@@ -3,7 +3,7 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { badgeText, deviceConnected, railFrontId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
+import { badgeText, deviceConnected, peerCounts, railFrontId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
 import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
 import { numberOf } from "../numbering";
@@ -26,9 +26,6 @@ import { SidebarMenus } from "./sidebar-menus";
 export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
 
 const NO_BOTS: AccessConnection[] = [];
-
-/** A paired machine's tile counts nothing until its core sends its counts over the connection (D-50). */
-const NO_COUNTS: TileCounts = { needs_you: 0, done: 0 };
 
 /** The rounded square every tile is, the add tile included; a tile's marks hang off its corners, and the focus outline stands outside the selected ring. */
 const TILE = "relative flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
@@ -142,15 +139,18 @@ export function DeviceRail({ actions }: { actions: Actions }) {
 }
 
 /**
- * A paired machine's tile (B17, B21): its own Hide screen, or the reason it
- * cannot show now in its hint (not connected, paused, update needed, not
- * allowed), dimmed with the cross while it cannot.
+ * A paired machine's tile (B17, B21): its own Hide screen with the Needs You
+ * and Done that machine told of its own work, or the reason it cannot show
+ * now in its hint (not connected, paused, update needed, not allowed), dimmed
+ * with the cross while it cannot.
  */
 function ScreenTile({ tile, peer, selected, number, onSelect }: { tile: Tile; peer: Peer; selected: boolean; number: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
   const state = screenState(peer);
   const note = state === "ready" ? null : t(screenStateKey(state));
-  return <RailTileView tile={tile} selected={selected} counts={NO_COUNTS} connected={state === "ready"} note={note} number={number} onSelect={onSelect} />;
+  // What that machine told of its own work (D-50), the counts its own window's This Mac tile shows.
+  const counts = useShellStore(useShallow((s) => peerCounts(s.rest, peer.key)));
+  return <RailTileView tile={tile} selected={selected} counts={counts} connected={state === "ready"} note={note} number={number} onSelect={onSelect} />;
 }
 
 const RailTile = memo(function RailTile({ tile, selected, number, actions }: { tile: Tile; selected: boolean; number: number | null; actions: Actions }) {

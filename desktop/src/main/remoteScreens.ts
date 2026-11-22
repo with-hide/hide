@@ -13,9 +13,10 @@ import path from "node:path";
 import { clipboard, ipcMain, protocol, session, WebContentsView, type BrowserWindow, type Input, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from "electron";
 import WebSocket from "ws";
 import type { RemoteScreenState } from "../../../web/src/host";
+import type { InterfaceLanguage } from "../../../web/src/i18n/locale";
 import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
-import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import { toBounds } from "./browserSync";
 import type { HostLog } from "./log";
 import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
@@ -50,6 +51,8 @@ type Screen = {
   state: RemoteScreenState["state"];
   /** When it last showed, to close the one hidden longest past `KEPT`. */
   shownAt: number;
+  /** What this window calls the machine, as the shell last said. */
+  name: string | null;
 };
 
 export type RemoteScreensDeps = {
@@ -59,6 +62,8 @@ export type RemoteScreensDeps = {
   registry: () => readonly Command[];
   /** The window's own color, which a screen wears until its page paints. */
   background: string;
+  /** The language this window is in, which a screen's page says its words in while its own machine chose none. */
+  language: () => InterfaceLanguage;
   log: HostLog;
   /** The clock an ask's wait is read on; `Date.now` unless a test sets it. */
   now?: () => number;
@@ -140,6 +145,10 @@ export class RemoteScreens {
     }
     const screen = kept ?? this.create(window, request.device, request.key);
     if (!screen) return;
+    if (screen.name !== request.name) {
+      screen.name = request.name;
+      this.tellViewer(screen);
+    }
     screen.view.setBounds(toBounds(request.rect, window.webContents.getZoomFactor()));
     screen.shownAt = ++this.clock;
     const shown = screen.visible;
@@ -231,6 +240,17 @@ export class RemoteScreens {
     if (window && !window.isDestroyed()) window.webContents.send(REMOTE_WORK_RESULT_CHANNEL, { device, ...result });
   }
 
+  /** This window's language changed: every loaded page hears it. */
+  languageChanged(): void {
+    for (const screen of this.screens.values()) this.tellViewer(screen);
+  }
+
+  /** Tells a loaded page what this window calls its machine and the language it is in. */
+  private tellViewer(screen: Screen): void {
+    if (screen.state !== "shown" || screen.view.webContents.isDestroyed()) return;
+    screen.view.webContents.send(REMOTE_VIEWER_CHANNEL, { language: this.deps.language(), name: screen.name });
+  }
+
   /** An app-menu command while a screen shows goes to that screen (B20); true when one took it. */
   sendCommand(id: string): boolean {
     const screen = this.front === null ? null : this.screens.get(this.front);
@@ -264,7 +284,7 @@ export class RemoteScreens {
     // The window's own color until the page paints, so a screen never flashes white.
     view.setBackgroundColor(this.deps.background);
     view.setVisible(false);
-    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0 };
+    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0, name: null };
     this.guard(screen);
     window.contentView.addChildView(view);
     this.screens.set(device, screen);
@@ -281,6 +301,7 @@ export class RemoteScreens {
         // A page closed meanwhile, or replaced by another key's, says nothing of the screen there now.
         if (screen.state === "failed" || this.screens.get(screen.device) !== screen) return;
         this.report(screen.device, "shown");
+        this.tellViewer(screen);
         this.handWaiting(screen);
         if (!screen.visible) return;
         screen.view.setVisible(true);

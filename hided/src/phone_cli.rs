@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use hide_core::InterfaceLanguage;
+
 use crate::env::Env;
 use crate::mobile::command::next_action;
 
@@ -105,6 +107,9 @@ pub fn run(env: &Env, cli: &PhoneCli) -> Result<(), String> {
             }
             Ok(())
         }
+        // `pair` answers a person only: its refusal is one line in their
+        // language, which the caller prints on stderr.
+        Err(Refused { message, .. }) if cli.verb == Verb::Pair => Err(message),
         Err(Refused { code, message }) => {
             println!(
                 "{}",
@@ -117,11 +122,11 @@ pub fn run(env: &Env, cli: &PhoneCli) -> Result<(), String> {
 
 /// The answer and its lines for a person.
 fn answer(env: &Env, cli: &PhoneCli) -> Result<(Value, String), Refused> {
-    if !env.device_connect {
-        return Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF));
-    }
     match &cli.verb {
-        Verb::Pair => pair(env),
+        // `pair` answers a person, so it words every refusal in their
+        // language, a build without the feature's included.
+        Verb::Pair => pair(env, &Words(language(env))),
+        _ if !env.device_connect => Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF)),
         Verb::List => {
             let value = ask(env, json!({"verb": "list"}))?;
             let lines = list_lines(&value, crate::mobile::now_ms());
@@ -161,20 +166,36 @@ fn ask(env: &Env, ask: Value) -> Result<Value, Refused> {
 /// Shows the pairing QR and waits for the phone that scans it, at most as
 /// long as the code lives.
 #[allow(clippy::disallowed_methods)] // polls a code the daemon spends or ends on its own, bounded by the code's life
-fn pair(env: &Env) -> Result<(Value, String), Refused> {
+fn pair(env: &Env, words: &Words) -> Result<(Value, String), Refused> {
+    let refused = |code: &str| Refused {
+        code: code.to_owned(),
+        message: words
+            .refusal(code)
+            .map_or_else(|| next_action(code).to_owned(), str::to_owned),
+    };
+    // The daemon's refusal in the person's language, else in its own words.
+    let reworded = |refusal: Refused| Refused {
+        message: words
+            .refusal(&refusal.code)
+            .map_or(refusal.message, str::to_owned),
+        code: refusal.code,
+    };
+    if !env.device_connect {
+        return Err(refused(crate::pairing::DEVICE_CONNECT_OFF));
+    }
     // The daemon refuses a pane again by what the kernel says of the caller.
     if env.pane_id.is_some() || env.access.is_some() {
-        return Err(Refused::code("phone_pair_from_pane"));
+        return Err(refused("phone_pair_from_pane"));
     }
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Err(Refused::code("phone_pair_needs_terminal"));
+        return Err(refused("phone_pair_needs_terminal"));
     }
     let window = hide_platform::stdio::stdout_window()
         .and_then(|window| hide_platform::stdio::stdout_escapes().map(|()| window))
-        .map_err(|_| Refused::code("phone_pair_needs_terminal"))?;
-    let shown = ask(env, json!({"verb": "pair"}))?;
+        .map_err(|_| refused("phone_pair_needs_terminal"))?;
+    let shown = ask(env, json!({"verb": "pair"})).map_err(reworded)?;
     let (Some(link), Some(code_id)) = (shown["qr"].as_str(), shown["code_id"].as_str()) else {
-        return Err(Refused::code("phone_unavailable"));
+        return Err(refused("phone_unavailable"));
     };
     let end = || {
         let _ = ask(env, json!({"verb": "pair_end", "code_id": code_id}));
@@ -183,31 +204,22 @@ fn pair(env: &Env) -> Result<(Value, String), Refused> {
     // which a QR always holds.
     let Some(picture) = qr_lines(link) else {
         end();
-        return Err(Refused::code("phone_unavailable"));
+        return Err(refused("phone_unavailable"));
     };
     let (columns, rows) = (picture.width, picture.lines.len() + AROUND);
     if usize::from(window.columns) < columns || usize::from(window.rows) < rows {
         end();
         return Err(Refused {
             code: "phone_window_small".to_owned(),
-            message: format!(
-                "The QR needs a window at least {columns} columns wide and {rows} rows tall: make this window bigger and run hide phone pair again"
-            ),
+            message: words.window_small(columns, rows),
         });
     }
-    let name = shown["name"].as_str().unwrap_or("this computer");
     let mut out = std::io::stdout().lock();
-    let _ = writeln!(
-        out,
-        "Scan this with your phone's camera, or with Scan QR code in the Hide app, to connect it to {name}."
-    );
+    let _ = writeln!(out, "{}", words.scan(shown["name"].as_str()));
     for line in &picture.lines {
         let _ = writeln!(out, "{line}");
     }
-    let _ = writeln!(
-        out,
-        "The code works once, for 5 minutes. Waiting for the phone..."
-    );
+    let _ = writeln!(out, "{}", words.waiting());
     let _ = out.flush();
     drop(out);
     let deadline = std::time::Instant::now()
@@ -216,18 +228,178 @@ fn pair(env: &Env) -> Result<(Value, String), Refused> {
     loop {
         if std::time::Instant::now() >= deadline {
             end();
-            return Err(Refused::code("phone_pair_ended"));
+            return Err(refused("phone_pair_ended"));
         }
         std::thread::sleep(POLL);
-        let status = ask(env, json!({"verb": "pair_status", "code_id": code_id}))?;
+        let status =
+            ask(env, json!({"verb": "pair_status", "code_id": code_id})).map_err(reworded)?;
         match status["state"].as_str() {
             Some("waiting") => {}
             Some("paired") => {
-                let phone = status["name"].as_str().unwrap_or("the phone").to_owned();
-                let lines = format!("Connected {phone}. hide phone list shows it.\n");
+                let phone = status["name"].as_str().unwrap_or_default().to_owned();
+                let lines = format!("{}\n", words.connected(&phone));
                 return Ok((json!({"name": phone}), lines));
             }
-            _ => return Err(Refused::code("phone_pair_ended")),
+            _ => return Err(refused("phone_pair_ended")),
+        }
+    }
+}
+
+/// The language `pair` words its lines in: the operator's choice in Hide,
+/// else this machine's primary language, else English, as every screen
+/// resolves it (docs/LOCALIZATION.md). A daemon that does not answer leaves
+/// the choice unread, and the refusal that follows says why in that language.
+fn language(env: &Env) -> InterfaceLanguage {
+    let chosen = ask(env, json!({"verb": "language"}))
+        .ok()
+        .and_then(|answer| serde_json::from_value(answer["interface_language"].clone()).ok());
+    chosen
+        .or_else(|| {
+            hide_platform::host::primary_language()
+                .ok()
+                .and_then(|tag| InterfaceLanguage::from_system(&tag))
+        })
+        .unwrap_or(InterfaceLanguage::English)
+}
+
+/// What `pair` says to the person at the terminal, in one language (PRD
+/// device-connect-iroh D-70). `hide phone list` and `remove` answer a
+/// program as well as a person and stay in English.
+struct Words(InterfaceLanguage);
+
+impl Words {
+    fn scan(&self, name: Option<&str>) -> String {
+        use InterfaceLanguage::*;
+        match (self.0, name) {
+            (English, Some(name)) => format!("Scan this with your phone's camera, or with Scan QR code in the Hide app, to connect it to {name}."),
+            (English, None) => "Scan this with your phone's camera, or with Scan QR code in the Hide app, to connect it to this computer.".to_owned(),
+            (Korean, Some(name)) => format!("폰 카메라나 Hide 앱의 [QR 스캔]으로 이 QR을 찍으면 폰이 {name}에 연결돼요."),
+            (Korean, None) => "폰 카메라나 Hide 앱의 [QR 스캔]으로 이 QR을 찍으면 폰이 이 컴퓨터에 연결돼요.".to_owned(),
+            (Japanese, Some(name)) => format!("スマートフォンのカメラか、Hide アプリの「QRをスキャン」でこのQRを読み取ると、{name} に接続します。"),
+            (Japanese, None) => "スマートフォンのカメラか、Hide アプリの「QRをスキャン」でこのQRを読み取ると、このコンピューターに接続します。".to_owned(),
+            (SimplifiedChinese, Some(name)) => format!("用手机相机或 Hide 应用中的“扫描二维码”扫描此二维码，即可连接到 {name}。"),
+            (SimplifiedChinese, None) => "用手机相机或 Hide 应用中的“扫描二维码”扫描此二维码，即可连接到这台电脑。".to_owned(),
+        }
+    }
+
+    fn waiting(&self) -> &'static str {
+        match self.0 {
+            InterfaceLanguage::English => {
+                "The code works once, for 5 minutes. Waiting for the phone..."
+            }
+            InterfaceLanguage::Korean => "이 QR은 5분 동안 한 번 쓸 수 있어요. 폰을 기다리는 중…",
+            InterfaceLanguage::Japanese => {
+                "このQRは5分間、1回だけ使えます。スマートフォンを待っています…"
+            }
+            InterfaceLanguage::SimplifiedChinese => {
+                "此二维码可使用一次，有效期 5 分钟。正在等待手机…"
+            }
+        }
+    }
+
+    fn connected(&self, phone: &str) -> String {
+        match self.0 {
+            InterfaceLanguage::English => format!("Connected {phone}. hide phone list shows it."),
+            InterfaceLanguage::Korean => {
+                format!("폰이 연결됐어요: {phone}. hide phone list에서 볼 수 있어요.")
+            }
+            InterfaceLanguage::Japanese => {
+                format!("スマートフォンが接続しました: {phone}。hide phone list で確認できます。")
+            }
+            InterfaceLanguage::SimplifiedChinese => {
+                format!("手机已连接：{phone}。可用 hide phone list 查看。")
+            }
+        }
+    }
+
+    fn window_small(&self, columns: usize, rows: usize) -> String {
+        match self.0 {
+            InterfaceLanguage::English => format!(
+                "The window is too small for the QR: make it at least {columns} columns wide and {rows} rows tall and run hide phone pair again."
+            ),
+            InterfaceLanguage::Korean => format!(
+                "창이 작아 QR이 잘려요. 창을 가로 {columns}칸, 세로 {rows}줄 이상으로 키운 뒤 hide phone pair를 다시 실행하세요."
+            ),
+            InterfaceLanguage::Japanese => format!(
+                "ウィンドウが小さく、QRが収まりません。横 {columns} 列、縦 {rows} 行以上に広げてから、hide phone pair をもう一度実行してください。"
+            ),
+            InterfaceLanguage::SimplifiedChinese => format!(
+                "窗口太小，放不下二维码。请把窗口调到至少 {columns} 列宽、{rows} 行高，然后重新运行 hide phone pair。"
+            ),
+        }
+    }
+
+    /// Why `pair` stopped, and what the person does about it; `None` for
+    /// English and for a code no sentence here names, which keep the English
+    /// sentence the daemon or `next_action` gives.
+    fn refusal(&self, code: &str) -> Option<&'static str> {
+        use InterfaceLanguage::*;
+        match (self.0, code) {
+            (English, _) => None,
+            (Korean, crate::pairing::DEVICE_CONNECT_OFF) => Some(
+                "이 버전의 Hide는 아직 hide phone을 지원하지 않아요. 설정 › 모바일에서 폰을 연결하세요.",
+            ),
+            (Korean, "phone_pair_needs_terminal") => {
+                Some("hide phone pair는 사람이 찍을 QR을 그려요. 터미널 창에서 실행하세요.")
+            }
+            (Korean, "phone_pair_ended") => Some(
+                "폰이 찍기 전에 QR이 만료되거나 새 QR로 바뀌었어요. hide phone pair를 다시 실행하세요.",
+            ),
+            (Korean, "phone_pair_from_pane") => Some(
+                "폰 연결은 Hide 터미널 밖에서만 할 수 있어요. Hide 밖의 터미널 창에서 hide phone pair를 실행하세요.",
+            ),
+            (Korean, "phone_limit") => Some(
+                "이 컴퓨터에 폰이 이미 4대 연결돼 있어요. hide phone remove <폰>으로 하나를 먼저 빼세요.",
+            ),
+            (Korean, "mobile_unreachable" | "phone_unavailable") => Some(
+                "이 컴퓨터에서 Hide 중계 서버에 닿지 못했어요. 네트워크를 확인하고 hide phone pair를 다시 실행하세요.",
+            ),
+            (Korean, "mobile_failed") => Some(
+                "이 컴퓨터에서 모바일을 켜지 못했어요. hide status나 설정 › 모바일에서 이유를 볼 수 있어요.",
+            ),
+            (Japanese, crate::pairing::DEVICE_CONNECT_OFF) => Some(
+                "このバージョンの Hide はまだ hide phone に対応していません。設定 › モバイルでスマートフォンを接続してください。",
+            ),
+            (Japanese, "phone_pair_needs_terminal") => Some(
+                "hide phone pair は読み取るためのQRを描きます。ターミナルのウィンドウで実行してください。",
+            ),
+            (Japanese, "phone_pair_ended") => Some(
+                "読み取られる前にQRの期限が切れたか、新しいQRに替わりました。hide phone pair をもう一度実行してください。",
+            ),
+            (Japanese, "phone_pair_from_pane") => Some(
+                "スマートフォンの接続は Hide のターミナルの外でしかできません。Hide の外のターミナルで hide phone pair を実行してください。",
+            ),
+            (Japanese, "phone_limit") => Some(
+                "このコンピューターにはすでに4台のスマートフォンが接続されています。先に hide phone remove <スマートフォン> で1台外してください。",
+            ),
+            (Japanese, "mobile_unreachable" | "phone_unavailable") => Some(
+                "このコンピューターから Hide の中継サーバーに届きませんでした。ネットワークを確認して、hide phone pair をもう一度実行してください。",
+            ),
+            (Japanese, "mobile_failed") => Some(
+                "このコンピューターでモバイルを有効にできませんでした。理由は hide status か 設定 › モバイルで確認できます。",
+            ),
+            (SimplifiedChinese, crate::pairing::DEVICE_CONNECT_OFF) => {
+                Some("此版本的 Hide 还不支持 hide phone。请在 设置 › 移动端 中连接手机。")
+            }
+            (SimplifiedChinese, "phone_pair_needs_terminal") => {
+                Some("hide phone pair 会画出供人扫描的二维码。请在终端窗口中运行。")
+            }
+            (SimplifiedChinese, "phone_pair_ended") => {
+                Some("手机扫描前二维码已过期或被新的二维码替换。请重新运行 hide phone pair。")
+            }
+            (SimplifiedChinese, "phone_pair_from_pane") => Some(
+                "只能在 Hide 的终端之外连接手机。请在 Hide 之外的终端窗口中运行 hide phone pair。",
+            ),
+            (SimplifiedChinese, "phone_limit") => {
+                Some("这台电脑已连接 4 部手机。请先用 hide phone remove <手机> 移除一部。")
+            }
+            (SimplifiedChinese, "mobile_unreachable" | "phone_unavailable") => {
+                Some("这台电脑无法连接 Hide 的中继服务器。请检查网络后重新运行 hide phone pair。")
+            }
+            (SimplifiedChinese, "mobile_failed") => {
+                Some("无法在这台电脑上开启移动端。原因可在 hide status 或 设置 › 移动端 中查看。")
+            }
+            _ => None,
         }
     }
 }
@@ -393,6 +565,94 @@ mod tests {
                 assert_eq!(dark, qr.get_module(x, y), "module {x},{y}");
             }
         }
+    }
+
+    #[test]
+    fn pair_speaks_the_operators_language_and_keeps_english_for_a_code_it_does_not_word() {
+        let korean = Words(InterfaceLanguage::Korean);
+        assert_eq!(
+            korean.refusal("phone_pair_from_pane"),
+            Some(
+                "폰 연결은 Hide 터미널 밖에서만 할 수 있어요. Hide 밖의 터미널 창에서 hide phone pair를 실행하세요."
+            )
+        );
+        assert!(korean.window_small(69, 38).contains("가로 69칸, 세로 38줄"));
+        assert_eq!(
+            korean.scan(Some("Mac-mini")),
+            "폰 카메라나 Hide 앱의 [QR 스캔]으로 이 QR을 찍으면 폰이 Mac-mini에 연결돼요."
+        );
+        // A code no sentence names, and English, keep the sentence they came with.
+        assert_eq!(korean.refusal("daemon_not_running"), None);
+        assert_eq!(
+            Words(InterfaceLanguage::English).refusal("phone_pair_from_pane"),
+            None
+        );
+        // Every language words every refusal `pair` itself makes.
+        for language in [
+            InterfaceLanguage::Korean,
+            InterfaceLanguage::Japanese,
+            InterfaceLanguage::SimplifiedChinese,
+        ] {
+            for code in [
+                crate::pairing::DEVICE_CONNECT_OFF,
+                "phone_pair_needs_terminal",
+                "phone_pair_ended",
+                "phone_pair_from_pane",
+                "phone_limit",
+                "mobile_unreachable",
+                "phone_unavailable",
+                "mobile_failed",
+            ] {
+                assert!(
+                    Words(language).refusal(code).is_some(),
+                    "{language:?} {code}"
+                );
+            }
+        }
+    }
+
+    /// A build without the feature refuses `pair` in the operator's
+    /// language too, as every other refusal of `pair` is.
+    #[test]
+    fn pair_refuses_a_build_without_the_feature_in_the_operators_language() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let env = Env {
+            home: path.clone(),
+            state_dir: path.clone(),
+            legacy_state_dir: None,
+            account_state_folder: false,
+            keep_alive: true,
+            vite_origin: None,
+            bind: "127.0.0.1:0".parse().unwrap(),
+            idle_secs: 600,
+            build: None,
+            starter_program: None,
+            open_command: None,
+            host_helper_root: None,
+            host_cli_dir: None,
+            pane_id: None,
+            install: None,
+            access: None,
+            tailscale_bin: None,
+            relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
+            device_connect: false,
+            search_path: None,
+        };
+        let refusal = pair(&env, &Words(InterfaceLanguage::Korean)).err().unwrap();
+        assert_eq!(refusal.code, crate::pairing::DEVICE_CONNECT_OFF);
+        assert_eq!(
+            refusal.message,
+            "이 버전의 Hide는 아직 hide phone을 지원하지 않아요. 설정 › 모바일에서 폰을 연결하세요."
+        );
+        let english = pair(&env, &Words(InterfaceLanguage::English))
+            .err()
+            .unwrap();
+        assert_eq!(
+            english.message,
+            next_action(crate::pairing::DEVICE_CONNECT_OFF)
+        );
     }
 
     #[test]

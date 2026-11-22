@@ -123,8 +123,8 @@ pub use model::{
     SnapshotDeltaWire,
 };
 pub use model::{
-    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
-    SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
+    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, InterfaceLanguage,
+    LinkOrigin, SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
 pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;
