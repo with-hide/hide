@@ -28,9 +28,9 @@ type Socket =
 #[cfg(unix)]
 mod core_letters;
 #[cfg(unix)]
-mod guest_work;
-#[cfg(unix)]
 mod fault_run;
+#[cfg(unix)]
+mod guest_work;
 #[cfg(unix)]
 mod moved_core;
 mod remote_view;

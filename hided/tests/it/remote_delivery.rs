@@ -930,8 +930,9 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
                 .pointer("/status/remote")
                 .and_then(Value::as_array)
                 .is_some_and(|rows| {
-                    rows.iter()
-                        .any(|row| row["target_id"] == fixture::DEVICE && row["state"] == "connected")
+                    rows.iter().any(|row| {
+                        row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                    })
                 }))
         };
         fixture.ssh.online(false)?;

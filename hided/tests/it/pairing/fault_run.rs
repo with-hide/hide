@@ -33,10 +33,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::GUEST;
-use super::guest_work::{Machine, PROGRAMS, place_build, pair};
-use crate::support::remote_delivery::{
-    Agent, Environment, SHIM, quote, successful, wait_within,
-};
+use super::guest_work::{Machine, PROGRAMS, pair, place_build};
+use crate::support::remote_delivery::{Agent, Environment, SHIM, quote, successful, wait_within};
 use crate::support::shipped;
 use hide_platform::process::OwnedChild;
 
@@ -236,7 +234,7 @@ async fn frozen(machines: &[&Machine], relay: Option<&Relay>, long: Duration) {
         signal(&[pid], "STOP");
     }
     // The time the machine is away is this fault's subject.
-    tokio::time::sleep(long).await;
+    tokio::time::sleep(long).await; // wait-ok: the machine has been away for the fault's length
     stopped.sort_unstable();
     stopped.dedup();
     signal(&stopped, "CONT");
@@ -323,7 +321,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         "HIDE_TEST_IROH_RELAY names the iroh-relay this run starts: build it with scripts/build-iroh-relay.sh",
     ));
     let minutes: u64 = std::env::var("HIDE_TEST_FAULT_RUN_MINUTES")
-        .map(|value| value.parse().expect("HIDE_TEST_FAULT_RUN_MINUTES is a number of minutes"))
+        .map(|value| {
+            value
+                .parse()
+                .expect("HIDE_TEST_FAULT_RUN_MINUTES is a number of minutes")
+        })
         .unwrap_or(8);
     let root = crate::fixtures::fixture_root("hf");
     // A core lists a checkout by its real path, and `/tmp` is a link on
@@ -496,7 +498,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             Fault::RelayRestart => {
                 relay.stop();
                 // The relay is away for this long: its absence is the fault.
-                tokio::time::sleep(long).await;
+                tokio::time::sleep(long).await; // wait-ok: the relay has been away for the fault's length
                 relay.start();
             }
             Fault::GuestSleeps => frozen(&[&guest], None, long).await,
@@ -513,9 +515,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         });
         let back = over.elapsed();
         let flowing = found.and_then(|()| {
-            wait_within("a letter to reach the guest's ledger again", RECOVERS_WITHIN, || {
-                Ok((letters_in(&guest.terminal.state, &sender).len() > before).then_some(()))
-            })
+            wait_within(
+                "a letter to reach the guest's ledger again",
+                RECOVERS_WITHIN,
+                || Ok((letters_in(&guest.terminal.state, &sender).len() > before).then_some(())),
+            )
         });
         let line = json!({
             "turn": turn,
@@ -536,7 +540,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         }
         // The calm between two faults, in which letters flow through a
         // settled connection.
-        tokio::time::sleep(CALM).await;
+        tokio::time::sleep(CALM).await; // wait-ok: the calm between two faults has passed
     }
 
     // The shell stops after the letter it is on; then every letter it sent
@@ -555,10 +559,14 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         "the shell's own record of what it sent"
     );
     let mut held = Vec::new();
-    wait_within("every letter in the guest's ledger", RECOVERS_WITHIN, || {
-        held = letters_in(&guest.terminal.state, &sender);
-        Ok((held.len() as u64 >= last).then_some(()))
-    })
+    wait_within(
+        "every letter in the guest's ledger",
+        RECOVERS_WITHIN,
+        || {
+            held = letters_in(&guest.terminal.state, &sender);
+            Ok((held.len() as u64 >= last).then_some(()))
+        },
+    )
     .unwrap_or_else(|error| panic!("{error:#}: {} of {last}", held.len()));
     let mut wanted: Vec<String> = (1..=last).map(|n| format!("fault-{n}")).collect();
     wanted.sort_unstable();
