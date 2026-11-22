@@ -46,6 +46,20 @@ fn hidden(spec: &Spec) -> bool {
         || matches!(spec.words, ["phone", ..])
 }
 
+/// What `hide wait pr|branch|mission` can refuse (PRD core-wait B10, B12,
+/// B14, B15, B19).
+const WAIT_REFUSALS: &[&str] = &[
+    "wait_target_invalid",
+    "wait_deadline_invalid",
+    "wait_agent_full",
+    "wait_full",
+    "wait_unsupported",
+    "wait_self",
+    "wait_mission_unknown",
+    "wait_project_unknown",
+    "wait_agent_unregistered",
+];
+
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
     "agent",
@@ -55,6 +69,7 @@ const TOPICS: &[&str] = &[
     "watch",
     "mission",
     "task",
+    "wait",
     "automation",
     "device",
     "phone",
@@ -86,6 +101,9 @@ pub enum Input {
     Ratio,
     /// A span of whole minutes or hours, `30m` or `2h`.
     Span,
+    /// A wait's deadline: whole minutes, hours or days from 1h to 30d,
+    /// `90m`, `2h` or `3d` (PRD core-wait D-07).
+    Deadline,
     /// A watch approval: not blank, at most 256 bytes, without control
     /// characters.
     Approval,
@@ -115,6 +133,7 @@ impl Input {
             Commit => "commit",
             Ratio => "ratio",
             Span => "span",
+            Deadline => "deadline",
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
@@ -334,8 +353,8 @@ const fn spec(
 }
 
 use Input::{
-    Address, Approval, Body, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio, Session,
-    Sha256, Span, Text, Unsigned,
+    Address, Approval, Body, Commit, Deadline, Json, Key, LinkOrKey, OneOf, PasteText, Ratio,
+    Session, Sha256, Span, Text, Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -2394,6 +2413,76 @@ pub const COMMANDS: &[Spec] = &[
         refusals: AUTOMATION_SCHEDULE_REFUSALS,
     },
     Spec {
+        words: &["wait", "pr"],
+        arguments: &[Arg {
+            name: "number",
+            value: Unsigned,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--ci"), optional("--for", Deadline)],
+        rest: None,
+        answers: &["wait"],
+        refusals: WAIT_REFUSALS,
+    },
+    Spec {
+        words: &["wait", "branch"],
+        arguments: &[Arg {
+            name: "name",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[optional("--for", Deadline)],
+        rest: None,
+        answers: &["wait"],
+        refusals: WAIT_REFUSALS,
+    },
+    Spec {
+        words: &["wait", "mission"],
+        arguments: &[Arg {
+            name: "mission",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[optional("--node", Key), optional("--for", Deadline)],
+        rest: None,
+        answers: &["wait"],
+        refusals: WAIT_REFUSALS,
+    },
+    Spec {
+        words: &["wait", "list"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["wait_list"],
+        refusals: &["wait_agent_unregistered"],
+    },
+    Spec {
+        words: &["wait", "cancel"],
+        arguments: &[Arg {
+            name: "wait",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["wait_cancelled"],
+        refusals: &["wait_unknown", "wait_not_yours", "wait_agent_unregistered"],
+    },
+    Spec {
         words: &["task", "set"],
         arguments: &[],
         repeats: None,
@@ -2638,6 +2727,7 @@ fn body() -> Value {
             "commit": "7 to 64 hexadecimal digits",
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "span": "whole minutes or hours, such as 30m or 2h",
+            "deadline": "whole minutes, hours or days from 1h to 30d, such as 2h or 3d",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
             "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
@@ -2744,6 +2834,14 @@ fn answers() -> Value {
     // The plan's own record and, for the caller's own plan, the summary its
     // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
     map.insert("plan".into(), shape(&["session", "plan"]));
+    // An agent's wait (PRD core-wait D-21): its id, target, the target in
+    // words and its deadline; `existing` when the same wait was open.
+    map.insert(
+        "wait".into(),
+        shape(&["id", "target", "words", "until_unix_ms"]),
+    );
+    map.insert("wait_list".into(), shape(&["waits"]));
+    map.insert("wait_cancelled".into(), shape(&["cancelled"]));
     // An automation as the core's `automations` section has it, worded for
     // an agent: what its schedule reads as, its next time on the machine's
     // wall clock and, stopped for a person, what to fix (`hide automation
@@ -2901,6 +2999,7 @@ mod tests {
             Commit => ("abc1234", "xyz"),
             Ratio => ("3/4", "x/4"),
             Span => ("30m", "30"),
+            Deadline => ("3d", "5m"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
@@ -2980,6 +3079,7 @@ mod tests {
                 | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
+                | CommandKind::Wait(_)
                 | CommandKind::Automation(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::AgentProfile(_)

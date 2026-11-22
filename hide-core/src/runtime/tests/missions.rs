@@ -17877,7 +17877,8 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
         // A release before general nodes published a research or verify
         // node's kind as such: this build reads it as a general node with
         // that preset (PRD node-presets D-05, B7), and every other node with
-        // none.
+        // none. A release before waits published a waiting node's kind as
+        // `external`: this build reads it as `wait` (PRD core-wait D-18).
         let expected = by_id(
             report["missions"]
                 .as_array()
@@ -17895,6 +17896,9 @@ fn a_released_builds_missions_read_as_that_build_published_them() {
                             _ => node.get("preset").cloned().unwrap_or(Value::Null),
                         };
                         node["preset"] = preset;
+                        if node["kind"] == "external" {
+                            node["kind"] = json!("wait");
+                        }
                     }
                     mission
                 })

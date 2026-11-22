@@ -55,6 +55,7 @@ pub mod pane_cli;
 pub mod pane_install;
 pub mod phone_cli;
 pub mod plan_cli;
+pub mod wait_cli;
 pub mod profile_cli;
 mod project_open;
 pub mod started_cores;

@@ -152,7 +152,8 @@ impl WaitInput {
 
 fn valid_branch(branch: &str) -> bool {
     !branch.is_empty()
-        && branch.len() <= 200
+        && !branch.starts_with('-')
+        && branch.len() <= 256
         && !branch.chars().any(|ch| ch.is_whitespace() || ch.is_control())
 }
 
