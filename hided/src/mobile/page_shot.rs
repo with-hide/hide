@@ -1,20 +1,21 @@
 //! A page View's screenshot for the phone (PRD mobile-companion-ui B20-B22,
-//! D-11): what the desktop app shows of the page now, taken by the same
+//! D-11): what the desktop app has drawn of the page, taken by the same
 //! page-control path `hide browser screenshot` uses.
 //!
 //! The chain is the CLI's, without a pane to start from: the core lists the
-//! View's checkout (a checkout caller, never a pane) for the View's area and
-//! whether a page command may act on it (`server::takes_input`, the CLI's
-//! own rule: its area's front tab, or any page on no desk),
+//! View's checkout (a checkout caller, never a pane) to find the View,
 //! `BrowserControl::relay` opens the desktop window's gateway, and
-//! `browser_page::still` attaches and takes the picture, refusing a hidden
-//! display with `display_hidden` as the CLI does. Nothing here selects a
-//! View, moves keyboard focus or raises a window (B22): a page that is not
-//! in front is answered "cannot be taken now", never brought forward.
+//! `browser_page::still` attaches and takes the picture. Unlike the CLI's
+//! screenshot, a still is a read: a page behind another tab of its area is
+//! taken too, as Chromium last drew it and kept drawing it while hidden.
+//! Nothing here selects a View, moves keyboard focus or raises a window
+//! (B22), so a page Chromium never drew (opened behind another tab and never
+//! shown) has no picture, and the capture times out as `display_hidden`.
 //!
-//! Why a screenshot cannot be taken is the operator's to know, not the
-//! phone's (design principle 13): every refusal is one `look.page_unavailable`
-//! diagnostic with its reason, and the phone is told only that it could not.
+//! Why a screenshot cannot be taken goes to one `look.page_unavailable`
+//! diagnostic with its reason; the phone is told the reasons the operator
+//! can act on (`looks.rs`, `page_reason`): no desktop app open, the window
+//! on another computer, a page never drawn.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,6 +76,9 @@ pub async fn take(mobile: &Arc<Mobile>, view: &LookView, image_cap: u64) -> Resu
 
 async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String> {
     let control = Arc::clone(mobile.browser_control());
+    if !control.has_window() {
+        return Err("no_window".to_owned());
+    }
     // Held for the whole screenshot, so a phone that keeps pressing refresh
     // cannot crowd out the relays `hide browser` commands need.
     let _relay = control
@@ -100,7 +104,7 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
             .views
             .as_deref()
             .and_then(|views| views.iter().find(|shown| shown.view_id == display))
-            .map(|shown| (shown.kind, crate::server::takes_input(shown)))
+            .map(|shown| shown.kind)
             .ok_or_else(|| "display_closed".to_owned())?;
         let relay = window
             .relay(&listed, &display, None)
@@ -109,7 +113,7 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
     })
     .await
     .map_err(|_| "worker_lost".to_owned())??;
-    let ((kind, selected), relay) = found;
+    let (kind, relay) = found;
     if kind != "browser" {
         return Err("not_a_page".to_owned());
     }
@@ -121,7 +125,7 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
         // this Mac's app, which is the one a phone's picture comes from.
         Relay::Own(_) | Relay::Through { .. } => return Err("window_elsewhere".to_owned()),
     };
-    crate::browser_page::still(gateway, &view.display_id, selected)
+    crate::browser_page::still(gateway, &view.display_id)
         .await
         .map_err(|failure| failure.reason)
 }

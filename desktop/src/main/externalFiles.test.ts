@@ -162,6 +162,32 @@ describe("ExternalFiles", () => {
     expect(log).toHaveBeenLastCalledWith("external.read_failed", { grant: id, kind: "text", reason: "not_physical" });
   });
 
+  it("reads a phone's part of the granted file or a file of its folder now, with the file's size, and nothing past the folder or through a link", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const page = file("phone/mock.html", "<img src=art/logo.png>");
+    file("phone/art/logo.png", "png bytes");
+    file("phone-secret.txt", "secret");
+    const { id } = files.grant(page, "html")!;
+    expect(await files.readPart(id, null, 4)).toEqual({ bytes: new Uint8Array(Buffer.from("<img")), total: 22 });
+    // Read again on each ask: what is on the disk now.
+    fs.writeFileSync(page, "<p>new</p>");
+    expect(await files.readPart(id, null, 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("<p>new</p>")), total: 10 });
+    expect(await files.readPart(id, "art/logo.png", 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("png bytes")), total: 9 });
+    for (const escape of ["../phone-secret.txt", "art/../../phone-secret.txt", "", "/etc/hosts", "art\\logo.png"]) {
+      expect(await files.readPart(id, escape, 1024), escape).toEqual({ failure: "outside_folder" });
+    }
+    expect(await files.readPart(id, "art/missing.png", 1024)).toEqual({ failure: "ENOENT" });
+    expect(await files.readPart("0".repeat(32), null, 1024)).toEqual({ failure: "grant_gone" });
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a phone's read of a folder file reached through a link", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const page = file("linked/mock.html", "<p>hi</p>");
+    fs.symlinkSync(file("linked-secret.txt", "secret"), path.join(root, "linked/leak.txt"));
+    const { id } = files.grant(page, "html")!;
+    expect(await files.readPart(id, "leak.txt", 1024)).toEqual({ failure: "not_physical" });
+  });
+
   it("lets an HTML page's files come from its folder alone, links resolved, while the grant lasts (D-03)", () => {
     const files = new ExternalFiles(vi.fn());
     const page = file("site/index.html", "<p>hi</p>");

@@ -98,6 +98,13 @@ enum Window {
     Elsewhere(RemoteHost),
 }
 
+/// What the window read of an outside file: its first bytes and the
+/// file's whole size.
+pub struct OutsideBytes {
+    pub bytes: Vec<u8>,
+    pub total: u64,
+}
+
 /// Where a `hide browser` page command's relay runs.
 pub enum Relay {
     /// From the core to its own window's gateway, at this capability URL.
@@ -453,6 +460,69 @@ impl BrowserControl {
             .read_to_vec()
             .map_err(|_| unavailable())?;
         serde_json::from_slice(&bytes).map_err(|_| unavailable())
+    }
+
+    /// Reads, through the window registered here, an outside file it granted
+    /// (`desktop/src/main/externalFiles.ts`, `ExternalFiles.readPart`): the
+    /// granted file itself, or with `file` one inside its folder that its
+    /// page names, read now and up to `limit` bytes. The core holds only
+    /// `grant`, so the path never leaves the desktop host. `Ok(Err(reason))`
+    /// is the host's reason it could not; a missing window is
+    /// `outside_file_no_window`.
+    pub fn external_read(
+        &self,
+        grant: &str,
+        file: Option<&str>,
+        limit: u64,
+    ) -> Result<Result<OutsideBytes, String>, Failure> {
+        const NO_WINDOW: Failure = (
+            "outside_file_no_window",
+            "Open the Hide desktop app on this computer and retry",
+        );
+        let _slot = self.acquire()?;
+        let host = self.own_host()?.ok_or(NO_WINDOW)?;
+        let body = json!({"grant": grant, "file": file, "limit": limit}).to_string();
+        let mut response = match agent()
+            .post(format!("{}/external-read", host.endpoint))
+            .header("Authorization", format!("Bearer {}", host.token))
+            .header("Content-Type", "application/json")
+            .send(body.as_bytes())
+        {
+            Ok(response) => response,
+            // The window is open but its shell is not attached.
+            Err(ureq::Error::StatusCode(503)) => return Err(NO_WINDOW),
+            Err(_) => return Err(unavailable()),
+        };
+        let bytes_answer = response
+            .headers()
+            .get("content-type")
+            .is_some_and(|kind| kind.as_bytes() == b"application/octet-stream");
+        let total = response
+            .headers()
+            .get("x-hide-total")
+            .and_then(|total| total.to_str().ok()?.parse::<u64>().ok());
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(limit.max(MAX_ANSWER_BYTES))
+            .read_to_vec()
+            .map_err(|_| unavailable())?;
+        if bytes_answer {
+            let total = total.ok_or_else(unavailable)?;
+            if body.len() as u64 > limit {
+                return Err(unavailable());
+            }
+            return Ok(Ok(OutsideBytes { bytes: body, total }));
+        }
+        let refused: Value = serde_json::from_slice(&body).map_err(|_| unavailable())?;
+        let reason = refused["failure"].as_str().ok_or_else(unavailable)?;
+        Ok(Err(reason.chars().take(32).collect()))
+    }
+
+    /// Whether any desktop window is registered, here or on a linked node.
+    pub fn has_window(&self) -> bool {
+        matches!(self.own_host(), Ok(Some(_)) | Err(_))
+            || matches!(self.only_node_window(), Ok(Some(_)) | Err(_))
     }
 
     /// Asks every window registered here to drop each capability it handed

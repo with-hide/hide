@@ -48,6 +48,13 @@ type Options = {
    * hided alone asks, with the control token, and gets the grant or a reason.
    */
   externalOpen?: (path: string, page: boolean) => Promise<Json>;
+  /**
+   * Reads an outside file this window granted, now, for a phone looking at
+   * the agent's View (`ExternalFiles.readPart`): the grant's file or, with
+   * `file`, one in its folder, up to `limit` bytes. hided alone asks, with the
+   * control token; the answer is the bytes and the file's size, or a reason.
+   */
+  externalRead?: (grant: string, file: string | null, limit: number) => Promise<{ bytes: Uint8Array; total: number } | { failure: string }>;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -106,6 +113,8 @@ const MAX_HTTP_REQUESTS = 16;
 const MAX_PENDING = 32;
 const MAX_SESSIONS = 64;
 const MAX_BODY_BYTES = 16 * 1024;
+/** The most of an outside file one `/external-read` answers: a phone's image cap (`hided/src/mobile/looks.rs` `IMAGE_CAP`). */
+const MAX_EXTERNAL_READ_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_REQUESTS_PER_MINUTE = 600;
@@ -370,6 +379,19 @@ export class BrowserCdpGateway {
         const body = await this.body(request);
         if (!object(body) || typeof body.path !== "string" || typeof body.page !== "boolean") { this.reply(response, 400, { error: "Invalid request" }); return; }
         this.reply(response, 200, await this.options.externalOpen(body.path, body.page));
+        return;
+      }
+      if (path === "/external-read" && request.method === "POST" && this.options.externalRead) {
+        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        const body = await this.body(request);
+        const valid = object(body) && typeof body.grant === "string" && body.grant.length <= 64
+          && (body.file === null || (typeof body.file === "string" && body.file.length <= 1024))
+          && Number.isSafeInteger(body.limit) && (body.limit as number) > 0 && (body.limit as number) <= MAX_EXTERNAL_READ_BYTES;
+        if (!valid) { this.reply(response, 400, { error: "Invalid request" }); return; }
+        const read = await this.options.externalRead(body.grant as string, body.file as string | null, body.limit as number);
+        if ("failure" in read) { this.reply(response, 200, { failure: read.failure }); return; }
+        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": read.bytes.length, "X-Hide-Total": String(read.total), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+        response.end(Buffer.from(read.bytes.buffer, read.bytes.byteOffset, read.bytes.length));
         return;
       }
       if (path === "/connect" && request.method === "POST") {

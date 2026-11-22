@@ -82,6 +82,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
   const opened: { scope: CdpScope; url: string | undefined }[] = [];
   const actions: CdpAction[] = [];
   const externalOpens: { path: string; page: boolean }[] = [];
+  const externalReads: { grant: string; file: string | null; limit: number }[] = [];
   let sequence = 20;
   let incarnation: number | null = 1;
   const changed = (retirement?: CdpRetirement) => { for (const listener of listeners) listener(retirement); };
@@ -93,6 +94,10 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     attached: (page, value) => { attached.set(page.id, value); },
     ...(options.revive ? { revive: (scope: CdpScope) => options.revive!(scope, pages) } : {}),
     externalOpen: async (path, page) => { externalOpens.push({ path, page }); return { grant: { id: "a1".repeat(16), name: "r.html", kind: page ? "html" : "text" } }; },
+    externalRead: async (grant, file, limit) => {
+      externalReads.push({ grant, file, limit });
+      return grant === "a1".repeat(16) ? { bytes: new Uint8Array([1, 2, 3]), total: 9 } : { failure: "grant_gone" };
+    },
     chromeVersion: "144.0.0.0",
     now: () => time,
     log: () => {},
@@ -137,7 +142,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     shutdown.push(async () => { client.socket.terminate(); });
     return client;
   }
-  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens,
+  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens, externalReads,
     authority: (value: boolean) => { incarnation = value ? 1 : null; changed(); },
     incarnate: (value: number) => { incarnation = value; changed(); }, advance: (milliseconds: number) => { time += milliseconds; } };
 }
@@ -835,6 +840,22 @@ describe("scoped desktop CDP public boundary", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ grant: { id: "a1".repeat(16), name: "r.html", kind: "html" } });
     expect(externalOpens).toEqual([{ path: "/tmp/r.html", page: true }]);
+  });
+
+  it("reads an outside file's bytes for hided alone, with the control token, its size beside them or the reason it could not", async () => {
+    const { address, externalReads } = await fixture();
+    const ask = (body: unknown, token = address.token) => fetch(`${address.endpoint}/external-read`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect((await ask({ grant: "a1".repeat(16), file: null, limit: 3 }, "wrong".repeat(8))).status).toBe(401);
+    expect((await ask({ grant: "a1".repeat(16), file: null, limit: 0 })).status).toBe(400);
+    expect((await ask({ grant: "a1".repeat(16), file: null, limit: 64 * 1024 * 1024 })).status).toBe(400);
+    expect(externalReads).toEqual([]);
+    const read = await ask({ grant: "a1".repeat(16), file: "art/logo.png", limit: 3 });
+    expect(read.headers.get("content-type")).toBe("application/octet-stream");
+    expect(read.headers.get("x-hide-total")).toBe("9");
+    expect(new Uint8Array(await read.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    const refused = await ask({ grant: "b2".repeat(16), file: null, limit: 3 });
+    expect(await refused.json()).toEqual({ failure: "grant_gone" });
+    expect(externalReads).toEqual([{ grant: "a1".repeat(16), file: "art/logo.png", limit: 3 }, { grant: "b2".repeat(16), file: null, limit: 3 }]);
   });
 
   it("revokes everything a node's ended link authorized and stays available for the next", async () => {

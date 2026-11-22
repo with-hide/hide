@@ -534,16 +534,15 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// A picture of what `display` shows now, taken over a gateway socket the
-/// caller already opened (`mobile/page_shot.rs`). `selected` is whether a
-/// page command may act on the display (`server::takes_input`); one that may
-/// not is `display_hidden`.
+/// A picture of what `display` shows, taken over a gateway socket the caller
+/// already opened (`mobile/page_shot.rs`). It is a read, so a display behind
+/// another tab is taken too; the page is attached as not selected, so no
+/// input or overlay can reach it.
 pub(crate) async fn still(
     socket: crate::workspace_cli::WorkspaceSocket,
     display: &str,
-    selected: bool,
 ) -> Result<Vec<u8>, Failure> {
-    let mut page = page::Page::attach(cdp::Cdp::new(socket), display, selected).await?;
+    let mut page = page::Page::attach(cdp::Cdp::new(socket), display, false).await?;
     let outcome = actions::still(&mut page).await;
     page.close().await;
     outcome

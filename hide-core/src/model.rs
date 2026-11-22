@@ -799,6 +799,11 @@ pub struct LookView {
     /// is not a file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<&'static str>,
+    /// An outside file's grant, name and viewer: the desktop host's id, never
+    /// a path, which a phone's read hands back to that host (`hided/src/mobile/looks.rs`).
+    /// Absent for every other View.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<crate::view_layout::ExternalFile>,
     pub unseen: bool,
     /// When the agent opened it while unseen, else when it was last looked at.
     pub at_unix_ms: u64,

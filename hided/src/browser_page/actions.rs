@@ -1114,12 +1114,14 @@ async fn capture_image(
 const STILL_PIXELS: f64 = 1_500_000.0;
 const STILL_QUALITY: u32 = 70;
 
-/// The visible part of the page as a JPEG, for a phone. It is the same
-/// capture `hide browser screenshot` takes and refuses the same way: a
-/// display behind another tab of its area is `display_hidden`, and nothing
-/// here selects, focuses or raises anything.
+/// The visible part of the page as a JPEG, for a phone. It is the capture
+/// `hide browser screenshot` takes, without its rule that pixels come only
+/// from a display on screen: a still is a read, so a display behind another
+/// tab of its area is taken as Chromium keeps drawing it. One Chromium never
+/// drew does not answer the capture and is `display_hidden` (`unanswered`).
+/// Nothing here selects, focuses or raises anything.
 pub async fn still(page: &mut Page) -> Result<Vec<u8>, Failure> {
-    let probe = page.require_visible().await?;
+    let probe = page.probe().await?;
     let (view, scroll) = (&probe["vv"], &probe["scroll"]);
     let read = |value: &Value, key: &str| value[key].as_f64().filter(|n| n.is_finite());
     let (Some(width), Some(height)) = (read(view, "width"), read(view, "height")) else {
