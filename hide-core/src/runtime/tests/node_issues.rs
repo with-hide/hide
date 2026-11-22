@@ -964,6 +964,7 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
+                identity_read: crate::model::PartRead::Read,
                 repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
@@ -1388,6 +1389,7 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
                     viewer: None,
                     pull_requests_read: true,
                     issues_read: crate::model::PartRead::Read,
+                    identity_read: crate::model::PartRead::Read,
                     repository: None,
                     issues: crate::issues::ProjectIssuesSnapshot {
                         repository: Some("acme/app".to_owned()),
@@ -2219,6 +2221,7 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
+                identity_read: crate::model::PartRead::Read,
                 repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
@@ -2572,6 +2575,7 @@ fn ingest_node_issues(runtime: &mut Runtime, repo: &Repo, numbers: &[u32]) {
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
+                identity_read: crate::model::PartRead::Read,
                 repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),

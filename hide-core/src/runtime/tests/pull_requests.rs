@@ -87,6 +87,7 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
             pull_requests,
             pull_requests_read: true,
             issues_read: crate::model::PartRead::Read,
+            identity_read: crate::model::PartRead::Read,
             repository: None,
         });
     runtime.apply_pull_requests();

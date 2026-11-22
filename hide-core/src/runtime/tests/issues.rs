@@ -340,6 +340,7 @@ fn a_pass_that_cannot_read_dependencies_keeps_the_blockers_read_before() {
                 pull_requests: Vec::new(),
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
+                identity_read: crate::model::PartRead::Read,
                 repository: None,
             }],
         }

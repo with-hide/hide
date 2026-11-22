@@ -578,6 +578,7 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             pull_requests,
             pull_requests_read: read,
             issues_read: crate::model::PartRead::Read,
+            identity_read: crate::model::PartRead::Read,
             // The identity is read on its own: the record keys on it, not
             // on the issues answer.
             repository: Some(crate::model::RepositoryIdentity {

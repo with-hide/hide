@@ -1046,6 +1046,7 @@ fn a_failed_lookup_keeps_the_pull_requests_it_could_not_refresh() {
             pull_requests: vec![pull_request.clone()],
             pull_requests_read: true,
             issues_read: crate::model::PartRead::Read,
+            identity_read: crate::model::PartRead::Read,
             repository: None,
         }],
     });
