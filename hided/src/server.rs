@@ -4422,7 +4422,7 @@ fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
 /// The boundary's refusal for a device's answer about a path: a file that is
 /// not there, or a path its root does not hold. Anything else is a read that
 /// failed.
-fn device_refusal(error: &hide_core::node_access::LinkError) -> Option<Refusal> {
+pub(crate) fn device_refusal(error: &hide_core::node_access::LinkError) -> Option<Refusal> {
     use hide_node_link::ErrorCode;
     let hide_core::node_access::LinkError::Refused(error) = error else {
         return None;

@@ -4,7 +4,7 @@ import { expect, test as base, type Page } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { screenshot } from "./wire";
-import { LOOK_CHUNK, LOOK_WINDOW, startPhoneRelay } from "./phone-relay-fixture";
+import { LOOK_CHUNK, startPhoneRelay } from "./phone-relay-fixture";
 import { installBrowserPush } from "./phone-push-platform";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
@@ -403,10 +403,10 @@ function noiseBmp(width: number, height: number): Buffer {
   return bmp;
 }
 
-test("a large image arrives in many chunks, each confirmed, with no more than the window out at once", async ({ page, relay }) => {
+test("a large image arrives in many chunks, each confirmed in order, and draws whole", async ({ page, relay }) => {
   const bytes = noiseBmp(320, 300);
   const chunks = Math.ceil(bytes.length / LOOK_CHUNK);
-  expect(chunks).toBeGreaterThan(LOOK_WINDOW);
+  expect(chunks).toBeGreaterThan(3);
   relay.state.look = { id: "v-image", kind: "image", name: "screen.bmp", mode: "image", bytes };
   await pair(page, relay);
   await page.locator('[data-phone-agent="test-device|pane-one"]').click();
@@ -415,9 +415,8 @@ test("a large image arrives in many chunks, each confirmed, with no more than th
   const image = page.locator('[data-phone-look-state="image"] img');
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => [element.naturalWidth, element.naturalHeight])).toEqual([320, 300]);
-  // The phone confirmed every chunk in order, and the device never ran past its window waiting for it.
+  // The phone confirmed every chunk, in order, which is what lets a computer send the next.
   expect(relay.received.filter((frame) => frame.type === "look_ack").map((frame) => frame.seq)).toEqual([...Array(chunks).keys()]);
-  expect(relay.wire.lookAhead).toBeLessThanOrEqual(LOOK_WINDOW);
 });
 
 for (const [state, title] of [["not_found", "This file isn't here now"], ["outside_roots", "This file can't be shown on the phone"]] as const) {

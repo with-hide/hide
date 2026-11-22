@@ -12,9 +12,10 @@ import { ownUntilWorkerExit } from "./worker-owned.ts";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 import type { LookHead, LookResultState, LookRow, PhoneAgent, ServerFrame } from "../src/mobile/protocol";
 
-/** hided's chunk (`looks.rs`, `CHUNK`: the raw bytes whose frame is one relay frame) and its window of chunks ahead of the last ack. */
-export const LOOK_CHUNK = 49_008;
-export const LOOK_WINDOW = 4;
+/** The fixture's own chunk and its chunks ahead of the last ack: what the phone is shown to handle is many chunks, confirmed one
+ * by one, whatever size and pace hided picks (`hided/src/mobile/looks.rs` holds and tests its own). */
+export const LOOK_CHUNK = 30_000;
+const LOOK_WINDOW = 3;
 /** A View the fixture's agent opened: bytes sent in chunks, or a `look_result` state alone. */
 export type FixtureLook = { id: string; kind: LookRow["kind"]; name: string } & ({ mode: LookHead["mode"]; bytes: Buffer } | { result: LookResultState });
 
@@ -92,9 +93,8 @@ export async function startPhoneRelay(port = 0) {
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
   const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false, look: null as FixtureLook | null };
-  // `lookAhead` is the most chunks that were ever out beyond the phone's last `look_ack`.
-  const wire = { binaryFrames: 0, lookAhead: 0 };
-  // The transfer in flight, paced as hided paces it (`hided/src/mobile/looks.rs`, `chunks`): driven by the phone's acks.
+  const wire = { binaryFrames: 0 };
+  // The transfer in flight, driven by the phone's acks as hided's is.
   let transfer: { id: number; requestId: string; viewId: string; parts: string[]; sent: number; acked: number; ended: boolean } | null = null;
   const pump = async () => {
     const t = transfer;
@@ -102,7 +102,6 @@ export async function startPhoneRelay(port = 0) {
     while (t.sent < t.parts.length && t.sent < t.acked + LOOK_WINDOW) {
       await send(t.id, { type: "look_chunk", request_id: t.requestId, seq: t.sent, data: t.parts[t.sent] });
       t.sent++;
-      wire.lookAhead = Math.max(wire.lookAhead, t.sent - t.acked);
     }
     if (t.sent === t.parts.length && !t.ended) {
       t.ended = true;
