@@ -2372,8 +2372,6 @@ mod tests {
         assert_eq!(registry.entries.lock().unwrap().len(), 2);
     }
 
-    // Windows cannot read a process's working directory (`cwd_of`).
-    #[cfg(unix)]
     #[test]
     fn only_the_guest_a_split_left_the_device_folder_to_is_not_handed_its_own_hide() {
         let home = tempfile::tempdir().unwrap();
@@ -2407,6 +2405,8 @@ mod tests {
         assert!(!split_guest_in(home.path(), &"cd".repeat(32)));
     }
 
+    // Windows cannot read a process's working directory (`cwd_of`).
+    #[cfg(unix)]
     #[test]
     fn bootstrap_without_an_engine_socket_still_reaches_the_checkout_fallback() {
         let directory = tempfile::tempdir().unwrap();
