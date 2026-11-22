@@ -146,7 +146,7 @@ it("keeps the reply bar for an agent that is awake, and names a refusal that sti
 // works the foot of its conversation says it thinks, counted on the phone from its last word; no new frame field carries either.
 it("draws the state strip from the row and a thinking line while the agent works, which goes once it stops", async () => {
   const now = Date.now();
-  const working = agent({ group: "working", mark: "going", status_code: "working", changed_at_unix_ms: now - 60_000, line: { text: "Reading holder.log", mode: "news", tone: "subtle" } });
+  const working = agent({ group: "working", mark: "going", status_code: "working", changed_at_unix_ms: now - 60_000, line: { text: "Reading holder.log", mode: "kept", tone: "subtle" } });
   const { container, serve, unmount } = await openDetail(working);
   try {
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", before: null, messages: [
@@ -155,6 +155,7 @@ it("draws the state strip from the row and a thinking line while the agent works
     ] });
     const strip = container.querySelector("[data-phone-status-strip]")!;
     expect(strip.getAttribute("data-phone-status-strip")).toBe("Working");
+    // The list's line leads with its word (`Working · Reading holder.log`); the strip says that word once, as its own.
     expect(strip.querySelector("[data-phone-status-line]")!.textContent).toBe("Reading holder.log");
     expect(strip.textContent).toContain("1m");
     // The thinking line counts from the agent's last word, not the row's older change.

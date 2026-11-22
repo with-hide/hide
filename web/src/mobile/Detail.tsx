@@ -21,7 +21,7 @@ import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
 import { AgentLead, PhoneHumanTurn, PlaceParts } from "./parts";
 import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
-import { lineText } from "../agentRow";
+import { lineParts } from "../agentRow";
 import { statusText } from "../agentStatus";
 import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
@@ -245,8 +245,10 @@ function ViewingHead({ row, opener }: { row: { name: string; kind: LookKind; at:
 /** Where the agent stands, under the head (Doop 02, 09, 10): the state's word in its mark's colour, the row's line and how long ago it changed. */
 function AgentStrip({ agent }: { agent: PhoneAgent }) {
   const { t } = useInterfaceTranslation();
-  const line = agent.line ? lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line) : null;
-  return <StatusStrip word={statusText(t, agent.status_code)} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
+  // The word that leads the row's line (`작업 중`, `자식 2개 기다림`) is the strip's word, so it is said once.
+  const parts = agent.line ? lineParts(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line) : null;
+  const line = parts ? [parts.text, parts.tail].filter(Boolean).join(" · ") || null : null;
+  return <StatusStrip word={parts?.lead ?? statusText(t, agent.status_code)} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
 }
 
 /** The strip's word takes the colour of the row's mark. */
