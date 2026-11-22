@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // PRD hide-external-control B40: a tool's map is the tool's work only. Its
-// centre is the tool, by its rail tile's monogram, where a device's map draws
+// centre is the tool, by the bot's owl, where a device's map draws
 // the operator with a `+`; the missions it lists wait on the tool, not the
 // operator; and nothing on it starts the operator's work.
 import { readFileSync } from "node:fs";
@@ -69,7 +69,7 @@ async function drawn(tool: ToolCell | null, working: boolean) {
   const centre = container.querySelector<HTMLElement>("[data-graph-center]");
   const picture = centre?.querySelector<HTMLElement>('[role="img"]');
   const seen = {
-    centre: centre && picture ? { id: centre.dataset.graphCenter, glyph: picture.textContent, name: picture.getAttribute("aria-label"), start: centre.querySelector("[data-graph-operator-start]") !== null } : null,
+    centre: centre && picture ? { id: centre.dataset.graphCenter, glyph: picture.querySelector("[data-bot-face]") ? "owl" : picture.textContent, name: picture.getAttribute("aria-label"), start: centre.querySelector("[data-graph-operator-start]") !== null } : null,
     asks: [...container.querySelectorAll<HTMLElement>("[data-graph-mission-ask]")].map((item) => item.dataset.graphMissionAsk),
     heading: container.querySelector(".og-waiting h3")?.firstChild?.textContent?.trim() ?? null,
     starts: container.querySelectorAll("[data-graph-project-row-start], [data-graph-welcome-action='start_agent'], [data-graph-empty-action='start_agent']").length,
@@ -79,15 +79,15 @@ async function drawn(tool: ToolCell | null, working: boolean) {
   return seen;
 }
 
-it("centres a device's map on the operator with its + and a tool's map on the tool's letter with none", async () => {
+it("centres a device's map on the operator with its + and a tool's map on the bot's owl with none", async () => {
   expect((await drawn(null, true)).centre).toEqual({ id: "operator", glyph: "You", name: "You", start: true });
-  expect((await drawn(TOOL, true)).centre).toEqual({ id: TOOL.connection, glyph: "N", name: "nightly · External tool", start: false });
+  expect((await drawn(TOOL, true)).centre).toEqual({ id: TOOL.connection, glyph: "owl", name: "nightly · Bot", start: false });
 });
 
 it("lists the missions waiting on the tool in its map, and the operator's only in the device's", async () => {
   for (const working of [true, false]) {
     expect(await drawn(null, working).then(({ asks, heading }) => ({ asks, heading })), `device, drawn ${working}`).toEqual({ asks: ["mission-operator"], heading: "Waiting on you" });
-    expect(await drawn(TOOL, working).then(({ asks, heading }) => ({ asks, heading })), `tool, drawn ${working}`).toEqual({ asks: ["mission-tool"], heading: "Tool's turn" });
+    expect(await drawn(TOOL, working).then(({ asks, heading }) => ({ asks, heading })), `tool, drawn ${working}`).toEqual({ asks: ["mission-tool"], heading: "Bot's turn" });
   }
 });
 
@@ -171,8 +171,8 @@ it("words and counts a tool's map filter as the tool's cell does: its turn is wh
   ] } }] };
   cell.devices[0]!.members = ["q", "h"].map((pane_id) => ({ pane_id, project_id: "alpha", checkout_id: "alpha-main" }));
   const seen = await map([ASKING_TOOL, WAITING_ON_PERSON], cell);
-  expect(seen.filter).toEqual(["All 2", "Tool's turn 1", "Working 1", "Unread results 0"]);
-  expect(seen.heading).toBe("Tool's turn");
+  expect(seen.filter).toEqual(["All 2", "Bot's turn 1", "Working 1", "Unread results 0"]);
+  expect(seen.heading).toBe("Bot's turn");
   expect(seen.asks.map((ask) => ask.pane)).toEqual(["q"]);
 });
 
