@@ -2685,6 +2685,7 @@ impl Runtime {
                         std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
                     self.reconcile_peer_devices(&before);
                 }
+                self.core_machines_told();
                 changed
             }
             Event::AiSettings(payload) => self.apply_ai_settings(payload),

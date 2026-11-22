@@ -56,6 +56,34 @@ impl Runtime {
             }
             _ => return Err("pane_required".into()),
         };
+        // A pane or an agent of another machine's core is read by that
+        // core (PRD device-connect-iroh D-72).
+        if let Some(forward) = self.core_pane_forward(caller_pane, &command)? {
+            return Ok(Prepared {
+                engine: None,
+                step: Step::Core(Box::new(forward)),
+                gate: None,
+                agent_kind: None,
+                noted: None,
+                caller: caller_pane.to_owned(),
+                runtime: std::sync::Weak::new(),
+            });
+        }
+        self.pane_command_as(device, caller_pane, &context, own.as_ref(), command)
+    }
+
+    /// What `command` does for a caller already admitted: `caller_pane` is
+    /// its pane, empty for one that has none, `context` where it runs, and
+    /// `own` the work an own-mode bot's `agent read` is held to, none for
+    /// every other caller.
+    pub(super) fn pane_command_as(
+        &self,
+        device: &str,
+        caller_pane: &str,
+        context: &Context,
+        own: Option<&super::access::OwnWork>,
+        command: PaneCommand,
+    ) -> Result<Prepared, String> {
         if let Some(step) = self.guest_pane_step(&command)? {
             return Ok(Prepared {
                 engine: None,
@@ -115,7 +143,7 @@ impl Runtime {
                 )
             }
             PaneCommand::AgentRead { agent, lines } => {
-                let observation = self.agent_read_target(device, &agent, own.as_ref())?;
+                let observation = self.agent_read_target(device, &agent, own)?;
                 (
                     observation.actor.device_id.clone(),
                     // The answer names the agent's pane as `hide pane send`

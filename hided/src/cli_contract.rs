@@ -692,13 +692,26 @@ pub const COMMANDS: &[Spec] = &[
         &["agent", "agent_register_check"],
     ),
     // Every registration, or with `--live` only those not ended (running
-    // or asleep).
-    spec(
-        &["agent", "list"],
-        &[],
-        &[switch("--live"), switch("--json")],
-        &["agent_list"],
-    ),
+    // or asleep). With `--machine`, the registrations another machine's
+    // core keeps, asked of that core (PRD device-connect-iroh D-72).
+    Spec {
+        words: &["agent", "list"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--live"),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["agent_list"],
+        refusals: &[
+            "machine_unknown",
+            "machine_not_permitted",
+            "machine_unavailable",
+        ],
+    },
     // A registration by its id with its agent's state, or a spawn by its id
     // or the caller's intent: its child's registration once it has one, the
     // spawn and its pane's state until then; else a registration by its name
@@ -711,7 +724,12 @@ pub const COMMANDS: &[Spec] = &[
         options: &[switch("--json")],
         rest: None,
         answers: &["agent_show", "spawn_show"],
-        refusals: &["agent_unavailable", "target_ambiguous"],
+        refusals: &[
+            "agent_unavailable",
+            "target_ambiguous",
+            "machine_not_permitted",
+            "machine_unavailable",
+        ],
     },
     // The caller's own registration, by its attested pane, device and
     // session; only a pane-bound credential can ask.
@@ -963,6 +981,7 @@ pub const COMMANDS: &[Spec] = &[
             "native_identity_unavailable",
             "identity_waits_full",
             "session_too_long",
+            "sender_not_registered",
             "codex_capability_unknown",
             "invalid_brief",
             "invalid_agent_name",
@@ -1498,6 +1517,8 @@ pub const COMMANDS: &[Spec] = &[
             "lines_out_of_range",
             "pane_unavailable",
             "guest_pane_read",
+            "machine_not_permitted",
+            "machine_unavailable",
         ],
     },
     Spec {
@@ -1548,6 +1569,7 @@ pub const COMMANDS: &[Spec] = &[
             "send_unconfirmed",
             "operator_typing",
             "guest_pane_keys",
+            "machine_not_permitted",
         ],
     },
     Spec {
@@ -1597,6 +1619,8 @@ pub const COMMANDS: &[Spec] = &[
             "lines_out_of_range",
             "agent_unavailable",
             "target_ambiguous",
+            "machine_not_permitted",
+            "machine_unavailable",
         ],
     },
     Spec {
@@ -1679,10 +1703,13 @@ pub const COMMANDS: &[Spec] = &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
+            "machine_not_permitted",
             "no_parent",
             "outbox_full",
             "outbox_unavailable",
             "participant_registering",
+            "recipient_not_agent",
+            "sender_not_registered",
         ],
     },
     spec(

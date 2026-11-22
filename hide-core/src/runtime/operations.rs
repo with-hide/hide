@@ -346,6 +346,7 @@ impl Runtime {
         self.drive_unreadable_letters();
         self.drive_blocked_notes();
         self.drive_heal_letters(now_unix_ms);
+        self.drive_mission_reports(now_unix_ms);
         self.with_close_geometry(|runtime| runtime.tick_operations(now_unix_ms))
     }
 

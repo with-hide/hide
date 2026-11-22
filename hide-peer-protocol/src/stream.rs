@@ -26,10 +26,14 @@ pub enum StreamKind {
     File,
     Page,
     Screen,
+    /// What the two machines' cores say to each other (D-72): opened by a
+    /// side that holds a grant, written by both, and apart from the
+    /// management stream, which belongs to a guest's node.
+    Core,
 }
 
 impl StreamKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Hello,
         Self::Pairing,
         Self::Revoke,
@@ -40,6 +44,7 @@ impl StreamKind {
         Self::File,
         Self::Page,
         Self::Screen,
+        Self::Core,
     ];
 
     pub const fn tag(self) -> u8 {
@@ -54,6 +59,7 @@ impl StreamKind {
             Self::File => 8,
             Self::Page => 9,
             Self::Screen => 10,
+            Self::Core => 11,
         }
     }
 
@@ -73,6 +79,7 @@ impl StreamKind {
             Self::File => "file",
             Self::Page => "page",
             Self::Screen => "screen",
+            Self::Core => "core",
         }
     }
 
@@ -83,7 +90,7 @@ impl StreamKind {
     pub const fn priority(self) -> i32 {
         match self {
             Self::Keys => 100,
-            Self::Hello | Self::Pairing | Self::Revoke | Self::Management => 75,
+            Self::Hello | Self::Pairing | Self::Revoke | Self::Management | Self::Core => 75,
             Self::NodeLink => 50,
             Self::Terminal | Self::Screen => 0,
             Self::File | Self::Page => -100,

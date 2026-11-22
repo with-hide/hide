@@ -38,6 +38,7 @@ Target names and pane IDs resolve against the daemon's current observations.
 Each machine's engine numbers its panes, and an agent learns the numbers from its own machine's engine, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
 A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.
 A pane on another machine is reached by the agent's name or registration ID, or by the full address of a device's pane, `remote:<device>:pane:<id>`.
+An agent or a pane that another machine's own core keeps is named `core:<device>:agent:<id>` or `core:<device>:pane:<id>` ([Another machine's agents](#another-machines-agents)); `remote:<device>:…` names only what this core keeps on that machine.
 The reference the shell copies for a device's pane (Copy name and ID, a dragged agent row, a pane's `@`) carries that full address, so an agent anywhere can read, type into or write to it as written; a pane of the caller's machine is copied bare.
 The session-start text and `hide guide` (`PURPOSE_CONTEXT`) say so, and the `pane_unavailable` and `agent_unavailable` refusals name the full address in their `next_action`.
 The same reading applies to the pane IDs of `--actor` and `--observer`.
@@ -1062,6 +1063,7 @@ Any other key is a name or a pane, as a letter's recipient is named, a bare pane
 A key that names nothing, such as the number of an id without its `agent-`, is `agent_unavailable`, whose next action says how agents are named and does not tell the caller to retry, since the same key answers the same.
 A spawn that stopped partway after it made its pane (`native_identity_unavailable`, `brief_not_submitted`, `agent_not_started`, `pane_busy`) carries `"spawn":{"id","pane"}` beside its code and next action (`executor::incomplete_spawn`), printed by the CLI as `error.spawn`, and running the same command again resumes that spawn and never starts a second child.
 `hide agent list` answers every registration of an agent the ledger keeps, ended ones included, and `hide agent list --live` only those not ended (`running`, `asleep` or `closed`); a plain list answers as it always did, so a caller that reads ended registrations from it keeps them.
+`hide agent list --machine <device>` asks the core of a machine this one opened for its own registrations ([Another machine's agents](#another-machines-agents)).
 A code-owned identity's record (Hide's own, such as Desk's or Hide AI's, an external tool's, the operator's) is the origin of the work it starts and runs in no pane, so neither list names it; `origin` and `origin_tool` on the agents it started still do, and `hide agent show <id>` reads it.
 `list` and `show` give each registration's life as `runtime`: `running`, `asleep` while Hide holds its agent asleep (put to sleep, waking, or a wake that failed, in its pane or with its pane closed), `closed` while its pane is closed and its Reopen closed entry is listed, and `ended` once the record ended; `connection` is `connected` only while it runs.
 The life has one source, the core's sleep records read for the registration's pane and session or the dormant record that holds it, and the closes and Reopen closed entries that hold it (`Runtime::sleeping_registrations`, beside `asleep_route` and `closed_target`, which letters to a sleeper or a closed agent read), and one decision (`coordination::life`), which `hide ps` reads too, so the two never answer differently for the same agent.
@@ -1108,6 +1110,7 @@ A choice the kind does not take is refused `invalid_launch_choice` before anythi
 Choose responsibility when creating the agent; it cannot be transferred afterwards.
 With `--parent here` or the caller's own id, the agent is delegated: its parent owns the work, lineage is written immediately and an automatic watch starts.
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
+The spawner hears of it once more only when that agent conducts a mission: the mission's close sends the spawner its report (Another machine's agents, below).
 Both modes create a separate tab, in an existing checkout or a new worktree, without changing the current screen or keyboard focus.
 A new worktree's branch starts where New worktree's does: from `origin/<branch>` as last fetched when the repository folder's own branch has no commits origin lacks, else from that branch ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)); on a device whose helper is not connected the spawn cannot read that and leaves the start to the engine, the folder's own HEAD.
 A spawn a mission admitted into the mission's own project starts its new worktree from the mission's destination instead of the repository folder's own branch, by the same rule ([Missions](#missions)); a destination the repository does not have refuses the spawn with Git's reason, and nothing else is started from in its place.
@@ -1312,7 +1315,7 @@ A ledger with no wait writes no `identity_waits` field, and a build from before 
 They need the running daemon and a pane-bound caller, like the letter commands; a caller outside a Hide pane is refused by the credential boundary, and a checkout-bound one with `pane_required`.
 The daemon admits the caller's pane and checkout on the core's owner thread (`Runtime::prepare_pane_command`), and the engine calls run on the caller's task, off the runtime lock, through the engine boundary (`hide_core::pane_command`); nothing they do is recorded in the ledger.
 
-- They reach every pane of the machine they name: a bare pane id is a pane of the caller's machine, as `hide ps` lists it, and `remote:<device>:pane:<id>` a device's; an agent is named as a letter's target is, by its name, registration id or pane, and two agents of one name are `target_ambiguous`.
+- They reach every pane of the machine they name: a bare pane id is a pane of the caller's machine, as `hide ps` lists it, `remote:<device>:pane:<id>` a device's, and `core:<device>:pane:<id>` or `core:<device>:agent:<id>` one another machine's core keeps, which is read by that core and never typed into ([Another machine's agents](#another-machines-agents)); an agent is named as a letter's target is, by its name, registration id or pane, and two agents of one name are `target_ambiguous`.
 - A read prints the pane's last 120 lines unwrapped and without styling (`recent_unwrapped`), at most 2,000 (`lines_out_of_range` past it); `--json` prints the answer line `{"ok":true,"value":{"pane","text","truncated"}}` instead.
   `hide pane read <pane> --source visible --format ansi [--json]` reads the whole visible screen with its physical rows and styling through the engine's existing `read_screen` operation, without taking over its terminal connection.
   Both options are required together, and this whole-screen form refuses `--lines`; the ordinary read and `hide agent read` keep their defaults.
@@ -1388,6 +1391,56 @@ The tree uses box-drawing characters on every system: Rust writes UTF-8 to a pip
 The answer is what the core already holds: the navigator's projects, tabs and agent rows, each device's last session, the mission map and the delivery ledger.
 It asks the engine and the devices nothing; under the runtime's lock it copies one row per pane and per agent row, and the ledger join and serialization run after the lock (`hide-core/src/runtime/ps.rs`).
 Like `hide agent catalog`, it needs the running daemon and a Hide credential but no open renderer, and a caller that is not an agent pane gets the same answer with no `you`.
+
+### Another machine's agents
+
+Two paired machines each run a core of their own ([ARCHITECTURE.md: The peer connection](ARCHITECTURE.md#the-peer-connection)), and an agent of one reaches the other's agents through the grant between them (PRD device-connect-iroh D-71, D-72).
+What the other core keeps is named `core:<device>:agent:<registration id>` or `core:<device>:pane:<pane id>`, read beside the `remote:` and `guest:` forms in `hide-node-link/src/address.rs` and nowhere else.
+An agent of another core enters this core at the boundary an external tool does, as `Actor::core`: `hide:core:<device>:agent|pane:<id>`, named `hide:core:<machine's name>:<the agent's name there>`, of kind `hide`, on this core's machine, one identity per agent whatever it or its machine is called later.
+The identity belongs to the connection its machine proved, not to the device id the machine says: its session is the digest of the caller it acts as, the connection id then that slot (`Actor::core_caller`), so the agents of two connections that say one device id are two identities, and a letter kept, a reply, a settle and a remembered start of one are never the other's.
+A `core:` name whose device id two paired connections say names neither and is refused `device_ambiguous`.
+A letter's `core:` address is read where every key that names an agent is (`Runtime::resolve_target`, as `Target::Core`), so the send, its retry and what holds a bot run on that one reading; the exact id of the registration this ledger keeps of such an agent wins as any registration id does, and names it on the connection it was registered on.
+A letter it wrote shows that name, so its recipient reads which machine wrote it.
+
+`hide_core::access` judges it from where its machine stands (`core_standing`), which the core reads from the paired machines the daemon told it in one event (`peer_machines`); the daemon filters nothing.
+A machine this one opened itself to (its grant here is active) runs what a bot of the whole Hide runs (`core_admit`, `core_call_admit`, judged as `Mode::All`: a machine is opened whole or not at all, so none stands in own mode): it writes letters, reads with `hide agent list --machine <device>`, `hide agent show`, `hide agent read` and `hide pane read`, and starts agents with `hide agent spawn --machine <device>` and no `--parent`.
+A machine that is only opened (this machine's grant there is active, and none here) answers the letters it got and sends the `report` of a start this machine's agent asked it for, and writes nothing first: the rest is refused `machine_not_permitted`, where it is written and again by the core that would keep it.
+The receiving core judges it twice with the same table (`core_inbound_admit`): when the command is prepared and again just before it is stored or changes anything (`core_command_current`, `core_mutation_current`), so a first letter or a start prepared under a grant that was paused or taken back meanwhile is refused there, even while the other direction still stands.
+With grants both ways both write.
+Only an agent writes to another core: a tool, Hide's own identities and another core's agent are refused `machine_not_permitted`, so nothing is passed on through a third machine.
+A bot in own mode is refused `access_not_own_work` before that, as for any agent it did not start.
+`hide pane send` types into no pane of another core and is refused `machine_not_permitted`; a read or a start asked while the two are not connected is refused `machine_unavailable`.
+
+A letter between two machines is between two registrations, as every letter is (PRD letters-missions-simplify D-21).
+Its target is `core:<device>:agent:<id>`, the registration id or the registered name of an agent there; a pane's address is refused `recipient_not_agent` where it is written.
+Its sender is the registration it writes as: an agent Hide holds none for is registered from what Hide reads of its pane, as any letter's sender is, and one Hide reads no agent session from is refused `sender_not_registered`, for a letter and for a start, because the other machine answers an agent.
+The letter is kept by the sending core's ledger as any letter is and waits there as `pending`, with no deadline, while the other machine is away.
+The daemon carries it on the stream the two cores share ([ARCHITECTURE.md: The two cores' stream](ARCHITECTURE.md#the-two-cores-stream)), named by that core's letter id and its sender's registration id and name; the other core keeps it under an id of its own and remembers the sender's (`core_id`), answers with the registration that took it, and a reply names the sender's id back.
+The receiving core takes it for an agent only: the registration it names, or the agent that runs in that registration's place now (`coordination::live_successor`), never a pane and never one of Hide's own identities, and any other target is refused `target_unavailable`.
+A letter is sent again until it is answered, and the receiving core keeps it once, by its sender's connection and letter id: asked again, it is answered as it stands, taken by its agent, or `no_recipient` once that agent ended with no agent after it.
+A refusal there (its ledger's cap, an intent conflict, a recipient that is gone) is answered with its reason: the letter ends `no_recipient` with that reason as its failure code, its sender reads it once as a status cell (`letter:<id>`, which says why and how to send again), and the letters behind it go on.
+A reply whose original the ledger no longer keeps and a letter whose sender has no registration end the same way before they leave (`letter_unavailable`, `sender_not_registered`).
+
+A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked, by registration id, and on which connection (`ledger::CoreStart`, at most 256), saved before the ask leaves, which is what lets that machine's result report in.
+The asker is registered with that write when Hide holds no registration for it, and the other core is told its registration id and name.
+An asker whose pane another agent took hands its starts to that agent (`Ledger::hand_core_starts`), so the report reaches the agent that runs in its place.
+Asked again, the record takes the newest place and time; at the cap the oldest record whose asker ended goes, since no report reaches an ended agent, and while every asker may still take its report the new start is refused `capacity` and nothing is dropped, so a long mission's report is not lost to newer starts.
+When a pairing ends, the store's upkeep ends that machine's identities here and forgets the starts asked of it (`coordination::end_gone_cores`), as it does for a gone tool.
+
+A Conductor an agent started with no parent reports to that agent, on its own machine as on another (PRD device-connect-iroh D-72): when its mission closes, by its own `hide mission close` or by Hide once every node is done, the core sends that origin the mission's report as a `report` letter, the Conductor's own (`hide-core/src/runtime/mission_report.rs`).
+An origin of the Conductor's own core is named by the registration that runs in its place now, and one whose line ended with no agent after it is sent none; a Conductor the operator typed, a fork, and one Hide or an external tool started owe no report.
+The debt is part of the mission's record: the close saves it with the close itself (`origin_report: owed`, `missions::OriginReport`), and a start reads the owed reports back from the stored missions, so a core that ends between the close and the letter writes it at its next start.
+The letter is prepared at the next tick as a send from the Conductor's pane, so every rule of a letter applies to it, and written on a thread of its own.
+It names an origin on another machine by the registration this ledger keeps of it, which is that agent on the connection its machine proved when it asked (`Runtime::core_send_target`): the device id is not read again, so a second paired connection that says the same id neither makes the report ambiguous nor takes it, and once the asker's connection is paired no longer the report is refused `machine_not_permitted`.
+Only what became of the letter settles the debt: kept by the store (`sent`, with the letter's id), or refused for good (`refused`, with the reason: the Conductor ended, the two machines are paired no longer, the origin is gone), which the Conductor reads once as a status cell (`mission-report:<id>`) so it can still write the letter itself.
+A Conductor away from its pane and a store that could not keep the letter (`delivery_unavailable`, `ledger_unavailable`, `delivery_timeout`) leave the debt, which is tried again 30 s later.
+The same close asked again is the same letter, and a close with another end or report (a mission that waited for its merges turning done) is a new one, which a send prepared for the earlier close does not settle.
+A Conductor under a parent, a fork, and one an agent of its own machine, a tool or Hide started send none.
+A question for a person (내 차례) reaches people only: no agent of another machine answers it.
+
+`hide-core/src/runtime/tests/core_letters.rs` runs two cores against each other for each of these, and `hided/src/peer_core.rs` the stream between two endpoints.
+What the ledger and a mission keep of another machine is also written over every released state folder and read by the next start ([TESTING.md: Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)).
+`hided/tests/it/pairing/core_letters.rs` is the journey: two daemons of a shipped copy of the build pair by a link, and a stand-in agent in a pane of each runs the shipped `hide` through a letter and its reply, the reads, both refusals, a start with no parent and the closed mission's report.
 
 ## Missions
 

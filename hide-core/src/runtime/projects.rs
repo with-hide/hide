@@ -2027,6 +2027,18 @@ impl Runtime {
         self.snapshot.git_worktrees_loading = true;
     }
 
+    /// The core made a worktree in a repository of this machine (a start
+    /// did), so the catalog is asked again and the wait for it announced, as
+    /// after a worktree the New Task flow makes. With no window this is the
+    /// only thing that reads the new worktree: the Git watch rests then
+    /// (`WorktreeReader::read_unwatched_if_due`).
+    pub(crate) fn worktree_made_here(&mut self) {
+        self.refresh_worktrees();
+        if let Some(context) = &self.worker_context {
+            context.notifier.notify();
+        }
+    }
+
     pub(super) fn refresh_project_worktrees(&mut self, project_path: &str) {
         let generation = self
             .worktree_project_generations

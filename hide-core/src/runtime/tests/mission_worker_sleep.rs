@@ -1712,7 +1712,10 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
         let shown = ask(crate::coordination::Command::Show {
             id: "agent-2".into(),
         });
-        let list = ask(crate::coordination::Command::List { live: false });
+        let list = ask(crate::coordination::Command::List {
+            live: false,
+            machine: None,
+        });
         let listed = list["items"]
             .as_array()
             .unwrap()
@@ -1725,7 +1728,10 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
         );
         // `hide agent list --live` lists it while it sleeps or runs and
         // leaves it out once it ended, and lists no ended agent.
-        let live = ask(crate::coordination::Command::List { live: true });
+        let live = ask(crate::coordination::Command::List {
+            live: true,
+            machine: None,
+        });
         let live = live["items"].as_array().unwrap();
         assert!(live.iter().all(|item| item["runtime"] != "ended"));
         assert_eq!(

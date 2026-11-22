@@ -4,6 +4,28 @@ use crate::env::Env;
 use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
 pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+
+/// `hide agent list` as [`USAGE`] names it, and as a build that offers
+/// connections between two Hides does: with the machine whose own core is
+/// asked for its agents.
+const LIST: &str = "hide agent list [--live]";
+const LIST_ACROSS: &str = "hide agent list [--live] [--machine <device id>]";
+
+/// What `hide --help` and a wrong `hide agent` print: [`USAGE`], with
+/// `--machine` on `hide agent list` only where `device_connect`
+/// (`env::Env::device_connect`) is on.
+pub fn usage(device_connect: bool) -> String {
+    if device_connect {
+        USAGE.replacen(LIST, LIST_ACROSS, 1)
+    } else {
+        USAGE.to_owned()
+    }
+}
+
+/// [`usage`] for this process's environment (`env::device_connect_here`).
+pub fn usage_here() -> String {
+    usage(crate::env::device_connect_here())
+}
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -146,6 +168,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                     ]
                     .as_slice(),
                     "end" => ["--actor"].as_slice(),
+                    "list" => ["--machine"].as_slice(),
                     _ => &[],
                 };
                 if flags.contains_key(flag) {
@@ -267,7 +290,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 },
             });
         }
-        "list" => Command::List { live },
+        "list" => Command::List {
+            live,
+            machine: flags.remove("--machine"),
+        },
         // The core judges the kind and the place, so its refusals say what
         // to do (`human_kind_unknown`, `human_place_required`).
         "ask-human" if clear => {
@@ -688,6 +714,17 @@ mod tests {
         assert!(SPAWN_HELP.contains("run it again without --beside to open it in a new tab"));
     }
 
+    /// The read of another machine's agents is printed only by a build that
+    /// offers connections between two Hides. The parser takes the option in
+    /// every build; one that offers none has no machine to ask.
+    #[test]
+    fn the_list_names_another_machine_only_where_hides_connect() {
+        assert_eq!(usage(false), USAGE);
+        assert!(!usage(false).contains(LIST_ACROSS));
+        assert!(usage(true).contains(LIST_ACROSS));
+        assert_eq!(usage(true).replacen(LIST_ACROSS, LIST, 1), USAGE);
+    }
+
     #[test]
     fn machine_names_the_device_for_either_mode_and_is_in_every_help() {
         let spawn = |extra: &[&str]| {
@@ -924,16 +961,34 @@ mod tests {
         // agents not ended.
         let lists = |args: &[&str]| match line(args) {
             Ok(Delivery::Agents {
-                command: Command::List { live },
+                command:
+                    Command::List {
+                        live,
+                        machine: None,
+                    },
             }) => Ok(live),
             other => Err(format!("{other:?}")),
         };
+        // `--machine` asks another machine's core for its own agents.
+        assert!(matches!(
+            line(&["list", "--live", "--machine", "mac-mini"]),
+            Ok(Delivery::Agents {
+                command: Command::List {
+                    live: true,
+                    machine: Some(machine),
+                },
+            }) if machine == "mac-mini"
+        ));
         assert_eq!(lists(&["list"]), Ok(false));
         assert_eq!(lists(&["list", "--live", "--json"]), Ok(true));
         assert!(lists(&["list", "--live", "--live"]).is_err());
         assert!(lists(&["show", "agent-1", "--live"]).is_err());
         assert_eq!(
-            serde_json::to_value(Command::List { live: false }).unwrap(),
+            serde_json::to_value(Command::List {
+                live: false,
+                machine: None,
+            })
+            .unwrap(),
             serde_json::json!({"action": "list"}),
             "a plain list reads as an older daemon expects"
         );
