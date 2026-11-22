@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 mod facts;
 mod git;
+pub mod host;
 pub mod payload;
 #[cfg(test)]
 mod tests;
@@ -328,7 +329,7 @@ impl Rule {
         match self {
             Self::WorktreeFolder => "Guard working folders",
             Self::BaseBranch => "Guard the base branch",
-            Self::AgentMerge => "Block agents from merging pull requests",
+            Self::AgentMerge => "Block agents from merging pull requests and merge requests",
             Self::GitCommands => "Block risky Git commands",
             Self::Files => "Guard files",
         }
