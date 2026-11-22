@@ -450,10 +450,6 @@ pub struct Config {
     /// The desktop windows' gateways, which a page View's screenshot goes
     /// through (`page_shot.rs`).
     pub browser_control: Arc<crate::browser_control::BrowserControl>,
-    /// Whether this build offers connections between two Hides
-    /// (`env::Env::device_connect`): what the phone gains with them (the
-    /// gathered view, `hide phone`) stays away until it does.
-    pub device_connect: bool,
 }
 
 pub struct Mobile {
@@ -726,11 +722,6 @@ impl Mobile {
     fn relay_changed(&self) {
         self.relay_change
             .send_modify(|generation| *generation = generation.wrapping_add(1));
-    }
-
-    /// Whether this build offers connections between two Hides (`Config::device_connect`).
-    pub fn device_connect(&self) -> bool {
-        self.config.device_connect
     }
 
     /// The mac's name on the phone: its tailnet name, else the system's.
@@ -2009,9 +2000,7 @@ impl Mobile {
                         hide_core::product_analytics::Event::PhonePaired { route },
                     );
                 }
-                if self.config.device_connect {
-                    self.owe_paired_notice(phone.clone());
-                }
+                self.owe_paired_notice(phone.clone());
             }
             Err(refusal) => hide_core::diagnostic!(json!({
                 "component": "mobile_pairing", "kind": "pairing.refused", "reason": refusal.reason(),
@@ -3317,7 +3306,6 @@ pub(super) fn test_mobile_from(
             Arc::new(crate::index::IndexService::new()),
         )),
         browser_control: Arc::default(),
-        device_connect: false,
     })
 }
 
@@ -3449,7 +3437,7 @@ mod tests {
             }
         }
         let mut phone = push::PhoneNotices::default();
-        let desktop = DesktopNotices::new(true);
+        let desktop = DesktopNotices::new();
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
             "macbook",
@@ -3533,7 +3521,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
-        let mobile = test_mobile_with(directory.path(), &gate, Arc::new(DesktopNotices::new(true)));
+        let mobile = test_mobile_with(directory.path(), &gate, Arc::new(DesktopNotices::new()));
         let desktop = &mobile.config.desktop;
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
@@ -3608,7 +3596,7 @@ mod tests {
         ] {
             let label = format!("phone {phone_on}, desktop {desktop_on}, in use {in_use}");
             let mut phone = push::PhoneNotices::default();
-            let desktop = DesktopNotices::new(true);
+            let desktop = DesktopNotices::new();
             desktop.set(1, desktop_on);
             desktop.set_waiting(1, desktop_on);
             desktop.activity(1, in_use);
@@ -3642,7 +3630,7 @@ mod tests {
         // phones do not rest for a wait the computer does not show, and the
         // window itself leaves the frame's wait out.
         let mut phone = push::PhoneNotices::default();
-        let desktop = DesktopNotices::new(true);
+        let desktop = DesktopNotices::new();
         desktop.set(1, true);
         desktop.activity(1, true);
         pass(&mut phone, true, &desktop, &projected("working", "none"));

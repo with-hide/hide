@@ -6,9 +6,7 @@
 //! link the QR holds, and asks for a bigger window when the QR would not fit.
 //! `list` and `remove` read and change the paired phones; a program in a Hide
 //! pane may run them, and only a terminal outside the panes pairs (D-53).
-//! This machine's own daemon answers each ask (`mobile::command`). A build
-//! that does not offer connections between two Hides refuses all of it with
-//! `device_connect_unavailable` until that feature ships.
+//! This machine's own daemon answers each ask (`mobile::command`).
 
 use std::io::{IsTerminal, Write as _};
 use std::time::Duration;
@@ -20,11 +18,6 @@ use crate::mobile::command::next_action;
 
 pub const USAGE: &str =
     "hide phone pair\nhide phone list [--json]\nhide phone remove <phone> [--json]";
-
-/// The usage `hide --help` lists: none in a build that does not offer it.
-pub fn usage_here() -> Option<&'static str> {
-    crate::env::device_connect_here().then_some(USAGE)
-}
 
 /// How often `pair` asks whether a phone has scanned the code.
 const POLL: Duration = Duration::from_secs(1);
@@ -117,9 +110,6 @@ pub fn run(env: &Env, cli: &PhoneCli) -> Result<(), String> {
 
 /// The answer and its lines for a person.
 fn answer(env: &Env, cli: &PhoneCli) -> Result<(Value, String), Refused> {
-    if !env.device_connect {
-        return Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF));
-    }
     match &cli.verb {
         Verb::Pair => pair(env),
         Verb::List => {

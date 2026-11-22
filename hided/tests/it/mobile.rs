@@ -40,7 +40,6 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         tailscale_bin: Some(tailscale.to_path_buf()),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: None,
-        device_connect: false,
         search_path: None,
         install: None,
         access: None,

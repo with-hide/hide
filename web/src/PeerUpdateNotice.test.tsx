@@ -24,8 +24,7 @@ const Screen = () => <TooltipProvider><PeerUpdateNotice /></TooltipProvider>;
 it("says on the computer that must update which computer waits, updates on a press, and by itself when that computer asked (B22)", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const saved = useShellStore.getState();
-  // `connect`: whether the build offers connections between two Hides, as hided's hello says.
-  const show = (pairing: PairingView | null, peers: Peer[], connect = true) => act(async () => useShellStore.setState({ daemon: { device_connect: connect }, pairing, rest: { navigator: { devices: [], peers, guest_panes: [] }, ui_state: {} } } as never));
+  const show = (pairing: PairingView | null, peers: Peer[]) => act(async () => useShellStore.setState({ pairing, rest: { navigator: { devices: [], peers, guest_panes: [] }, ui_state: {} } } as never));
   try {
     // A browser tab or the phone updates nothing: no notice.
     await show(idle, [peer({ update: "here" })]);
@@ -60,10 +59,7 @@ it("says on the computer that must update which computer waits, updates on a pre
     await show(idle, [peer({ update: "there" })]);
     expect(notice()).toBeNull();
 
-    // A build that does not offer connections between two Hides shows none of it and follows no ask.
     await phase(status({ kind: "idle", checkedAt: 1 }));
-    await show(idle, [peer({ update: "here_asked" })], false);
-    expect(notice()).toBeNull();
     expect(bridge.check).toHaveBeenCalledTimes(1);
 
     // The computer that opens this one asked: the app looks at once and restarts once the release is ready.

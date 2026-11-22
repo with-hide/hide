@@ -409,7 +409,7 @@ async fn placed_through_a_hold() {
     let mobile = test_mobile_with(
         directory.path(),
         &Arc::default(),
-        Arc::new(crate::desktop_notices::DesktopNotices::new(true)),
+        Arc::new(crate::desktop_notices::DesktopNotices::new()),
     );
     let held = || -> Vec<String> {
         mobile

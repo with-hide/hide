@@ -1500,9 +1500,7 @@ fn answer_bootstrap(
     }
     // What `hide phone` asks (PRD device-connect-iroh D-70): answered in
     // this one exchange, the caller judged as `hide device`'s is above (a
-    // pane is refused a pairing, a bot what its mode does not grant). A
-    // build that does not offer connections between two Hides answers none
-    // of it.
+    // pane is refused a pairing, a bot what its mode does not grant).
     if let Some(request) = &parsed
         && let Some(ask) = &request.phone
         && line.len() <= 4096
@@ -1512,9 +1510,6 @@ fn answer_bootstrap(
             &operators,
             serde_json::from_value::<command::Ask>(ask.clone()),
         ) {
-            (Some(operators), _) if !operators.mobile.device_connect() => {
-                command::refused(crate::pairing::DEVICE_CONNECT_OFF)
-            }
             (Some(operators), Ok(ask)) => {
                 match crate::access::pairing_caller(peer, request, engine, core) {
                     Ok(caller) => operators

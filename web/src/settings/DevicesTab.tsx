@@ -18,7 +18,7 @@ import { AddByLink, AddDevice } from "./AddDevice";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
-import { deviceConnectOffered, listedDevices, ownWindow, pairedMachines } from "../pairing";
+import { listedDevices, ownWindow, pairedMachines } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -55,15 +55,12 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   // A paired machine's row is its pairing's; its device has none of its own.
   const listed = listedDevices(rows);
   const remoteRows = listed.filter((device) => device.kind === "remote");
-  // A build that does not offer connections between two Hides shows no
-  // pairing, and any screen adds an SSH device as before pairing.
-  const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
   const paired = useShellStore((s) => pairedMachines(s.rest).length);
   // What the last Add over SSH did not add, and why (B41).
   const notAdded = useShellStore((s) => s.rest?.navigator?.device_not_added ?? null);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const canAdd = ownScreen || !pairs;
+  const canAdd = ownScreen;
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations);
   const editorTabs = useShellStore((s) => s.editor?.tabs);
   const recoveryDrafts = useShellStore((s) => s.recoveryDrafts);
@@ -106,7 +103,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         }
       >
         {/* The Hides this computer is paired with stand in the same list as its SSH devices (B24). */}
-        {pairs ? <PairedRows actions={actions} /> : null}
+        <PairedRows actions={actions} />
         {listed.map((device) => (
           <DeviceRow
             key={device.id}
@@ -115,8 +112,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             focused={focused === device.id}
             place={{
               name: machineName(devices, device.id, t),
-              // Every computer runs a core of its own once two Hides connect, so no row is marked as the core's (PRD device-connect-iroh D-80).
-              core: !pairs && isCoreMachine(devices, device.id),
               own: device.id === own,
               windowIsNode,
               coreName,
@@ -134,7 +129,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             }
           />
         ) : null}
-        {remoteRows.length === 0 && (!pairs || paired === 0) && !notAdded ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
+        {remoteRows.length === 0 && paired === 0 && !notAdded ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
       {adding !== null && canAdd ? (
@@ -143,19 +138,13 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             <DialogHeader>
               <DialogTitle>{t("devices.addTitle")}</DialogTitle>
             </DialogHeader>
-            {pairs ? (
-              <DialogBody className="space-y-lg">
-                <AddByLink actions={actions} onStarted={() => setAdding(null)} />
-                <section className="space-y-sm">
-                  <h3 className="text-body font-semibold text-subtle-foreground">{t("pairing.add.sshTitle")}</h3>
-                  <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
-                </section>
-              </DialogBody>
-            ) : (
-              <DialogBody>
+            <DialogBody className="space-y-lg">
+              <AddByLink actions={actions} onStarted={() => setAdding(null)} />
+              <section className="space-y-sm">
+                <h3 className="text-body font-semibold text-subtle-foreground">{t("pairing.add.sshTitle")}</h3>
                 <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
-              </DialogBody>
-            )}
+              </section>
+            </DialogBody>
           </DialogContent>
         </Dialog>
       ) : null}

@@ -574,8 +574,8 @@ impl NodeRole {
     }
 
     /// Whether this machine becomes a Hide of its own once it reaches its
-    /// core: its build offers connections between two Hides
-    /// (`env::Env::device_connect`), so each connection tries the split.
+    /// core: a node a window started, which knows its state folder, so each
+    /// connection tries the split.
     pub fn splits(&self) -> bool {
         splits(self.shared.updates.as_ref())
     }
@@ -1158,10 +1158,7 @@ fn try_link(
 }
 
 /// Whether this connection still owes its one try at the split: a node
-/// that knows its state folder, which every node a window starts does, in a
-/// build that offers connections between two Hides
-/// (`env::Env::device_connect`). In one that does not, the machine stays the
-/// node it is and asks its core nothing.
+/// that knows its state folder, which every node a window starts does.
 fn split_due(shared: &Shared) -> bool {
     splits(shared.updates.as_ref()) && lock(&shared.state).split_failed.is_none()
 }
@@ -1169,7 +1166,7 @@ fn split_due(shared: &Shared) -> bool {
 /// Whether a node with these `updates` is split from its core at all
 /// (`NodeRole::splits`).
 fn splits(updates: Option<&Updates>) -> bool {
-    updates.is_some_and(|updates| updates.peer.device_connect)
+    updates.is_some()
 }
 
 /// The words that run the `hide` beside the core's program on its machine,
@@ -1882,11 +1879,11 @@ mod tests {
         assert!(press.is_none() && owed.is_none());
     }
 
-    /// A node is split from its core only by a build that offers connections
-    /// between two Hides; in any other it stays the node it is.
+    /// A node a window started is split from its core; one no window
+    /// started stays the node it is.
     #[test]
-    fn only_a_build_that_offers_connections_between_hides_splits_a_node() {
-        let updates = |device_connect| Updates {
+    fn only_a_node_a_window_started_splits() {
+        let updates = Updates {
             packages: PathBuf::from("/packages"),
             state_dir: PathBuf::from("/state"),
             peer: crate::peer_host::Settings {
@@ -1896,11 +1893,9 @@ mod tests {
                 release: false,
                 direct: None,
                 wsl: None,
-                device_connect,
             },
         };
-        assert!(splits(Some(&updates(true))));
-        assert!(!splits(Some(&updates(false))));
+        assert!(splits(Some(&updates)));
         // A node no window started knows no state folder to be a core on.
         assert!(!splits(None));
     }

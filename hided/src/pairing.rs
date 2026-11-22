@@ -290,16 +290,9 @@ pub enum Caller {
     Bot(hide_core::access::Mode),
 }
 
-/// The refusal of every ask in a build that does not offer connections
-/// between two Hides (`env::Env::device_connect` off).
-pub const DEVICE_CONNECT_OFF: &str = "device_connect_unavailable";
-
 /// What a caller does about a refusal `code`.
 pub fn next_action(code: &str) -> &'static str {
     match code {
-        DEVICE_CONNECT_OFF => {
-            "This build does not offer connections between two Hides yet: add a machine by its SSH alias"
-        }
         "device_from_pane" => {
             "Ask the operator to run it in a terminal outside Hide's panes, or to use Settings > Devices"
         }
@@ -831,11 +824,6 @@ impl Pairing {
     /// answers that its app updates it or that nothing would start its core
     /// again: its row shows nothing of the raise. One raise runs at a time.
     fn raise_started(self: &Arc<Self>, peers: &HostPeers, key: PeerKey, theirs: &str, asked: bool) {
-        // A build that does not offer connections between two Hides raises
-        // no other machine's core (`env::Env::device_connect`).
-        if !self.host.device_connect() {
-            return;
-        }
         let Some(login) = peers.host(&key).and_then(|host| host.started) else {
             return;
         };
@@ -1020,13 +1008,8 @@ impl Pairing {
     }
 
     /// Answers one ask. The answer is `{"ok": true, ...}` or a refusal with
-    /// its code and what to do about it. A build that does not offer
-    /// connections between two Hides refuses every ask and does nothing
-    /// (`env::Env::device_connect`).
+    /// its code and what to do about it.
     pub async fn ask(self: &Arc<Self>, ask: Ask, caller: Caller) -> Value {
-        if !self.host.device_connect() {
-            return refused(DEVICE_CONNECT_OFF);
-        }
         match caller {
             Caller::Operator => {}
             Caller::Pane if !ask.operators() => {}
@@ -1834,9 +1817,6 @@ impl Pairing {
     /// handed to (`Ask::Carry`): opened for it, as for either side of a
     /// pairing, and only for the operator's own account outside a pane.
     pub async fn carrier(self: &Arc<Self>, caller: Caller) -> Result<HostPeers, &'static str> {
-        if !self.host.device_connect() {
-            return Err(DEVICE_CONNECT_OFF);
-        }
         if caller != Caller::Operator {
             return Err("device_from_pane");
         }
