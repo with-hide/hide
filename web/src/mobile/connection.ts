@@ -304,7 +304,7 @@ function connect(): void {
       return;
     }
     if (frame.type === "input_result") {
-      onInputResult(frame.ok, frame.reason);
+      onInputResult(frame.request_id, frame.ok, frame.reason);
       return;
     }
     if (frame.type === "human_turn_result") {
@@ -369,8 +369,10 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput?.kind === "choice" && state.answering) settleChoice(false, "uncertain");
-  else if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  // A choice on its way may have landed: each is answered in the terminal from now on.
+  for (const requestId of Object.keys(state.answering)) settleChoice(requestId, false, "uncertain");
+  if (state.pendingInput && state.pendingInput.kind !== "choice") patch({ pendingInput: null, inputError: inputFailure("offline") });
+  else if (state.pendingInput) patch({ pendingInput: null });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
   if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
@@ -747,30 +749,42 @@ export function sendChoice(choice: string): void {
   // An ask answered, or one whose answer may have landed, is never sent again from here: a second send would be a second press.
   const answered = state.answers[identity];
   if (answered && (answered.state !== "failed" || answered.inTerminal)) return;
+  // Room for it first: with every remembered answer still holding an ask that may stand, nothing is sent.
+  const sending = withAnswer(state.answers, identity, { choice, state: "sending" });
+  if (!sending) {
+    patch({ inputError: inputFailure("answers_full") });
+    return;
+  }
   const requestId = newRequestId();
   const sent = send(choiceMessage(detail.key, ask, choice, requestId));
   patch(
     sent
-      ? { pendingInput: { requestId, kind: "choice" }, answering: identity, answers: withAnswer(state.answers, identity, { choice, state: "sending" }) }
-      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) },
+      ? { pendingInput: { requestId, kind: "choice" }, answering: { ...state.answering, [requestId]: identity }, answers: sending }
+      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) ?? state.answers },
   );
 }
 
 /**
- * Settles the choice being sent: sent, or refused with why. One that may have landed (`uncertain`), or that stopped on a moved
- * highlight, is answered in the terminal from then on, whatever the phone does next.
+ * Settles the choice sent as `requestId` on the ask it was picked on, never on another: sent, or refused with why. One that may
+ * have landed (`uncertain`), or that the terminal no longer showed, is answered in the terminal from then on, whatever the phone
+ * does next.
  */
-function settleChoice(ok: boolean, reason: string | null): void {
-  const { answering, answers } = usePhone.getState();
-  const picked = answering ? answers[answering] : undefined;
-  if (!answering || !picked) {
-    patch({ pendingInput: null, answering: null });
+function settleChoice(requestId: string, ok: boolean, reason: string | null): void {
+  const state = usePhone.getState();
+  const identity = state.answering[requestId];
+  if (identity === undefined) return;
+  const answering = Object.fromEntries(Object.entries(state.answering).filter(([waiting]) => waiting !== requestId));
+  const pendingInput = state.pendingInput?.requestId === requestId ? null : state.pendingInput;
+  const picked = state.answers[identity];
+  if (!picked) {
+    patch({ pendingInput, answering });
     return;
   }
-  const state: ChoiceState = ok
+  const settled: ChoiceState = ok
     ? { choice: picked.choice, state: "sent" }
     : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown" };
-  patch({ pendingInput: null, answering: null, answers: withAnswer(answers, answering, state) });
+  // The answer is already kept, so setting it again takes no room.
+  patch({ pendingInput, answering, answers: withAnswer(state.answers, identity, settled) ?? state.answers });
 }
 
 /**
@@ -803,12 +817,14 @@ export function onReplyResult(listener: ReplyListener): () => void {
   return () => replyListeners.delete(listener);
 }
 
-function onInputResult(ok: boolean, reason: string | null): void {
-  const { pendingInput: pending } = usePhone.getState();
-  if (pending?.kind === "choice") {
-    settleChoice(ok, reason);
+function onInputResult(requestId: string | undefined, ok: boolean, reason: string | null): void {
+  if (requestId !== undefined && requestId in usePhone.getState().answering) {
+    settleChoice(requestId, ok, reason);
     return;
   }
+  const { pendingInput: pending } = usePhone.getState();
+  // A result for a reply or key no longer waited on (its detail closed) is not this one's.
+  if (!pending || pending.kind === "choice" || (requestId !== undefined && pending.requestId !== requestId)) return;
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     if (ok) lastReply = null;

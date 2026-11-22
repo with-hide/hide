@@ -518,6 +518,16 @@ export function askIdentity(key: AgentKey, ask: PhoneAsk): string {
   return `${key.device_id}|${key.pane_id}|${ask.kind}|${what}`;
 }
 
+/** What `identity` (`askIdentity`) was made on when it is one of `key`'s asks: its call, or its turn; null for another agent's. */
+export function askOf(identity: string, key: AgentKey): { call: string } | { turn: number } | null {
+  const agent = `${key.device_id}|${key.pane_id}|`;
+  if (!identity.startsWith(agent)) return null;
+  const rest = identity.slice(agent.length);
+  const what = rest.slice(rest.indexOf("|") + 1);
+  if (what.startsWith("call ")) return { call: what.slice("call ".length) };
+  return { turn: Number(what.slice("turn ".length, what.indexOf(" ", "turn ".length))) };
+}
+
 /**
  * What runs now under the agent's turn, by kind and since when, never by what it runs (Doop 02); `unknown` when the computer
  * kept fewer of the agent's open calls than it made, so it cannot say.
@@ -586,6 +596,8 @@ export function inputFailure(reason: string | null, lines = false): Notice {
       return { key: "mobile.input.screenDiffers" };
     case "ask_not_shown":
       return { key: "mobile.input.askNotShown" };
+    case "answers_full":
+      return { key: "mobile.input.answersFull" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":
