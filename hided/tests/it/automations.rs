@@ -45,6 +45,7 @@ fn daemon_env(root: &Path) -> Env {
         search_path: None,
         peer_direct: None,
         peer_relay: None,
+        peer_relay_only: false,
         device_connect: false,
     }
 }

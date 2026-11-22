@@ -65,6 +65,7 @@ fn host_env(root: &Path) -> Env {
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
         peer_relay: None,
+        peer_relay_only: false,
         device_connect: true,
         search_path: None,
     }

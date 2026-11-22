@@ -20,10 +20,19 @@
 //! needs a network namespace or the system's packet filter, which this
 //! test does not take (`docs/TESTING.md`, The release A gate).
 //!
-//! Its inputs are `HIDE_TEST_IROH_RELAY`, the iroh-relay that
+//! The two machines reach each other by one way, `HIDE_TEST_FAULT_RUN_PATH`:
+//! `relay` (when unset) keeps no IP transport on either endpoint
+//! (`HIDE_PEER_RELAY_ONLY`), as between two machines with no direct way to
+//! each other, so a relay that stops takes the connection with it, and the
+//! guest has to see its host go while the relay is away; `direct` lets the
+//! two find their direct path beside the relay, which a relay restart must
+//! leave alone: the path stays direct and letters keep arriving. Before
+//! each fault the guest's device list has to name that path.
+//!
+//! Its other inputs are `HIDE_TEST_IROH_RELAY`, the iroh-relay that
 //! `scripts/build-iroh-relay.sh` builds, and `HIDE_TEST_FAULT_RUN_MINUTES`
 //! (8 when unset: about one round of the faults); `scripts/release-gate.sh`
-//! runs it for two hours. Each fault is printed as one JSON line beginning
+//! runs it for an hour on each path. Each fault is printed as one JSON line beginning
 //! `fault_run:`, with how long the guest took to find its host again.
 
 use std::path::{Path, PathBuf};
@@ -278,15 +287,43 @@ fn numbers(file: &Path) -> Vec<u64> {
         .collect()
 }
 
+/// How the guest reaches its host, as its device list says: whether it is
+/// connected, and by which path (`direct`, `relay`). `None` when the list
+/// does not answer.
+fn host_link(guest: &Machine) -> Option<(bool, String)> {
+    let listed = guest.run(&["device", "list", "--json"]);
+    if !listed.ok {
+        return None;
+    }
+    let peer = listed.json()["value"]["peers"].as_array()?.first()?.clone();
+    Some((
+        peer["connected"] == true,
+        peer["path"].as_str().unwrap_or_default().to_owned(),
+    ))
+}
+
+/// What the guest saw of its host while the relay was away for `long`,
+/// asked once a second: whether the connection went, and the letters that
+/// reached its ledger meanwhile.
+async fn while_relay_away(guest: &Machine, sender: &str, long: Duration) -> (bool, usize) {
+    let before = letters_in(&guest.terminal.state, sender).len();
+    let ends = Instant::now() + long;
+    let mut went = false;
+    while Instant::now() < ends {
+        went |= host_link(guest).is_some_and(|(connected, _)| !connected);
+        // The relay is away for this long: its absence is the fault.
+        tokio::time::sleep(Duration::from_secs(1)).await; // wait-ok: the relay has been away for the fault's length
+    }
+    (
+        went,
+        letters_in(&guest.terminal.state, sender).len() - before,
+    )
+}
+
 /// Whether the guest has its host again: the connection, and its node
 /// there answering.
 fn guest_has_its_host(guest: &Machine) -> bool {
-    let connected = guest.run(&["device", "list", "--json"]);
-    let peer = connected.ok
-        && connected.json()["value"]["peers"]
-            .as_array()
-            .and_then(|peers| peers.first())
-            .is_some_and(|peer| peer["connected"] == true);
+    let peer = host_link(guest).is_some_and(|(connected, _)| connected);
     peer && guest.screen().snapshot().is_ok_and(|snapshot| {
         snapshot
             .pointer("/navigator/devices")
@@ -378,6 +415,12 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
                 .expect("HIDE_TEST_FAULT_RUN_MINUTES is a number of minutes")
         })
         .unwrap_or(8);
+    let relay_only = match std::env::var("HIDE_TEST_FAULT_RUN_PATH").as_deref() {
+        Err(_) | Ok("relay") => true,
+        Ok("direct") => false,
+        Ok(other) => panic!("HIDE_TEST_FAULT_RUN_PATH is relay or direct, not {other:?}"),
+    };
+    let path = if relay_only { "relay" } else { "direct" };
     let root = crate::fixtures::fixture_root("hf");
     // A core lists a checkout by its real path, and `/tmp` is a link on
     // macOS.
@@ -446,6 +489,9 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         // The product's endpoint on every interface, attached to this run's
         // relay instead of the device relay.
         account.push(("HIDE_PEER_RELAY".into(), url.clone().into()));
+        if relay_only {
+            account.push(("HIDE_PEER_RELAY_ONLY".into(), "1".into()));
+        }
         Machine {
             terminal: super::Terminal::new(environment.home.clone(), at(state), Some(id)),
             hide: at("p").join("hide"),
@@ -560,14 +606,31 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     while Instant::now() < ends {
         let (fault, long) = PLAN[turn % PLAN.len()];
         turn += 1;
+        // The connection is on the path this run is about.
+        wait_within(&format!("the guest's link to be {path}"), WITHIN, || {
+            Ok(host_link(&guest)
+                .is_some_and(|(connected, by)| connected && by == path)
+                .then_some(()))
+        })
+        .unwrap_or_else(|error| panic!("{error:#}: {:?} after {report:?}", host_link(&guest)));
         let before = letters_in(&guest.terminal.state, &sender).len();
         let started = Instant::now();
+        let mut away = Value::Null;
         match fault {
             Fault::RelayRestart => {
                 relay.stop();
-                // The relay is away for this long: its absence is the fault.
-                tokio::time::sleep(long).await; // wait-ok: the relay has been away for the fault's length
+                let (went, arrived) = while_relay_away(&guest, &sender, long).await;
                 relay.start();
+                away = json!({"link_went": went, "letters_meanwhile": arrived});
+                // Only the path the relay carried goes with it.
+                if relay_only {
+                    assert!(went, "the relay-only link outlived the relay: {away}");
+                } else {
+                    assert!(
+                        !went && arrived > 0,
+                        "a relay restart disturbed the direct link: {away}"
+                    );
+                }
             }
             Fault::GuestSleeps => frozen(&[&guest], None, long).await,
             Fault::HostSleeps => frozen(&[&host], None, long).await,
@@ -591,7 +654,9 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         });
         let line = json!({
             "turn": turn,
+            "path": path,
             "fault": fault.name(),
+            "while_away": away,
             "away_s": (over - started).as_secs(),
             "found_again_s": back.as_secs_f64(),
             "letters_before": before,

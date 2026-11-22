@@ -9,7 +9,9 @@
 #      Hide it runs; a guest's work outliving each core;
 #   2. the fault run: two Hides paired through a relay of its own, letters
 #      sent from a guest's pane on its host through relay restarts, sleeps, a
-#      lost network and host restarts, every one in the guest's ledger once.
+#      lost network and host restarts, every one in the guest's ledger once;
+#      half the minutes with the relay as their only way to each other, half
+#      on their direct path beside it.
 #
 # Usage: scripts/release-gate.sh [fault-run minutes, 120 when unset]
 # Each daemon runs under a fixture HOME in the system's temporary folder, so
@@ -41,6 +43,9 @@ scenes+=' | test(/^pairing::guest_work::/)'
 HIDE_TEST_HOLDER_BIN="$PWD/target/debug/hide-holder" \
     bash scripts/verify-cargo.sh nextest -p hided --test it -E "$scenes" --run-ignored all --no-fail-fast --test-threads 2
 
-HIDE_TEST_IROH_RELAY="$PWD/$relay" HIDE_TEST_FAULT_RUN_MINUTES="$minutes" \
-    bash scripts/verify-cargo.sh nextest -p hided --test it \
-    -E 'test(/^pairing::fault_run::/)' --run-ignored only --no-capture
+for path in relay direct; do
+    HIDE_TEST_IROH_RELAY="$PWD/$relay" HIDE_TEST_FAULT_RUN_MINUTES=$(((minutes + 1) / 2)) \
+        HIDE_TEST_FAULT_RUN_PATH="$path" \
+        bash scripts/verify-cargo.sh nextest -p hided --test it \
+        -E 'test(/^pairing::fault_run::/)' --run-ignored only --no-capture
+done

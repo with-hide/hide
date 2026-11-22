@@ -52,6 +52,9 @@ pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
 /// attaches to instead of the device relay, with no local network search
 /// (`peer_host`), so a run can stop and start its own relay.
 pub const HIDE_PEER_RELAY: &str = "HIDE_PEER_RELAY";
+/// Development and tests: with `HIDE_PEER_RELAY`, the endpoint keeps no IP
+/// transport, so every connection goes through that relay (`peer_host`).
+pub const HIDE_PEER_RELAY_ONLY: &str = "HIDE_PEER_RELAY_ONLY";
 /// Whether this build offers connections between two Hides
 /// ([`Env::device_connect`]); off in every build until that feature ships.
 pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
@@ -218,6 +221,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "The endpoint attaches to the device relay (https://device-relay.withhide.dev)",
     },
     EnvKey {
+        key: HIDE_PEER_RELAY_ONLY,
+        required: false,
+        format: "1 for development or tests, only beside HIDE_PEER_RELAY: the endpoint keeps no IP transport, so every connection to another Hide goes through that relay; 0 is the same as unset",
+        absent_behavior: "The endpoint uses direct addresses beside its relay",
+    },
+    EnvKey {
         key: HIDE_DEVICE_CONNECT,
         required: false,
         format: "1 or 0, for development and tests until connections between two Hides ship",
@@ -318,6 +327,9 @@ pub struct Env {
     /// The relay the endpoint for other Hides attaches to instead of the
     /// device relay (`HIDE_PEER_RELAY`); `None` is the device relay.
     pub peer_relay: Option<String>,
+    /// Whether the endpoint keeps no IP transport beside that relay
+    /// (`HIDE_PEER_RELAY_ONLY=1`).
+    pub peer_relay_only: bool,
     /// Whether this build offers connections between two Hides
     /// (`HIDE_DEVICE_CONNECT=1`): pairing, its `hide device` verbs and
     /// Settings rows, the endpoint and the login item that keeps a paired
@@ -602,6 +614,17 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             None
         }
     };
+    let peer_relay_only = match read(HIDE_PEER_RELAY_ONLY).as_deref() {
+        None | Some("0") => false,
+        Some("1") if peer_relay.is_some() => true,
+        Some(_) => {
+            errors.push(EnvError {
+                key: HIDE_PEER_RELAY_ONLY,
+                kind: "invalid",
+            });
+            false
+        }
+    };
     let device_connect = match read(HIDE_DEVICE_CONNECT).as_deref() {
         None | Some("0") => false,
         Some("1") => true,
@@ -635,6 +658,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         relay_url,
         peer_direct,
         peer_relay,
+        peer_relay_only,
         device_connect,
         search_path,
     };
@@ -1065,6 +1089,25 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(both[0].key, HIDE_PEER_RELAY);
+    }
+
+    #[test]
+    fn relay_only_needs_the_peer_relay_beside_it() {
+        let only = |pairs: &[(&str, &str)]| {
+            let mut all = vec![(HOME, "/Users/example")];
+            all.extend_from_slice(pairs);
+            from_map(&all).map(|env| env.peer_relay_only)
+        };
+        let relay = (HIDE_PEER_RELAY, "http://127.0.0.1:3340");
+        assert!(!only(&[relay]).unwrap());
+        assert!(!only(&[relay, (HIDE_PEER_RELAY_ONLY, "0")]).unwrap());
+        assert!(only(&[relay, (HIDE_PEER_RELAY_ONLY, "1")]).unwrap());
+        for pairs in [
+            &[(HIDE_PEER_RELAY_ONLY, "1")][..],
+            &[relay, (HIDE_PEER_RELAY_ONLY, "yes")][..],
+        ] {
+            assert_eq!(only(pairs).unwrap_err()[0].key, HIDE_PEER_RELAY_ONLY);
+        }
     }
 
     #[test]
