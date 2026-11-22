@@ -3847,6 +3847,133 @@ mod tests {
         }
     }
 
+    /// A node whose `gh` answers each call by `answer`: `None` is a call
+    /// GitHub refused. The calls asked are kept.
+    type Answer = Box<dyn Fn(&[&str]) -> Option<String> + Send + Sync>;
+
+    struct Answering {
+        answer: Answer,
+        asked: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl Answering {
+        fn new(answer: impl Fn(&[&str]) -> Option<String> + Send + Sync + 'static) -> Self {
+            Self {
+                answer: Box::new(answer),
+                asked: Mutex::default(),
+            }
+        }
+    }
+
+    impl NodeLink for Answering {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let Call::Gh { args, .. } = call else {
+                panic!("only gh is asked");
+            };
+            self.asked.lock().unwrap().push(args.clone());
+            let words: Vec<&str> = args.iter().map(String::as_str).collect();
+            let answer = match (self.answer)(&words) {
+                Some(stdout) => GhAnswer::Output { stdout },
+                None => GhAnswer::Failed {
+                    category: GithubFailureCategory::NetworkOrRateLimit,
+                    reason: "HTTP 404: Not Found".to_owned(),
+                },
+            };
+            Ok(serde_json::to_value(answer).unwrap().into())
+        }
+    }
+
+    /// Whether the base branch takes a direct push: an unprotected branch is
+    /// judged by its rulesets alone; a protected one whose protection asks
+    /// for a pull request takes none, and its rulesets are not asked; a
+    /// protection that allows a push still has its rulesets judge; an answer
+    /// GitHub did not give, or one Hide cannot read, leaves the question open
+    /// as a code.
+    #[test]
+    fn a_base_branch_takes_a_push_only_where_its_protection_and_its_rules_both_allow_one() {
+        type Reads = (
+            Option<&'static str>,
+            Option<&'static str>,
+            Option<&'static str>,
+        );
+        let judge = |(protected, protection, rules): Reads| {
+            let node = Answering::new(move |words| match words {
+                ["repo", "view", "--json", "nameWithOwner"] => {
+                    Some(r#"{"nameWithOwner":"acme/app"}"#.to_owned())
+                }
+                ["api", "--jq", _, endpoint] if endpoint.ends_with("/protection") => {
+                    protection.map(str::to_owned)
+                }
+                ["api", "--jq", _, endpoint] if endpoint.contains("/rules/branches/") => {
+                    rules.map(str::to_owned)
+                }
+                ["api", "--jq", _, endpoint] if endpoint.contains("/branches/") => {
+                    protected.map(str::to_owned)
+                }
+                other => panic!("not a base push read: {other:?}"),
+            });
+            let verdict = base_push(&node, Path::new("/repo"), "main");
+            let asked_rules = node.asked.lock().unwrap().iter().any(|args| {
+                args.last()
+                    .is_some_and(|endpoint| endpoint.contains("/rules/"))
+            });
+            (verdict, asked_rules)
+        };
+        let push = Some("push");
+        let pr_only = Some("pr_only");
+        assert_eq!(judge((Some("false"), None, push)), (Ok(true), true));
+        assert_eq!(judge((Some("false"), None, pr_only)), (Ok(false), true));
+        assert_eq!(judge((Some("true"), pr_only, push)), (Ok(false), false));
+        assert_eq!(judge((Some("true"), push, push)), (Ok(true), true));
+        assert_eq!(judge((Some("true"), push, pr_only)), (Ok(false), true));
+        assert_eq!(
+            judge((Some("true"), None, push)).0,
+            Err("branch_push_unread".to_owned()),
+            "the protection of a repository the account does not administer"
+        );
+        assert_eq!(
+            judge((Some("maybe"), None, push)).0,
+            Err("branch_push_unreadable".to_owned())
+        );
+        assert_eq!(
+            judge((Some("false"), None, Some("later"))).0,
+            Err("branch_push_unreadable".to_owned())
+        );
+        let unnamed = Answering::new(|_| None);
+        assert_eq!(
+            base_push(&unnamed, Path::new("/repo"), "main"),
+            Err("branch_push_repository_unread".to_owned())
+        );
+    }
+
+    /// A pull request's standing is GitHub's state for it; a state Hide does
+    /// not know, or a view GitHub refused, is not a standing.
+    #[test]
+    fn a_pull_requests_standing_is_its_open_closed_or_merged_state() {
+        let standing = |state: &'static str| {
+            let node = Answering::new(move |words| match words {
+                ["pr", "view", "7", "--json", fields] if *fields == OUTSIDE_PR_FIELDS => {
+                    Some(format!(r#"{{"state":"{state}"}}"#))
+                }
+                other => panic!("not a standing read: {other:?}"),
+            });
+            pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7)
+        };
+        assert_eq!(standing("OPEN"), Ok(Standing::Open));
+        assert_eq!(standing("CLOSED"), Ok(Standing::Closed));
+        assert_eq!(standing("MERGED"), Ok(Standing::Merged));
+        assert!(standing("DRAFT").is_err());
+        let refused = Answering::new(|_| None);
+        assert_eq!(
+            pr_standing(&refused, &Where::Repository("acme/app".to_owned()), 7),
+            Err("HTTP 404: Not Found".to_owned())
+        );
+    }
+
     /// The server of a checkout `gh` read in place, row by row from the
     /// decided table of cases: the checkout's remotes as its node lists
     /// them, the servers `auth status` names, and the addresses one pass
