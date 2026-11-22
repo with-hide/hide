@@ -465,7 +465,11 @@ impl CodeHosts {
     ///
     /// An older node's GitHub-shaped names are read as stored names, as they
     /// were; a name no unit reads names nothing.
-    pub(crate) fn place_of_checkout(self, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
+    pub(crate) fn place_of_checkout(
+        self,
+        root: &Path,
+        remotes: CheckoutRemotes<'_>,
+    ) -> Option<Place> {
         let in_checkout = |host: Host| Place::Checkout {
             host,
             root: root.to_path_buf(),

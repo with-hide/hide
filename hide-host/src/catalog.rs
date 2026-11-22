@@ -133,9 +133,9 @@ fn without_credentials(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();
     };
-    let (authority, path) = rest.split_once('/').map_or((rest, None), |(authority, path)| {
-        (authority, Some(path))
-    });
+    let (authority, path) = rest
+        .split_once('/')
+        .map_or((rest, None), |(authority, path)| (authority, Some(path)));
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);

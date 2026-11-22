@@ -1085,8 +1085,16 @@ fn a_node_read_whose_issues_alone_failed_keeps_the_full_wait() {
             ..Default::default()
         }],
     };
-    runtime.ingest_device_github(NODE, &Default::default(), answer(crate::model::PartRead::Read));
-    runtime.ingest_device_github(NODE, &Default::default(), answer(crate::model::PartRead::Failed));
+    runtime.ingest_device_github(
+        NODE,
+        &Default::default(),
+        answer(crate::model::PartRead::Read),
+    );
+    runtime.ingest_device_github(
+        NODE,
+        &Default::default(),
+        answer(crate::model::PartRead::Failed),
+    );
     let later = start + std::time::Duration::from_secs(31);
     assert_eq!(
         runtime.device_github_request(NODE, later).projects[0].generation,
@@ -1180,7 +1188,10 @@ fn a_node_project_says_when_this_machine_s_gh_is_signed_out() {
 /// base-only host reads the same address by its name.
 #[test]
 fn a_node_s_origin_is_named_by_the_registered_hosts() {
-    let repo = repo(Some("https://code.example/group/sub/project.git"), "feature");
+    let repo = repo(
+        Some("https://code.example/group/sub/project.git"),
+        "feature",
+    );
     let shared = node_runtime(
         &repo,
         FakeDevice::new(),

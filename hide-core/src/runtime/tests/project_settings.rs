@@ -1099,8 +1099,14 @@ fn an_unread_identity_is_kept_only_where_the_connected_repository_is_its_own() {
             .project("/fixture/project")
             .and_then(|project| project.repository.clone())
     };
-    assert_eq!(kept("acme/app", "acme/app", &unread), Some(identity("acme/app")));
-    assert_eq!(kept("acme/app", "acme/app", &failed), Some(identity("acme/app")));
+    assert_eq!(
+        kept("acme/app", "acme/app", &unread),
+        Some(identity("acme/app"))
+    );
+    assert_eq!(
+        kept("acme/app", "acme/app", &failed),
+        Some(identity("acme/app"))
+    );
     assert_eq!(kept("acme/old", "acme/new", &unread), None);
     assert_eq!(kept("acme/old", "acme/new", &failed), None);
 }
@@ -1148,9 +1154,18 @@ fn a_saved_answer_is_reused_under_a_setting_its_identity_names() {
         }
     };
     use crate::model::PartRead::{Failed, Read, Unsupported};
-    assert!(restored("example/override", answer(Failed, Some("example/override"))));
-    assert!(restored("example/override", answer(Unsupported, Some("Example/Override"))));
-    assert!(!restored("example/other", answer(Read, Some("example/override"))));
+    assert!(restored(
+        "example/override",
+        answer(Failed, Some("example/override"))
+    ));
+    assert!(restored(
+        "example/override",
+        answer(Unsupported, Some("Example/Override"))
+    ));
+    assert!(!restored(
+        "example/other",
+        answer(Read, Some("example/override"))
+    ));
     let mut before_identity = answer(Read, None);
     before_identity.issues.repository = Some("example/override".to_owned());
     assert!(restored("example/override", before_identity.clone()));

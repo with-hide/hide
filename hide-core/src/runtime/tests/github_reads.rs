@@ -357,7 +357,10 @@ fn a_read_whose_issues_failed_backs_off_and_still_reads_a_printed_pull_request()
 /// and the store see a failed part, not a read one.
 #[test]
 fn kept_issues_keep_the_passes_own_outcome() {
-    for outcome in [crate::model::PartRead::Failed, crate::model::PartRead::NotRead] {
+    for outcome in [
+        crate::model::PartRead::Failed,
+        crate::model::PartRead::NotRead,
+    ] {
         let mut runtime = runtime();
         runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
         runtime.reread_stale_github(Instant::now());
@@ -370,14 +373,28 @@ fn kept_issues_keep_the_passes_own_outcome() {
             .unwrap(),
             ..Default::default()
         };
-        runtime.ingest_github_answer(GithubSnapshot { projects: vec![first] }, true);
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![first],
+            },
+            true,
+        );
         let mut second = read_ok("/tmp/a", Vec::new(), 20);
         second.issues_read = outcome;
         second.status.stale = true;
         second.status.unavailable_reason = Some("gh api graphql: no answer".into());
-        runtime.ingest_github_answer(GithubSnapshot { projects: vec![second] }, true);
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![second],
+            },
+            true,
+        );
         let project = runtime.github.project("/tmp/a").unwrap();
-        assert_eq!(project.issues.issues.len(), 1, "the issues read before are shown");
+        assert_eq!(
+            project.issues.issues.len(),
+            1,
+            "the issues read before are shown"
+        );
         assert_eq!(project.issues_read, outcome);
         assert_eq!(
             project.read_outcome(),
@@ -431,7 +448,10 @@ fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
         ),
         (
             "the same path on another server",
-            unread(vec![referenced(3, "https://ghe.example:8443/owner/a/pull/3")]),
+            unread(vec![referenced(
+                3,
+                "https://ghe.example:8443/owner/a/pull/3",
+            )]),
             false,
         ),
         ("no pull request names it", unread(Vec::new()), false),
@@ -440,14 +460,24 @@ fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
         let mut runtime = runtime();
         runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
         runtime.reread_stale_github(Instant::now());
-        runtime.ingest_github_answer(GithubSnapshot { projects: vec![identity()] }, true);
-        runtime.ingest_github_answer(GithubSnapshot { projects: vec![pass] }, true);
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![identity()],
+            },
+            true,
+        );
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![pass],
+            },
+            true,
+        );
         let project = runtime.github.project("/tmp/a").unwrap();
         assert_eq!(
-            project.repository.as_ref().map(|identity| (
-                identity.id.as_deref(),
-                identity.default_branch.as_deref()
-            )),
+            project
+                .repository
+                .as_ref()
+                .map(|identity| (identity.id.as_deref(), identity.default_branch.as_deref())),
             kept.then_some((Some("R1"), Some("trunk"))),
             "{case}"
         );
@@ -472,7 +502,12 @@ fn a_failed_identity_alone_keeps_the_lists_and_backs_the_clock_off() {
             10,
         )
     };
-    runtime.ingest_github_answer(GithubSnapshot { projects: vec![pass] }, true);
+    runtime.ingest_github_answer(
+        GithubSnapshot {
+            projects: vec![pass],
+        },
+        true,
+    );
     let project = runtime.github.project("/tmp/a").unwrap();
     assert_eq!(project.repository, None);
     assert_eq!(project.pull_requests.len(), 1);
@@ -482,7 +517,10 @@ fn a_failed_identity_alone_keeps_the_lists_and_backs_the_clock_off() {
         crate::model::GithubReadOutcome::IssuesFailed
     );
     let now = start + Duration::from_secs(1);
-    assert_eq!(seconds_until_asked_again(&mut runtime, "/tmp/a", now), Some(30));
+    assert_eq!(
+        seconds_until_asked_again(&mut runtime, "/tmp/a", now),
+        Some(30)
+    );
 }
 
 #[test]

@@ -477,10 +477,17 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         in_checkout(BOTH, "github"),
         "remotes the node did not list are read in the checkout"
     );
-    assert_eq!(hosts_place(PLAIN_ONLY, root, CheckoutRemotes::Unknown), None);
+    assert_eq!(
+        hosts_place(PLAIN_ONLY, root, CheckoutRemotes::Unknown),
+        None
+    );
 
     assert_eq!(by_name(BOTH, &[]), None);
-    assert_eq!(by_name(BOTH, &["not a repository"]), None, "a name no unit reads names nothing");
+    assert_eq!(
+        by_name(BOTH, &["not a repository"]),
+        None,
+        "a name no unit reads names nothing"
+    );
     assert_eq!(by_name(BOTH, &["acme/app"]), in_checkout(BOTH, "github"));
     assert_eq!(
         by_name(BOTH, &["acme/app", "ghe.example.com/acme/app"]),
@@ -826,22 +833,33 @@ fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
     use GithubReadOutcome::{Failed, IssuesFailed, NoRemote, Read};
     let read = [
         ("/github-app", (Read, PartRead::Read, PartRead::Read)),
-        ("/github-quiet", (IssuesFailed, PartRead::Failed, PartRead::Read)),
+        (
+            "/github-quiet",
+            (IssuesFailed, PartRead::Failed, PartRead::Read),
+        ),
         ("/github-down", (Failed, PartRead::Read, PartRead::Read)),
         ("/plain-app", (Read, PartRead::Unsupported, PartRead::Read)),
-        ("/plain-down", (Failed, PartRead::NotRead, PartRead::NotRead)),
+        (
+            "/plain-down",
+            (Failed, PartRead::NotRead, PartRead::NotRead),
+        ),
     ];
     for (root, expected) in read {
         assert_eq!(outcome(&answer, root), Some(expected), "{root}");
     }
     assert_eq!(
-        answer.project("/none").map(|project| project.read_outcome()),
+        answer
+            .project("/none")
+            .map(|project| project.read_outcome()),
         Some(NoRemote)
     );
     let github = answer.project("/github-app").unwrap();
     let reference = github.pull_requests[0].reference.as_ref().unwrap();
     assert_eq!(
-        (reference.label.as_str(), reference.repository.authority.as_str()),
+        (
+            reference.label.as_str(),
+            reference.repository.authority.as_str()
+        ),
         ("#7", "github.com")
     );
     assert_eq!(github.repository_id(), Some("R_acme/app"));

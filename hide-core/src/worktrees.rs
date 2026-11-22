@@ -1112,7 +1112,10 @@ fn read_project(
 
 /// The stored name of the repository an `origin` address names, as the unit
 /// of its code host reads it.
-pub(crate) fn origin_repository(hosts: crate::code_host::CodeHosts, origin: &str) -> Option<String> {
+pub(crate) fn origin_repository(
+    hosts: crate::code_host::CodeHosts,
+    origin: &str,
+) -> Option<String> {
     let (host, repository) = hosts.remote(origin)?;
     Some(host.stored_name(&repository))
 }

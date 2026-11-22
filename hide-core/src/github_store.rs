@@ -349,7 +349,10 @@ mod tests {
                 .as_ref()
                 .expect("named again");
             assert_eq!(
-                (reference.repository.authority.as_str(), reference.files_url.as_str()),
+                (
+                    reference.repository.authority.as_str(),
+                    reference.files_url.as_str()
+                ),
                 (authority, files)
             );
             let identity = project.repository.as_ref().expect("named by the address");
