@@ -50,7 +50,7 @@
         <div class="legal-head">
           <p class="label">Privacy</p>
           <h1>Privacy policy</h1>
-          <p class="meta">Effective 13 November 2026</p>
+          <p class="meta">Effective 22 November 2026</p>
           <p class="lead">This page says what each part of hide sends, where it goes and how long it stays. It describes the code that ships, not an intention.</p>
           <nav class="legal-langs" aria-label="Language">
             <a href="#en">English</a>
@@ -87,11 +87,14 @@
               </thead>
               <tbody>
                 <tr data-event="hide_connected"><td>Window connected</td><td>That a window drew the app's state for the first time in that page, once per page.</td></tr>
-                <tr data-event="hide_agent_started"><td>Agent started</td><td>Which agent it is (Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode or Antigravity), and whether you started it, a mission started it, or another agent spawned it.</td></tr>
+                <tr data-event="hide_agent_started"><td>Agent started</td><td>Which agent it is (Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode or Antigravity), and whether you started it, a mission started it, an automation started it, or another agent spawned it.</td></tr>
                 <tr data-event="hide_mission_started"><td>Mission started</td><td>How many steps the plan has, as 1, 2 to 3, 4 to 7, or 8 and more.</td></tr>
                 <tr data-event="hide_mission_ended"><td>Mission ended</td><td>Done, waiting to merge, or cancelled.</td></tr>
-                <tr data-event="hide_practice"><td>Practice chapter</td><td>Which of the five practice chapters, and whether it started or finished.</td></tr>
+                <tr data-event="hide_practice"><td>Practice chapter</td><td>Which practice chapter, and whether it started or finished.</td></tr>
                 <tr data-event="hide_active"><td>Active day</td><td>That Hide was used that day, sent once a day for the computer and once for the phone, and which of the two it was.</td></tr>
+                <tr data-event="hide_feature_used"><td>Feature used</td><td>That a main feature was used that day, sent once a day for each: focus mode turned on, or a skill or MCP server added, changed, switched or removed.</td></tr>
+                <tr data-event="hide_automation_created"><td>Automation made</td><td>Which example the automation started from (a weekly report, a morning briefing or fixing failed CI), or none.</td></tr>
+                <tr data-event="hide_automation_run_ended"><td>Automation run ended</td><td>Whether the run finished, failed or was stopped, and whether its time came, a missed time was caught up, or you ran it yourself.</td></tr>
                 <tr data-event="hide_phone_paired"><td>Phone paired</td><td>Whether the phone paired through the relay or through Tailscale.</td></tr>
                 <tr data-event="hide_device_connected"><td>Device connected</td><td>Ready or failed, the platform (for example macOS on Apple Silicon), and, for a failure, whether it failed while downloading or installing and a class such as a sign-in that was needed or a server that could not be reached.</td></tr>
               </tbody>
@@ -243,11 +246,14 @@
               </thead>
               <tbody>
                 <tr data-event="hide_connected"><td>창 연결</td><td>그 페이지에서 창이 처음으로 앱의 상태를 그렸다는 사실. 페이지마다 한 번.</td></tr>
-                <tr data-event="hide_agent_started"><td>에이전트 시작</td><td>어떤 에이전트인지(Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode, Antigravity)와, 사용자가 시작했는지, 미션이 시작했는지, 다른 에이전트가 띄웠는지.</td></tr>
+                <tr data-event="hide_agent_started"><td>에이전트 시작</td><td>어떤 에이전트인지(Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode, Antigravity)와, 사용자가 시작했는지, 미션이 시작했는지, 자동화가 시작했는지, 다른 에이전트가 띄웠는지.</td></tr>
                 <tr data-event="hide_mission_started"><td>미션 시작</td><td>계획의 단계 수를 1, 2~3, 4~7, 8 이상으로 나눈 값.</td></tr>
                 <tr data-event="hide_mission_ended"><td>미션 끝</td><td>완료, 병합 대기, 취소 중 하나.</td></tr>
-                <tr data-event="hide_practice"><td>연습 챕터</td><td>다섯 챕터 중 어느 것인지와, 시작했는지 끝냈는지.</td></tr>
+                <tr data-event="hide_practice"><td>연습 챕터</td><td>어느 연습 챕터인지와, 시작했는지 끝냈는지.</td></tr>
                 <tr data-event="hide_active"><td>사용한 날</td><td>그날 Hide를 썼다는 것. 컴퓨터와 폰 각각 하루에 한 번 보내며, 둘 중 어느 쪽이었는지.</td></tr>
+                <tr data-event="hide_feature_used"><td>기능 사용</td><td>그날 주요 기능을 썼다는 것. 기능마다 하루에 한 번 보내며, 집중 모드를 켰는지, 스킬이나 MCP 서버를 추가·변경·켜고 끄기·삭제했는지.</td></tr>
+                <tr data-event="hide_automation_created"><td>자동화 만듦</td><td>어떤 예시(주간 리포트, 아침 브리핑, 실패한 CI 고치기)로 시작했는지, 또는 예시 없이 만들었는지.</td></tr>
+                <tr data-event="hide_automation_run_ended"><td>자동화 실행 끝</td><td>실행이 끝났는지, 실패했는지, 멈췄는지와, 정한 시간에 돌았는지, 놓친 시간을 따라잡았는지, 직접 실행했는지.</td></tr>
                 <tr data-event="hide_phone_paired"><td>폰 연결</td><td>중계 서버로 연결했는지 Tailscale로 연결했는지.</td></tr>
                 <tr data-event="hide_device_connected"><td>기기 연결</td><td>성공 또는 실패, 플랫폼(예: Apple Silicon의 macOS), 그리고 실패라면 내려받기와 설치 중 어디서 실패했는지와 로그인이 필요했다거나 서버에 닿지 못했다는 식의 실패 종류.</td></tr>
               </tbody>
@@ -363,7 +369,7 @@
           </ul>
 
           <h3>9. 방침의 변경</h3>
-          <p>이 방침은 2026년 11월 13일부터 시행합니다. hide의 어느 부분이 새로 무엇을 보내거나 보내기를 멈추면, 이 페이지를 같은 릴리스에서 함께 고치고 위의 시행일도 함께 옮깁니다. 모으는 내용이 달라지는 변경은 시행 전에 그 릴리스의 변경 내역에도 적습니다.</p>
+          <p>이 방침은 2026년 11월 22일부터 시행합니다. hide의 어느 부분이 새로 무엇을 보내거나 보내기를 멈추면, 이 페이지를 같은 릴리스에서 함께 고치고 위의 시행일도 함께 옮깁니다. 모으는 내용이 달라지는 변경은 시행 전에 그 릴리스의 변경 내역에도 적습니다.</p>
 
           <h3>10. 문의</h3>
           <p>이 페이지에 적힌 데이터에 책임이 있는 곳은 그랩더월드(대표 이호연)이며, 개인정보 책임자는 이호연입니다. 둘 다 아래 주소로 연락할 수 있고, 그 메일함은 저희가 읽습니다.</p>

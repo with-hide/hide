@@ -291,6 +291,18 @@ impl Runtime {
             );
             return true;
         }
+        // A change the operator makes, not a look: a check for new
+        // versions, a source read or an update's preview counts no use.
+        if changes.iter().any(|change| {
+            !matches!(
+                change,
+                StoreChange::Inspect { .. }
+                    | StoreChange::CheckUpdates
+                    | StoreChange::PreviewUpdate { .. }
+            )
+        }) {
+            self.note_feature_used(crate::product_analytics::Feature::SkillsMcp);
+        }
         self.queue_store(device_id, StoreJob::Pass(changes), true, Some(&request_id));
         true
     }
