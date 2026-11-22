@@ -166,6 +166,46 @@ pub(crate) fn declaration(unit: &dyn CodeHost) -> HostDeclaration {
     }
 }
 
+/// How a text names the change request a carried reference names: by the
+/// unit its host key registers (`PR #12`, `MR !12`), or by the label it
+/// carries alone when no registered unit has that key. For a reader of a
+/// reference outside the core (`hide mission show`), which never branches on
+/// a host's key itself.
+pub fn change_request_name(host: &str, number: u32, label: &str) -> String {
+    CodeHosts::STANDARD
+        .host(host)
+        .map_or_else(|| label.to_owned(), |unit| unit.change_request_name(number))
+}
+
+/// What the operator does about a read of `unit`'s host that failed for
+/// `category`, for a refusal that rests on that read; `None` for a project
+/// no host reads, which nothing fixes. The program's own words stay in the
+/// log.
+pub(crate) fn unread_action(
+    unit: &dyn CodeHost,
+    category: GithubFailureCategory,
+) -> Option<String> {
+    let (name, access) = (unit.name(), unit.access());
+    let program = &access.program;
+    Some(match category {
+        GithubFailureCategory::NotInstalled => {
+            format!("{name} is not read: {program} is not installed on the core's machine")
+        }
+        GithubFailureCategory::Outdated => format!(
+            "{name} is not read: {program} on the core's machine is older than {}; update it",
+            access.minimum_version
+        ),
+        GithubFailureCategory::NotLoggedIn => format!(
+            "{name} is not read: {program} is not signed in on the core's machine; run {} there",
+            access.sign_in
+        ),
+        GithubFailureCategory::NetworkOrRateLimit => {
+            format!("{name}'s last read failed (network or rate limit); retry in a minute")
+        }
+        GithubFailureCategory::NoGithubRemote => return None,
+    })
+}
+
 /// A registered host's unit, compared and shown by its key.
 #[derive(Clone, Copy)]
 pub(crate) struct Host(&'static dyn CodeHost);
@@ -340,6 +380,14 @@ pub(crate) trait CodeHost: Sync {
 
     /// How the host writes a change request's number (`#12`).
     fn number_label(&self, number: u32) -> String;
+
+    /// How a text Hide writes for an agent or the operator names change
+    /// request `number` (`PR #12`).
+    fn change_request_name(&self, number: u32) -> String;
+
+    /// The command an agent opens a change request into `base` with
+    /// (`gh pr create --base <base>`), as a mission's hand-off names it.
+    fn create_command(&self, base: &str) -> String;
 
     /// How the host is reached: its program, the oldest release Hide reads
     /// with, and the command that signs it in.

@@ -336,28 +336,6 @@ fn supported_version(answer: Result<String, GhFailure>) -> Result<(), GhFailure>
     }
 }
 
-/// What the operator does about a GitHub read that failed for `category`,
-/// for a refusal that rests on that read; `None` for a repository with no
-/// GitHub remote, which nothing fixes. `gh`'s own words stay in the log.
-pub(crate) fn unread_action(category: GithubFailureCategory) -> Option<String> {
-    Some(match category {
-        GithubFailureCategory::NotInstalled => {
-            "GitHub is not read: gh is not installed on the core's machine".to_owned()
-        }
-        GithubFailureCategory::Outdated => format!(
-            "GitHub is not read: gh on the core's machine is older than {MINIMUM_VERSION}; update it"
-        ),
-        GithubFailureCategory::NotLoggedIn => {
-            "GitHub is not read: gh is not signed in on the core's machine; run gh auth login there"
-                .to_owned()
-        }
-        GithubFailureCategory::NetworkOrRateLimit => {
-            "GitHub's last read failed (network or rate limit); retry in a minute".to_owned()
-        }
-        GithubFailureCategory::NoGithubRemote => return None,
-    })
-}
-
 /// States that an extra question went unanswered, with the reason, for the
 /// diagnostic log (design principle 13): the operator sees which question,
 /// not `gh`'s words.

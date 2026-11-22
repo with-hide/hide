@@ -26,6 +26,7 @@ use serde::Deserialize;
 
 mod budget;
 pub(crate) mod host;
+mod merge_request;
 
 use crate::checkout_git::{Ci, CiState};
 use crate::code_host::{CardRead, DueRead, HostFailure, HostReads, Place, RepositoryRef};
@@ -68,6 +69,8 @@ enum Refusal {
     TooLarge,
     /// `glab` or the link failed, in the class it failed in.
     Failed(HostFailure),
+    /// gitlab.com answered something Hide cannot read.
+    Unreadable(String),
 }
 
 impl From<HostFailure> for Refusal {
@@ -89,6 +92,7 @@ impl Refusal {
                 hide_node_link::glab::ANSWER_BYTE_LIMIT
             ),
             Self::Failed(failure) => failure.reason.clone(),
+            Self::Unreadable(reason) => reason.clone(),
         }
     }
 }
@@ -101,6 +105,12 @@ fn glab(node: &dyn NodeLink, arguments: Vec<String>, share: Share) -> Result<Str
     if asks_gitlab && !budget::take(share) {
         return Err(Refusal::Spent);
     }
+    glab_taken(node, arguments)
+}
+
+/// Runs one allowed `glab` line whose request the caller already took from
+/// the budget ([`budget::Budget::take_many`]).
+fn glab_taken(node: &dyn NodeLink, arguments: Vec<String>) -> Result<String, Refusal> {
     let answer: GlabAnswer = match call_as(node, Call::Glab { args: arguments }, GLAB_CALL_TIMEOUT)
     {
         Ok(answer) => answer,
@@ -236,7 +246,7 @@ fn refused(root_path: &str, refusal: &Refusal) -> GithubProjectSnapshot {
     match refusal {
         Refusal::Unsupported(_) => held(ReadHeld::Unsupported),
         Refusal::Spent => held(ReadHeld::BudgetSpent),
-        Refusal::TooLarge => failed(root_path, None, refusal.reason()),
+        Refusal::TooLarge | Refusal::Unreadable(_) => failed(root_path, None, refusal.reason()),
         Refusal::Failed(failure) => signed_out(root_path, failure),
     }
 }
@@ -1010,6 +1020,9 @@ fn failed_card_parts(value: &serde_json::Value) -> Option<Vec<&'static str>> {
             Some("discussions" | "resolvableDiscussionsCount" | "resolvedDiscussionsCount") => {
                 "threads"
             }
+            // Whether the account may merge: without it the card offers no
+            // merge, and the rest of the card stands.
+            Some("userPermissions") => continue,
             _ => return None,
         };
         if !parts.contains(&part) {
@@ -1117,6 +1130,16 @@ pub(crate) fn parse_card(output: &str) -> Result<CardRead, String> {
         }
         None => read.failed.push("threads"),
     }
+    // gitlab.com merges a merge request its own way (the project's method,
+    // a squash when the merge request or the project asks for one) and has
+    // no merge queue to join, so the card offers that one merge.
+    read.merge = merge_request["userPermissions"]["canMerge"]
+        .as_bool()
+        .map(|can_merge| crate::model::PrCardMerge {
+            methods: vec![hide_node_link::change_request::PrMergeMethod::Merge],
+            queue: false,
+            can_merge,
+        });
     Ok(read)
 }
 

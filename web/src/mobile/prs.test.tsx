@@ -272,6 +272,23 @@ it("shows what a refused or finished merge did in the desktop's words, and reads
   }
 });
 
+it("shows a gitlab.com merge that set auto-merge only, or found the request budget spent, as its own outcome in the desktop's words", async () => {
+  const { click, q, prs, unmount } = await connect([pr(1)]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    for (const reason of ["auto_merge", "budget_spent"] as const) {
+      await prs([pr(1, { card: card({ write: { action: "merge", head: HEAD, method: "merge", phase: "failed", reason } }) })]);
+      const shown = q("[data-phone-pr-write]")!;
+      expect(shown.getAttribute("data-phone-pr-write-reason")).toBe(reason);
+      // The words are the card's own, never the key.
+      expect(shown.textContent).not.toContain("work.card.fail");
+    }
+  } finally {
+    await unmount();
+  }
+});
+
 it("hands a pull request to an agent with the desktop card's prompt, the remembered kind and model, and one request", async () => {
   const feedback: PhonePrFeedback = {
     request_id: "",

@@ -1145,7 +1145,7 @@ fn a_teammates_pending_checks_the_list_does_not_show_are_not_read_for() {
 
 /// The project `/repo` connected, through its repository setting, to a
 /// gitlab.com project: the setting takes a gitlab.com repository, and the
-/// card writes and the feedback hand-over gitlab.com does not declare are
+/// branch update and the feedback hand-over gitlab.com does not declare are
 /// refused at the event, before any host is asked and whatever surface sent
 /// it (an old phone bundle, a direct event).
 #[test]
@@ -1191,27 +1191,22 @@ fn an_operation_gitlab_com_does_not_offer_is_refused_at_its_event() {
         });
     runtime.apply_pull_requests();
 
-    for (kind, payload) in [
-        (
-            "pr_merge",
-            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
-        ),
-        (
-            "pr_update_branch",
-            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD}),
-        ),
-    ] {
-        runtime.pr_card_slot("w", 2).write = None;
-        assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
-        let write = card(&runtime, 2)
-            .write
-            .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
-        assert_eq!(
-            (write.phase, write.reason),
-            ("failed", Some("unsupported")),
-            "{kind}"
-        );
-    }
+    // gitlab.com offers the merge; the method it does not take (an old
+    // phone's squash) is refused by its unit with nothing sent
+    // (`gitlab::merge_request` tests). The branch update it does not offer
+    // is refused here.
+    let kind = "pr_update_branch";
+    let payload = serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD});
+    runtime.pr_card_slot("w", 2).write = None;
+    assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
+    let write = card(&runtime, 2)
+        .write
+        .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
+    assert_eq!(
+        (write.phase, write.reason),
+        ("failed", Some("unsupported")),
+        "{kind}"
+    );
 
     assert!(runtime.dispatch_json(&event(
         "pr_feedback_read",

@@ -440,7 +440,14 @@ use crate::error::HostError;
 /// read gitlab.com's merge requests with the operator's login; a node on 100
 /// does not know the call, so it is refused at Hello and upgraded with its
 /// core.
-pub const PROTOCOL_VERSION: u32 = 101;
+/// 102: the core's own node runs the one gitlab.com write, a merge at the
+/// head the operator saw (`crate::glab::merge_arguments`), and three REST
+/// reads (a merge request by its number, a branch's merged merge requests,
+/// the merge base of two commits) its merge, merge proof and read by number
+/// rest on; a `glab` line a node does not allow is refused as unsupported
+/// rather than answered as a failure. A node on 101 refuses those lines as
+/// failed commands, so it is refused at Hello and upgraded with its core.
+pub const PROTOCOL_VERSION: u32 = 102;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

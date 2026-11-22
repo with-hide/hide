@@ -560,7 +560,15 @@ fn a_card_reads_its_head_files_and_open_discussions() {
     // The only discussion is a system note, which cannot be resolved.
     assert_eq!(card.threads, Some(Vec::new()));
     assert!(card.failed.is_empty());
-    assert_eq!(card.merge, None);
+    // gitlab.com's one method, with the account's permission to merge.
+    assert_eq!(
+        card.merge,
+        Some(crate::model::PrCardMerge {
+            methods: vec![hide_node_link::change_request::PrMergeMethod::Merge],
+            queue: false,
+            can_merge: true,
+        })
+    );
 }
 
 /// The card answer with `edit` applied to its merge request and `errors`
@@ -673,6 +681,11 @@ fn gitlab_com_names_and_addresses_round_trip_and_refuse_a_credential() {
         None
     );
     assert_eq!(unit.number_label(12), "!12");
+    assert_eq!(unit.change_request_name(12), "MR !12");
+    assert_eq!(
+        unit.create_command("m91/low"),
+        "glab mr create --target-branch m91/low"
+    );
     assert_eq!(
         unit.commit_url(&repository, "abc"),
         "https://gitlab.com/group/sub/project/-/commit/abc"
@@ -727,7 +740,12 @@ fn gitlab_com_declares_only_the_operations_it_offers() {
     assert_eq!(declaration.key, "gitlab");
     assert_eq!(
         declaration.operations,
-        [crate::code_host::Operation::CommitChecks]
+        [
+            crate::code_host::Operation::Merge,
+            crate::code_host::Operation::MergeProof,
+            crate::code_host::Operation::CommitChecks,
+            crate::code_host::Operation::ByNumber,
+        ]
     );
     assert_eq!(declaration.access.program, "glab");
     assert_eq!(declaration.access.minimum_version, "1.78.0");

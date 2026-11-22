@@ -563,7 +563,7 @@ export type PrWrite = {
   head: string;
   method: PrMergeMethod | null;
   phase: "working" | "done" | "failed";
-  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "unsupported" | "failed" | null;
+  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "unsupported" | "auto_merge" | "budget_spent" | "failed" | null;
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */

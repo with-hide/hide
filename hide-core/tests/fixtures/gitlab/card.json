@@ -3,6 +3,9 @@
     "project": {
       "mergeRequest": {
         "diffHeadSha": "1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c",
+        "userPermissions": {
+          "canMerge": true
+        },
         "description": "",
         "resolvableDiscussionsCount": 0,
         "resolvedDiscussionsCount": 0,

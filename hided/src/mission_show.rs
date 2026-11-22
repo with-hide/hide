@@ -274,9 +274,43 @@ fn minutes_ago(now: u64, at: u64) -> String {
     }
 }
 
+/// A change request's number as its host writes it (`#12`, `!12`): the label
+/// its carried reference has.
+///
+/// The fallbacks here and in [`change_request_name`] and the stack line
+/// serve one pair of builds: this `hide` answered by a daemon of an earlier
+/// release (1.2.11 and before carry no reference and no stack words), which
+/// meets it while the app on disk was updated and its daemon, which quitting
+/// the app leaves running, waits for the app's next start to replace it.
+/// The reverse pair needs nothing here: an older `hide` ignores the fields.
+fn number_label(number: u64, reference: &Value) -> String {
+    reference["label"]
+        .as_str()
+        .map_or_else(|| format!("#{number}"), str::to_owned)
+}
+
+/// A change request as a text names it (`PR #12`, `MR !12`), by the unit of
+/// the host its carried reference names; `PR #N` with no reference, from a
+/// daemon of an earlier release (see [`number_label`]).
+fn change_request_name(number: u64, reference: &Value) -> String {
+    match (
+        reference["repository"]["host"].as_str(),
+        u32::try_from(number),
+    ) {
+        (Some(host), Ok(number)) => {
+            hide_core::change_request_name(host, number, &number_label(number.into(), reference))
+        }
+        _ => format!("PR #{number}"),
+    }
+}
+
 fn pr_words(node: &Value) -> Option<String> {
     let number = node["pr"].as_u64()?;
-    let mut words = format!("#{number} {}", pr_word(&node["pr_state"]));
+    let mut words = format!(
+        "{} {}",
+        number_label(number, &node["pr_reference"]),
+        pr_word(&node["pr_state"])
+    );
     let more = node["prs"].as_array().map_or(0, Vec::len).saturating_sub(1);
     if more > 0 {
         let _ = write!(words, " 외 {more}");
@@ -594,14 +628,23 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     // its work reaches the destination.
     if let Some(on) = node["stack"]["on"].as_str() {
         let mut words = format!("쌓기 {on} 위");
-        if let Some(pr) = node["stack"]["pr"].as_u64() {
+        // The change request below and the command that opens one on its
+        // branch, in the project's host's words, which the core writes.
+        // A daemon of an earlier release sends neither and names a stack
+        // in GitHub's words, the only host it read (see `number_label`).
+        if let Some(pr) = result["stack_pr"].as_str() {
+            let _ = write!(words, " · {pr}");
+        } else if let Some(pr) = node["stack"]["pr"].as_u64() {
             let _ = write!(words, " · PR #{pr}");
         }
         match node["stack"]["branch"].as_str() {
             Some(branch) => {
+                let create = result["stack_create"]
+                    .as_str()
+                    .map_or_else(|| format!("gh pr create --base {branch}"), str::to_owned);
                 let _ = write!(
                     words,
-                    " · 브랜치 {branch}에서 시작 · gh pr create --base {branch} · {on} 다음에 머지"
+                    " · 브랜치 {branch}에서 시작 · {create} · {on} 다음에 머지"
                 );
             }
             None => {
@@ -618,7 +661,11 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
         let _ = writeln!(out, "작업자 {worker}");
     }
     for pr in node["prs"].as_array().into_iter().flatten() {
-        let mut words = format!("PR #{} {}", pr["number"], pr_word(&pr["state"]));
+        let name = pr["number"].as_u64().map_or_else(
+            || format!("PR #{}", pr["number"]),
+            |number| change_request_name(number, &pr["reference"]),
+        );
+        let mut words = format!("{name} {}", pr_word(&pr["state"]));
         if let Some(url) = pr["url"].as_str() {
             let _ = write!(words, " · {url}");
         }
@@ -992,6 +1039,28 @@ mod tests {
         assert_eq!(text.lines().count(), 7, "{text}");
     }
 
+    /// A node's change request reads by the unit of the host its carried
+    /// reference names: `MR !12` on gitlab.com, `PR #12` on GitHub, and the
+    /// carried label alone for a host this build does not know.
+    #[test]
+    fn a_nodes_change_request_is_named_by_its_hosts_unit() {
+        let line = |host: &str, label: &str| {
+            let mut node = mission()["mission"]["nodes"][0].clone();
+            node["prs"] = json!([{"number": 12, "state": "pending", "reference": {
+                "repository": {"host": host, "authority": "example.test", "path": "example-user/project"},
+                "number": 12, "label": label}}]);
+            let answer = json!({"mission_id": "mission-33", "node": node, "letters": []});
+            let text = draw(&answer, NOW).unwrap();
+            text.lines()
+                .find(|line| line.contains("12 "))
+                .map(str::to_owned)
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        assert!(line("gitlab", "!12").starts_with("MR !12 "));
+        assert!(line("github", "#12").starts_with("PR #12 "));
+        assert!(line("forge", "~12").starts_with("~12 "));
+    }
+
     /// with-hide/hide-private#552 c1: one node in full: its state, worker,
     /// pull requests, last push, warnings, every line with its evidence and each
     /// checker's answer, its worker's newest letters, and the letters its
@@ -1221,12 +1290,26 @@ mod tests {
         );
         // A node stacked on another starts from that one's branch and bases
         // its pull request there, and merges after it.
+        // With no words from the daemon the line is GitHub's, as before; a
+        // gitlab.com project's daemon writes the change request below and
+        // the create command in gitlab.com's.
         let mut stacked = mission()["mission"]["nodes"][1].clone();
         stacked["stack"] = json!({"on": "core", "branch": "m82/core", "pr": 12});
         let text = alone(&stacked, Some("main"));
         assert!(
             text.contains(
                 "\n도착 main\n쌓기 core 위 · PR #12 · 브랜치 m82/core에서 시작 · gh pr create --base m82/core · core 다음에 머지\n"
+            ),
+            "{text}"
+        );
+        let mut answer = json!({"mission_id": "mission-33", "node": stacked.clone(), "letters": [],
+            "destination": "main", "stack_pr": "MR !12",
+            "stack_create": "glab mr create --target-branch m82/core"});
+        answer["node"]["stack"] = json!({"on": "core", "branch": "m82/core", "pr": 12});
+        let text = draw(&answer, NOW).unwrap();
+        assert!(
+            text.contains(
+                "\n쌓기 core 위 · MR !12 · 브랜치 m82/core에서 시작 · glab mr create --target-branch m82/core · core 다음에 머지\n"
             ),
             "{text}"
         );

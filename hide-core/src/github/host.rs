@@ -158,6 +158,14 @@ impl CodeHost for Github {
         format!("#{number}")
     }
 
+    fn change_request_name(&self, number: u32) -> String {
+        format!("PR #{number}")
+    }
+
+    fn create_command(&self, base: &str) -> String {
+        format!("gh pr create --base {base}")
+    }
+
     fn access(&self) -> HostAccess {
         HostAccess {
             program: "gh".to_owned(),

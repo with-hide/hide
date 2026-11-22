@@ -3544,4 +3544,92 @@ mod tests {
             (Some("unverified"), false)
         );
     }
+
+    /// gitlab.com's answer for a branch's merged merge requests, recorded
+    /// on the test project for !21, merged with the merge request's own
+    /// squash setting into `main`, with its head set to `head`.
+    struct GitlabMerged {
+        head: String,
+    }
+
+    impl crate::node_access::NodeLink for GitlabMerged {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let hide_node_link::protocol::Call::Glab { args } = call else {
+                panic!("the merge proof is read with glab: {call:?}");
+            };
+            assert_eq!(
+                Some(args),
+                hide_node_link::glab::merged_arguments(
+                    "example-user/hide-code-host-check",
+                    "squashed"
+                ),
+                "the branch's merged merge requests, as the node allows"
+            );
+            let mut answer: serde_json::Value = serde_json::from_str(include_str!(
+                "../tests/fixtures/gitlab/merged-of-branch.json"
+            ))
+            .unwrap();
+            answer[0]["sha"] = serde_json::json!(self.head);
+            Ok(
+                serde_json::to_value(hide_node_link::glab::GlabAnswer::Output {
+                    stdout: answer.to_string(),
+                    cut: false,
+                })
+                .unwrap()
+                .into(),
+            )
+        }
+    }
+
+    /// A worktree whose branch gitlab.com squash-merged into main is proved
+    /// merged by gitlab.com's merge request at exactly its head, through the
+    /// unit's merge proof as GitHub's is; the same merge request at another
+    /// head proves nothing.
+    #[test]
+    fn a_gitlab_squash_merge_is_proved_by_its_merge_request_at_this_head() {
+        use crate::code_host::{CodeHost, CodeHosts, Place};
+        let f = Fixture::new();
+        let squashed = f.add("squashed");
+        commit(&squashed, "Feature");
+        let feature_head = head_of(&squashed);
+        let host = CodeHosts::STANDARD.host("gitlab").unwrap();
+        let place = Place::Repository {
+            host,
+            repository: host
+                .repository("gitlab.com/example-user/hide-code-host-check")
+                .unwrap(),
+        };
+        let review = |head: &str| {
+            let link = GitlabMerged { head: head.into() };
+            inspect_with_merge_proofs(
+                &node(),
+                &f.main,
+                Some(&f.main),
+                Ok(Vec::new()),
+                &Usage::default(),
+                None,
+                Some("main"),
+                |branch, _| {
+                    let proof = crate::gitlab::host::GITLAB.merge_proof().unwrap();
+                    Ok(heads_into(
+                        proof.merged_heads(&link, &place, branch)?,
+                        "main",
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(code_of(&review(&feature_head), &squashed), None);
+        assert_eq!(
+            code_of(
+                &review("25a20b50d1a4a2e6a3b1f2d7c8e9f0a1b2c3d4e5"),
+                &squashed
+            ),
+            Some("not_merged")
+        );
+    }
 }

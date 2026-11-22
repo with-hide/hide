@@ -18,6 +18,7 @@ mod checkout_git;
 mod checkout_owner;
 mod checkout_start;
 mod code_host;
+pub use code_host::change_request_name;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
