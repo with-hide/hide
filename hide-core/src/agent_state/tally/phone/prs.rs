@@ -135,6 +135,9 @@ pub struct PhoneMerge {
     pub methods: Vec<String>,
     pub queue: bool,
     pub can_merge: bool,
+    /// As the desktop's card carries it (`PrCardMerge::host_sets_method`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_sets_method: bool,
 }
 
 /// The Merge or branch update asked for from the card, and how it went.

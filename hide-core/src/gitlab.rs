@@ -1132,13 +1132,15 @@ pub(crate) fn parse_card(output: &str) -> Result<CardRead, String> {
     }
     // gitlab.com merges a merge request its own way (the project's method,
     // a squash when the merge request or the project asks for one) and has
-    // no merge queue to join, so the card offers that one merge.
+    // no merge queue to join, so the card offers that one merge. `Merge` is
+    // the event's method, which the unit requires; no method is chosen.
     read.merge = merge_request["userPermissions"]["canMerge"]
         .as_bool()
         .map(|can_merge| crate::model::PrCardMerge {
             methods: vec![hide_node_link::change_request::PrMergeMethod::Merge],
             queue: false,
             can_merge,
+            host_sets_method: true,
         });
     Ok(read)
 }

@@ -595,13 +595,15 @@ fn a_card_reads_its_head_files_and_open_discussions() {
     // The only discussion is a system note, which cannot be resolved.
     assert_eq!(card.threads, Some(Vec::new()));
     assert!(card.failed.is_empty());
-    // gitlab.com's one method, with the account's permission to merge.
+    // gitlab.com's one merge, by the method its own settings name, with the
+    // account's permission to merge.
     assert_eq!(
         card.merge,
         Some(crate::model::PrCardMerge {
             methods: vec![hide_node_link::change_request::PrMergeMethod::Merge],
             queue: false,
             can_merge: true,
+            host_sets_method: true,
         })
     );
 }

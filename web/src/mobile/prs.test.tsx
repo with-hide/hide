@@ -272,6 +272,23 @@ it("shows what a refused or finished merge did in the desktop's words, and reads
   }
 });
 
+it("names no merge method where the host merges by its own settings, and still sends the event's one method", async () => {
+  const own = pr(1, { card: card({ merge: { methods: ["merge"], queue: false, can_merge: true, host_sets_method: true } }) });
+  const { click, sent, q, unmount } = await connect([own]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    await click("[data-phone-pr-merge]");
+    const sheet = q("[data-phone-pr-confirm]")!;
+    expect(sheet.textContent).toContain(HEAD.slice(0, 7));
+    expect(sheet.textContent).not.toContain("Merge commit");
+    await click("[data-phone-pr-confirm-yes]");
+    expect(sent("merge_pr")[0]).toMatchObject({ head: HEAD, method: "merge" });
+  } finally {
+    await unmount();
+  }
+});
+
 it("shows a gitlab.com merge that set auto-merge only, or found the request budget spent, as its own outcome in the desktop's words", async () => {
   const { click, q, prs, unmount } = await connect([pr(1)]);
   try {

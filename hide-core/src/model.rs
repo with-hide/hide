@@ -6066,6 +6066,11 @@ pub struct PrCardMerge {
     pub queue: bool,
     /// The signed-in account may write to the repository.
     pub can_merge: bool,
+    /// The host merges by the method its own settings name and applies none
+    /// Hide sends, so the confirm line names no method. Left out when false,
+    /// so GitHub's card and an older core's read the same.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_sets_method: bool,
 }
 
 /// One GitHub write asked for from a card (D-22, B31-B34).

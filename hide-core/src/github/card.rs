@@ -136,6 +136,8 @@ pub(crate) fn parse(output: &str) -> Result<CardRead, String> {
             repository["viewerPermission"].as_str(),
             Some("WRITE" | "MAINTAIN" | "ADMIN")
         ),
+        // GitHub merges by the method Hide sends.
+        host_sets_method: false,
     });
     Ok(read)
 }
@@ -450,6 +452,13 @@ mod tests {
             vec![PrMergeMethod::Merge, PrMergeMethod::Squash]
         );
         assert!(merge.queue && merge.can_merge);
+        // GitHub merges by the method sent: the card's merge says nothing
+        // more than before, byte for byte.
+        let wire = serde_json::to_value(&merge).unwrap();
+        assert_eq!(
+            wire.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["methods", "queue", "can_merge"]
+        );
         assert!(read.failed.is_empty());
         // The latest completed check, a running one passed over, and the
         // latest decisive review, a comment-only one passed over (D-15).

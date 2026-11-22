@@ -557,7 +557,8 @@ export type PrCard = {
   files: { path: string; additions: number; deletions: number; generated: boolean }[] | null;
   files_total: number;
   threads: { reviewer: string | null; path: string; line: number | null; text: string }[] | null;
-  merge: { methods: PrMergeMethod[]; queue: boolean; can_merge: boolean } | null;
+  /** `host_sets_method`: the host merges by its own settings' method and applies none Hide sends, so the confirm line names none; absent from GitHub and an older core. */
+  merge: { methods: PrMergeMethod[]; queue: boolean; can_merge: boolean; host_sets_method?: boolean } | null;
   /** Parts the last read could not get. */
   failed: ("body" | "files" | "threads")[];
   /** When the head's last check run finished, for the timeline's check row (PRD pr-card-and-session-record-redesign D-15); absent until the card read it or when no check ran. */

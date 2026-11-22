@@ -275,8 +275,11 @@ function Blocked({ pr, entry, card, actions, projectId }: { pr: PullRequest; ent
 
 type Confirm = Confirmed | null;
 
-function confirmText(confirm: Confirmed, queue: boolean, t: (key: string, values?: Record<string, unknown>) => string, values: { pull: string; label: string; host: string; base: string; method: string; head: string }): string {
-  return t(confirm.action === "merge" ? (queue ? "work.card.confirm.queue" : "work.card.confirm.merge") : "work.card.confirm.update", values);
+function confirmText(confirm: Confirmed, queue: boolean, t: (key: string, values?: Record<string, unknown>) => string, values: { pull: string; label: string; host: string; base: string; method: string | null; head: string }): string {
+  if (confirm.action !== "merge") return t("work.card.confirm.update", values);
+  if (queue) return t("work.card.confirm.queue", values);
+  // A host that merges by its own settings' method takes none from Hide: the line names none.
+  return t(values.method === null ? "work.card.confirm.mergeOwnMethod" : "work.card.confirm.merge", values);
 }
 
 /**
@@ -311,7 +314,7 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const line = <div className="flex min-w-0 flex-wrap items-center gap-sm">{children}</div>;
   if (!open) return line;
   const base = pr.base_branch ?? "";
-  const methodLabel = method ? t(`work.card.method.${method}`) : "";
+  const methodLabel = card?.merge?.host_sets_method === true ? null : method ? t(`work.card.method.${method}`) : "";
   // A write GitHub refused for the head, the merge state or the permission would only be refused again, so both buttons stay off until Look again has read the card; a transient failure (unreachable, failed) is retried with the same button (B37).
   const repeats = write?.phase === "failed" && write.reason !== "unreachable" && write.reason !== "failed";
   const canAsk = head !== null && !writing && !repeats;
