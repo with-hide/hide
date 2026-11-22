@@ -231,7 +231,16 @@ fn press(
         if let Some(screen) = screen {
             let row = counts_from_highlight(key).then_some(place);
             if row.is_some() || (index == 0 && *screen != Screen::default()) {
-                await_screen(engine, raw_pane, screen, row, index > 0)?;
+                await_screen(engine, raw_pane, screen, row, index > 0).map_err(|unwritten| {
+                    // A read that failed after a key this write typed
+                    // leaves that key landed; a screen read whole that
+                    // differs keeps its reason.
+                    if index > 0 && !matches!(unwritten, Unwritten::Unready(_)) {
+                        Unwritten::Uncertain
+                    } else {
+                        unwritten
+                    }
+                })?;
             }
         }
         if *key == "down" {
@@ -411,8 +420,8 @@ pub struct Screen {
     /// How the screen draws the ask's highlighted row; `None` where the
     /// agent's table does not say.
     rows: Option<Rows>,
-    /// The start of the command a permission was shown with: the ask on the
-    /// screen is that command's.
+    /// The first line of the command a permission was shown with, spaces
+    /// and all: the ask on the screen is that command's.
     command: Option<String>,
 }
 
@@ -427,21 +436,20 @@ struct Rows {
     labels: Vec<String>,
 }
 
-/// How much of a command's first line the screen must show: short enough
-/// to sit on one line of any pane a dialog fits in.
-const COMMAND_PROBE_CHARS: usize = 40;
-
 /// The places a numbered row is looked for at, when any row of the ask
 /// will do: more than any ask an agent's screen lists.
 const ROW_PLACES: usize = 16;
 
 impl Screen {
-    /// This screen, which also shows the start of `command`, the one the
-    /// operator was shown.
+    /// This screen, which also shows the whole first line of `command`, the
+    /// one the operator was shown, on one of its lines with every space as
+    /// it is: two commands may differ by one space, so a first line the
+    /// agent's screen wraps, cuts or scrolls off is not read as shown, and
+    /// types nothing.
     #[must_use]
     pub fn showing(mut self, command: &str) -> Self {
-        let first = command.trim().lines().next().unwrap_or_default().trim();
-        self.command = Some(first.chars().take(COMMAND_PROBE_CHARS).collect());
+        let first = command.trim().lines().next().unwrap_or_default();
+        self.command = Some(first.trim_end().to_owned());
         self
     }
 
@@ -452,7 +460,7 @@ impl Screen {
         let command = self
             .command
             .as_deref()
-            .is_none_or(|command| visible.contains(command));
+            .is_none_or(|command| visible.lines().any(|line| line.contains(command)));
         let row = match (&self.rows, place) {
             (Some(rows), Some(place)) => rows.highlighted(visible, place),
             (None, Some(_)) => false,
@@ -930,6 +938,84 @@ mod tests {
         let here = menu(2, 0);
         assert_eq!(write_with(&here, &["esc"], &shown), Ok(()));
         assert_eq!(sent(&here), ["esc"]);
+    }
+
+    /// A screen read that fails before the first key typed nothing and may
+    /// be answered again; one that fails after a key this write typed leaves
+    /// that key landed, so it is uncertain and the same answer is not typed
+    /// twice.
+    #[test]
+    fn a_screen_read_failing_after_a_typed_key_is_uncertain() {
+        let gate = Arc::new(PaneInputGate::default());
+        let open = node(None);
+        let screen = choice_screen("antigravity", Ask::Permission, &[]);
+        let failing_from = |failing: usize| {
+            let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            FakeEngine::start(move |method, _| match method {
+                "read_pane" => {
+                    let read = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if read >= failing {
+                        crate::engine::fake::unanswered("read timed out")
+                    } else {
+                        reply(crate::engine::PaneText {
+                            text: "> 1. Yes, run command\n  2. Yes, and always allow".to_owned(),
+                            truncated: false,
+                        })
+                    }
+                }
+                _ => reply(()),
+            })
+        };
+        let answer = |fake: &Arc<FakeEngine<'static>>| {
+            let engine = EngineHandle::new(fake.engine());
+            let ready = || Ok(engine.clone());
+            let typed = Typed::Choice {
+                keys: &["down", "enter"],
+                screen: &screen,
+            };
+            write(&open, &gate, "w1:p1", "p1", typed, &ready)
+        };
+        let before = failing_from(0);
+        assert_eq!(answer(&before), Err(Unwritten::Unavailable));
+        assert!(before.calls_of("send_keys").is_empty());
+        let after = failing_from(1);
+        assert_eq!(answer(&after), Err(Unwritten::Uncertain));
+        assert_eq!(after.calls_of("send_keys").len(), 1);
+    }
+
+    /// A permission's keys wait for the whole first line of the command the
+    /// card showed, on one screen line with its spaces as they are: another
+    /// command that starts the same way however long, or differs by one
+    /// space, is another ask, and a first line the screen wraps cannot be
+    /// told from one, so it is not read as shown either.
+    #[test]
+    fn a_permission_waits_for_its_commands_whole_first_line_on_one_line() {
+        let menu = " Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+        let waits = |card: &str, shown: &str| {
+            choice_screen("claude", Ask::Permission, &[])
+                .showing(card)
+                .shows(&format!("{shown}\n{menu}"), Some(0))
+        };
+        let write =
+            "python3 -c \"from pathlib import Path; Path('notes.txt').write_text('draft')\"";
+        assert!(waits(
+            &format!("{write}\nsecond line"),
+            &format!("   {write}")
+        ));
+        let unlink = "python3 -c \"from pathlib import Path; Path('notes.txt').unlink()\"";
+        assert!(!waits(write, &format!("   {unlink}")));
+        assert!(!waits(
+            "rm -r '/project/safe folder'",
+            "   rm -r '/project/safefolder'"
+        ));
+        assert!(!waits(
+            "rm -r '/project/safefolder'",
+            "   rm -r '/project/safe folder'"
+        ));
+        assert!(!waits(
+            write,
+            "   python3 -c \"from pathlib import Path; Path('notes.txt')\n   .write_text('draft')\""
+        ));
     }
 
     /// One key write runs in a pane at a time: another, from a second phone

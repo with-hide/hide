@@ -80,7 +80,14 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
         }
         Ask::Permission => match pending {
             Some(Pending::One(open)) if open.plan => (Ask::PlanApproval, Some(&open.id), None),
-            Some(Pending::One(open)) => (Ask::Permission, Some(&open.id), open.command.clone()),
+            // A command of no words cannot be checked on the screen.
+            Some(Pending::One(open)) => (
+                Ask::Permission,
+                Some(&open.id),
+                open.command
+                    .clone()
+                    .filter(|command| !command.trim().is_empty()),
+            ),
             _ => (Ask::Permission, None, None),
         },
         recorded => (recorded, None, None),
