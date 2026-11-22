@@ -6,12 +6,12 @@
 //! file's name can never become a command line. The writes are conditioned on
 //! the head commit the card showed; GitHub refuses them when it has moved.
 
-use hide_node_link::gh::{
-    PrMergeMethod, pr_card_query, pr_merge_arguments, pr_update_branch_arguments,
-};
+use hide_node_link::change_request::PrMergeMethod;
+use hide_node_link::gh::{pr_card_query, pr_merge_arguments, pr_update_branch_arguments};
 use serde_json::Value;
 
 use super::{GhFailure, Where, gh_at, issue_repository, parse_rfc3339_ms};
+use crate::code_host::{CardRead, WriteFailure};
 use crate::model::{PrCardFile, PrCardMerge, PrCardThread};
 use crate::node_access::NodeLink;
 
@@ -30,30 +30,6 @@ const LOCK_FILES: [&str; 9] = [
     "poetry.lock",
     "composer.lock",
 ];
-
-/// What one card read found. A part that could not be understood is `None`
-/// and named in `failed`; the others stand (B52).
-#[derive(Debug, Default, Eq, PartialEq)]
-pub(crate) struct CardRead {
-    pub head: Option<String>,
-    pub body: Option<String>,
-    pub files: Option<Vec<PrCardFile>>,
-    pub files_total: u32,
-    pub threads: Option<Vec<PrCardThread>>,
-    pub merge: Option<PrCardMerge>,
-    pub failed: Vec<&'static str>,
-    /// When the head commit's checks last completed: the latest completed
-    /// run's time (PRD pr-card-and-session-record-redesign D-15); `None`
-    /// while none has completed or the answer lacks it.
-    pub checks_completed_at: Option<u64>,
-    /// When the review that stands (the latest approval or change request)
-    /// was submitted; `None` without one.
-    pub review_at: Option<u64>,
-    /// The time parts the answer did not carry in a readable shape
-    /// (`checks`, `review`): the card stands without them and the caller
-    /// logs why (B21). A part that is there and empty is not named.
-    pub times_unread: Vec<&'static str>,
-}
 
 /// Reads the card of pull request `number`; `Err` when GitHub could not be
 /// asked at all, which fails every part.
@@ -311,14 +287,6 @@ pub(crate) enum Write {
         number: u32,
         head: String,
     },
-}
-
-/// Why a write did not happen: a code the card words, and `gh`'s own text for
-/// the diagnostic log.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct WriteFailure {
-    pub reason: &'static str,
-    pub detail: String,
 }
 
 /// Runs one write. A merge of a pull request that is already merged is a

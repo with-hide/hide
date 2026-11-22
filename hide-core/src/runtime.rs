@@ -1183,6 +1183,10 @@ pub(crate) struct DeviceGithubRead {
     generation: u64,
     asked_at: std::time::Instant,
     links: Vec<crate::issues::IssueReference>,
+    /// The last answer's own outcome, taken before a failed part was filled
+    /// in from the answer before it (`keep_previous_reads`), as this
+    /// machine's clock takes it (`github_answered`).
+    answered: Option<crate::model::GithubReadOutcome>,
 }
 
 /// Whether `actor` is one of Hide's own roles that writes notices rather
@@ -2094,7 +2098,7 @@ pub struct Runtime {
     /// after its own merge. An entry leaves when a read shows the pull
     /// request merged or closed, or no longer lists it.
     merged_here: HashMap<(String, u32), u64>,
-    /// The number of local Git projects past `GITHUB_PROJECT_LIMIT` last
+    /// The number of local Git projects past their hosts' project limits last
     /// stated, so a count is logged once rather than on every wake.
     github_over_limit: usize,
     /// Projects the advisory poll saw change and the full read has not been
@@ -2107,6 +2111,9 @@ pub struct Runtime {
     /// Where the last answer is kept across a restart; absent in a runtime
     /// that has no state folder to keep it in.
     github_store: Option<crate::github_store::GithubStore>,
+    /// The registered code hosts every project's repository is matched
+    /// against; a test registers its own units here.
+    pub(crate) code_hosts: crate::code_host::CodeHosts,
     /// Bumped when visible Git rows must be measured again: section opening,
     /// explicit refresh, and opening the delete confirmation.
     disk_generation: u64,
@@ -2824,6 +2831,7 @@ impl Runtime {
             github_polled: BTreeSet::new(),
             github_poll_over_limit: 0,
             github_store: None,
+            code_hosts: crate::code_host::CodeHosts::STANDARD,
             disk_generation: 0,
             disk_sweeps: Default::default(),
             cleanup: None,

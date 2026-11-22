@@ -130,7 +130,7 @@ fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_ren
     );
     assert!(runtime.ingest_checkout_git((request.clone(), Ok(facts.clone())), Instant::now()));
     assert_eq!(
-        runtime.checkout_ci_request().unwrap().repository,
+        runtime.checkout_ci_request().unwrap().repository.path,
         "example/fixture"
     );
     let public = serde_json::to_value(
@@ -313,6 +313,16 @@ fn commits_whose_remote_is_unknown_get_no_page_and_the_reason_stays_off_the_wire
             .commit_links
             .len(),
         1
+    );
+    // The page is the commit's on the host its origin names.
+    let link = runtime.checkout_header_snapshot(&key).unwrap().commit_links[0].clone();
+    assert_eq!(link.sha, "a".repeat(40));
+    assert_eq!(
+        link.url,
+        format!(
+            "https://github.com/example/fixture/commit/{}",
+            "a".repeat(40)
+        )
     );
 
     let unread = CheckoutGit {

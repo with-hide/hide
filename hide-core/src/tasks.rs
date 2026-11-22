@@ -225,21 +225,25 @@ pub enum SourceKind {
 }
 
 /// The source a local project reads. `choice` is the operator's
-/// (`ui_state.project_issue_sources`); without one, a Git repository reads
-/// GitHub unless `gh` said it has no GitHub remote or is not installed, and a
-/// folder reads Local. A GitHub read that fails for another reason (logged
-/// out, offline) stays GitHub and says so, rather than moving the project's
-/// issues somewhere else under the operator.
+/// (`ui_state.project_issue_sources`); `keeps_issues` is whether the
+/// project's code host offers issues (`CodeHost::issues`), `None` when no
+/// registered host reads the project. A project whose host keeps no issues,
+/// and a folder, read Local; otherwise a Git repository reads its host's
+/// issues unless its read said it has no remote or the CLI is not installed.
+/// A read that fails for another reason (logged out, offline) stays on the
+/// host and says so, rather than moving the project's issues somewhere else
+/// under the operator.
 pub fn source_kind(
     choice: Option<&str>,
     git: bool,
+    keeps_issues: Option<bool>,
     issues: &ProjectIssuesSnapshot,
     status: &GithubStatusSnapshot,
 ) -> SourceKind {
     match choice {
         Some(LOCAL) => SourceKind::Local,
-        Some(GITHUB) if git => SourceKind::Github,
-        _ if !git => SourceKind::Local,
+        _ if !git || keeps_issues == Some(false) => SourceKind::Local,
+        Some(GITHUB) => SourceKind::Github,
         _ if issues.repository.is_some() => SourceKind::Github,
         _ if matches!(
             status.failure_category,
@@ -264,6 +268,7 @@ pub enum LocalRead<'a> {
 /// keeps the tasks read before it and says so.
 pub fn github_tasks(
     issues: &ProjectIssuesSnapshot,
+    public: Option<bool>,
     status: &GithubStatusSnapshot,
     chosen: bool,
 ) -> ProjectTasksSnapshot {
@@ -287,7 +292,7 @@ pub fn github_tasks(
         }),
         last_read_at_unix_ms: status.last_success_at_unix_ms,
         chosen,
-        public: issues.public,
+        public,
     };
     ProjectTasksSnapshot {
         sources: vec![source.clone()],
@@ -442,7 +447,6 @@ mod tests {
 
     fn answered() -> ProjectIssuesSnapshot {
         ProjectIssuesSnapshot {
-            public: None,
             repository: Some("acme/app".into()),
             issues: vec![
                 issue("acme/app", 170, "OPEN"),
@@ -450,8 +454,6 @@ mod tests {
             ],
             overflow: true,
             dependencies_failure: None,
-            repository_id: None,
-            default_branch: None,
         }
     }
 
@@ -465,7 +467,7 @@ mod tests {
 
     #[test]
     fn issues_become_source_neutral_tasks() {
-        let tasks = github_tasks(&answered(), &healthy(), false);
+        let tasks = github_tasks(&answered(), None, &healthy(), false);
         let source = tasks.source.expect("connected");
         assert_eq!(source.name.as_deref(), Some("acme/app"));
         assert!(!source.reading && source.failure.is_none());
@@ -491,7 +493,7 @@ mod tests {
                 number: 12,
             },
         ];
-        let tasks = github_tasks(&issues, &healthy(), false);
+        let tasks = github_tasks(&issues, None, &healthy(), false);
         assert_eq!(
             tasks.tasks[0].blocked_by,
             vec![
@@ -522,7 +524,7 @@ mod tests {
                 open: false,
             }],
         };
-        let tasks = github_tasks(&issues, &healthy(), false);
+        let tasks = github_tasks(&issues, None, &healthy(), false);
         let sub_issues = tasks.tasks[0].sub_issues.as_ref().expect("has sub-issues");
         assert_eq!((sub_issues.total, sub_issues.completed), (5, 3));
         assert_eq!(sub_issues.items[0].key, "github:acme/app#171");
@@ -537,7 +539,7 @@ mod tests {
     fn unread_dependencies_are_a_source_failure_beside_current_tasks() {
         let mut issues = answered();
         issues.dependencies_failure = Some("Field 'blockedBy' doesn't exist".into());
-        let tasks = github_tasks(&issues, &healthy(), false);
+        let tasks = github_tasks(&issues, None, &healthy(), false);
         assert_eq!(tasks.tasks.len(), 2);
         assert_eq!(
             tasks.source.and_then(|source| source.failure).as_deref(),
@@ -555,7 +557,7 @@ mod tests {
             last_success_at_unix_ms: Some(5),
             ..Default::default()
         };
-        let tasks = github_tasks(&answered(), &status, false);
+        let tasks = github_tasks(&answered(), None, &status, false);
         assert_eq!(tasks.tasks.len(), 2);
         assert_eq!(
             tasks.source.and_then(|source| source.failure).as_deref(),
@@ -583,23 +585,35 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                source_kind(None, true, &none, &status),
+                source_kind(None, true, Some(true), &none, &status),
                 expected,
                 "{category:?}"
             );
         }
         // A folder has no GitHub to read; a choice wins over the default.
         assert_eq!(
-            source_kind(None, false, &none, &healthy()),
+            source_kind(None, false, Some(true), &none, &healthy()),
             SourceKind::Local
         );
         assert_eq!(
-            source_kind(Some(LOCAL), true, &answered(), &healthy()),
+            source_kind(Some(LOCAL), true, Some(true), &answered(), &healthy()),
             SourceKind::Local
         );
         assert_eq!(
-            source_kind(Some(GITHUB), false, &none, &healthy()),
+            source_kind(Some(GITHUB), false, Some(true), &none, &healthy()),
             SourceKind::Local
+        );
+        // A host that keeps no issues reads Local whatever was chosen; a
+        // project no host reads is judged by its read, as before hosts.
+        for choice in [None, Some(GITHUB)] {
+            assert_eq!(
+                source_kind(choice, true, Some(false), &answered(), &healthy()),
+                SourceKind::Local
+            );
+        }
+        assert_eq!(
+            source_kind(None, true, None, &none, &healthy()),
+            SourceKind::Github
         );
     }
 
@@ -610,7 +624,7 @@ mod tests {
             failure_category: Some(GithubFailureCategory::NotLoggedIn),
             ..Default::default()
         };
-        let tasks = github_tasks(&ProjectIssuesSnapshot::default(), &status, false);
+        let tasks = github_tasks(&ProjectIssuesSnapshot::default(), None, &status, false);
         let source = tasks.source.expect("a GitHub source");
         assert!(!source.reading);
         assert_eq!(source.failure.as_deref(), Some("gh auth login"));
@@ -648,7 +662,7 @@ mod tests {
             loading: true,
             ..Default::default()
         };
-        let tasks = github_tasks(&ProjectIssuesSnapshot::default(), &status, false);
+        let tasks = github_tasks(&ProjectIssuesSnapshot::default(), None, &status, false);
         assert!(tasks.source.expect("reading").reading);
     }
 }

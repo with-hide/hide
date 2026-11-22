@@ -1125,13 +1125,13 @@ fn write_issue_metadata(
     Err(IssueWriteFailure::unchanged(detail))
 }
 
-/// Where `gh` reads a project's repository: with this machine's login
+/// Where a project's host reads its repository: with this machine's login
 /// (`node`, the core's own), in the checkout here or by the repository's
 /// name for a project on a node (D-16).
 #[derive(Clone)]
 pub(crate) struct GhPlace {
     pub node: Arc<dyn crate::node_access::NodeLink>,
-    pub place: crate::github::Where,
+    pub place: crate::code_host::Place,
 }
 
 /// A checkout's issue link: the branch's `issue` note and its Workspace
@@ -1154,13 +1154,15 @@ pub(crate) fn spawn_issue_write(
                         let reference =
                             crate::issues::IssueReference::parse(&request.purpose, None)
                                 .map_err(IssueWriteFailure::unchanged)?;
-                        Some(
-                            crate::github::read_linked_issue(
-                                read.node.as_ref(),
-                                &read.place,
-                                &reference,
+                        let issues = read.place.host().issues().ok_or_else(|| {
+                            IssueWriteFailure::unchanged(
+                                "The project's code host has no issues".to_owned(),
                             )
-                            .map_err(IssueWriteFailure::unchanged)?,
+                        })?;
+                        Some(
+                            issues
+                                .linked(read.node.as_ref(), &read.place, &reference)
+                                .map_err(IssueWriteFailure::unchanged)?,
                         )
                     }
                     _ => None,

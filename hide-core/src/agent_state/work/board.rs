@@ -657,6 +657,7 @@ mod tests {
 
     fn pr(number: u32) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("PR {number}"),
             checks: PullRequestChecks::Passing,

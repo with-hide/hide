@@ -17,6 +17,7 @@ mod changes;
 mod checkout_git;
 mod checkout_owner;
 mod checkout_start;
+mod code_host;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;

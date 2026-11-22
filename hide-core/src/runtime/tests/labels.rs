@@ -349,6 +349,7 @@ fn running_checks_are_read_again_once_a_minute_only_while_the_view_is_shown() {
     }];
     let mut runtime = runtime_with_facts(facts, "idle");
     let mut pending = crate::model::PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: "Request view".to_owned(),
         checks: crate::model::PullRequestChecks::Pending,
@@ -527,6 +528,7 @@ fn a_row_waits_on_its_running_checks_and_their_end_is_news() {
 /// Pull request #7 of acme/app, its checks pending and none reported yet.
 fn checks_pull_request() -> crate::model::PullRequestSnapshot {
     crate::model::PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: "Request view".to_owned(),
         checks: crate::model::PullRequestChecks::Pending,

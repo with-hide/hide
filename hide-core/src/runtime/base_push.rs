@@ -101,11 +101,20 @@ impl Runtime {
                 self.base_push_work.reading.remove(&base_key);
                 continue;
             };
+            let machine = (*node != self.node).then_some(node.as_str());
+            let Some(policy) = self
+                .github_place(machine, root)
+                .ok()
+                .and_then(|place| place.host().unit().base_policy())
+            else {
+                self.base_push_work.reading.remove(&base_key);
+                continue;
+            };
             let folder = std::path::PathBuf::from(root);
             let carried = base_key.clone();
             let spawned = self.spawn_issue_worker(
                 "base-push",
-                move || crate::github::base_push(link.as_ref(), &folder, &base),
+                move || policy.base_push(link.as_ref(), &folder, &base),
                 move |runtime, answer| {
                     runtime.base_push_work.reading.remove(&carried);
                     let push = match answer {

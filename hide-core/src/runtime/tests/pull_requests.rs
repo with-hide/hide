@@ -36,6 +36,7 @@ fn pull_request(
     merged_at: Option<u64>,
 ) -> PullRequestSnapshot {
     PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: format!("PR {number}"),
         checks: PullRequestChecks::Failed,
@@ -73,13 +74,10 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {
-                public: None,
                 repository: Some("acme/project".into()),
                 issues: (1..=4).map(issue).collect(),
                 overflow: false,
                 dependencies_failure: None,
-                repository_id: None,
-                default_branch: None,
             },
             status: crate::model::GithubStatusSnapshot {
                 available: true,
@@ -88,7 +86,9 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
             },
             pull_requests,
             pull_requests_read: true,
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
+            identity_read: crate::model::PartRead::Read,
+            repository: None,
         });
     runtime.apply_pull_requests();
     runtime
@@ -622,7 +622,7 @@ fn a_card_read_keeps_the_parts_an_earlier_read_found_when_one_part_fails() {
     runtime.ingest_pr_card(
         "w",
         2,
-        Ok(crate::github::card::CardRead {
+        Ok(crate::code_host::CardRead {
             head: Some(HEAD.into()),
             body: Some("Plan".into()),
             files: Some(Vec::new()),
@@ -633,7 +633,7 @@ fn a_card_read_keeps_the_parts_an_earlier_read_found_when_one_part_fails() {
     runtime.ingest_pr_card(
         "w",
         2,
-        Ok(crate::github::card::CardRead {
+        Ok(crate::code_host::CardRead {
             head: Some(HEAD.into()),
             failed: vec!["body"],
             ..Default::default()
@@ -699,7 +699,7 @@ fn a_merge_is_one_write_and_its_failure_is_a_code_on_the_card() {
         2,
         None,
         "/repo",
-        Err(crate::github::card::WriteFailure {
+        Err(crate::code_host::WriteFailure {
             reason: "head_moved",
             detail: "Head branch was modified".into(),
         }),

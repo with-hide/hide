@@ -547,6 +547,9 @@ pub struct ArchivedMemberSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ArchivedPullSnapshot {
     pub url: String,
+    /// `url` as its host's unit names it, which the screen compares and
+    /// opens it by.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub number: u32,
     pub title: String,
     pub state: PrState,
@@ -614,6 +617,8 @@ impl ArchiveRecord {
                             .iter()
                             .map(|pull| ArchivedPullSnapshot {
                                 url: pull.url.clone(),
+                                reference: crate::code_host::CodeHosts::STANDARD
+                                    .reference_at(&pull.url),
                                 number: pull.number,
                                 title: pull.title.clone(),
                                 state: current(&pull.url).unwrap_or(pull.state),

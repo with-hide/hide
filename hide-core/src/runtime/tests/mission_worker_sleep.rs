@@ -1208,6 +1208,7 @@ fn a_reported_child_sleeps_once_its_pull_requests_checks_end() {
         true,
     ));
     let mut pull_request = crate::model::PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: "Fix the parser".to_owned(),
         checks: PullRequestChecks::Pending,

@@ -669,8 +669,7 @@ impl Runtime {
                     project.status.last_success_at_unix_ms,
                     project.status.stale,
                     project.pull_requests.len(),
-                    &project.issues.repository,
-                    &project.issues.repository_id,
+                    &project.repository,
                 )
                     .hash(&mut hasher);
             }
@@ -688,7 +687,7 @@ impl Runtime {
                         project
                             .pull_requests
                             .iter()
-                            .filter_map(|pr| link_pr(pr, workspace))
+                            .filter_map(|pr| link_pr(pr, workspace, self.code_hosts))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -697,10 +696,15 @@ impl Runtime {
                     device_id: workspace.device_id.clone(),
                     workspace_id: workspace.id.clone(),
                     root: workspace.path.clone(),
+                    // The repository's name without its server, which the
+                    // record has keyed a project by since before hosts; an
+                    // identity whose server is not known keys nothing.
                     repository: project
-                        .and_then(|project| project.issues.repository.as_deref())
-                        .map(str::to_ascii_lowercase),
-                    repository_id: project.and_then(|project| project.issues.repository_id.clone()),
+                        .and_then(|project| project.repository.as_ref()?.as_key())
+                        .map(|identity| identity.name.to_ascii_lowercase()),
+                    repository_id: project
+                        .and_then(|project| project.repository.as_ref()?.as_key())
+                        .and_then(|identity| identity.id.clone()),
                     connection_epoch: self
                         .links_work
                         .connection_epochs
@@ -732,7 +736,7 @@ impl Runtime {
                                 .filter_map(|pr| {
                                     Some(OutputFact {
                                         kind: "pr".into(),
-                                        repository: crate::links::repository_of(&pr.url)?,
+                                        repository: pr.sighting_key(self.code_hosts)?.0,
                                         number: u64::from(pr.number),
                                         title: pr.title.clone(),
                                         url: pr.url.clone(),
@@ -1207,6 +1211,7 @@ impl Runtime {
                         number: links.pr.number,
                         branch: links.pr.branch,
                         title: links.pr.title,
+                        reference: self.code_hosts.reference_at(&links.pr.url),
                         url: links.pr.url,
                         created_at_unix_ms: links.pr.created_at,
                         closed_at_unix_ms: links.pr.closed_at,
@@ -1353,8 +1358,9 @@ pub(super) fn associate_pr_sessions(
 fn link_pr(
     pr: &crate::model::PullRequestSnapshot,
     workspace: &WorkspaceSnapshot,
+    hosts: crate::code_host::CodeHosts,
 ) -> Option<PrFact> {
-    let repository = crate::links::repository_of(&pr.url)?;
+    let (repository, _) = pr.sighting_key(hosts)?;
     if pr.cross_repository || !hide_session::links::is_branch(&pr.head_branch) {
         return None;
     }

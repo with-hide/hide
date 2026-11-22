@@ -49,6 +49,10 @@ pub struct SessionPull {
     pub stale: bool,
     /// When a stale state was read; none while the read is fresh.
     pub last_read_at_unix_ms: Option<u64>,
+    /// The pull request as its host's unit names it, which the screen
+    /// compares and opens it by; `None` for an address no registered host
+    /// reads.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
 }
 
 /// A session's list, worst first, then the highest number.
@@ -201,6 +205,7 @@ struct Read<'a> {
     title: &'a str,
     stale: bool,
     last_read_at_unix_ms: Option<u64>,
+    reference: Option<&'a crate::code_host::ChangeRequestRef>,
 }
 
 impl Read<'_> {
@@ -237,6 +242,7 @@ pub(crate) struct Sources<'a> {
     by_pane: HashMap<&'a str, usize>,
     by_session: HashMap<&'a SessionIdentity, usize>,
     github: HashMap<&'a str, Read<'a>>,
+    hosts: crate::code_host::CodeHosts,
 }
 
 impl<'a> Sources<'a> {
@@ -246,6 +252,7 @@ impl<'a> Sources<'a> {
         rows: impl IntoIterator<Item = &'a SidebarAgentSnapshot>,
         sessions: &'a [Option<SessionIdentity>],
         github: impl IntoIterator<Item = &'a GithubSnapshot>,
+        hosts: crate::code_host::CodeHosts,
     ) -> Self {
         let rows: Vec<&SidebarAgentSnapshot> = rows.into_iter().collect();
         let by_pane = rows
@@ -266,6 +273,7 @@ impl<'a> Sources<'a> {
                     title: pull.title.as_str(),
                     stale: project.status.stale,
                     last_read_at_unix_ms: project.status.last_success_at_unix_ms,
+                    reference: pull.reference.as_ref(),
                 };
                 reads
                     .entry(pull.url.as_str())
@@ -283,6 +291,7 @@ impl<'a> Sources<'a> {
             by_pane,
             by_session,
             github: reads,
+            hosts,
         }
     }
 
@@ -304,6 +313,15 @@ impl<'a> Sources<'a> {
         pulls.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| b.number.cmp(&a.number)));
         let omitted = pulls.len().saturating_sub(PULL_LIMIT);
         pulls.truncate(PULL_LIMIT);
+        for pull in &mut pulls {
+            pull.reference = match self.github.get(pull.url.as_str()) {
+                Some(Read {
+                    reference: Some(reference),
+                    ..
+                }) => Some((*reference).clone()),
+                _ => self.hosts.reference_at(&pull.url),
+            };
+        }
         SessionPulls {
             pulls,
             omitted,
@@ -353,6 +371,7 @@ impl<'a> Sources<'a> {
                             holders: vec![agent.identity_label.clone()],
                             stale: read.is_some_and(|read| read.stale),
                             last_read_at_unix_ms: read.and_then(Read::stale_since),
+                            reference: None,
                         },
                     );
                 }
@@ -397,6 +416,7 @@ impl<'a> Sources<'a> {
                             holders: name.cloned().into_iter().collect(),
                             stale: read.stale,
                             last_read_at_unix_ms: read.stale_since(),
+                            reference: None,
                         },
                         None => SessionPull {
                             url: pull.url.clone(),
@@ -407,6 +427,7 @@ impl<'a> Sources<'a> {
                             holders: name.cloned().into_iter().collect(),
                             stale: true,
                             last_read_at_unix_ms: pull.last_read_at_unix_ms,
+                            reference: None,
                         },
                     };
                     add(&mut items, item);
@@ -653,6 +674,7 @@ mod tests {
         checks: PullRequestChecks,
     ) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("PR {number}"),
             checks,
@@ -739,6 +761,46 @@ mod tests {
             .collect()
     }
 
+    /// The screen compares and opens a session's pull request by the
+    /// reference its host's unit made: the one the read carries, else the
+    /// one the unit makes from the address the record kept.
+    #[test]
+    fn a_session_pull_carries_the_reads_reference_else_the_units_for_its_address() {
+        let (mut rows, sessions) = rows(&[("lead", "s-lead", &[])]);
+        let mut open = listed(3, PullRequestBadge::Open, PullRequestChecks::Passing);
+        let (host, repository) = crate::code_host::CodeHosts::STANDARD
+            .repository("ghe.example.com/acme/app")
+            .unwrap();
+        let carried = crate::code_host::change_request(host.unit(), repository, 3);
+        open.reference = Some(carried.clone());
+        holds(&mut rows[0], &open);
+        let github = github(vec![open]);
+        let recorded =
+            Recorded::from_summaries([&summary(&[("s-lead", None, "lead", &[(2, "merged")])])]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
+        let list = sources.pulls(Some(0), sessions[0].as_ref(), &[&recorded]);
+        let reference = |number: u32| {
+            list.pulls
+                .iter()
+                .find(|pull| pull.number == number)
+                .and_then(|pull| pull.reference.clone())
+        };
+        assert_eq!(reference(3), Some(carried), "the read's own reference");
+        assert_eq!(
+            reference(2).map(|reference| (reference.key, reference.url)),
+            Some((
+                "github.com/acme/app#2".to_owned(),
+                "https://github.com/acme/app/pull/2".to_owned()
+            )),
+            "an address only the record kept, named by the unit of its host"
+        );
+    }
+
     /// mission-17: a Conductor's 태스크 row showed 3 pull requests while its
     /// record held 15, because each child the Conductor ended took its pull
     /// requests out of the row.
@@ -759,7 +821,12 @@ mod tests {
                 &[(1, "review"), (2, "merged")],
             ),
         ])]);
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let lead = sources.pulls(Some(0), sessions[0].as_ref(), &[&recorded]);
         assert_eq!(
             numbers(&lead),
@@ -789,7 +856,12 @@ mod tests {
         holds(&mut rows[0], &closed);
         holds(&mut rows[0], &merged);
         let github = github(vec![closed, merged]);
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let list = sources.pulls(Some(0), None, &[]);
         assert_eq!(numbers(&list), [(5, PrState::Merged), (4, PrState::Closed)]);
     }
@@ -810,7 +882,12 @@ mod tests {
         holds(&mut rows[1], &shared);
         holds(&mut rows[1], &foreign);
         let github = github(vec![shared, foreign]);
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let list = sources.pulls(Some(0), None, &[]);
         assert_eq!(
             numbers(&list),
@@ -832,7 +909,12 @@ mod tests {
             "agent",
             &[(6, "merged"), (7, "review")],
         )])]);
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let list = sources.pulls(Some(0), None, &[&recorded]);
         assert_eq!(
             numbers(&list),
@@ -916,7 +998,12 @@ mod tests {
                 )],
             )],
         );
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let row = sources.pulls(
             Some(0),
             sessions[0].as_ref(),
@@ -1014,7 +1101,12 @@ mod tests {
             [&fresh_older, &here, &stale_newer],
         ];
         for order in orders {
-            let sources = Sources::new(rows.iter(), &sessions, order);
+            let sources = Sources::new(
+                rows.iter(),
+                &sessions,
+                order,
+                crate::code_host::CodeHosts::STANDARD,
+            );
             let list = sources.pulls(Some(0), None, &[]);
             assert_eq!(
                 numbers(&list),
@@ -1028,7 +1120,12 @@ mod tests {
         let recorded =
             Recorded::from_summaries([&summary(&[("s-ended", None, "ended", &[(42, "review")])])]);
         for order in orders {
-            let sources = Sources::new(rows.iter(), &sessions, order);
+            let sources = Sources::new(
+                rows.iter(),
+                &sessions,
+                order,
+                crate::code_host::CodeHosts::STANDARD,
+            );
             let list = sources.pulls(None, Some(&session("s-ended")), &[&recorded]);
             assert_eq!(numbers(&list), [(42, PrState::Merged)]);
         }
@@ -1052,7 +1149,13 @@ mod tests {
                 at,
                 stale,
             );
-            Sources::new(rows.iter(), &sessions, [&github]).pulls(Some(0), None, &[&recorded])
+            Sources::new(
+                rows.iter(),
+                &sessions,
+                [&github],
+                crate::code_host::CodeHosts::STANDARD,
+            )
+            .pulls(Some(0), None, &[&recorded])
         };
         assert_eq!(list(9_000, false), list(19_000, false));
         let stale = list(9_000, true);
@@ -1102,7 +1205,12 @@ mod tests {
                 ),
             ],
         );
-        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let sources = Sources::new(
+            rows.iter(),
+            &sessions,
+            [&github],
+            crate::code_host::CodeHosts::STANDARD,
+        );
         let row = sources.pulls(Some(0), sessions[0].as_ref(), &[&summaries]);
         assert_eq!((row.pulls.len(), row.omitted), (PULL_LIMIT, 1));
         let mut laid = tree.clone();
@@ -1158,7 +1266,7 @@ mod tests {
             .collect();
         let recorded = Recorded::from_summaries([&summary(&chain)]);
         let github = github(Vec::new());
-        let sources = Sources::new([], &[], [&github]);
+        let sources = Sources::new([], &[], [&github], crate::code_host::CodeHosts::STANDARD);
         let past = sources.pulls(None, Some(&session("s-0")), &[&recorded]);
         assert!(past.pulls.is_empty() && past.lineage_capped);
         let mut alone = record("s-0", "step", Vec::new(), Vec::new());
@@ -1198,7 +1306,12 @@ mod tests {
         let check = |rows: &[SidebarAgentSnapshot],
                      sessions: &[Option<SessionIdentity>],
                      summaries: &Recorded| {
-            let sources = Sources::new(rows.iter(), sessions, [&github]);
+            let sources = Sources::new(
+                rows.iter(),
+                sessions,
+                [&github],
+                crate::code_host::CodeHosts::STANDARD,
+            );
             let a = sources.pulls(Some(0), sessions[0].as_ref(), &[summaries]);
             let b = sources.pulls(Some(1), sessions[1].as_ref(), &[summaries]);
             assert_eq!(
