@@ -7297,6 +7297,18 @@ pub struct GithubStatusSnapshot {
     pub host: Option<crate::code_host::HostDeclaration>,
 }
 
+impl GithubStatusSnapshot {
+    /// Whether the host that answered offers `operation`. The one place an
+    /// absent declaration is read: before any host answered, and in a
+    /// payload or a saved file from before hosts were declared, the read was
+    /// GitHub's, which offers every operation.
+    pub(crate) fn offers(&self, operation: crate::code_host::Operation) -> bool {
+        self.host
+            .as_ref()
+            .is_none_or(|host| host.operations.contains(&operation))
+    }
+}
+
 /// How one part of a project's read stands: the four answers the reader,
 /// the re-read clock and the saved answers tell apart.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
