@@ -36,7 +36,7 @@ use crate::node_access::NodeLink;
 use hide_node_link::gh::{
     AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS,
     REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS,
-    VIEWER_LOGIN, is_number,
+    VIEWER_LOGIN, WAIT_PR_FIELDS, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::protocol::Call;
@@ -2517,8 +2517,7 @@ pub(crate) fn pr_as_listed(
     number: u32,
 ) -> Result<PullRequestSnapshot, String> {
     let run = |arguments: &[&str]| gh_at(node, place, arguments);
-    let fields = format!("{PULL_REQUEST_FIELDS},statusCheckRollup");
-    let viewed = run(&["pr", "view", &number.to_string(), "--json", &fields])
+    let viewed = run(&["pr", "view", &number.to_string(), "--json", WAIT_PR_FIELDS])
         .map_err(|error| error.reason)?;
     let mut pull_request = parse_pull_requests(&format!("[{viewed}]"))?
         .pop()
@@ -4103,7 +4102,15 @@ mod tests {
                 }
                 other => panic!("not a standing read: {other:?}"),
             });
-            pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7)
+            let standing = pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7);
+            for asked in node.asked() {
+                let words: Vec<&str> = asked.iter().map(String::as_str).collect();
+                assert!(
+                    hide_node_link::gh::allowed(&words),
+                    "{words:?} is refused by the host"
+                );
+            }
+            standing
         };
         assert_eq!(standing("OPEN"), Ok(Standing::Open));
         assert_eq!(standing("CLOSED"), Ok(Standing::Closed));
@@ -4126,9 +4133,7 @@ mod tests {
         let read = |state: &'static str, conclusion: &'static str, runs: bool| {
             let node = Answering::new(move |words| {
                 match words {
-                ["pr", "view", "2254", "--json", fields]
-                    if *fields == format!("{PULL_REQUEST_FIELDS},statusCheckRollup") =>
-                {
+                ["pr", "view", "2254", "--json", fields] if *fields == WAIT_PR_FIELDS => {
                     Some(format!(
                         r#"{{"title":"t","number":2254,"headRefName":"old","headRefOid":"{}","isCrossRepository":false,"baseRefName":"main","state":"{state}","reviewDecision":"","isDraft":false,"url":"https://github.com/acme/app/pull/2254","mergedAt":null,"updatedAt":"2026-09-01T10:00:00Z","statusCheckRollup":[{}]}}"#,
                         head('a'),
@@ -4156,7 +4161,17 @@ mod tests {
                 other => panic!("not a read of #2254: {other:?}"),
             }
             });
-            pr_as_listed(&node, &Where::Repository("acme/app".to_owned()), 2254).unwrap()
+            let read = pr_as_listed(&node, &Where::Repository("acme/app".to_owned()), 2254);
+            // A node and a device's host run only what `allowed` names: a
+            // read this fake answers but the host would refuse proves nothing.
+            for asked in node.asked() {
+                let words: Vec<&str> = asked.iter().map(String::as_str).collect();
+                assert!(
+                    hide_node_link::gh::allowed(&words),
+                    "{words:?} is refused by the host"
+                );
+            }
+            read.unwrap()
         };
         let ci = crate::waits::WaitTarget::Ci(2254);
         let judge = |pull: &PullRequestSnapshot| crate::waits::judge_listed(&ci, pull);
