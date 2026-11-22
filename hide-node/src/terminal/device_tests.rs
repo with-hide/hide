@@ -349,13 +349,14 @@ fn a_host_screens_size_resizes_a_guests_pane_so_its_frames_reach_the_host() {
 
     let host = GridSize { rows: 40, cols: 120 };
     node.size_from_tap("w1:p1", host);
-    let resize = loop {
+    // The program is told the host's grid: the lines before it (the
+    // attach's own size) say the guest's.
+    loop {
         let line = pane.next_line();
-        if line["type"] == "terminal.resize" {
-            break line;
+        if line["type"] == "terminal.resize" && line["rows"] == 40 && line["cols"] == 120 {
+            break;
         }
-    };
-    assert_eq!((&resize["rows"], &resize["cols"]), (&json!(40), &json!(120)));
+    }
     pane.frame(host, true, b"\x1bcat the host's grid");
     wait_for(|| tap.saw("w1:p1", b"at the host's grid"));
 }
