@@ -24,11 +24,11 @@ blake3 = "=1.8.7"
 ed25519-dalek = "=3.0.0"
 getrandom = "=0.3.4"
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
-tokio = { version = "=1.53.2", features = ["io-util", "macros", "rt", "sync", "time"] }
+serde_json = "=1.0.154"
+tokio = { version = "=1.54.1", features = ["io-util", "macros", "rt", "sync", "time"] }
 zeroize = "=1.9.2"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
-tokio = { version = "=1.53.2", features = ["rt-multi-thread", "test-util"] }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "test-util"] }
