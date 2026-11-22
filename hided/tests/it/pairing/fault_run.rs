@@ -1,13 +1,14 @@
 //! The release A fault run (PRD device-connect-iroh D-34 (2)): two daemons
 //! of a shipped copy of this build pair through a relay this test runs, the
-//! guest opens a folder of its host, and a shell in the guest's pane there
-//! sends a letter every two seconds to the guest's own agent, trying each
-//! one again under the same intent until it is taken, as an agent does.
+//! guest opens a folder of its host, and the guest's agent in a pane there
+//! (the remote mailbox fixture's stand-in, `SHIM`) sends a letter every two
+//! seconds to the guest's agent at home, trying each one again under the
+//! same intent until it is taken, as an agent does.
 //! Meanwhile the run takes the connection down again and again, one fault
 //! after another for as long as it is given: the relay restarts, one
 //! machine sleeps, the guest loses its network, the host's Hide starts
 //! anew. After each fault the guest has to find its host again and letters
-//! have to reach its ledger again; at the end every letter the shell sent
+//! have to reach its ledger again; at the end every letter the agent sent
 //! is in the guest's ledger exactly once.
 //!
 //! A machine's sleep is every process of that machine stopped
@@ -32,7 +33,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::GUEST;
-use super::guest_work::{Machine, PROGRAMS, place_build, pair, types};
+use super::guest_work::{Machine, PROGRAMS, place_build, pair};
 use crate::support::remote_delivery::{
     Agent, Environment, SHIM, quote, successful, wait_within,
 };
@@ -286,16 +287,14 @@ fn guest_has_its_host(guest: &Machine) -> bool {
     })
 }
 
-/// The shell the guest's pane runs: it registers the pane's agent, then
-/// sends letter after letter, each until it is taken (`ok`, from the core
-/// or from the node's box while the core is away), and stops after the
-/// letter it is on once `stop` exists.
+/// What the agent in the guest's pane runs: letter after letter, each until
+/// it is taken (`ok`, from the core or from the node's box while the core
+/// is away), stopping after the letter it is on once `stop` exists. It runs
+/// under the agent, so the node proves it a caller of the agent's pane.
 fn sender_script(folder: &Path) -> String {
     let at = |name: &str| quote(folder.join(name));
     format!(
         r#"hide="$HIDE_INSTALL_CLI"
-"$hide" agent register --host-scope {HOST} --session fault-sender-session \
-  --instance "$HIDE_PANE_ID" --name fault-sender --pane "$HIDE_PANE_ID" > {registered} 2>&1
 n=0
 while [ ! -e {stop} ]; do
   n=$((n + 1))
@@ -310,7 +309,6 @@ while [ ! -e {stop} ]; do
 done
 : > {done}
 "#,
-        registered = at("registered"),
         stop = at("stop"),
         retries = at("retries"),
         sent = at("sent"),
@@ -347,8 +345,8 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         );
         shipped::place(&built.join(name), &at("p").join(name), &host_env).unwrap();
     }
-    // The stand-in agent, as the guest account's `claude`: the letters'
-    // recipient.
+    // The stand-in agent, as each account's `claude`: the letters' sender
+    // on the host and their recipient at home.
     std::fs::write(at("provider.c"), SHIM).unwrap();
     let mut compiler = guest_env.command("/usr/bin/cc");
     compiler
@@ -357,6 +355,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         .arg("-o")
         .arg(guest_env.home.join("bin/claude"));
     successful(compiler).unwrap();
+    std::fs::copy(
+        guest_env.home.join("bin/claude"),
+        host_env.home.join("bin/claude"),
+    )
+    .unwrap();
     let url = relay.url();
     let machine = |environment: &Environment, state: &str, id: &'static str| {
         let project = environment.home.join("project");
@@ -429,15 +432,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     )
     .unwrap_or_else(|error| panic!("the recipient: {error:#}"));
 
-    // The sender: a shell in a pane of the guest's work on its host.
-    let folder = host_env.home.join("work");
-    successful({
-        let mut git = host_env.command("/usr/bin/git");
-        git.args(["-c", "init.defaultBranch=main", "init", "-q"])
-            .arg(&folder);
-        git
-    })
-    .unwrap();
+    // The sender: the guest's agent in a pane of its work on its host.
     wait_within("the guest's node on its host", WITHIN, || {
         Ok(guest_has_its_host(&guest).then_some(()))
     })
@@ -446,32 +441,38 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         .screen()
         .event(
             "create_workspace",
-            json!({"device_id": HOST, "path": folder, "label": "Faults",
-                "initialize_git": false}),
+            json!({"device_id": HOST, "path": host_env.home.join("project"),
+                "label": "Faults", "initialize_git": false}),
         )
         .unwrap();
-    let pane = host.lists("the guest's pane on its host", |listed| {
-        listed["guest_panes"]
-            .as_array()?
-            .iter()
-            .find(|guest| guest["id"] == GUEST)?["panes"][0]["id"]
-            .as_str()
-            .map(str::to_owned)
-    });
+    std::fs::create_dir(at("cs")).unwrap();
+    let sender = Agent::start(
+        &guest.screen(),
+        at("cs"),
+        host_env.clone(),
+        Some(HOST),
+        at("p").join("hide"),
+        at("p").join("hide-agent-hooks"),
+        "fault-sender-session",
+        "fault-sender",
+        HOST,
+    )
+    .unwrap_or_else(|error| panic!("the sender: {error:#}"));
     let run = at("run");
     std::fs::create_dir(&run).unwrap();
-    std::fs::write(run.join("send.sh"), sender_script(&run)).unwrap();
-    types(&host, &pane, &format!("sh {}", quote(run.join("send.sh")))).await;
+    let script = run.join("send.sh");
+    std::fs::write(&script, sender_script(&run)).unwrap();
+    // Handed to the stand-in by its pane's run order, as the fixture hands
+    // every command, but not waited for: it runs for the whole run.
+    let order = host_env
+        .home
+        .join(".fixture-run")
+        .join(sender.own_pane(&sender.pane).unwrap().replace(':', "-"));
+    hide_platform::fs::private::create_dir_all(order.parent().unwrap()).unwrap();
+    std::fs::write(order.with_extension("tmp"), script.display().to_string()).unwrap();
+    std::fs::rename(order.with_extension("tmp"), &order).unwrap();
     let sent = run.join("sent");
-    let sender = {
-        let mut last = String::new();
-        wait_within("the sender's registration", WITHIN, || {
-            last = std::fs::read_to_string(run.join("registered")).unwrap_or_default();
-            let answer: Value = serde_json::from_str(&last).unwrap_or(Value::Null);
-            Ok(answer["value"]["id"].as_str().map(str::to_owned))
-        })
-        .unwrap_or_else(|error| panic!("{error:#}: {last}"))
-    };
+    let sender = sender.registration.clone();
     wait_within("the first letter in the guest's ledger", WITHIN, || {
         Ok((!letters_in(&guest.terminal.state, &sender).is_empty()).then_some(()))
     })
