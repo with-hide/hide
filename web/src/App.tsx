@@ -43,6 +43,8 @@ import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
+import { remoteBridge } from "./remoteView";
+import { takeComputerWork } from "./computerWork";
 import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
@@ -70,6 +72,17 @@ export function App() {
   useGithubLook(actions);
   useFetchLook(actions);
   usePracticeChannel(actions);
+  // Another computer's view takes the work its own window's operator asked of it (PRD device-connect-iroh D-73, D-78).
+  useEffect(() => {
+    const bridge = remoteBridge();
+    if (!bridge) return;
+    return takeComputerWork(bridge, {
+      actions,
+      rest: () => useShellStore.getState().rest,
+      subscribe: (listener) => useShellStore.subscribe(listener),
+      note: (message) => useShellStore.getState().noteDiagnostic(message),
+    });
+  }, [actions]);
   // Open in VS Code is offered only where the desktop app found it (D-14).
   useEffect(() => readEditorAvailability(), []);
 

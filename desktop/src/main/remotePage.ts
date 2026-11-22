@@ -4,6 +4,7 @@
 // load is fetched from, so each is tested on its own.
 
 import type { BrowserRect } from "../../../web/src/host";
+import type { RemotePlace, RemoteWork } from "../../../web/src/remoteView";
 
 /** The page's own scheme: `hide-remote://<device>/`, one origin per machine. */
 export const REMOTE_SCHEME = "hide-remote";
@@ -53,6 +54,62 @@ export function parseShow(value: unknown): ShowRequest | undefined {
   if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value))) return undefined;
   if ((width as number) < 0 || (height as number) < 0) return undefined;
   return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number } };
+}
+
+/** The longest path, pane, model or profile name an ask carries. */
+const MAX_NAME = 4096;
+
+/** The longest prompt a start carries, as the operator typed it. */
+export const MAX_PROMPT = 1024 * 1024;
+
+/**
+ * The operator's ask of a machine's screen (D-73, D-78): its work to show or
+ * a start to make there, for the key that machine is paired under now, so an
+ * ask never reaches a host that later took the same device id (S1).
+ */
+export type GoRequest = { device: string; key: string; work: RemoteWork };
+
+function named(value: unknown, max = MAX_NAME): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+/** A name that may be absent: null when absent, undefined when it is no name. */
+function maybe(value: unknown, max = MAX_NAME): string | null | undefined {
+  if (value === null || value === undefined) return null;
+  return named(value, max) ? value : undefined;
+}
+
+function parsePlace(value: unknown): RemotePlace | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const place = value as Record<string, unknown>;
+  if ("checkout" in place) return named(place.checkout) ? { checkout: place.checkout } : undefined;
+  const base = maybe(place.base);
+  if (!named(place.repository) || !named(place.branch) || base === undefined) return undefined;
+  return { repository: place.repository, branch: place.branch, base };
+}
+
+function parseWork(value: unknown): RemoteWork | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const work = value as Record<string, unknown>;
+  if (work.op === "show") return named(work.pane) ? { op: "show", pane: work.pane } : undefined;
+  if (work.op !== "start") return undefined;
+  const place = parsePlace(work.place);
+  const model = maybe(work.model);
+  const prompt = maybe(work.prompt, MAX_PROMPT);
+  const profile = maybe(work.profile);
+  if (place === undefined || model === undefined || prompt === undefined || profile === undefined) return undefined;
+  if (!named(work.request, 128) || !named(work.provider, 64)) return undefined;
+  return { op: "start", request: work.request, place, provider: work.provider, model, prompt, profile };
+}
+
+/** The shell's ask, or undefined when it is not one. */
+export function parseGo(value: unknown): GoRequest | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { device, key, work } = value as Record<string, unknown>;
+  if (typeof device !== "string" || !DEVICE.test(device)) return undefined;
+  if (typeof key !== "string" || !KEY.test(key)) return undefined;
+  const parsed = parseWork(work);
+  return parsed ? { device, key, work: parsed } : undefined;
 }
 
 /** The page's first address. */

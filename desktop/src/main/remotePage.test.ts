@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchPath, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseShow, queueAllows, requestAllowed, socketAddress } from "./remotePage";
+import { fetchPath, MAX_PROMPT, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseGo, parseShow, queueAllows, requestAllowed, socketAddress } from "./remotePage";
 
 const KEY = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -54,5 +54,31 @@ describe("another machine's screen", () => {
     expect(parseShow({ device: "example.com:80", key: KEY, rect: { x: 0, y: 0, width: 1, height: 1 } })).toBeUndefined();
     expect(parseShow({ device: "host-a", key: KEY, rect: { x: 0, y: 0, width: -1, height: 1 } })).toBeUndefined();
     expect(parseShow({ device: "host-a" })).toBeUndefined();
+  });
+});
+
+// PRD device-connect-iroh D-73, D-78: the shell's ask of another computer's
+// screen is a work to show or a start to make, for one device and key, and
+// nothing else reaches the page.
+describe("an ask of another machine's screen", () => {
+  const start = { op: "start", request: "r-1", place: { checkout: "/home/me/app" }, provider: "codex", model: null, prompt: "fix it", profile: null };
+
+  it("takes a work to show and a start in a checkout or a new worktree", () => {
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "w1:p2" } })).toEqual({ device: "host-a", key: KEY, work: { op: "show", pane: "w1:p2" } });
+    expect(parseGo({ device: "host-a", key: KEY, work: start })?.work).toEqual(start);
+    const worktree = { ...start, place: { repository: "/home/me/app", branch: "fix", base: null }, model: "o4", profile: "work" };
+    expect(parseGo({ device: "host-a", key: KEY, work: worktree })?.work).toEqual(worktree);
+  });
+
+  it("refuses an ask that names no machine, no key, no place or another operation", () => {
+    expect(parseGo({ device: "http://x", key: KEY, work: start })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: "abcd", work: start })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { ...start, place: null } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { ...start, place: { repository: "/r" } } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { ...start, provider: "" } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { ...start, prompt: "x".repeat(MAX_PROMPT + 1) } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "close", pane: "w1:p2" } })).toBeUndefined();
+    expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "" } })).toBeUndefined();
+    expect(parseGo(null)).toBeUndefined();
   });
 });

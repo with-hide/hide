@@ -95,7 +95,7 @@ import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane }
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
-import { remoteBridge, remoteClipboard } from "./remoteView";
+import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -1865,6 +1865,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         return;
       }
       this.focusDevice(id);
+    },
+
+    /**
+     * A paired computer's work on that computer's own screen (PRD
+     * device-connect-iroh D-73, D-78, D-81): its tile comes forward and its
+     * page shows the work its core knows by that pane, or makes the start,
+     * which is then that computer's own work and the page moves to it. False
+     * where no desktop app draws that screen, or `deviceId` is no paired
+     * computer's: the caller does what it did before.
+     */
+    openComputerWork(deviceId: string, work: RemoteWork): boolean {
+      const remote = hostBridge()?.remoteScreens;
+      const tile = computerTiles(rest()).find((row) => row.screen !== null && (row.id === deviceId || row.screen.device_id === deviceId));
+      if (!tile?.screen || !remote?.go) return false;
+      ui().setRemoteScreen(tile.screen.device_id);
+      remote.go({ device: tile.screen.device_id, key: tile.screen.key, work });
+      return true;
     },
 
     focusTool(connection: string) {

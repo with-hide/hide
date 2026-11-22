@@ -17,6 +17,7 @@ import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAns
 import { agentFailure, useStartPanel, startFailure, startRefusal } from "./startDraft";
 import { QuotedLine } from "./QuotedLine";
 import { projectOf, resolveTarget, startTargets, type StartProject, type StartTarget, type StartTargets } from "./startTargets";
+import { startWork } from "./computerWork";
 import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { restoreFocus } from "./terminals";
@@ -340,6 +341,13 @@ function StartPanel({ actions }: { actions: Actions }) {
   const start = () => {
     if (!canStart || !target || selection.kind === "terminal") return;
     const id = startRequestId();
+    // A start on a paired computer is that computer's own work (PRD device-connect-iroh D-59, D-73, B64): its own screen makes it and
+    // shows it, so the panel's job ends here and the window moves to that computer's tile.
+    const handed = startWork(target, { request: id, provider: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, profile: profileToSend, branch: worktreeBranch.trim(), base: base || null });
+    if (actions.openComputerWork(target.deviceId, handed)) {
+      useStartPanel.getState().finish(null);
+      return;
+    }
     // An open that asked to stay (from the Overview's work map) leaves the screen where it is when the start goes.
     const stay = useStartPanel.getState().stay;
     useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start", !stay);

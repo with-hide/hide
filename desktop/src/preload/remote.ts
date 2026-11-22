@@ -1,12 +1,12 @@
 // The remote screen's whole view of the host (PRD device-connect-iroh D-67,
 // B20; security spec 8.3, bridge v1): another machine's Hide page, loaded in
 // a sandboxed view on its own `hide-remote://` origin, reaches its screen
-// socket, the guest machine's clipboard to write, the app menu's commands
-// and whether its tile shows, and nothing else of Electron, Node or this
-// machine. The page holds no token: the main process opens the socket.
+// socket, the guest machine's clipboard to write, the app menu's commands,
+// whether its tile shows and the work the guest's operator asked of it
+// (D-73, D-78), and nothing else of Electron, Node or this machine. The page holds no token: the main process opens the socket.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VISIBLE_CHANNEL } from "../channel";
+import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
 
@@ -48,6 +48,13 @@ contextBridge.exposeInMainWorld("hideRemote", {
     ipcRenderer.removeAllListeners(REMOTE_VISIBLE_CHANNEL);
     ipcRenderer.on(REMOTE_VISIBLE_CHANNEL, (_event: IpcRendererEvent, visible: unknown) => {
       if (typeof visible === "boolean") listener(visible);
+    });
+  },
+  // The main process checked the ask's shape before it handed it here.
+  onWork(listener: (work: unknown) => void): void {
+    ipcRenderer.removeAllListeners(REMOTE_WORK_CHANNEL);
+    ipcRenderer.on(REMOTE_WORK_CHANNEL, (_event: IpcRendererEvent, work: unknown) => {
+      if (typeof work === "object" && work !== null) listener(work);
     });
   },
 });

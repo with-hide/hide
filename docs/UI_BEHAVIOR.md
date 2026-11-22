@@ -2520,7 +2520,7 @@ A program's mouse reports are not sent to another machine's pane.
 
 A connected machine this computer opens tells its own Needs You and Done, and those rows follow this computer's in the same sections of both sidebar lists, each with the machine's filled chip, its mark, title and the sentence its own core chose (D-50, B49).
 A section is drawn for them alone, and its count includes them.
-Pressing one selects that machine's tile; rows of this computer's own work on another machine keep the outline chip and open in this computer's tile.
+Pressing one opens that machine's tile on that work: its screen opens the work its core told by its pane (D-78, D-81), and in a browser tab, which draws no other computer's screen, it selects the tile; rows of this computer's own work on another machine keep the outline chip and open in this computer's tile.
 This computer rings nothing for another machine's rows, and they leave the list when that machine is no longer connected.
 
 ## Start panel
@@ -2538,6 +2538,9 @@ The project menu lists the front device's projects, then each other device's und
 Choosing a project starts on its main checkout; the branch menu, lists that project's checkouts by branch with its main checkout first, marked `기본`, then the checkout in front, marked `지금`, then the rest as the catalog lists them, with a search field and, for a Git project, `새 브랜치에서 시작…` at its end.
 `새 브랜치에서 시작…` puts a new branch's name field, its base (the project's saved base, else its default branch) and an `✕` where the branch chip was; the start then creates that worktree and starts the agent in it, and `✕` goes back to the project's main checkout.
 A target whose device stops answering after it was chosen stays chosen: the panel says `<device> · 연결 안 됨` with `다시 연결` and holds `시작` until the device answers, and never moves the start to another target.
+A target on a paired computer, one that runs its own Hide, is that computer's own work (PRD device-connect-iroh D-59, D-73, B64): `시작` closes the panel and hands the start to that computer's screen, which its tile then shows, and that screen starts it on its own core with the same text, agent, model and branch and moves to it as its own start would (`web/src/computerWork.ts`).
+When the folder is no project of that computer, the start adds it as one first and starts once it is listed, within 30 s; a start that waited longer, or whose screen could not open, starts nothing.
+A browser tab, which draws no other computer's screen, starts there as on any device.
 The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
 OpenCode's start takes no model, so with OpenCode chosen no model menu is drawn here or in a Factory's worker candidate, and a model remembered for it from before is not sent.
 The agent menu lists items, one per agent and profile the target's machine has (PRD agent-profiles-phase2 B2): each agent's `Claude Code` first, standing for its built-in account, then one `Claude Code · work` for each profile the machine lists for it, in the machine's order; there is no profile menu beside it.

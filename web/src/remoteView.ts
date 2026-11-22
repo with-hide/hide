@@ -1,8 +1,9 @@
 // Another machine's view of its Hide (PRD device-connect-iroh D-67, B17,
 // B20, B63): the desktop app shows the host's own page in a sandboxed view
 // whose preload exposes `window.hideRemote` and nothing else. Its bridge
-// carries the screen socket, clipboard writes and the app menu's commands;
-// the page in it has no token of the host, no `/health` to ask and no rail.
+// carries the screen socket, clipboard writes, the app menu's commands and
+// the work the guest's operator asked of this screen (D-73, D-78); the page
+// in it has no token of the host, no `/health` to ask and no rail.
 //
 // The socket is the bridge's: the desktop opens it only while the tile
 // shows, closes it when the tile is hidden (`hidden`) and says when it shows
@@ -15,6 +16,19 @@ export type BridgeSocketEvent =
   | { op: "open" }
   | { op: "message"; data: string | ArrayBuffer }
   | { op: "close"; code: number; reason: string };
+
+/**
+ * What the operator asked of another computer's screen from their own
+ * (PRD device-connect-iroh D-73, D-78): one of its works to show, by the
+ * pane its core knows it by, or a start to make there, which is then that
+ * computer's own work.
+ */
+export type RemoteWork =
+  | { op: "show"; pane: string }
+  | { op: "start"; request: string; place: RemotePlace; provider: string; model: string | null; prompt: string | null; profile: string | null };
+
+/** Where a start goes on that computer: one checkout's folder, or a new worktree of a repository, each in the wire spelling. */
+export type RemotePlace = { checkout: string } | { repository: string; branch: string; base: string | null };
 
 /** The preload's bridge, version 1. */
 export type RemoteBridge = {
@@ -32,6 +46,8 @@ export type RemoteBridge = {
   onMenuCommand(listener: (id: string) => void): void;
   /** Says when the tile shows or hides. */
   onVisible(listener: (visible: boolean) => void): void;
+  /** Delivers each work the guest's operator asked of this screen; absent from an older desktop app. */
+  onWork?(listener: (work: RemoteWork) => void): void;
 };
 
 /** The close the desktop gives the socket of a tile it hid: nothing to show, nothing to reconnect. */

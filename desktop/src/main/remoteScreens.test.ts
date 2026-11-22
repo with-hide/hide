@@ -2,16 +2,18 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL } from "../channel";
+import { REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL } from "../channel";
 import type { HostLog } from "./log";
 import { MAX_SEND_BYTES, pageAddress } from "./remotePage";
-import { RemoteScreens } from "./remoteScreens";
+import { GO_WITHIN_MS, RemoteScreens } from "./remoteScreens";
 
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
 /** What each `new WebContentsView()` gave the host, newest last. */
 const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean } }[]);
 /** Each session partition the host asked for, in order. */
 const partitions = vi.hoisted(() => [] as string[]);
+/** Ends each page load the host started, in order. */
+const loads = vi.hoisted(() => [] as (() => void)[]);
 vi.mock("electron", () => {
   const fakeSession = {
     protocol: { handle: () => undefined },
@@ -44,7 +46,8 @@ vi.mock("electron", () => {
           },
           loadURL(url: string) {
             this.loaded.push(url);
-            return new Promise(() => undefined);
+            // A load ends only when a test ends it (`loads`).
+            return new Promise<void>((resolve) => loads.push(resolve));
           },
           close() {
             this.closed = true;
@@ -91,10 +94,11 @@ afterEach(async () => {
   ipc.clear();
   views.length = 0;
   partitions.length = 0;
+  loads.length = 0;
 });
 
 /** A host with the fakes above, its daemon at `server`'s port. */
-function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }): RemoteScreens {
+function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }, now?: () => number): RemoteScreens {
   const window = {
     isDestroyed: () => false,
     isFocused: () => false,
@@ -107,6 +111,7 @@ function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }): Remo
     registry: () => [],
     background: "#000000",
     log: log as unknown as HostLog,
+    now,
   });
   screens.listen();
   return screens;
@@ -189,4 +194,57 @@ describe("a remote screen's socket", () => {
     expect(asked).toEqual([`/peer-screen/${DEVICE}/ws?key=${KEY}`, `/peer-screen/${DEVICE}/ws?key=${REPLACEMENT}`]);
     expect(pageEvents(earlier).filter((event) => event.op === "open")).toHaveLength(1);
   }, 30_000);
+});
+
+/** The asks the host handed the screen's page. */
+function handed(view: (typeof views)[number]): unknown[] {
+  const contents = view.webContents as unknown as { sent: { channel: string; value: unknown }[] };
+  return contents.sent.filter((sent) => sent.channel === REMOTE_WORK_CHANNEL).map((sent) => sent.value);
+}
+
+async function loaded(count: number): Promise<void> {
+  await until("the page's load", () => loads.length >= count);
+  loads[count - 1]!();
+  // The load's answer runs on the next turn.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// PRD device-connect-iroh D-73, D-78: the operator's ask of another
+// computer's screen reaches its page once, after the page loaded, for the
+// key it was asked under and while the operator still waits on it.
+describe("an ask of a remote screen", () => {
+  const work = { op: "show", pane: "w1:p2" } as const;
+
+  it("reaches the page once it loaded, and at once when it already has", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work });
+    const view = views.at(-1)!;
+    expect(handed(view)).toEqual([]);
+    await loaded(1);
+    expect(handed(view)).toEqual([work]);
+
+    const start = { op: "start", request: "r-1", place: { checkout: "/home/me/app" }, provider: "claude", model: null, prompt: "fix it", profile: null } as const;
+    screens.go({ device: DEVICE, key: KEY, work: start });
+    expect(handed(view)).toEqual([work, start]);
+  });
+
+  it("drops an ask made under another key or that waited past its bound", async () => {
+    let clock = 1_000;
+    const log = { event: vi.fn() };
+    const screens = screensOn(9, log, () => clock);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: REPLACEMENT, work });
+    await loaded(1);
+    expect(handed(views.at(-1)!)).toEqual([]);
+    expect(log.event).toHaveBeenCalledWith("remote.work_dropped", { device: DEVICE, reason: "key_changed" });
+
+    screens.closeAll();
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work });
+    clock += GO_WITHIN_MS + 1;
+    await loaded(2);
+    expect(handed(views.at(-1)!)).toEqual([]);
+    expect(log.event).toHaveBeenCalledWith("remote.work_dropped", { device: DEVICE, reason: "late" });
+  });
 });

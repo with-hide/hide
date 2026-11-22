@@ -10,6 +10,7 @@
 import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
+import type { RemoteWork } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
 
@@ -362,6 +363,13 @@ export type RemoteScreensBridge = {
    * key is closed and the machine's page loaded anew.
    */
   show(view: { device: string; key: string; rect: BrowserRect } | null): void;
+  /**
+   * The operator's ask of that machine's screen (PRD device-connect-iroh
+   * D-73, D-78): its work to show, or a start to make there. Made as the
+   * screen is asked to show; its page takes it once loaded under `key`, or
+   * drops it when it does not load. Absent on an older desktop app.
+   */
+  go?(request: { device: string; key: string; work: RemoteWork }): void;
   /** How the shown screen's page loaded; returns the unsubscribe. */
   onState(listener: (state: RemoteScreenState) => void): () => void;
 };

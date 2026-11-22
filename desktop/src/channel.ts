@@ -140,12 +140,18 @@ export const COMPUTER_USE_GET_CHANNEL = "hide:computer-use-get";
  */
 export const REMOTE_SHOW_CHANNEL = "hide:remote-show";
 export const REMOTE_STATE_CHANNEL = "hide:remote-state";
+/**
+ * The operator's ask of that screen from this window (D-73, D-78): one of
+ * its works to show, or a start to make there (renderer -> main); the page
+ * hears it once it loaded (`REMOTE_WORK_CHANNEL`).
+ */
+export const REMOTE_GO_CHANNEL = "hide:remote-go";
 
 /**
  * The remote screen's own bridge, version 1, between its sandboxed page and
  * the main process and nothing else: its one screen socket (open, send,
- * close, and its events back), a clipboard write, the app menu's commands
- * and whether its tile shows.
+ * close, and its events back), a clipboard write, the app menu's commands,
+ * whether its tile shows, and the work this window's operator asked of it.
  */
 export const REMOTE_SOCKET_OPEN_CHANNEL = "hide-remote:socket-open";
 export const REMOTE_SOCKET_SEND_CHANNEL = "hide-remote:socket-send";
@@ -154,3 +160,4 @@ export const REMOTE_SOCKET_EVENT_CHANNEL = "hide-remote:socket-event";
 export const REMOTE_CLIPBOARD_CHANNEL = "hide-remote:clipboard";
 export const REMOTE_MENU_CHANNEL = "hide-remote:menu";
 export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";
+export const REMOTE_WORK_CHANNEL = "hide-remote:work";
