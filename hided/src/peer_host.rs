@@ -68,6 +68,12 @@ pub struct Settings {
     /// `HIDE_PEER_DIRECT`: bind this one address and use no relay and no
     /// local network search. `None` is the product's endpoint.
     pub direct: Option<SocketAddr>,
+    /// `HIDE_PEER_RELAY`: attach to this relay instead of the device relay,
+    /// with no local network search. `None` is the product's relay.
+    pub relay: Option<String>,
+    /// `HIDE_PEER_RELAY_ONLY`: with [`Settings::relay`], no IP transport, so
+    /// every connection goes through that relay.
+    pub relay_only: bool,
     /// What makes the carriers to this PC's WSL distributions; none on a
     /// machine that reaches no WSL, which then only takes the carriers its
     /// own PC makes.
@@ -88,6 +94,8 @@ impl std::fmt::Debug for Settings {
             .field("device", &self.device)
             .field("release", &self.release)
             .field("direct", &self.direct)
+            .field("relay", &self.relay)
+            .field("relay_only", &self.relay_only)
             .field("wsl", &self.wsl.is_some())
             .field("device_connect", &self.device_connect)
             .finish()
@@ -110,6 +118,8 @@ impl Settings {
             build: release.version,
             device: device.to_owned(),
             direct: env.peer_direct,
+            relay: env.peer_relay.clone(),
+            relay_only: env.peer_relay_only,
             wsl,
             device_connect: env.device_connect,
         }
@@ -220,12 +230,18 @@ impl Settings {
                 mdns: false,
                 bind: Some(address),
                 port: None,
+                relay_only: false,
             },
             None => Options {
-                relay: Some(DEVICE_RELAY_URL.to_owned()),
-                mdns: true,
+                mdns: self.relay.is_none(),
+                relay: Some(
+                    self.relay
+                        .clone()
+                        .unwrap_or_else(|| DEVICE_RELAY_URL.to_owned()),
+                ),
                 bind: None,
                 port,
+                relay_only: self.relay_only && self.relay.is_some(),
             },
         }
     }
@@ -592,6 +608,8 @@ pub(crate) mod fixture {
                     device: name.to_owned(),
                     release: false,
                     direct: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+                    relay: None,
+                    relay_only: false,
                     wsl: None,
                     device_connect,
                 },
@@ -769,6 +787,8 @@ mod tests {
             device: "macbook".to_owned(),
             release: false,
             direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
+            relay: None,
+            relay_only: false,
             wsl: None,
             device_connect: true,
         };
@@ -788,6 +808,8 @@ mod tests {
             device: "macbook".to_owned(),
             release: false,
             direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
+            relay: None,
+            relay_only: false,
             wsl: None,
             device_connect: false,
         };

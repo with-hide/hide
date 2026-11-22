@@ -840,12 +840,20 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
 /// `hide device switch` for the fixture's device, named by its id or the
 /// alias it was added by, at a terminal of the core's machine: whether it
 /// succeeded, and the line it answered.
+/// How long the journey gives one switch. A switch with `--install` copies
+/// this build's `hide` and `hided` to the device and starts each once, and
+/// macOS scans a new copy of a program at its first start. On a Mac mini
+/// the whole switch took 4 s idle; under load the first start of each
+/// 400 MB debug binary took 5 to 6 s and the switch 10 to 11 s (#2846).
+/// The CLI's own bound is minutes (`device_cli::SWITCH_BOUND`).
+const SWITCH_WITHIN: Duration = Duration::from_secs(60);
+
 fn switch_device(fixture: &Fixture, device: &str, words: &[&str]) -> Result<(bool, Value)> {
     let mut command = fixture.local.environment.command(&fixture.hide);
     command
         .args(["device", "switch", device, "--json"])
         .args(words);
-    let ran = fixture::capture(command)?;
+    let ran = fixture::capture_within(command, SWITCH_WITHIN)?;
     let text = String::from_utf8_lossy(&ran.stdout).into_owned();
     let answer =
         serde_json::from_str(text.lines().last().unwrap_or_default()).with_context(|| {
@@ -918,6 +926,47 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         ensure!(
             !state.join("hided.json").exists(),
             "a Hide was started on the account before the operator allowed it"
+        );
+
+        // A device that is off when the operator allows the switch (D-34
+        // (1)): the login fails, nothing is started there and the device
+        // stays the helper's; once it is back the helper's link carries the
+        // terminal again and the same switch goes on below.
+        let helper_connected = |fixture: &Fixture| -> Result<bool> {
+            Ok(fixture
+                .snapshot()?
+                .pointer("/status/remote")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                    })
+                }))
+        };
+        fixture.ssh.online(false)?;
+        let (_, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
+        ensure!(
+            answer["value"]["switch"] != "done",
+            "a switch to a device that is off: {answer}"
+        );
+        eprintln!("the switch to a device that is off answered {answer}");
+        let row = device_row(&fixture.snapshot()?)?;
+        ensure!(
+            row["peer_key"].is_null(),
+            "a switch that never reached the device changed it: {row}"
+        );
+        ensure!(
+            !state.join("hided.json").exists(),
+            "a switch that never reached the device started a Hide there"
+        );
+        fixture.ssh.online(true)?;
+        fixture.reconnect_device()?;
+        wait_for("the helper's link once the device is back", || {
+            Ok(helper_connected(fixture)?.then_some(()))
+        })?;
+        ensure!(
+            stand_in(fixture)? == before,
+            "the terminal did not carry on while the device was off"
         );
 
         // The build this core's node runs from on that machine, placed in

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
-use hide_node_link::device::{Cancel, EstablishError, InstallStop, Wake};
+use hide_node_link::device::{Cancel, EstablishError, InstallStop, RemoteError, RemoteStage, Wake};
 use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
 use hide_peer::protocol::event::Event;
@@ -187,7 +187,25 @@ impl Dialer {
             Some(()) => WOKEN_WITHIN,
             None => CONNECTED_WITHIN,
         };
-        let link = connected(&peers, &key, within).await?;
+        // A distribution of this PC that does not run is off until the
+        // operator opens it; any other machine only waits for its
+        // connection, which `hide_peer` keeps dialing, so the core tries its
+        // link again on its own schedule rather than leaving it stopped
+        // after a sleep longer than this wait (D-34 (2), the fault run).
+        let distribution = peers.host(&key).is_some_and(|known| {
+            hide_peer::pipe::distribution(&hide_peer::protocol::PeerAddr::new(
+                key,
+                known.candidates,
+            ))
+            .is_some()
+        });
+        let link = connected(&peers, &key, within).await.map_err(|away| {
+            if distribution {
+                away
+            } else {
+                not_yet(device, away)
+            }
+        })?;
         if granted(&link, &key, told).await != GrantState::Active {
             return Err(EstablishError::Stopped(
                 "That machine has not opened itself to this one, or paused it".to_owned(),
@@ -308,6 +326,22 @@ impl PeerDial for Dialer {
             }
             opened => opened,
         }
+    }
+}
+
+/// A machine reached over the network that is not connected yet: a
+/// connection failure the core tries again, in the same words.
+fn not_yet(device: &str, away: EstablishError) -> EstablishError {
+    match away {
+        EstablishError::Stopped(words) => EstablishError::Connect(RemoteError::new(
+            "peer-connection",
+            device,
+            RemoteStage::Reconnect,
+            words,
+            true,
+            false,
+        )),
+        other => other,
     }
 }
 
@@ -978,6 +1012,32 @@ mod stream_tests {
         close.send(true).unwrap();
         drop(host);
         within("the held stream's end", holding).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod away_tests {
+    use super::*;
+
+    /// A machine that is not connected after a long sleep is tried again by
+    /// the core: before, it stayed stopped although its connection came
+    /// back (the release A fault run, D-34 (2)).
+    #[test]
+    fn a_network_machine_not_connected_yet_is_a_failure_the_core_tries_again() {
+        let away = EstablishError::Stopped("not connected".to_owned());
+        match not_yet("mini", away) {
+            EstablishError::Connect(error) => {
+                assert!(error.diagnostic().retryable);
+                assert_eq!(error.diagnostic().reason, "not connected");
+                assert_eq!(error.diagnostic().target, "mini");
+            }
+            other => panic!("{other:?}"),
+        }
+        let refused = EstablishError::Unsupported("old".to_owned());
+        assert!(matches!(
+            not_yet("mini", refused),
+            EstablishError::Unsupported(_)
+        ));
     }
 }
 
