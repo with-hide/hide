@@ -125,12 +125,9 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const device = devices?.find((row) => row.id === front);
+  // Said once: the line goes when the operator leaves the machine's screen
+  // (`useSwitchedSeen`), whichever screen draws this strip meanwhile.
   const landed = useUiStore((s) => front != null && s.switchedDevices.includes(front));
-  // Said once: the line goes with the first look at the machine's screen.
-  useEffect(() => {
-    if (!landed || front == null) return;
-    return () => useUiStore.getState().clearSwitched(front);
-  }, [landed, front]);
   if (!ownScreen || !device) return null;
   if (landed && device.peer_key != null) {
     const left = device.not_carried ?? 0;
@@ -181,6 +178,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   useSwitchAfterAdd(actions);
   useSwitchLanded();
+  useSwitchedSeen();
   const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
@@ -271,6 +269,22 @@ function useSwitchLanded() {
       else if (switching.current.delete(device.id) && device.peer_key != null) useUiStore.getState().markSwitched(device.id);
     }
   }, [devices]);
+}
+
+/**
+ * A landed switch's line is said once (D-48): it goes when the operator
+ * leaves that machine's screen for another. Kept here, where the window
+ * always draws, since the strip that says it moves from the main screen to
+ * the remote screen as the switch lands, and unmounting there is no leaving.
+ */
+function useSwitchedSeen() {
+  const front = useShellStore((s) => frontDeviceId(s.rest));
+  const shown = useRef(front);
+  useEffect(() => {
+    const left = shown.current;
+    shown.current = front;
+    if (left != null && left !== front) useUiStore.getState().clearSwitched(left);
+  }, [front]);
 }
 
 /**
