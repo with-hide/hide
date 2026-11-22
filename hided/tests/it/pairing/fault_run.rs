@@ -682,6 +682,18 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             .join("\n"),
         read.lines().rev().take(6).collect::<Vec<_>>().join("\n")
     );
+    let core_log =
+        std::fs::read_to_string(guest.terminal.state.join("Logs/core.jsonl")).unwrap_or_default();
+    eprintln!(
+        "fault_run: the guest core's sleep and input records:\n{}",
+        core_log
+            .lines()
+            .filter(|line| line.contains("agent_sleep") || line.contains("doorbell"))
+            .rev()
+            .take(12)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     assert_eq!(held, wanted, "each letter the shell sent, once");
     drop(recipient);
 }
