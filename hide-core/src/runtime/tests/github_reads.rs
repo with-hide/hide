@@ -2191,16 +2191,39 @@ fn a_gitlab_com_read_counts_a_use_of_gitlab_once_a_day() {
     // does five minutes after the last answer.
     let mut at = Instant::now();
     let mut answer = |runtime: &mut Runtime, lab: GithubProjectSnapshot| {
-        let hub = on(read_ok("/tmp/hub", Vec::new(), 10), &crate::github::host::GITHUB);
-        runtime.ingest_github_answer(GithubSnapshot { projects: vec![hub, lab] }, true);
+        let hub = on(
+            read_ok("/tmp/hub", Vec::new(), 10),
+            &crate::github::host::GITHUB,
+        );
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![hub, lab],
+            },
+            true,
+        );
         runtime.reread_stale_github(at);
         at += Duration::from_secs(400);
         runtime.reread_stale_github(at);
     };
-    answer(&mut runtime, on(read_failed("/tmp/lab"), &crate::gitlab::host::GITLAB));
+    answer(
+        &mut runtime,
+        on(read_failed("/tmp/lab"), &crate::gitlab::host::GITLAB),
+    );
     assert_eq!(statistics.take(), [], "a failed read is no use");
-    answer(&mut runtime, on(read_ok("/tmp/lab", Vec::new(), 20), &crate::gitlab::host::GITLAB));
-    answer(&mut runtime, on(read_ok("/tmp/lab", Vec::new(), 30), &crate::gitlab::host::GITLAB));
+    answer(
+        &mut runtime,
+        on(
+            read_ok("/tmp/lab", Vec::new(), 20),
+            &crate::gitlab::host::GITLAB,
+        ),
+    );
+    answer(
+        &mut runtime,
+        on(
+            read_ok("/tmp/lab", Vec::new(), 30),
+            &crate::gitlab::host::GITLAB,
+        ),
+    );
     assert_eq!(
         statistics.take(),
         [Event::FeatureUsed {
