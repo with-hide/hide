@@ -4495,7 +4495,9 @@ pub(crate) async fn stream_device_file_bytes(
         let (read_device, read_root, read_relative) =
             (device.to_owned(), root.clone(), relative.clone());
         let range = tokio::task::spawn_blocking(move || {
-            let channel = core.node_link(&read_device).map_err(|message| (None, message))?;
+            let channel = core
+                .node_link(&read_device)
+                .map_err(|message| (None, message))?;
             hide_core::node_access::read_bytes(
                 channel.as_ref(),
                 &read_root,

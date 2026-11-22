@@ -59,7 +59,7 @@ const WINDOW: u64 = 4;
 /// the socket's frames free for what the phone is sent beside it (a list, a
 /// reply).
 const TRANSFER_FRAMES: usize = 1 + WINDOW as usize + 1;
-const _: () = assert!(CHUNK % 3 == 0);
+const _: () = assert!(CHUNK.is_multiple_of(3));
 const _: () = assert!(CHUNK.div_ceil(3) * 4 + CHUNK_FRAME_EXTRA <= CHUNK_DATA);
 const _: () = assert!(TRANSFER_FRAMES + 2 <= MAX_QUEUED_FRAMES);
 /// Changed files a list names; the totals still count every file.
@@ -1001,7 +1001,11 @@ mod tests {
             let Some(Message::Text(text)) = answers.recv().await else {
                 panic!("{path}: no refusal");
             };
-            assert_eq!(refusal_state(&refusal_reason(&text)), state, "{path}: {text}");
+            assert_eq!(
+                refusal_state(&refusal_reason(&text)),
+                state,
+                "{path}: {text}"
+            );
         }
     }
 
