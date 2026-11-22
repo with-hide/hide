@@ -75,18 +75,10 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
     }
 }
 
-/// `device_connect` is whether this build offers connections between two
-/// Hides (`env::Env::device_connect`): without it the folder counts as
-/// paired with nothing.
-pub fn run(
-    command: &Command,
-    home: &Path,
-    state_dir: &Path,
-    device_connect: bool,
-) -> Result<(), String> {
+pub fn run(command: &Command, home: &Path, state_dir: &Path) -> Result<(), String> {
     match command {
         Command::Status { json } => {
-            let status = status(home, state_dir, device_connect)?;
+            let status = status(home, state_dir)?;
             if *json {
                 println!("{status}");
             } else {
@@ -193,11 +185,7 @@ fn ask_to_remove_rules() -> Result<(), String> {
     }
 }
 
-fn status(
-    home: &Path,
-    state_dir: &Path,
-    device_connect: bool,
-) -> Result<serde_json::Value, String> {
+fn status(home: &Path, state_dir: &Path) -> Result<serde_json::Value, String> {
     let agents = super::agents_for(home);
     let port = hide_peer::port::read(&hide_kit::layout::peer_port(state_dir))
         .map_err(|error| error.to_string())?;
@@ -211,7 +199,7 @@ fn status(
         Some(Err(error)) => return Err(error.to_string()),
     };
     Ok(json!({
-        "paired": super::paired(state_dir, device_connect)?,
+        "paired": super::paired(state_dir)?,
         "login_item": crate::login_item::installed(&agents, home, state_dir)?,
         "keep_alive": crate::login_item::marker(state_dir).exists(),
         "udp_port": port,

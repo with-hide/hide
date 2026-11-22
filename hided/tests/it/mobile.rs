@@ -42,7 +42,6 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         peer_direct: None,
         peer_relay: None,
         peer_relay_only: false,
-        device_connect: false,
         search_path: None,
         install: None,
         access: None,

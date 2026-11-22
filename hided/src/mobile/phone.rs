@@ -851,13 +851,12 @@ async fn run(
     });
     // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
     // shows the gathered view only for a computer that says it offers
-    // connections between two Hides; an older bundle ignores the field.
-    if mobile.device_connect() {
-        hello["device_connect"] = json!(true);
-        // This computer's product device id, which another computer's
-        // `machines` names it by, so the phone knows which of those it has.
-        hello["machine"] = json!(mobile.node().as_str());
-    }
+    // connections between two Hides, which every computer from this build
+    // on does; an older bundle ignores the field.
+    hello["device_connect"] = json!(true);
+    // This computer's product device id, which another computer's
+    // `machines` names it by, so the phone knows which of those it has.
+    hello["machine"] = json!(mobile.node().as_str());
     let mut agents_omitted = 0;
     let (agents, omitted) = agents_frame(&projection.borrow_and_update());
     note_agents_omitted(phone_id, &mut agents_omitted, omitted);

@@ -10,10 +10,6 @@
 //! one or acts on a machine the records name. Once open it stays open until
 //! the daemon ends, which closes it.
 //!
-//! A build that does not offer connections between two Hides
-//! (`env::Env::device_connect` off, every build until that feature ships)
-//! opens none, whatever pairing records a development build left.
-//!
 //! Each [`StreamKind`] has one owner, which hands in its handler
 //! ([`PeerHost::handle`]) when the daemon starts. A stream of a kind no one
 //! handles is dropped, which closes it for the peer.
@@ -78,9 +74,6 @@ pub struct Settings {
     /// machine that reaches no WSL, which then only takes the carriers its
     /// own PC makes.
     pub wsl: Option<Arc<crate::pairing_wsl::Carriers>>,
-    /// Whether this build offers connections between two Hides
-    /// (`env::Env::device_connect`); without it no endpoint ever opens.
-    pub device_connect: bool,
 }
 
 impl std::fmt::Debug for Settings {
@@ -97,7 +90,6 @@ impl std::fmt::Debug for Settings {
             .field("relay", &self.relay)
             .field("relay_only", &self.relay_only)
             .field("wsl", &self.wsl.is_some())
-            .field("device_connect", &self.device_connect)
             .finish()
     }
 }
@@ -121,21 +113,12 @@ impl Settings {
             relay: env.peer_relay.clone(),
             relay_only: env.peer_relay_only,
             wsl,
-            device_connect: env.device_connect,
         }
     }
 
     /// Opens this machine's endpoint: its key and the state folder's port,
     /// and its peer records. Answers how the key was come by, for the log.
-    /// A build that does not offer connections between two Hides
-    /// (`device_connect` off) opens none and makes no key.
     async fn open(&self) -> io::Result<(HostPeers, mpsc::Receiver<Incoming>, String)> {
-        if !self.device_connect {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this build does not offer connections between two Hides",
-            ));
-        }
         let key_file = layout::machine_key(&self.state_dir);
         let state_dir = self.state_dir.clone();
         // The machine id is asked of the system, on macOS through a
@@ -273,13 +256,8 @@ fn now_unix_ms() -> u64 {
 /// `state_dir` records a grant this machine gives that has not run out, or
 /// a host it is still a guest of. A host that dropped the pairing is no
 /// reason: nothing is dialed, and the row it leaves needs no socket, no
-/// relay and no question from the system. Never in a build that does not
-/// offer connections between two Hides (`device_connect` off), whose
-/// records are not read.
-pub fn endpoint_wanted(state_dir: &Path, device_connect: bool) -> io::Result<bool> {
-    if !device_connect {
-        return Ok(false);
-    }
+/// relay and no question from the system.
+pub fn endpoint_wanted(state_dir: &Path) -> io::Result<bool> {
     let mut grants = Grants::open(layout::peer_grants(state_dir))?;
     grants.expire(now_unix_ms()).map_err(io::Error::other)?;
     let known = Known::open(layout::peer_known(state_dir))?;
@@ -308,12 +286,8 @@ fn recorded(state_dir: &Path) -> io::Result<(Vec<Grant>, Vec<Host>)> {
 /// waits, a pending grant, a confirm not yet answered, a removal on its way
 /// and a host that holds this machine no more count as none, so a pairing
 /// that is declined or runs out never leaves a login item behind. What
-/// keeps a paired core on (`always_on`) asks this. Never in a build that
-/// does not offer connections between two Hides (`device_connect` off).
-pub fn pairing_confirmed(state_dir: &Path, device_connect: bool) -> io::Result<bool> {
-    if !device_connect {
-        return Ok(false);
-    }
+/// keeps a paired core on (`always_on`) asks this.
+pub fn pairing_confirmed(state_dir: &Path) -> io::Result<bool> {
     let grants = Grants::open(layout::peer_grants(state_dir))?;
     if grants
         .list(now_unix_ms())
@@ -439,11 +413,9 @@ impl PeerHost {
     /// known host wants it ([`endpoint_wanted`]). `None` when nothing does.
     pub async fn start(self: &Arc<Self>) -> io::Result<Option<HostPeers>> {
         let state_dir = self.settings.state_dir.clone();
-        let device_connect = self.settings.device_connect;
-        let wanted =
-            tokio::task::spawn_blocking(move || endpoint_wanted(&state_dir, device_connect))
-                .await
-                .map_err(io::Error::other)??;
+        let wanted = tokio::task::spawn_blocking(move || endpoint_wanted(&state_dir))
+            .await
+            .map_err(io::Error::other)??;
         match wanted {
             true => self.open().await.map(Some),
             false => Ok(None),
@@ -473,13 +445,6 @@ impl PeerHost {
     /// that reaches WSL.
     pub fn wsl(&self) -> Option<&Arc<crate::pairing_wsl::Carriers>> {
         self.settings.wsl.as_ref()
-    }
-
-    /// Whether this build offers connections between two Hides
-    /// (`env::Env::device_connect`), for every part of the daemon that
-    /// serves them.
-    pub fn device_connect(&self) -> bool {
-        self.settings.device_connect
     }
 
     /// The open endpoint's connections; `None` while it is not open.
@@ -590,16 +555,6 @@ pub(crate) mod fixture {
 
         /// A machine whose state folder is `dir`.
         pub(crate) fn at(name: &str, dir: tempfile::TempDir) -> Self {
-            Self::built(name, dir, true)
-        }
-
-        /// A machine of a build that offers connections between two Hides
-        /// or not (`env::Env::device_connect`).
-        pub(crate) fn offering(name: &str, device_connect: bool) -> Self {
-            Self::built(name, tempfile::tempdir().unwrap(), device_connect)
-        }
-
-        fn built(name: &str, dir: tempfile::TempDir, device_connect: bool) -> Self {
             let shutdown = Ending::new();
             let host = PeerHost::new(
                 Settings {
@@ -611,7 +566,6 @@ pub(crate) mod fixture {
                     relay: None,
                     relay_only: false,
                     wsl: None,
-                    device_connect,
                 },
                 shutdown.clone(),
             );
@@ -723,28 +677,28 @@ mod tests {
     #[test]
     fn only_a_confirmed_grant_is_a_finished_pairing() {
         let state = tempfile::tempdir().unwrap();
-        assert!(!pairing_confirmed(state.path(), true).unwrap());
+        assert!(!pairing_confirmed(state.path()).unwrap());
         let mut grants = Grants::open(layout::peer_grants(state.path())).unwrap();
         let grant = grants
             .grant_pending(guest(), "d1", "Laptop", Via::Link, now_unix_ms())
             .unwrap();
         assert!(
-            !pairing_confirmed(state.path(), true).unwrap(),
+            !pairing_confirmed(state.path()).unwrap(),
             "a pending grant is no finished pairing"
         );
         assert!(
-            endpoint_wanted(state.path(), true).unwrap(),
+            endpoint_wanted(state.path()).unwrap(),
             "it opens the endpoint"
         );
         grants.confirm(&guest(), &grant.id, now_unix_ms()).unwrap();
-        assert!(pairing_confirmed(state.path(), true).unwrap());
+        assert!(pairing_confirmed(state.path()).unwrap());
         grants.pause(&guest()).unwrap();
         assert!(
-            pairing_confirmed(state.path(), true).unwrap(),
+            pairing_confirmed(state.path()).unwrap(),
             "a paused grant is still a pairing"
         );
         grants.revoke(&guest(), None, now_unix_ms()).unwrap();
-        assert!(!pairing_confirmed(state.path(), true).unwrap());
+        assert!(!pairing_confirmed(state.path()).unwrap());
     }
 
     /// A machine that is a guest: only a host it is confirmed with, active
@@ -771,7 +725,7 @@ mod tests {
         ] {
             known.put(host(state_now)).unwrap();
             assert_eq!(
-                pairing_confirmed(state.path(), true).unwrap(),
+                pairing_confirmed(state.path()).unwrap(),
                 finished,
                 "{state_now:?}"
             );
@@ -790,39 +744,10 @@ mod tests {
             relay: None,
             relay_only: false,
             wsl: None,
-            device_connect: true,
         };
         let machine = hide_platform::host::machine_id().unwrap();
         let (key, _) = MachineKey::load_or_create(&layout::machine_key(dir), &machine).unwrap();
         (settings, key.public())
-    }
-
-    /// A build that does not offer connections between two Hides meets no
-    /// machine: it opens no endpoint and makes no key.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_build_without_connections_between_hides_meets_no_machine() {
-        let state = tempfile::tempdir().unwrap();
-        let settings = Settings {
-            state_dir: state.path().to_path_buf(),
-            build: "1.3.0-test".to_owned(),
-            device: "macbook".to_owned(),
-            release: false,
-            direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
-            relay: None,
-            relay_only: false,
-            wsl: None,
-            device_connect: false,
-        };
-        let core = PeerAddr::new(
-            guest(),
-            vec![Candidate::Ip(SocketAddr::from((
-                std::net::Ipv4Addr::LOCALHOST,
-                9,
-            )))],
-        );
-        let refused = meeting(&settings, &core, WITHIN).await.unwrap_err();
-        assert!(refused.starts_with("endpoint: "), "{refused}");
-        assert!(!layout::machine_key(state.path()).exists());
     }
 
     /// `meets` as the node role calls it: on a thread no runtime drives.
@@ -865,7 +790,7 @@ mod tests {
         .await;
         assert!(peers.link(&key).is_none());
         assert!(
-            !pairing_confirmed(core.dir.path(), true).unwrap(),
+            !pairing_confirmed(core.dir.path()).unwrap(),
             "the grant is still pending"
         );
         assert_eq!(meeting(&settings, &core.addr(), WITHIN).await, Ok(()));
@@ -906,26 +831,6 @@ mod tests {
         assert!(!layout::peers(machine.dir.path()).exists());
     }
 
-    /// A build that does not offer connections between two Hides opens no
-    /// endpoint, makes no key and counts no pairing, even with a confirmed
-    /// grant and a host a development build left in its folder.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_build_without_connections_between_hides_opens_nothing_for_the_records_on_disk() {
-        let machine = Machine::offering("windows-pc", false);
-        grant(&machine, guest());
-        known_host(&machine, KnownState::Active);
-        assert!(endpoint_wanted(machine.dir.path(), true).unwrap());
-        assert!(pairing_confirmed(machine.dir.path(), true).unwrap());
-
-        assert!(!endpoint_wanted(machine.dir.path(), false).unwrap());
-        assert!(!pairing_confirmed(machine.dir.path(), false).unwrap());
-        assert!(machine.host.start().await.unwrap().is_none());
-        let refused = machine.host.open().await.err().expect("no endpoint opens");
-        assert_eq!(refused.kind(), io::ErrorKind::Unsupported);
-        assert!(machine.host.peers().is_none());
-        assert!(!layout::machine_key(machine.dir.path()).exists());
-    }
-
     /// Saves in `guest`'s state folder a host it is a guest of, in `state`.
     fn known_host(guest: &Machine, state: KnownState) {
         let mut known = Known::open(layout::peer_known(guest.dir.path())).unwrap();
@@ -958,7 +863,7 @@ mod tests {
         // endpoint, so the start opens it.
         let paused = Machine::new("macbook");
         known_host(&paused, KnownState::PausedByMe);
-        assert!(endpoint_wanted(paused.dir.path(), true).unwrap());
+        assert!(endpoint_wanted(paused.dir.path()).unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

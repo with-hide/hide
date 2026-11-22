@@ -3046,11 +3046,6 @@ fn handle_client_text(
         // operator of this machine ends it, after the window's confirm (the
         // `OwnWindow` class).
         Some("guest_pane_close") => {
-            // A build that offers no connection between two Hides hosts no
-            // guest (`Guests::serve` is not called), and says so.
-            if !state.peers.device_connect() {
-                return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
-            }
             state
                 .guests
                 .close_pane(&payload_str(&event, "pane_id"))
@@ -5631,9 +5626,8 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
                 let state_dir = state.core.state_dir().to_path_buf();
-                let device_connect = state.peers.device_connect();
                 Arc::new(move || {
-                    let paired = crate::always_on::paired(&state_dir, device_connect)?;
+                    let paired = crate::always_on::paired(&state_dir)?;
                     Ok(holders.live_panes()? + usize::from(paired))
                 })
             },

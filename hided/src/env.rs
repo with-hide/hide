@@ -55,9 +55,6 @@ pub const HIDE_PEER_RELAY: &str = "HIDE_PEER_RELAY";
 /// Development and tests: with `HIDE_PEER_RELAY`, the endpoint keeps no IP
 /// transport, so every connection goes through that relay (`peer_host`).
 pub const HIDE_PEER_RELAY_ONLY: &str = "HIDE_PEER_RELAY_ONLY";
-/// Whether this build offers connections between two Hides
-/// ([`Env::device_connect`]); off in every build until that feature ships.
-pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
 /// Test-only: how a core is started on a machine for another one's sake.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: a file in a fixture HOME naming a build whose daemon exits at
@@ -227,12 +224,6 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "The endpoint uses direct addresses beside its relay",
     },
     EnvKey {
-        key: HIDE_DEVICE_CONNECT,
-        required: false,
-        format: "1 or 0, for development and tests until connections between two Hides ship",
-        absent_behavior: "This build offers no connection to another Hide: no pairing in Settings > Devices or `hide device`, no endpoint and no login item for it, even where a development build left pairing records; SSH and WSL devices work as before",
-    },
-    EnvKey {
         key: HIDE_MACHINE_ID,
         required: false,
         format: "a node id: lowercase letters, digits and '-'; only a test fixture sets it, so one host runs a node and the core it dials as two machines",
@@ -330,14 +321,6 @@ pub struct Env {
     /// Whether the endpoint keeps no IP transport beside that relay
     /// (`HIDE_PEER_RELAY_ONLY=1`).
     pub peer_relay_only: bool,
-    /// Whether this build offers connections between two Hides
-    /// (`HIDE_DEVICE_CONNECT=1`): pairing, its `hide device` verbs and
-    /// Settings rows, the endpoint and the login item that keeps a paired
-    /// core on. Off by default in every build, release or not, until that
-    /// feature ships (mission-75 release A), which removes the switch. The
-    /// one place it is read; every caller is handed this value, and the
-    /// window reads it from the daemon's hello (`device_connect`).
-    pub device_connect: bool,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
 }
@@ -393,14 +376,6 @@ pub fn load_for_from(
     } else {
         Err(errors)
     }
-}
-
-/// [`Env::device_connect`] of this process's environment, for what a
-/// command prints before it loads its environment (`hide --help`). An
-/// invalid value counts as off here; a command that loads its environment
-/// refuses it.
-pub fn device_connect_here() -> bool {
-    load_for(&[HIDE_DEVICE_CONNECT]).is_ok_and(|env| env.device_connect)
 }
 
 pub fn load_from(read: impl FnMut(&str) -> Option<String>) -> Result<Env, Vec<EnvError>> {
@@ -625,17 +600,6 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             false
         }
     };
-    let device_connect = match read(HIDE_DEVICE_CONNECT).as_deref() {
-        None | Some("0") => false,
-        Some("1") => true,
-        Some(_) => {
-            errors.push(EnvError {
-                key: HIDE_DEVICE_CONNECT,
-                kind: "invalid",
-            });
-            false
-        }
-    };
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
@@ -659,7 +623,6 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         peer_direct,
         peer_relay,
         peer_relay_only,
-        device_connect,
         search_path,
     };
     (env, errors)
@@ -1107,25 +1070,6 @@ mod tests {
             &[relay, (HIDE_PEER_RELAY_ONLY, "yes")][..],
         ] {
             assert_eq!(only(pairs).unwrap_err()[0].key, HIDE_PEER_RELAY_ONLY);
-        }
-    }
-
-    #[test]
-    fn connections_between_hides_are_off_unless_the_switch_says_1() {
-        let device_connect = |pairs: &[(&str, &str)]| {
-            let mut all = vec![(HOME, "/Users/example")];
-            all.extend_from_slice(pairs);
-            from_map(&all).map(|env| env.device_connect)
-        };
-        assert!(!device_connect(&[]).unwrap());
-        assert!(!device_connect(&[(HIDE_DEVICE_CONNECT, "0")]).unwrap());
-        assert!(device_connect(&[(HIDE_DEVICE_CONNECT, "1")]).unwrap());
-        for value in ["", "true", "yes", "2"] {
-            assert_eq!(
-                device_connect(&[(HIDE_DEVICE_CONNECT, value)]).unwrap_err()[0].key,
-                HIDE_DEVICE_CONNECT,
-                "{value:?}"
-            );
         }
     }
 

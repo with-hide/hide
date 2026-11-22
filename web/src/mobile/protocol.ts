@@ -340,7 +340,7 @@ export type StartCatalog = {
 
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
-  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before it and from a build with them off. */
+  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before 1.3.0. */
   /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
   | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string }
   // Older computers still send off; new phone settings do not use this global mode.

@@ -7,8 +7,7 @@
 //! machine's own window (B52).
 //!
 //! The two endpoints bind loopback with no relay (`HIDE_PEER_DIRECT`), so
-//! nothing leaves the machine. Both builds offer connections between two
-//! Hides (`HIDE_DEVICE_CONNECT=1`); one that does not refuses all of it.
+//! nothing leaves the machine.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -67,7 +66,6 @@ fn host_env(root: &Path) -> Env {
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
         peer_relay: None,
         peer_relay_only: false,
-        device_connect: true,
         search_path: None,
     }
 }
@@ -187,7 +185,6 @@ impl Terminal {
             .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
             .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
             .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
-            .env(hided::env::HIDE_DEVICE_CONNECT, "1")
             .env("LANG", "en_US.UTF-8")
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
@@ -462,7 +459,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     // A machine paired with nothing lists nothing, and looking opens no
     // endpoint (D-83).
     assert!(host.peers().is_empty());
-    assert!(!hided::peer_host::endpoint_wanted(&host.state, true).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&host.state).unwrap());
 
     // What is the operator's alone is refused where an agent runs: by this
     // command's own environment, and by what the kernel says of the caller.
@@ -684,7 +681,7 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
     };
 
     ask("stranger").refused("device_unknown");
-    assert!(!hided::peer_host::endpoint_wanted(&core.state, true).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&core.state).unwrap());
 
     let taken = ask("moved-off");
     assert!(taken.ok, "{}", taken.text());
@@ -710,7 +707,7 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
         })
         .await;
     assert_eq!(peer["id"], "moved-off", "{peer}");
-    assert!(hided::peer_host::pairing_confirmed(&core.state, true).unwrap());
+    assert!(hided::peer_host::pairing_confirmed(&core.state).unwrap());
 
     let again = ask("moved-off");
     assert!(again.ok, "{}", again.text());
@@ -746,8 +743,7 @@ XDG_CONFIG_HOME=$HOME/xdg-config
 HIDE_TAILSCALE_BIN=$HOME/no-tailscale
 HIDE_RELAY_URL=ws://127.0.0.1:9/ws
 HIDE_PEER_DIRECT=127.0.0.1:0
-HIDE_DEVICE_CONNECT=1
-export HOME XDG_CONFIG_HOME HIDE_STATE_DIR HIDE_MACHINE_ID HIDE_TAILSCALE_BIN HIDE_RELAY_URL HIDE_PEER_DIRECT HIDE_DEVICE_CONNECT
+export HOME XDG_CONFIG_HOME HIDE_STATE_DIR HIDE_MACHINE_ID HIDE_TAILSCALE_BIN HIDE_RELAY_URL HIDE_PEER_DIRECT
 unset XDG_STATE_HOME
 cd "$HOME" || exit 1
 exec "$@"
@@ -948,7 +944,6 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         &[
             (hided::env::HOME.into(), target.home.clone().into()),
             ("HIDE_STATE_DIR".into(), target.state.clone().into()),
-            (hided::env::HIDE_DEVICE_CONNECT.into(), "1".into()),
         ],
     )
     .unwrap();
@@ -971,7 +966,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         "{}",
         looked.text()
     );
-    assert!(!hided::peer_host::endpoint_wanted(&target.state, true).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&target.state).unwrap());
 
     // One command pairs: no link, no words.
     let added = guest.run(&["device", "add", "studio", "--json"]);
@@ -1116,7 +1111,6 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         relay: None,
         relay_only: false,
         wsl: None,
-        device_connect: true,
     };
     // The split runs where the node role runs it: on a thread no runtime
     // drives.
@@ -1205,97 +1199,4 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
     );
     assert!(kept.join("core-placement.json").is_file());
     assert_eq!(core.peers().len(), 1);
-}
-
-/// A build that does not offer connections between two Hides (no
-/// `HIDE_DEVICE_CONNECT`, every build until that feature ships) says so in
-/// its hello, so its window shows no pairing, and refuses every pairing ask
-/// from a window and from a terminal, opening nothing, and its help leaves
-/// the pairing verbs out.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
-    let root = crate::fixtures::fixture_root("hp");
-    let running = hided::start_daemon(Env {
-        device_connect: false,
-        ..host_env(root.path())
-    })
-    .await
-    .unwrap();
-    let host = Terminal {
-        home: root.path().join("host-home"),
-        state: root.path().join("host-state"),
-        machine: None,
-    };
-
-    let mut window = Window::open(&running, "web").await;
-    let hello = window
-        .frame("the daemon frame", |frame| frame["type"] == "daemon")
-        .await;
-    assert_eq!(hello["payload"]["device_connect"], false, "{hello}");
-    window
-        .send(
-            "pairing_share",
-            json!({"request_id": "s1", "language": "en"}),
-        )
-        .await;
-    let refused = window.result("share").await;
-    assert_eq!(refused["ok"], false, "{refused}");
-    assert_eq!(refused["reason"], "device_connect_unavailable", "{refused}");
-    // It hosts no other machine's work, so a window's close of a guest's
-    // pane is refused the same way, and nothing of another machine is on
-    // its screen (PRD device-connect-iroh D-50, D-74).
-    window
-        .send(
-            "guest_pane_close",
-            json!({"pane_id": "guest:macbook:pane:w1:p1"}),
-        )
-        .await;
-    let refused = window
-        .frame("the refused close", |frame| frame["type"] == "error")
-        .await;
-    assert_eq!(
-        refused["message"], "device_connect_unavailable",
-        "{refused}"
-    );
-
-    // The terminal's own build refuses before it asks; one that offers
-    // pairing hears the daemon's refusal, which is the same.
-    let mut off = host.command(&["device", "share", "--json"]);
-    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
-    Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
-    host.run(&["device", "pause", "studio", "--json"])
-        .refused("device_connect_unavailable");
-    // A carrier is refused too, by the terminal's own build and by the
-    // daemon one that offers them asks; nothing is written where a
-    // connection's bytes would go.
-    let mut off = host.command(&["device", "carry"]);
-    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
-    for refused in [
-        off.output().unwrap(),
-        host.command(&["device", "carry"]).output().unwrap(),
-    ] {
-        assert!(!refused.status.success());
-        assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
-        assert!(
-            String::from_utf8_lossy(&refused.stderr).contains("device_connect_unavailable"),
-            "{}",
-            String::from_utf8_lossy(&refused.stderr)
-        );
-    }
-
-    // Its help leaves the pairing verbs out; a build that offers them
-    // lists them.
-    let help = |command: &mut std::process::Command| {
-        let out = command.output().unwrap();
-        assert!(out.status.success());
-        String::from_utf8(out.stdout).unwrap()
-    };
-    let mut off = host.command(&["--help"]);
-    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
-    assert!(!help(&mut off).contains("hide device share"));
-    assert!(help(&mut host.command(&["--help"])).contains("hide device share"));
-
-    // Nothing was opened for it.
-    assert!(!hided::peer_host::endpoint_wanted(&host.state, false).unwrap());
-    assert!(!hide_kit::layout::machine_key(&host.state).exists());
 }

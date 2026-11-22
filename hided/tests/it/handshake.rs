@@ -36,7 +36,6 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
         peer_direct: None,
         peer_relay: None,
         peer_relay_only: false,
-        device_connect: false,
         search_path: None,
     };
     (dir, env)

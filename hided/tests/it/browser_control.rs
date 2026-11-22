@@ -64,7 +64,6 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
         peer_direct: None,
         peer_relay: None,
         peer_relay_only: false,
-        device_connect: false,
         search_path: None,
     };
     let running = hided::start_daemon(env).await.unwrap();

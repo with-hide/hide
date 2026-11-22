@@ -54,9 +54,6 @@ pub fn refused(code: &str) -> Value {
 /// What the person does about a refusal `code`.
 pub fn next_action(code: &str) -> &'static str {
     match code {
-        crate::pairing::DEVICE_CONNECT_OFF => {
-            "This build does not offer hide phone yet: pair a phone from Settings > Mobile"
-        }
         "phone_pair_needs_terminal" => {
             "hide phone pair draws a QR code for a person to scan: run it in a terminal window"
         }
@@ -462,7 +459,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
-        let desktop = Arc::new(DesktopNotices::new(true));
+        let desktop = Arc::new(DesktopNotices::new());
         let computers = Arc::new(Recording::default());
         desktop.set_computers(Arc::clone(&computers) as Arc<dyn Computers>);
         // Two computers that may open this one told their seat; no one is at either.

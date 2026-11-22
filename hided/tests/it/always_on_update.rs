@@ -142,16 +142,7 @@ impl Machine {
     /// The raise a paired machine runs with the build it put here (B23):
     /// `program core-update` with no build named, as a build of `order`.
     fn raise(&self, program: &Path, order: u32) -> Value {
-        self.raise_from(program, order, true)
-    }
-
-    /// [`Machine::raise`], by a build that offers connections between two
-    /// Hides (`HIDE_DEVICE_CONNECT=1`) or one that does not.
-    fn raise_from(&self, program: &Path, order: u32, offers: bool) -> Value {
         let mut raise = self.command(program, order);
-        if offers {
-            raise.env(hided::env::HIDE_DEVICE_CONNECT, "1");
-        }
         raise
             .arg("core-update")
             .arg("--state-dir")
@@ -377,16 +368,6 @@ fn a_paired_machine_s_newer_build_raises_the_core_and_an_older_one_leaves_it() {
     let mut machine = Machine::new();
     machine.log_in();
     let old_pid = machine.old_core.as_ref().unwrap().id();
-
-    // A build that does not offer connections between two Hides takes no
-    // raise, and the core runs on.
-    let off = machine.raise_from(&machine.app_daemon, NEW, false);
-    assert_eq!(off["kind"], "refused", "{off}");
-    assert_eq!(off["reason"], "device_connect_unavailable", "{off}");
-    assert!(
-        hide_platform::process::is_alive(old_pid),
-        "the core was not touched"
-    );
 
     let raised = machine.raise(&machine.app_daemon, NEW);
 
