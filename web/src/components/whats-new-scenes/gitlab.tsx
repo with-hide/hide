@@ -4,7 +4,7 @@
 // `!12` and `!14` with GitLab's mark on their project; the pointer opens `!12`
 // and its card names GitLab, its failed pipeline and the page on gitlab.com,
 // with no button GitLab does not offer. It is drawn from the screens' own
-// parts and words (`PrMark`, `hostLook`, `work.card.github`,
+// parts and words (`PrMark`, `hostLook`, `recordCard.github`,
 // `recordCard.ciFailed`, `work.reason.failed`), and the projects and their work are examples, never
 // the operator's.
 
@@ -95,7 +95,7 @@ function Card() {
       </span>
       <span className="text-caption text-destructive">{t("recordCard.ciFailed", { count: 1, total: 2 })}</span>
       <span className="font-mono text-micro text-muted-foreground">{t("work.reason.failed", { name: FAILED_JOB })}</span>
-      <span className="self-start rounded-md border border-border px-sm py-xxs text-micro">{t("work.card.github", { host: name })}</span>
+      <span className="self-start rounded-md border border-border px-sm py-xxs text-micro">{t("recordCard.github", { host: name })}</span>
     </div>
   );
 }

@@ -111,7 +111,7 @@ export function applyReview(pr: PullRequest, review: string) {
       break;
     case "approved":
       pr.review = "approved";
-      work.reviewers = [reviewer("kim-reviewer", "approved", 2 * HOUR), reviewer("이호연", "approved", HOUR)];
+      work.reviewers = [reviewer("kim-reviewer", "approved", 2 * HOUR), reviewer("박서준", "approved", HOUR)];
       work.required_approvals = 2;
       work.merge_state = "clean";
       pr.state = "mergeable";
