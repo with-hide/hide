@@ -573,6 +573,11 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         CodeHosts::STANDARD.place_of("gitlab.com/acme/sub/app"),
         "a gitlab.com remote alone is read by its name"
     );
+    assert_eq!(
+        by_name(CodeHosts::STANDARD, &["gitlab.com/acme/app"]),
+        CodeHosts::STANDARD.place_of("gitlab.com/acme/app"),
+        "an older node names a gitlab.com remote as an Enterprise server's: gitlab.com's unit reads it"
+    );
 }
 
 fn hosts_place(hosts: CodeHosts, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
