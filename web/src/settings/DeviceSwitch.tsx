@@ -127,7 +127,7 @@ export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?
   const { t } = useInterfaceTranslation();
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const front = useShellStore((s) => frontDeviceId(s.rest));
+  const front = useShownDevice();
   const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const device = devices?.find((row) => row.id === front);
   // Said once: the line goes when the operator leaves the machine's screen
@@ -277,13 +277,25 @@ function useSwitchLanded() {
 }
 
 /**
+ * The machine whose screen the window shows: a paired machine's own screen
+ * opened from its tile, else the device in front. A paired machine's screen
+ * moves no focus in the core, so the device in front alone would name the
+ * machine the operator left.
+ */
+function useShownDevice(): string {
+  const remote = useUiStore((s) => s.remoteScreen);
+  const front = useShellStore((s) => frontDeviceId(s.rest));
+  return remote ?? front;
+}
+
+/**
  * A landed switch's line is said once (D-48): it goes when the operator
  * leaves that machine's screen for another. Kept here, where the window
  * always draws, since the strip that says it moves from the main screen to
  * the remote screen as the switch lands, and unmounting there is no leaving.
  */
 function useSwitchedSeen() {
-  const front = useShellStore((s) => frontDeviceId(s.rest));
+  const front = useShownDevice();
   const shown = useRef(front);
   useEffect(() => {
     const left = shown.current;

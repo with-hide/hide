@@ -227,6 +227,21 @@ it("keeps a landed switch's line while the strip moves from the main screen to t
   await unmount();
 });
 
+it("says a landed switch's line only over that machine's screen, and ends it when another computer's screen opens (D-48)", async () => {
+  const machine = helper({ ssh_alias: null, peer_key: "ab".repeat(32), switch: null });
+  const { q, show, moveStrip, unmount } = await mount(helper({ switch: { state: "connecting" } }));
+  await show(machine);
+  await act(async () => { useUiStore.setState({ remoteScreen: "mini" }); });
+  await moveStrip("remote");
+  expect(q('[data-device-switched="mini"]')).not.toBeNull();
+  // Another paired computer's screen opens from its tile; the core's focus stays on the machine.
+  await act(async () => { useUiStore.setState({ remoteScreen: "other" }); });
+  expect(q("[data-device-switched]")).toBeNull();
+  expect(useUiStore.getState().switchedDevices).toEqual([]);
+  await act(async () => { useUiStore.setState({ remoteScreen: null }); });
+  await unmount();
+});
+
 it("says once how many terminals a landed switch could not take over (B36)", async () => {
   const { q, show, unmount } = await mount(helper({ switch: { state: "connecting" } }));
   await show(helper({ ssh_alias: null, peer_key: "a".repeat(64), switchable: false, not_carried: 2 }));
