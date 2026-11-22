@@ -388,32 +388,28 @@ fn shell(
         if merge_barred && let Some(HostCall::Merge { host, .. }) = host_call(&program, args) {
             return Some(Refused::MissionMerge(host));
         }
-        match program.as_str() {
-            "git" => {
-                let Some((subcommand, rest)) = git_subcommand(args) else {
-                    continue;
-                };
-                let force = rest.iter().any(|arg| {
-                    arg.starts_with("--force")
-                        || (arg.starts_with('-')
-                            && !arg.starts_with("--")
-                            && arg[1..].contains('f'))
-                        || (arg.starts_with('+') && arg.len() > 1)
-                });
-                match subcommand {
-                    "push" if rewrite_barred && force => return Some(Refused::HistoryRewrite),
-                    "rebase"
-                        if rewrite_barred
-                            && !rest
-                                .iter()
-                                .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
-                    {
-                        return Some(Refused::HistoryRewrite);
-                    }
-                    "commit" | "push" if proposed => return Some(Refused::ProposedPlan),
-                    _ => {}
-                }
+        if program != "git" {
+            continue;
+        }
+        let Some((subcommand, rest)) = git_subcommand(args) else {
+            continue;
+        };
+        let force = rest.iter().any(|arg| {
+            arg.starts_with("--force")
+                || (arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('f'))
+                || (arg.starts_with('+') && arg.len() > 1)
+        });
+        match subcommand {
+            "push" if rewrite_barred && force => return Some(Refused::HistoryRewrite),
+            "rebase"
+                if rewrite_barred
+                    && !rest
+                        .iter()
+                        .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
+            {
+                return Some(Refused::HistoryRewrite);
             }
+            "commit" | "push" if proposed => return Some(Refused::ProposedPlan),
             _ => {}
         }
     }
@@ -594,9 +590,12 @@ mod tests {
             "glab mr --repo group/app merge 3",
             "glab api -X PUT projects/89295207/merge_requests/3/merge",
             "glab mr create --fill --auto-merge",
+            "glab mr new --fill --auto-merge",
             "git push -o merge_request.auto_merge origin m91/guards",
             "git push --push-option=mr.merge_when_pipeline_succeeds",
             "git -c push.pushOption=merge_request.auto_merge push",
+            "glab mr --sha abc merge 3",
+            "git --config-env=push.pushOption=OPT push",
         ];
         for syntax in [hide_shell::Syntax::Posix, hide_shell::Syntax::PowerShell] {
             for (host, commands) in [(Host::GitHub, &github[..]), (Host::GitLab, &gitlab[..])] {
@@ -615,9 +614,20 @@ mod tests {
                 "glab mr view 3",
                 "glab mr checkout 3",
                 "git push -o merge_request.create origin m91/guards",
+                "glab mr create -t x -d --auto-merge",
+                "git -c push.pushOption=merge_request.auto_merge status",
             ] {
                 assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
             }
+        }
+        for command in ["command -- glab mr merge 3", "env -u NAME gh pr merge 12"] {
+            assert!(
+                matches!(
+                    refusal(&worker, &shell_action(command)),
+                    Some(Refused::MissionMerge(_))
+                ),
+                "{command}"
+            );
         }
         for command in ["gh -R owner/repo pr merge 12", "glab mr merge 3"] {
             for (runtime, action) in crate::guardrails::payload::every_runtimes_shell_call(command)

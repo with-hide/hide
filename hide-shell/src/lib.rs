@@ -910,14 +910,43 @@ pub fn is_assignment(word: &str) -> bool {
 }
 
 /// A command's words from its program on: without the `NAME=value` words a
-/// shell takes as the environment of the command that follows and the prefix
-/// words [`is_prefix`] names.
+/// shell takes as the environment of the command that follows, the prefix
+/// words [`is_prefix`] names, and a wrapper's own options with their values
+/// (`command -- git`, `env -u NAME git`, `exec -a name git`).
 pub fn command_words(words: &[String], compound: bool) -> &[String] {
-    let at = words
-        .iter()
-        .position(|word| !is_assignment(word) && !is_prefix(word, compound))
-        .unwrap_or(words.len());
-    &words[at..]
+    let mut wrapper = None;
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        if is_assignment(word) {
+            at += 1;
+        } else if let Some(taken) = wrapper.and_then(|wrapper| wrapper_option(wrapper, word)) {
+            at += taken;
+        } else if is_prefix(word, compound) {
+            wrapper = Some(word.as_str());
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    &words[at.min(words.len())..]
+}
+
+/// How many words an option of a wrapper takes, itself included; `None` for
+/// a word that is no option of it. `env -S` takes a whole command line as
+/// its value, which is not read, as `bash -c`'s is not.
+fn wrapper_option(wrapper: &str, word: &str) -> Option<usize> {
+    if !word.starts_with('-') {
+        return None;
+    }
+    match wrapper {
+        "env" => Some(match word {
+            "-u" | "-C" | "-P" | "-S" | "--unset" | "--chdir" | "--split-string" => 2,
+            _ => 1,
+        }),
+        "exec" => Some(if word == "-a" { 2 } else { 1 }),
+        "command" | "time" | "nohup" => Some(1),
+        _ => None,
+    }
 }
 
 /// Words a shell puts before a command without changing which command runs:
@@ -935,6 +964,34 @@ pub fn is_prefix(word: &str, compound: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrappers_own_options_and_their_values_are_not_the_program() {
+        let program = |line: &str| {
+            let words: Vec<String> = line.split(' ').map(str::to_owned).collect();
+            command_words(&words, true).first().cloned()
+        };
+        for line in [
+            "glab mr merge 3",
+            "command -- glab mr merge 3",
+            "command -p glab mr merge 3",
+            "env -u NAME glab mr merge 3",
+            "env -i PATH=/usr/bin glab mr merge 3",
+            "env --unset=NAME -C /tmp glab mr merge 3",
+            "exec -a name glab mr merge 3",
+            "time -p glab mr merge 3",
+            "nohup -- glab mr merge 3",
+            "A=1 env -u B C=2 glab mr merge 3",
+            "if command -- glab mr merge 3",
+        ] {
+            assert_eq!(program(line).as_deref(), Some("glab"), "{line}");
+        }
+        // A program's own options stay its words.
+        assert_eq!(
+            command_words(&["git".into(), "-C".into(), "x".into()], true).len(),
+            3
+        );
+    }
 
     #[test]
     fn a_backquoted_command_is_kept_and_a_single_quoted_backtick_is_not() {

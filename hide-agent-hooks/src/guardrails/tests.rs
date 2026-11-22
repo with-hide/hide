@@ -430,6 +430,7 @@ const MERGES: &[&str] = &[
     "glab api -XPUT 'projects/group%2Fapp/merge_requests/3/merge?squash=true'",
     "glab mr create --fill --auto-merge",
     "glab mr create -t x --auto-merge=true",
+    "glab mr new --fill --auto-merge",
     "git push -o merge_request.auto_merge origin feature",
     "git push -o merge_request.create -o merge_request.merge_when_pipeline_succeeds origin feature",
     "git push --push-option=mr.auto_merge origin feature",
@@ -438,6 +439,29 @@ const MERGES: &[&str] = &[
     "git -c push.pushOption=merge_request.auto_merge push origin feature",
     "git config push.pushOption merge_request.auto_merge",
     "git config --add push.pushoption mr.merge_when_pipeline_succeeds",
+    // A flag before the command word, which cobra reads as taking the next
+    // word, does not hide the command.
+    "glab mr --sha abc merge 3",
+    "glab mr --yes merge 3",
+    "gh pr --match-head-commit abc merge 12",
+    "glab -X PUT api projects/1/merge_requests/3/merge",
+    "glab mr --auto-merge=true create --fill",
+    "glab mr create --auto-merge=false --auto-merge",
+    // A push option only the shell knows may arm a merge.
+    "git push -o \"$opt\" origin feature",
+    "git --config-env=push.pushOption=OPT push origin feature",
+    "git --config-env push.pushOption=OPT push",
+    "git config --add push.pushOption \"$opt\"",
+];
+
+/// The same through a POSIX wrapper's own options, which PowerShell has not.
+const WRAPPED_MERGES: &[&str] = &[
+    "command -- glab mr merge 3",
+    "env -u NAME glab mr merge 3",
+    "env -i PATH=/usr/bin gh pr merge 12",
+    "exec -a name glab api -X PUT projects/1/merge_requests/3/merge",
+    "OPT=merge_request.auto_merge git --config-env=push.pushOption=OPT push origin feature",
+    "env -u NAME git push -o merge_request.auto_merge origin feature",
 ];
 
 /// Calls about change requests that merge nothing.
@@ -451,6 +475,7 @@ const NOT_MERGES: &[&str] = &[
     "glab mr view 3",
     "glab mr create -t x -d y",
     "glab mr create -t x --auto-merge=false",
+    "glab mr new -t x -d y",
     "glab mr update 3 --ready",
     "glab api projects/89295207/merge_requests/3/merge",
     "glab api projects/89295207/merge_requests/3",
@@ -458,6 +483,17 @@ const NOT_MERGES: &[&str] = &[
     "git push --push-option=ci.skip origin feature",
     "git config push.pushOption merge_request.create",
     "git commit -m 'merge_request.auto_merge'",
+    // An option's value is no option, field or endpoint.
+    "glab mr create -t x -d --auto-merge",
+    "glab mr create -t x -yd --auto-merge",
+    "glab mr create --auto-merge --auto-merge=false",
+    "glab api -X PUT projects/1 -f description=projects/1/merge_requests/3/merge",
+    "gh api -X PATCH repos/o/r -f homepage=https://x/pulls/1/merge",
+    // A push option given to a command that pushes nothing, or read back.
+    "git -c push.pushOption=merge_request.auto_merge status",
+    "git config --get-regexp push.pushOption merge_request.auto_merge",
+    "git config --unset push.pushOption merge_request.auto_merge",
+    "git push -o ci.variable=A=$B origin feature",
 ];
 
 #[test]
@@ -492,6 +528,13 @@ fn merging_a_change_request_is_refused_on_either_host_only_with_the_option() {
         for command in NOT_MERGES {
             assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
         }
+    }
+    for command in WRAPPED_MERGES {
+        assert_eq!(
+            judged(command, Syntax::Posix),
+            Some(Rule::AgentMerge),
+            "{command}"
+        );
     }
     // PowerShell finds the program without case or `.exe`, and an assigned
     // command is judged as itself.
@@ -574,6 +617,7 @@ fn checking_out_a_merge_request_keeps_the_original_checkouts_branch() {
             "glab mr checkout 3",
             "glab mr checkout 3 --branch todo-fix",
             "glab mr -R group/app checkout 3",
+            "glab mr --branch fix checkout 3",
             "gh pr checkout 12",
         ] {
             assert_eq!(
@@ -587,6 +631,10 @@ fn checking_out_a_merge_request_keeps_the_original_checkouts_branch() {
         // help.
         assert_eq!(judged(repo, "glab mr co 3"), None, "{syntax:?}");
     }
+    assert_eq!(
+        refused(fixture.decide_in(repo, posix("command -- glab mr checkout 3"), Some(false))),
+        Some(Rule::WorktreeFolder)
+    );
     for (runtime, action) in payload::every_runtimes_shell_call("glab mr checkout 3") {
         assert_eq!(
             refused(fixture.decide_in(repo, action, Some(false))),
