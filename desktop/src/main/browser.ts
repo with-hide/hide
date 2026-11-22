@@ -1386,10 +1386,11 @@ export class BrowserViews {
    */
   /**
    * A picture of a display's page for a phone (hided `mobile/page_shot.rs`):
-   * Electron's capture of what the page draws, whether it is in front, behind
-   * another tab or laid out off screen and never shown (B32), at most
-   * `STILL_PIXELS` and as a JPEG. A read: it shows, selects, focuses and loads
-   * nothing, so a page the host unloaded has no picture (`not_loaded`). Its
+   * Electron's capture of what the page draws, in front or behind another
+   * tab, at most `STILL_PIXELS` and as a JPEG. A read: it shows, selects,
+   * focuses and loads nothing, so a page the host unloaded has no picture
+   * (`not_loaded`), and one laid out off screen and never shown (B32) gives
+   * an empty image (`not_drawn`). Its
    * area must be one the core authorized, as a connection's is.
    */
   async still(scope: CdpScope): Promise<{ jpeg: Uint8Array } | { failure: string }> {

@@ -6,11 +6,11 @@
 //! find the display and its area, and `BrowserControl::display_still` asks
 //! this machine's desktop window for its picture (`BrowserViews.still` in
 //! `desktop/src/main/browser.ts`, Electron's own capture of the page). A still
-//! is a read: a page behind another tab, or laid out off screen and never
-//! shown, is taken as it draws there. The capture `hide browser screenshot`
-//! takes through the page's debugger is not used: Chromium answers it only
-//! for a page on screen or just hidden, and never for one behind a tab for a
-//! while or never shown. Nothing here selects a View, moves keyboard focus,
+//! is a read: a page behind another tab is taken as it draws there, and one
+//! laid out off screen and never shown has drawn nothing, which the host
+//! answers `not_drawn`. The capture `hide browser screenshot` takes through
+//! the page's debugger is not used: it answers only while Chromium draws the
+//! page on an unlocked screen (`docs/BROWSER_DISPLAYS.md`). Nothing here selects a View, moves keyboard focus,
 //! raises a window or loads a page (B22).
 //!
 //! Why a screenshot cannot be taken goes to one `look.page_unavailable`

@@ -132,7 +132,7 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
       return <HtmlBody name={row.name} content={content} />;
     case "page":
       // The address and the one sentence, with the refresh still there (B21): why, when the operator can act on it (no desktop
-      // app open, the window on another computer, a page the app let go); any other reason is the desktop's log.
+      // app open, the window on another computer, a page the app has not drawn); any other reason is the desktop's log.
       return (
         <div className="flex min-h-0 flex-1 flex-col bg-background px-lg py-md" data-phone-look-state="page">
           <PageAddress address={content.url || row.url || row.name} refreshing={refreshing} />

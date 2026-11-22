@@ -642,6 +642,9 @@ fn scope_of(
     Ok((area_id, display_id, scope))
 }
 
+/// A window's bytes and the `X-Hide-Total` it sent, or its reason for none.
+type WindowBytes = Result<(Vec<u8>, Option<u64>), String>;
+
 /// Asks this machine's window at `path` for bytes, with the control token:
 /// its answer is the bytes (and `X-Hide-Total` when it sends one) or, as
 /// JSON, the reason it has none (`Ok(Err)`). A window open with no shell
@@ -652,7 +655,7 @@ fn window_bytes(
     body: &Value,
     limit: u64,
     detached: Failure,
-) -> Result<Result<(Vec<u8>, Option<u64>), String>, Failure> {
+) -> Result<WindowBytes, Failure> {
     let mut response = match post_window(host, path, body) {
         Ok(response) => response,
         Err(ureq::Error::StatusCode(503)) => return Err(detached),
