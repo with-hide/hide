@@ -10,13 +10,6 @@
 //! (`list`, `add <ssh alias>`, and `remove` or `retry` of one) are the
 //! core's (`hide_core::device_command`).
 //!
-//! A build that does not offer connections between two Hides
-//! (`env::Env::device_connect` off, every build until that feature ships)
-//! refuses every verb that only pairs, with `device_connect_unavailable`,
-//! before anything is asked; `list`, `add`, `remove` and `retry` are the
-//! SSH devices' alone there, as they were before pairing, and [`USAGE`]
-//! lists only them.
-//!
 //! This file reads the words, asks, waits where a command waits (a share
 //! for its guest, a link for its words, a retry for its outcome), and
 //! prints the answer: one JSON line with `--json`, lines for a person
@@ -27,28 +20,8 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-/// The verbs every build offers, which the agent guide lists. The verbs
-/// that pair with another Hide (`share`, `allow`, `pause`, `resume`,
-/// `request`, `update`, `address`, `switch`, `add <link>` and a direction
-/// of `remove`) are
-/// listed only where the build offers connections between two Hides
-/// ([`usage`]), and their contract marks them hidden
-/// (`cli_contract::PAIRING_ONLY`), until that feature ships.
-pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id or ssh alias> [--json]\nhide device retry <device id or ssh alias> [--wait] [--json]";
-
-/// Every verb, for a build that offers connections between two Hides.
-const PAIRING_USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
-
-/// What `hide --help` and a wrong `hide device` print: the pairing verbs
-/// only where `device_connect` (`env::Env::device_connect`) is on.
-pub fn usage(device_connect: bool) -> &'static str {
-    if device_connect { PAIRING_USAGE } else { USAGE }
-}
-
-/// [`usage`] for this process's environment (`env::device_connect_here`).
-pub fn usage_here() -> &'static str {
-    usage(crate::env::device_connect_here())
-}
+/// Every verb a person types, which `hide --help` and the agent guide list.
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -341,11 +314,6 @@ pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     // A carrier's output is the connection's bytes: nothing else is ever
     // printed there, and a refusal is the code this command ends with.
     if cli.verb == Verb::Carry {
-        // A build that does not offer connections between two Hides
-        // carries none (`env::Env::device_connect`).
-        if !env.device_connect {
-            return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
-        }
         return carry(env);
     }
     let (code, message, device) = match answer(env, cli) {
@@ -398,9 +366,6 @@ enum Printed {
 }
 
 fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
-    if !env.device_connect {
-        return ssh_devices_only(env, cli);
-    }
     let direction = |direction: &Option<Direction>| direction.map(Direction::name);
     match &cli.verb {
         Verb::Core(command @ DeviceCommand::Add { ssh_alias, .. }) => {
@@ -616,33 +581,6 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             println!("{}", json!({"ok":true,"value":{"projects":added}}));
             Ok(Printed::Done)
         }
-    }
-}
-
-/// A build that does not offer connections between two Hides: the SSH
-/// devices' verbs go to the core as they did before pairing, and a verb
-/// that only pairs is refused before anything is asked.
-fn ssh_devices_only(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
-    match &cli.verb {
-        Verb::Core(command) => core(env, command, cli.wait),
-        Verb::Remove {
-            device,
-            direction: None,
-        } => core(
-            env,
-            &DeviceCommand::Remove {
-                device_id: device.clone(),
-            },
-            false,
-        ),
-        Verb::Retry { device } => core(
-            env,
-            &DeviceCommand::Retry {
-                device_id: device.clone(),
-            },
-            cli.wait,
-        ),
-        _ => Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF)),
     }
 }
 
@@ -1098,9 +1036,6 @@ fn allow(env: &Env) -> Result<Printed, Refused> {
 /// lists (B24): the paired ones, which this machine's daemon answers
 /// whoever asks at it. The SSH devices are the core's to list.
 fn paired_only(env: &Env) -> Option<Value> {
-    if !env.device_connect {
-        return None;
-    }
     let status = pairing(env, json!({"verb":"status"})).ok()?;
     Some(json!({"devices": [], "peers": status["machines"]}))
 }
@@ -1361,73 +1296,6 @@ mod tests {
         assert_eq!(
             first(peer(false, Value::Null)),
             "m1  Mac mini  not connected"
-        );
-    }
-
-    /// The pairing verbs are listed only where the build offers them.
-    #[test]
-    fn the_usage_lists_the_pairing_verbs_only_with_the_switch() {
-        for verb in [
-            "share", "allow", "pause", "resume", "request", "update", "address", "switch",
-        ] {
-            let line = format!("hide device {verb} ");
-            assert!(usage(true).contains(&line), "{verb}");
-            assert!(!usage(false).contains(&line), "{verb}");
-        }
-        assert!(usage(true).contains("hide device list"));
-        assert_eq!(usage(false), USAGE);
-    }
-
-    /// A build that does not offer connections between two Hides refuses
-    /// each verb that only pairs, with its reason, before asking anything:
-    /// the state folder has no daemon to ask.
-    #[test]
-    fn a_build_without_connections_between_hides_refuses_every_pairing_verb() {
-        let home = tempfile::tempdir().unwrap();
-        let env = crate::env::load_from(|key| {
-            (key == crate::env::HOME).then(|| home.path().to_string_lossy().into_owned())
-        })
-        .unwrap();
-        assert!(!env.device_connect);
-        for words in [
-            &["share"][..],
-            &["allow"],
-            &["add", "hide://pair#abc"],
-            &["pause", "studio"],
-            &["resume", "studio"],
-            &["remove", "studio", "--outgoing"],
-            &["request", "studio"],
-            &["update", "studio"],
-            &["address", "studio", "192.0.2.7:7842"],
-            &["switch", "studio"],
-            &["projects-ssh", "--project", "/home/me/app"],
-            &["look-ssh"],
-            &[
-                "accept-ssh",
-                "--request",
-                "r",
-                "--key",
-                "k",
-                "--device",
-                "d",
-                "--name",
-                "n",
-            ],
-        ] {
-            let cli = parse_words(words).unwrap();
-            match answer(&env, &cli) {
-                Err(Refused::Answer { code, message }) => {
-                    assert_eq!(code, crate::pairing::DEVICE_CONNECT_OFF, "{words:?}");
-                    assert_eq!(message, crate::pairing::next_action(&code), "{words:?}");
-                }
-                _ => panic!("{words:?} was not refused"),
-            }
-        }
-        // The carrier of a connection to this account's core is refused
-        // with the code alone: its output is the connection's bytes.
-        assert_eq!(
-            run(&env, &parse_words(&["carry"]).unwrap()),
-            Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned())
         );
     }
 

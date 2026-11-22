@@ -303,7 +303,6 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
         ("HIDE_STATE_DIR", at("c").into_os_string()),
         (hided::env::HIDE_MACHINE_ID, CORE.into()),
         ("HIDE_PEER_DIRECT", core_direct.clone().into()),
-        (hided::env::HIDE_DEVICE_CONNECT, "1".into()),
         // An update over this login starts the core itself, as the login
         // item does on the account's own home.
         (hided::env::HIDE_CORE_STARTER, "fixture".into()),

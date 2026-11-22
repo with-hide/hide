@@ -34,7 +34,8 @@ fn env(dir: &std::path::Path) -> Env {
         tailscale_bin: Some(dir.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: None,
-        device_connect: false,
+        peer_relay: None,
+        peer_relay_only: false,
         search_path: None,
     }
 }
