@@ -840,12 +840,20 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
 /// `hide device switch` for the fixture's device, named by its id or the
 /// alias it was added by, at a terminal of the core's machine: whether it
 /// succeeded, and the line it answered.
+/// How long the journey gives one switch. A switch with `--install` copies
+/// this build's `hide` and `hided` to the device and starts each once, and
+/// macOS scans a new copy of a program at its first start. On a Mac mini
+/// the whole switch took 4 s idle; under load the first start of each
+/// 400 MB debug binary took 5 to 6 s and the switch 10 to 11 s (#2846).
+/// The CLI's own bound is minutes (`device_cli::SWITCH_BOUND`).
+const SWITCH_WITHIN: Duration = Duration::from_secs(60);
+
 fn switch_device(fixture: &Fixture, device: &str, words: &[&str]) -> Result<(bool, Value)> {
     let mut command = fixture.local.environment.command(&fixture.hide);
     command
         .args(["device", "switch", device, "--json"])
         .args(words);
-    let ran = fixture::capture(command)?;
+    let ran = fixture::capture_within(command, SWITCH_WITHIN)?;
     let text = String::from_utf8_lossy(&ran.stdout).into_owned();
     let answer =
         serde_json::from_str(text.lines().last().unwrap_or_default()).with_context(|| {
