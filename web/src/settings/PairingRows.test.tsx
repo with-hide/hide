@@ -81,7 +81,7 @@ it("lists a paired machine with its state, its direction and the one action its 
   // An ask names the machine by its connection id, never by the device id it says of itself.
   expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: lost.key } });
   // The machine that opens this one is asked to be opened too.
-  expect(q('[data-peer-request-go="macbook"]')?.textContent).toBe("Open MacBook too");
+  expect(q('[data-peer-request-go="macbook"]')?.textContent).toBe("Ask to open MacBook");
   await press('[data-peer-request-go="macbook"]');
   expect(last(events)).toMatchObject({ kind: "pairing_request", payload: { device: guest.key } });
   expect(q('[data-peer-request-go="windows-pc"]')).toBeNull();

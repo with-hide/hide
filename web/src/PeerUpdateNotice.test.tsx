@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { UpdatePhase, UpdateStatus } from "./host";
 import type { PairingView, Peer } from "./pairing";
@@ -18,7 +19,9 @@ const status = (phase: UpdatePhase, more: Partial<UpdateStatus> = {}): UpdateSta
 const notice = () => document.querySelector<HTMLElement>("[data-peer-update-notice]");
 const now = () => document.querySelector<HTMLButtonElement>("[data-peer-update-now]");
 
-const Screen = () => <TooltipProvider><PeerUpdateNotice /></TooltipProvider>;
+const sent: { kind: string; payload: unknown }[] = [];
+const actions = createActions((event) => { sent.push(event as never); return true; });
+const Screen = () => <TooltipProvider><PeerUpdateNotice actions={actions} /></TooltipProvider>;
 
 // One test, in order: the page subscribes to the bridge once for its life (`updates.ts`).
 it("says on the computer that must update which computer waits, updates on a press, and by itself when that computer asked (B22)", async () => {
@@ -54,10 +57,23 @@ it("says on the computer that must update which computer waits, updates on a pre
     await act(async () => now()!.click());
     expect(bridge.restart).toHaveBeenCalledTimes(1);
 
-    // Another computer's view of this one offers nothing, and a computer that is not behind has no notice.
+    // Another computer's view of this one offers nothing.
     await show(null, [peer({ update: "here" })]);
     expect(notice()).toBeNull();
+    await show(null, [peer({ update: "there" })]);
+    expect(notice()).toBeNull();
+
+    // The computer that waits: the other one must update, and a press asks it to.
     await show(idle, [peer({ update: "there" })]);
+    expect(notice()?.getAttribute("data-peer-update-side")).toBe("there");
+    expect(notice()?.textContent).toContain("MacBook needs an update before it can be opened");
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-peer-update-ask]")!.click());
+    expect(sent).toEqual([expect.objectContaining({ kind: "pairing_update", payload: { device: "ab".repeat(32) } })]);
+    // Once asked, the row says so and the notice goes; a closed notice stays closed for that computer.
+    await show(idle, [peer({ update: "there_asked" })]);
+    expect(notice()).toBeNull();
+    await show(idle, [peer({ update: "there" })]);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-peer-update-notice] [aria-label]")!.click());
     expect(notice()).toBeNull();
 
     // A build that does not offer connections between two Hides shows none of it and follows no ask.

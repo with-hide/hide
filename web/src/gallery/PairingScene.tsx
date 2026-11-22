@@ -182,7 +182,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
           {view === "devices" || view === "other" || switching || landed || updating ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
           <PairingDialogs actions={actions} />
           <DeviceSwitchDialogs actions={actions} />
-          {updating ? <ToastStack><PeerUpdateNotice /></ToastStack> : null}
+          {updating ? <ToastStack><PeerUpdateNotice actions={actions} /></ToastStack> : null}
         </div>
       </TooltipProvider>
     </>

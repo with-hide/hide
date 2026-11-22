@@ -295,7 +295,7 @@ export function App() {
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
     ["workspace_notices", <WorkspaceNotices actions={actions} />],
     ["notice", <NoticeToasts actions={actions} />],
-    ["peer_update", <PeerUpdateNotice />],
+    ["peer_update", <PeerUpdateNotice actions={actions} />],
   ];
   const overlays: [string, ReactNode][] = [
     ["overview", <OverviewModal actions={actions} />],

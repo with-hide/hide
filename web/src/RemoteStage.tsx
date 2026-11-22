@@ -21,7 +21,6 @@ import { pairedMachines } from "./pairing";
 import { DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { offersUpdate, updateNow, useUpdateStatus } from "./updates";
 import { trafficLightSpace, useWindowChrome } from "./windowChrome";
 
 /** How long a page that could not load waits before it is asked again while its machine reads as reachable. */
@@ -52,8 +51,6 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   const [loaded, setLoaded] = useState<RemoteScreenState | null>(null);
   const [attempt, setAttempt] = useState(0);
   const state = peer ? screenState(peer) : "no_grant";
-  // This computer must update: its own app offers it here as its notice does (B22).
-  const update = useUpdateStatus();
 
   // A machine no longer paired leaves no screen to come back to.
   useEffect(() => {
@@ -136,11 +133,8 @@ export function RemoteStage({ actions }: { actions: Actions }) {
             <span className="text-headline font-semibold text-foreground">{peer?.name ?? ""}</span>
             <span className="text-body text-muted-foreground">{t(screenStateKey(why))}</span>
             {why === "not_connected" ? <span className="text-caption text-muted-foreground">{t("remoteScreen.reconnects")}</span> : null}
-            {why === "update_here" && offersUpdate(update) ? (
-              <Button variant="secondary" size="sm" onClick={() => updateNow(update)} data-remote-update="true">
-                {t("pairing.action.updateHere")}
-              </Button>
-            ) : why !== "not_connected" && why !== "confirming" ? (
+            {/* Which side must update is acted on in the window's notice (PeerUpdateNotice), so the stage only says it. */}
+            {why !== "not_connected" && why !== "confirming" && why !== "update_here" && why !== "update_there" ? (
               <Button variant="secondary" size="sm" onClick={() => actions.openSettings("devices")} data-remote-settings="true">
                 {t("remoteScreen.openSettings")}
               </Button>
