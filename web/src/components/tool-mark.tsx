@@ -3,6 +3,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { ToolWork } from "../snapshot";
 import { Badge } from "./ui/badge";
+import { BotFace } from "./bot-mark";
 import { Hint } from "./ui/tooltip";
 
 /**
@@ -25,6 +26,7 @@ export function ToolMark({ tool, className }: { tool: ToolWork | undefined; clas
   return (
     <Hint label={label}>
       <Badge variant="outline" className={cn("min-w-0 shrink", className)} aria-label={label} data-tool-mark={tool.connection} data-tool-mark-owns={tool.owns ? "" : undefined}>
+        <BotFace name={tool.name} size="line" />
         <span className="min-w-0 truncate">{tool.name}</span>
       </Badge>
     </Hint>
@@ -41,7 +43,8 @@ export function ToolLabel({ tool, className }: { tool: ToolWork | undefined; cla
   if (!tool || inCell) return null;
   const label = t(tool.owns ? "common.tool.kept" : "common.tool.started", { name: tool.name });
   return (
-    <span className={cn("flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs text-muted-foreground", className)} title={label}>
+    <span className={cn("flex min-w-0 max-w-2/5 shrink-0 items-center gap-xs text-muted-foreground", className)} title={label}>
+      <BotFace name={tool.name} size="line" />
       <span className="min-w-0 truncate" data-tool-mark={tool.connection} data-tool-mark-owns={tool.owns ? "" : undefined}>{tool.name}</span>
       <span aria-hidden="true">·</span>
     </span>

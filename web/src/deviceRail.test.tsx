@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { RailTileView, ToolTileView, type Tile } from "./components/device-rail";
+import { BotTileView, RailTileView, type Tile } from "./components/device-rail";
+import { botLook, type BotModeKind } from "./bots";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { sidebarBody, type TileCounts } from "./devices";
 import type { SnapshotRest } from "./snapshot";
@@ -116,32 +117,39 @@ describe("a rail tile (quick device-rail-slack)", () => {
   });
 });
 
-describe("a tool's tile (PRD hide-external-control D-50, B39, B41)", () => {
-  const tool = (turn: number, selected = false) => renderToStaticMarkup(
+describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
+  const bot = (turn: number, { selected = false, mode = "own" as BotModeKind } = {}) => renderToStaticMarkup(
     <TooltipProvider>
-      <ToolTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" selected={selected} onSelect={() => undefined} />
+      <BotTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" mode={mode} selected={selected} onSelect={() => undefined} />
     </TooltipProvider>,
   );
   const button = (html: string) => html.match(/<button[^>]*data-rail-tool[^>]*>/)?.[0] ?? "";
 
-  it("letters the tool, names it an external tool and carries what waits on the tool in a grey number", () => {
-    const html = tool(3);
-    expect(html).toMatch(/data-rail-glyph="true"[^>]*>N</);
-    expect(button(html)).toContain('aria-label="nightly, External tool, Tool&#x27;s turn 3"');
+  it("draws the owl its name chooses, names it a bot and its mode, and carries what waits on it in a grey number", () => {
+    const html = bot(3);
+    const look = botLook("nightly");
+    expect(html).toContain(`data-bot-face="${look.shape}:${look.color}"`);
+    expect(button(html)).toContain('aria-label="nightly, Bot, Own space, Bot&#x27;s turn 3"');
     expect(marks(html)).toEqual([["tool_turn", "3"]]);
     expect(html).toContain("bg-muted-foreground");
     expect(html).not.toContain("bg-warning");
   });
 
-  it("reads 9+ from ten and draws no number when nothing waits on the tool", () => {
-    expect(marks(tool(10))).toEqual([["tool_turn", "9+"]]);
-    expect(marks(tool(0))).toEqual([]);
-    expect(button(tool(0))).toContain('aria-label="nightly, External tool"');
+  it("reads 9+ from ten and draws no number when nothing waits on the bot", () => {
+    expect(marks(bot(10))).toEqual([["tool_turn", "9+"]]);
+    expect(marks(bot(0))).toEqual([]);
+    expect(button(bot(0))).toContain('aria-label="nightly, Bot, Own space"');
   });
 
-  it("is a ring, not a device's filled square, and rings as selected while its cell is in front", () => {
-    expect(button(tool(0))).toContain("rounded-full");
-    expect(button(tool(0))).not.toContain("bg-secondary");
-    expect(button(tool(0, true))).toContain('aria-pressed="true"');
+  it("rings the owl in lime only while the bot works in all of Hide, which its name says", () => {
+    expect(bot(0)).not.toContain("ring-primary");
+    const all = bot(0, { mode: "all" });
+    expect(all).toMatch(/data-bot-mode="all"[^>]*ring-primary|ring-primary[^>]*data-bot-mode="all"/);
+    expect(button(all)).toContain('aria-label="nightly, Bot, Full"');
+  });
+
+  it("rings as selected while its cell is in front", () => {
+    expect(button(bot(0, { selected: true }))).toContain('aria-pressed="true"');
+    expect(button(bot(0, { selected: true }))).toContain("ring-2");
   });
 });

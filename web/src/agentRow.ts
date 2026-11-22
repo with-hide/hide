@@ -5,6 +5,7 @@
 // sidebar and any other list of agents (the Overview) cannot disagree.
 
 import { agentProductName } from "./agentAdapters";
+import { botStarter } from "./bots";
 import { hideAiWords } from "./hideAiOrigin";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
@@ -313,9 +314,12 @@ export function branchChip(agent: Pick<AgentRow, "state">): string | null {
  * built-in default (`Claude Code · work`): what the hover and the accessible
  * name say for a logo that wears the profile badge (PRD agent-profiles B17).
  */
-export function agentWithProfile(t: TFunction<"translation">, agent: Pick<AgentRow, "agent_kind" | "profile">): string {
+export function agentWithProfile(t: TFunction<"translation">, agent: Pick<AgentRow, "agent_kind" | "profile"> & Partial<Pick<AgentRow, "tool">>): string {
   const product = agentProductName(agent.agent_kind);
-  return agent.profile ? t("agentProfiles.agentWithProfile", { agent: product, profile: agent.profile }) : product;
+  const named = agent.profile ? t("agentProfiles.agentWithProfile", { agent: product, profile: agent.profile }) : product;
+  // An agent a 전체-mode bot started is the operator's; its name says which bot started it, beside the bot's owl on its mark.
+  const bot = botStarter(agent);
+  return bot ? `${named} · ${t("common.bot.allStarted", { name: bot })}` : named;
 }
 
 export function rowAccessibleName(t: TFunction<"translation">, agent: AgentRow, device: string | null): string {
