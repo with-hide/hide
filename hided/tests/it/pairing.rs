@@ -613,6 +613,205 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     assert_eq!(pairing_frames, 0);
 }
 
+/// A stand-in `wsl.exe` for one distribution, Ubuntu: it runs the command it
+/// is given as the account the `account` file beside it names, with none of
+/// this process's own `HIDE_` variables, as a distribution has none of its
+/// PC's. Its text is fixed (`stand_ins`), so it is started once before a
+/// test's deadline runs it.
+#[cfg(unix)]
+const STAND_IN_WSL: &str = r#"#!/bin/sh
+[ "$1" = "--help" ] && exit 0
+here=$(dirname "$0")
+if [ "$1" = "--list" ]; then
+    echo Ubuntu
+    exit 0
+fi
+while [ $# -gt 0 ]; do
+    case $1 in
+        -d|-u|--cd) shift 2 ;;
+        -e) shift; break ;;
+        *) exit 64 ;;
+    esac
+done
+for name in $(env | sed -n 's/^\(HIDE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    unset "$name"
+done
+. "$here/account"
+XDG_CONFIG_HOME=$HOME/xdg-config
+HIDE_TAILSCALE_BIN=$HOME/no-tailscale
+HIDE_RELAY_URL=ws://127.0.0.1:9/ws
+HIDE_PEER_DIRECT=127.0.0.1:0
+HIDE_DEVICE_CONNECT=1
+export HOME XDG_CONFIG_HOME HIDE_STATE_DIR HIDE_MACHINE_ID HIDE_TAILSCALE_BIN HIDE_RELAY_URL HIDE_PEER_DIRECT HIDE_DEVICE_CONNECT
+unset XDG_STATE_HOME
+cd "$HOME" || exit 1
+exec "$@"
+"#;
+
+/// [`STAND_IN_WSL`] in `folder`, for the account `terminal` is.
+#[cfg(unix)]
+fn stand_in_wsl(folder: &Path, terminal: &Terminal) -> PathBuf {
+    let quoted = |path: &Path| format!("'{}'", path.display());
+    std::fs::create_dir_all(folder).unwrap();
+    std::fs::write(
+        folder.join("account"),
+        format!(
+            "HOME={}\nHIDE_STATE_DIR={}\nHIDE_MACHINE_ID={}\n",
+            quoted(&terminal.home),
+            quoted(&terminal.state),
+            terminal.machine.expect("a machine id of its own"),
+        ),
+    )
+    .unwrap();
+    let program = folder.join("wsl.exe");
+    crate::stand_ins::program(&program, STAND_IN_WSL);
+    program
+}
+
+/// A PC reaches the Hide its WSL distribution runs through `wsl.exe` alone
+/// (PRD device-connect-iroh D-27, D-62, D-63, B43): the distribution's own
+/// `hide device accept-ssh --wsl` saves the grant, `hide device carry`
+/// hands its input and output to that account's core, and the core proves
+/// its machine key over them before anything else is read. A core that
+/// stopped with its distribution is started by the same command.
+///
+/// The distribution is a second daemon of this machine and `wsl.exe` a
+/// stand-in that runs its commands in that account; the PC's side is the
+/// daemon's own code (`pairing_wsl`, `Carriers`, the pipe transport), since
+/// only a Windows daemon finds a `wsl.exe` of its own.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
+    use hide_node::ssh::host::wsl::WslAccess;
+    use hide_peer::pipe::PipeTransport;
+    use hide_peer::protocol::{Candidate, CloseCode, PeerAddr};
+    use hide_peer::{MachineKey, PeerConn as _, PeerTransport as _};
+    use hided::pairing_ssh::{Looked, Reach};
+    use hided::pairing_wsl::{self, Carriers};
+
+    let root = crate::fixtures::fixture_root("hw");
+    let distribution = Terminal::new(
+        root.path().join("wsl-home"),
+        root.path().join("wsl-state"),
+        Some("pairing-distribution"),
+    );
+    let _stop = StopOnDrop(&distribution);
+    let commands = distribution.home.join(".local/bin");
+    std::fs::create_dir_all(&commands).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+    let found = hide_platform::wsl::Distribution {
+        name: "Ubuntu".to_owned(),
+        id: "25622596-db24-4e3a-9a3e-6b3f0d2e1c11".to_owned(),
+        wsl_version: 2,
+        installed: true,
+        first_run_pending: false,
+        default: true,
+    };
+    let access = WslAccess::with(
+        stand_in_wsl(&root.path().join("pc"), &distribution),
+        std::sync::Arc::new(move || Ok(vec![found.clone()])),
+    );
+    let reach = Reach {
+        home: root.path().join("pc-home"),
+        command_folder: None,
+    };
+
+    // An account that never ran a Hide has none to pair with, and a look
+    // starts none there.
+    let (looked, asked) = (access.clone(), reach.clone());
+    let absent = tokio::task::spawn_blocking(move || pairing_wsl::look(&looked, &asked, "Ubuntu"))
+        .await
+        .unwrap();
+    assert_eq!(absent, Looked::Absent);
+    let connected = distribution.run(&["connect"]);
+    assert!(
+        connected.ok,
+        "the distribution's daemon: {}",
+        connected.text()
+    );
+
+    // The PC asks the distribution's Hide for a grant, through wsl.exe.
+    let mine = MachineKey::generate().unwrap();
+    let (key, me) = (
+        mine.public(),
+        hide_peer::pairing::Me {
+            name: "Windows PC".to_owned(),
+            device: "windows-pc".to_owned(),
+        },
+    );
+    let (asking, asked) = (access.clone(), reach.clone());
+    let paired = tokio::task::spawn_blocking(move || {
+        assert_eq!(pairing_wsl::look(&asking, &asked, "Ubuntu"), Looked::Ready);
+        pairing_wsl::accept(&asking, &asked, "Ubuntu", "request-1", &me, &key)
+    })
+    .await
+    .unwrap()
+    .unwrap_or_else(|code| panic!("the distribution's Hide refused: {code}"));
+    assert_eq!(paired.first, vec![Candidate::Wsl("Ubuntu".to_owned())]);
+    let theirs = paired.accepted.key;
+    assert_ne!(theirs, key);
+
+    // The connection: `hide device carry` in the distribution is the
+    // carrier, and its core proves the key it answered the pairing with.
+    let carriers = Carriers::new(access, reach);
+    let made = std::sync::Arc::clone(&carriers);
+    let transport = PipeTransport::dialing(mine, move |to| {
+        let distro = hide_peer::pipe::distribution(to).map(str::to_owned);
+        let carriers = std::sync::Arc::clone(&made);
+        async move {
+            let distro = distro.ok_or_else(|| std::io::Error::other("no distribution"))?;
+            tokio::task::spawn_blocking(move || carriers.carrier(&distro))
+                .await
+                .map_err(std::io::Error::other)?
+        }
+    });
+    let to = PeerAddr::new(theirs, paired.first.clone());
+    let reached = tokio::time::timeout(WITHIN, transport.dial(&to))
+        .await
+        .expect("the distribution's core answered")
+        .unwrap_or_else(|error| panic!("the carrier did not reach the core: {error:?}"));
+    assert_eq!(reached.peer(), theirs);
+    assert!(reached.dialed());
+    reached.close(CloseCode::Shutdown);
+
+    // A program in a pane of that Hide is no operator: it gets no carrier,
+    // and nothing is written where a connection's bytes would go.
+    let mut from_a_pane = distribution.command(&["device", "carry"]);
+    let refused = from_a_pane.env("HIDE_PANE_ID", "w1:p1").output().unwrap();
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("device_from_pane"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // A key the core does not hold proves nothing: the dial ends.
+    let other = MachineKey::generate().unwrap().public();
+    let wrong = tokio::time::timeout(
+        WITHIN,
+        transport.dial(&PeerAddr::new(other, paired.first.clone())),
+    )
+    .await
+    .expect("a dial to another key ended");
+    assert!(
+        wrong.is_err(),
+        "another machine's key was taken for this core's"
+    );
+
+    // The core stopped, as it does with a distribution that has no
+    // systemd: the next carrier starts it, since this account ran one.
+    let stopped = distribution.run(&["stop"]);
+    assert!(stopped.ok, "{}", stopped.text());
+    let again = tokio::time::timeout(WITHIN, transport.dial(&to))
+        .await
+        .expect("the started core answered")
+        .unwrap_or_else(|error| panic!("the carrier did not start the core: {error:?}"));
+    assert_eq!(again.peer(), theirs);
+    again.close(CloseCode::Shutdown);
+    transport.close().await;
+}
+
 /// B7 for a machine that already runs its own Hide, reached over SSH: the
 /// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
 /// the target's `hide device accept-ssh` with no words to compare, and
@@ -761,6 +960,23 @@ async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_t
     Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
     host.run(&["device", "pause", "studio", "--json"])
         .refused("device_connect_unavailable");
+    // A carrier is refused too, by the terminal's own build and by the
+    // daemon one that offers them asks; nothing is written where a
+    // connection's bytes would go.
+    let mut off = host.command(&["device", "carry"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    for refused in [
+        off.output().unwrap(),
+        host.command(&["device", "carry"]).output().unwrap(),
+    ] {
+        assert!(!refused.status.success());
+        assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("device_connect_unavailable"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
 
     // Its help leaves the pairing verbs out; a build that offers them
     // lists them.

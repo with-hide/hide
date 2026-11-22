@@ -334,7 +334,8 @@ pub(super) struct RegisterDevicePayload {
     #[serde(default)]
     pub(super) host_consent: bool,
     /// The device is added to be switched to its machine's own connection
-    /// at once, as every Add over SSH is (PRD device-connect-iroh B41): it
+    /// at once, as every Add over SSH or of a WSL distribution is (PRD
+    /// device-connect-iroh B41): it
     /// is not left on the helper when that switch stops before anything
     /// was started there.
     #[serde(default)]
@@ -3175,7 +3176,9 @@ impl Runtime {
             Event::RenameTab(payload) => self.rename_tab(payload),
             Event::ReorderTab(payload) => self.reorder_tab(payload),
             Event::FocusDevice(payload) => {
+                let opened = payload.device_id.clone();
                 self.bring_device_forward(payload.device_id);
+                self.wake_opened_device(&opened);
                 true
             }
             Event::ProjectCheckoutsFold(payload) => {

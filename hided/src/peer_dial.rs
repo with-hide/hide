@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
-use hide_node_link::device::{Cancel, EstablishError, InstallStop};
+use hide_node_link::device::{Cancel, EstablishError, InstallStop, Wake};
 use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
 use hide_peer::protocol::event::Event;
@@ -40,6 +40,11 @@ use crate::peer_inbox::{self, Events};
 /// How long a machine that is not connected is waited for: the connection
 /// is kept by the pairing, which dials it again by itself.
 const CONNECTED_WITHIN: Duration = Duration::from_secs(10);
+
+/// How long a WSL distribution the operator opened is waited for when it
+/// was off: WSL's virtual machine starts cold, then the distribution's
+/// core.
+const WOKEN_WITHIN: Duration = Duration::from_secs(60);
 
 /// How long a machine just connected has to say the grant it gives: one
 /// frame after its hello. A machine that gives none says so too, so only
@@ -151,6 +156,7 @@ impl Dialer {
         key: PeerKey,
         device: &str,
         packages: HelperPackages,
+        wake: Wake,
     ) -> Result<Opened, EstablishError> {
         let peers = host.open().await.map_err(|error| {
             failed(
@@ -161,7 +167,27 @@ impl Dialer {
         // Heard from before the link is read, so the grant its machine
         // tells is not missed between the two.
         let told = peers.events();
-        let link = connected(&peers, &key).await?;
+        // The operator opened a distribution of this PC: the dial that
+        // keeps its connection may start it, and is made now rather than
+        // at its next turn (B43). Anything else is only waited for.
+        let woken = (wake == Wake::Allowed && peers.link(&key).is_none())
+            .then(|| peers.host(&key))
+            .flatten()
+            .zip(host.wsl())
+            .and_then(|(known, carriers)| {
+                let named = hide_peer::protocol::PeerAddr::new(key, known.candidates);
+                let distro = hide_peer::pipe::distribution(&named)?;
+                carriers.may_wake(distro);
+                Some(())
+            });
+        if woken.is_some() {
+            peers.network_changed();
+        }
+        let within = match woken {
+            Some(()) => WOKEN_WITHIN,
+            None => CONNECTED_WITHIN,
+        };
+        let link = connected(&peers, &key, within).await?;
         if granted(&link, &key, told).await != GrantState::Active {
             return Err(EstablishError::Stopped(
                 "That machine has not opened itself to this one, or paused it".to_owned(),
@@ -251,6 +277,7 @@ impl PeerDial for Dialer {
         key: &str,
         device: &str,
         packages: &HelperPackages,
+        wake: Wake,
         cancel: &Cancel,
     ) -> Result<Opened, EstablishError> {
         let ended = || EstablishError::Helper("the connection attempt ended".to_owned());
@@ -269,7 +296,7 @@ impl PeerDial for Dialer {
         });
         let opened = self.runtime.block_on(async {
             tokio::select! {
-                opened = self.open_link(host, key, device, packages.clone()) => opened,
+                opened = self.open_link(host, key, device, packages.clone(), wake) => opened,
                 _ = stopped.wait_for(|stopped| *stopped) => Err(ended()),
             }
         });
@@ -284,13 +311,18 @@ impl PeerDial for Dialer {
     }
 }
 
-/// The connection to `key`, waited for while the pairing brings it up.
-async fn connected(peers: &HostPeers, key: &PeerKey) -> Result<Link, EstablishError> {
+/// The connection to `key`, waited for `within` while the pairing brings
+/// it up.
+async fn connected(
+    peers: &HostPeers,
+    key: &PeerKey,
+    within: Duration,
+) -> Result<Link, EstablishError> {
     let mut events = peers.events();
     if let Some(link) = peers.link(key) {
         return Ok(link);
     }
-    let waited = tokio::time::timeout(CONNECTED_WITHIN, async {
+    let waited = tokio::time::timeout(within, async {
         loop {
             match events.recv().await {
                 Ok(PeerEvent::Connected { key: connected, .. }) if connected == *key => break,
@@ -1008,6 +1040,7 @@ mod tests {
                     &host_key.to_hex(),
                     "windows-pc",
                     &packages,
+                    Wake::NotAllowed,
                     &Cancel::default(),
                 )
             })
@@ -1135,6 +1168,7 @@ mod tests {
                     &host_key.to_hex(),
                     "windows-pc",
                     &packages,
+                    Wake::NotAllowed,
                     &Cancel::default(),
                 )
             })

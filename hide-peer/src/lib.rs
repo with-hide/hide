@@ -10,7 +10,10 @@
 //!   anything acts on it) and `peers/known.json` (the hosts it is a guest of).
 //! - [`gate`]: each direction's generation, read without a lock.
 //! - [`transport`]: the seam. [`loopback`] is the in-process transport the
-//!   tests run on; `hide-peer-iroh` is the real one.
+//!   tests run on; `hide-peer-iroh` is the real one, and [`pipe`] the one
+//!   beside it for a WSL distribution and its PC, whose carrier is
+//!   `wsl.exe`'s one byte stream. [`proof`] is the first exchange of the
+//!   two that do not authenticate by themselves.
 //! - [`peers`]: the first exchange, admission, which of two connections
 //!   stays, the streams of a connection and who may open them.
 //! - [`pairing`]: how two machines become a pair and stop being one: the
@@ -34,7 +37,9 @@ pub mod loopback;
 pub mod mux;
 pub mod pairing;
 pub mod peers;
+pub mod pipe;
 pub mod port;
+pub mod proof;
 pub mod rate;
 pub mod store;
 pub mod transport;

@@ -1367,11 +1367,12 @@ pub struct Runtime {
     /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
     /// device.
     device_not_carried: HashMap<String, u32>,
-    /// The SSH aliases of the devices added to be switched at once whose
-    /// switch has not landed (`RegisterDevicePayload::switch_first`). By
-    /// alias, since such a device's id changes at its first connection.
-    /// Never saved: after a restart it is a helper device like any other.
-    device_fresh_adds: HashSet<String>,
+    /// The devices added to be switched at once whose switch has not
+    /// landed (`RegisterDevicePayload::switch_first`), by the alias or the
+    /// distribution each is dialed by, since an SSH device's id changes at
+    /// its first connection. Never saved: after a restart it is a helper
+    /// device like any other.
+    device_fresh_adds: HashSet<crate::model::DialedBy>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.

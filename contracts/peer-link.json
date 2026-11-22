@@ -269,7 +269,8 @@
       "contract",
       "device",
       "framing",
-      "link"
+      "link",
+      "update"
     ],
     "frames": {
       "grant": {

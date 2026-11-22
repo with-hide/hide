@@ -1503,6 +1503,152 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
     }
 }
 
+/// The WSL step of every released state folder (PRD device-connect-iroh
+/// D-27, D-49, B36): a WSL distribution added as a helper device on the
+/// upgraded store is switched through `wsl.exe`, named by its id or by its
+/// distribution, and becomes its own Hide's device under the id and the
+/// name it had. That Hide names itself by an id of its own, which the
+/// device does not take, and no other record of the release moves.
+#[test]
+fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
+    use crate::SwitchVia;
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
+    let key = "cd".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let mut runtime = runtime_reading(
+            &state.path().join(crate::node_migration::CORE_STATE),
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        // The release's own PC adds its distribution, with a project in it.
+        let helper = runtime
+            .register_wsl_device("Ubuntu", true, false)
+            .unwrap_or_else(|refusal| panic!("{tag}: the distribution was refused: {refusal:?}"));
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: "workspace:wsl-app".to_owned(),
+                label: "app".to_owned(),
+                path: "/home/me/app".to_owned(),
+                device_id: helper.id.clone(),
+                pinned: false,
+            },
+        );
+        let devices = runtime.snapshot.ui_state.device_registrations.len();
+        for named in [helper.id.as_str(), "Ubuntu"] {
+            let source = runtime
+                .device_switch_source(named)
+                .unwrap_or_else(|code| panic!("{tag}: {named} cannot be switched: {code}"));
+            assert_eq!(source.device_id, helper.id, "{tag}: {named}");
+            assert!(
+                matches!(&source.via, SwitchVia::Wsl { distro } if distro == "Ubuntu"),
+                "{tag}: {named} is not reached through wsl.exe"
+            );
+            assert_eq!(source.projects, ["/home/me/app"], "{tag}: {named}");
+            assert_eq!(
+                Some(&source.helper_root),
+                helper
+                    .host_consent
+                    .as_ref()
+                    .map(|consent| &consent.helper_root),
+                "{tag}: {named}"
+            );
+        }
+        let before = rest(&runtime);
+
+        dispatch(
+            &mut runtime,
+            "device_switch",
+            serde_json::json!({"device_id": helper.id, "step": "connecting", "key": key}),
+        );
+        assert_eq!(
+            runtime.device_registration(&helper.id),
+            Some(&helper),
+            "{tag}: the device changed before its distribution was paired"
+        );
+        // The distribution's own Hide names itself by an id of its own.
+        dispatch(
+            &mut runtime,
+            "peer_machines",
+            serde_json::json!({ "machines": [{
+                "key": key, "device_id": "distribution-own-id", "name": "DESKTOP-PC",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]}),
+        );
+
+        let switched = runtime
+            .device_registration(&helper.id)
+            .unwrap_or_else(|| panic!("{tag}: the device is gone"))
+            .clone();
+        assert_eq!(
+            switched.origin,
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: true
+            },
+            "{tag}"
+        );
+        assert_eq!(
+            (&switched.label, &switched.host_consent),
+            (&helper.label, &helper.host_consent),
+            "{tag}"
+        );
+        assert_eq!(switched.label, "WSL Ubuntu", "{tag}");
+        assert_eq!(
+            runtime.snapshot.ui_state.device_registrations.len(),
+            devices,
+            "{tag}: the distribution's Hide became a second device"
+        );
+        assert!(
+            runtime.device_registration("distribution-own-id").is_none(),
+            "{tag}"
+        );
+        // A switched device is no helper any more: nothing is left to switch.
+        assert_eq!(
+            runtime.device_switch_source(&helper.id).err(),
+            Some("switch_unsupported"),
+            "{tag}"
+        );
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
+        assert!(
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: the switch changed another record: {changed:#?}"
+        );
+    }
+}
+
 /// A helper device is switched to its machine's own connection under the
 /// registration it has (PRD device-connect-iroh D-49, B36, B41): the steps
 /// hided says are drawn on its row, a switch that stops leaves the helper
@@ -1922,6 +2068,37 @@ fn a_device_added_for_its_switch_is_taken_off_when_the_switch_started_nothing() 
     dispatch(&mut runtime, "device_switch", failed(&again, true));
     assert!(runtime.device_registration(&again).is_some());
     assert_eq!(runtime.snapshot.navigator.device_not_added, None);
+
+    // A WSL distribution added for its switch goes the same way (D-27):
+    // it is remembered by its distribution, and offers the switch.
+    let distribution = runtime
+        .register_device(events::RegisterDevicePayload {
+            label: String::new(),
+            ssh_alias: String::new(),
+            wsl_distro: Some("Ubuntu".to_owned()),
+            host_consent: true,
+            switch_first: true,
+        })
+        .unwrap_or_else(|refusal| panic!("not registered: {}", refusal.code));
+    let row = device(&runtime, &distribution);
+    assert!(row.switch_first && row.switchable);
+    dispatch(
+        &mut runtime,
+        "device_switch",
+        serde_json::json!({
+            "device_id": distribution, "step": "failed", "reason": "wsl_not_reached", "clean": true,
+        }),
+    );
+    assert_eq!(runtime.device_registration(&distribution), None);
+    assert_eq!(
+        runtime
+            .snapshot
+            .navigator
+            .device_not_added
+            .as_ref()
+            .map(|line| line.reason.as_str()),
+        Some("wsl_not_reached")
+    );
 
     // A device that was not added for a switch is never taken off.
     let older = add(&mut runtime, "older", false);

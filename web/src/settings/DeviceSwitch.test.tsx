@@ -150,6 +150,31 @@ it("says what would be put on a machine with no Hide of its own, and starts it o
   await unmount();
 });
 
+it("offers a WSL distribution's switch as an SSH device's, and names no linger in what it installs (B35, B36, D-27)", async () => {
+  const distribution = helper({ id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", ssh_alias: null, wsl_distro: "Ubuntu" });
+  const { events, q, answer, show, unmount } = await mount(distribution);
+  expect(q('[data-device-switch-strip="wsl-ubuntu-1a2b3c4d"]')?.textContent).toContain("Switch WSL Ubuntu to the new connection");
+  await act(async () => { q('[data-device-switch="wsl-ubuntu-1a2b3c4d"]')?.click(); });
+  expect(switches(events).map((event) => event.payload.device)).toEqual(["wsl-ubuntu-1a2b3c4d"]);
+  await answer({ ok: true, switch: "install_needed", system: "linux", device_id: "wsl-ubuntu-1a2b3c4d" });
+  expect(q("[data-device-switch-install-parts]")?.getAttribute("data-device-switch-install-parts")).toBe("core,autostart");
+  await act(async () => { q('[data-device-switch-install-go="true"]')?.click(); });
+  // WSL could not run in it: the distribution stays a helper, with why and Try again (B41).
+  await show({ ...distribution, switch: { state: "failed", reason: "wsl_not_reached" } });
+  expect(q('[data-device-switch-state="wsl-ubuntu-1a2b3c4d:failed"]')?.textContent).toContain("WSL could not open this distribution");
+  await unmount();
+});
+
+it("asks for the switch of a distribution added for it once its helper is connected (B41)", async () => {
+  const ready = { host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "linux x86_64", helper_path: null } } as Partial<Device>;
+  const distribution = helper({ id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", ssh_alias: null, wsl_distro: "Ubuntu", state: "unavailable", switch_first: true });
+  const { events, show, unmount } = await mount(distribution);
+  expect(switches(events)).toHaveLength(0);
+  await show({ ...distribution, state: "ready", ...ready });
+  expect(switches(events).map((event) => event.payload.device)).toEqual(["wsl-ubuntu-1a2b3c4d"]);
+  await unmount();
+});
+
 it("asks for the switch of a device added over SSH once its helper is connected, and only once (B41)", async () => {
   const ready = { host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "linux x86_64", helper_path: null } } as Partial<Device>;
   // The core keeps that it was added for its switch; it has not connected yet, so it is not offered.

@@ -799,6 +799,32 @@ fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
     );
 }
 
+/// A command runs without the ssh session's variables, as the helper starts
+/// without them: the core a pairing starts with one (`hide connect`) runs on
+/// with what it started with, and a pane of it is on the machine, not in an
+/// ssh session (with-hide/hide#2776).
+#[test]
+fn a_command_runs_without_the_ssh_sessions_variables() {
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    let named: String = SSH_SESSION_VARIABLES
+        .iter()
+        .map(|name| format!("${{{name}+ {name}}}"))
+        .collect();
+    let ran = run(
+        &mut pipe,
+        &words(&["sh", "-c", &format!("printf %s \"session:{named}\"")]),
+        1024,
+        soon(),
+    )
+    .unwrap();
+    assert_eq!(
+        (ran.status, String::from_utf8(ran.stdout).unwrap()),
+        (0, "session:".to_owned())
+    );
+}
+
 /// A copied file lands whole under a private folder, a damaged one leaves
 /// the file already there alone, and the same file reads back with the
 /// digest the machine states for it.

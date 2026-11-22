@@ -140,16 +140,19 @@ const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
 /// What the wrapper answers when it runs, asking for [`powershell_script`].
 const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
 
-/// The variables the ssh session sets for what it runs, which the helper
-/// starts without, in both scripts: a program in a pane is on the device, not
-/// in an ssh session, and one that reads them as an ssh login (Antigravity
+/// The variables the ssh session sets for what it runs, which both scripts
+/// clear before their first step, so nothing a step starts carries them:
+/// the helper, the attach role, and a command ([`run`]), such as the
+/// `hide connect` that starts a paired machine's own core, which runs on
+/// with what it started with. A program in a pane is on the device, not in
+/// an ssh session, and one that reads them as an ssh login (Antigravity
 /// keeps its sign-in in a file then, not in the device's keychain) misses
 /// what the device's own account holds (with-hide/hide#2776).
 const SSH_SESSION_VARIABLES: [&str; 3] = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"];
 
 /// The PowerShell script's text, with the variables a home of the node's
-/// own clears, the agent homes it sets and the ssh session's variables the
-/// helper starts without.
+/// own clears, the agent homes it sets and the ssh session's variables it
+/// clears before its first step.
 fn powershell_text() -> String {
     let variables = HOME_FOLDER_VARIABLES
         .iter()
@@ -204,6 +207,7 @@ below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 
 o= e= x= t=;
 trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
+unset @SSH_SESSION_VARIABLES@;
 say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs" "$gz";
 root=;
 while IFS=$T read -r cmd a b c d; do
@@ -227,7 +231,6 @@ start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; 
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
 case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
-unset @SSH_SESSION_VARIABLES@;
 say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
 o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
