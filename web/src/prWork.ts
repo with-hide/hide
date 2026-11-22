@@ -8,7 +8,7 @@ import { scopeOccurrences, type PrBoard, type PrGroupId, type PrReason } from ".
 import { readsHere } from "./devices";
 import { GH_REFUSAL_KEY, isGhRefusal, type GhRefusal } from "./githubFailure";
 import type { TFunction } from "i18next";
-import type { AgentRow, Device, ExtraQuery, GithubStatus, HostDeclaration, PullRequest, Workspace } from "./snapshot";
+import type { AgentRow, Device, ExtraQuery, GithubStatus, PullRequest, Workspace } from "./snapshot";
 
 /** One listed pull request: the core's row with everything it names. */
 export type PrEntry = {
@@ -45,16 +45,15 @@ export type PrReading = (
   | { state: "partial"; unread: ExtraQuery[] }
   | { state: "ready" }
 ) & {
-  /** With projects of more than one host: each host that is not ready, with its own reading, so one host's success never hides another's failure. Absent with one host, which reads as before hosts. */
+  /** Each host that is refused, failed or read in part, with its own reading and how it is named, so one host's success never hides another's failure. Absent when every host is ready or still reading its first answer. */
   hosts?: HostReading[];
 };
 
-/** One host's own reading, named by its key and its program (`HostDeclaration`). */
-export type HostReading = { key: string; program: string; reading: PrReading };
+/** One host's own reading, named as its declaration names it (`HostDeclaration`). */
+export type HostReading = { key: string; name: string; program: string; reading: PrReading };
 
-/** The key of the host a status without a declaration is from: a core from before hosts read GitHub alone. */
-const UNDECLARED_HOST = "github";
-const UNDECLARED_PROGRAM = "gh";
+/** A status without a declaration is from a core before hosts, which read GitHub alone. */
+const UNDECLARED: Omit<HostReading, "reading"> = { key: "github", name: "GitHub", program: "gh" };
 
 export type PrListModel = {
   groups: PrGroupView[];
@@ -83,36 +82,34 @@ const EXTRA_QUERIES: readonly ExtraQuery[] = ["account", "review_requests", "mer
 /**
  * The warning in the PRs tool while reading is not whole, or null when it
  * is: a failed read says how old the list is, and either state names the
- * extra questions that were not answered, in plain words. With more than
- * one host, each host that is not ready says so in the same words, named by
- * its program, a refused program included.
+ * extra questions that were not answered, in plain words, each host in its
+ * own words; beside a host that answered, a refused host says so too. A
+ * reading refused whole draws its own lines ([`blockedLines`]).
  */
 export function readingWarning(reading: PrReading, t: TFunction<"translation">): string | null {
-  if (reading.hosts?.length) return hostLines(reading.hosts, t).join(" · ");
-  return stateLine(reading, "GitHub", t);
+  if (reading.state === "blocked") return null;
+  // A reading made without hosts is GitHub's, as before hosts.
+  const lines = hostLines(reading.hosts ?? [{ ...UNDECLARED, reading }], t);
+  return lines.length > 0 ? lines.join(" · ") : null;
 }
 
-/** The lines a reading refused before anything was read says: one per refused host, or the one host's. */
+/** The lines a reading refused before anything was read says: one per refused host. */
 export function blockedLines(reading: PrReading & { state: "blocked" }, t: TFunction<"translation">): string[] {
-  if (reading.hosts?.length) return hostLines(reading.hosts, t);
-  return [t(GH_REFUSAL_KEY[reading.category], { program: UNDECLARED_PROGRAM })];
+  const refused = (reading.hosts ?? []).filter((host) => host.reading.state === "blocked");
+  if (refused.length === 0) return [t(GH_REFUSAL_KEY[reading.category], { program: UNDECLARED.program })];
+  return hostLines(refused, t);
 }
 
-/** Each not-ready host's line, as the desktop and the phone show it. */
+/** Each listed host's line: a refusal names its program, a failed or partial read its host. */
 export function hostLines(hosts: readonly HostReading[], t: TFunction<"translation">): string[] {
-  return hosts.flatMap((host) => {
-    if (host.reading.state === "blocked") return [t(GH_REFUSAL_KEY[host.reading.category], { program: host.program })];
-    const line = stateLine(host.reading, host.program, t);
-    return line ? [line] : [];
+  return hosts.flatMap(({ name, program, reading }) => {
+    if (reading.state === "blocked") return [t(GH_REFUSAL_KEY[reading.category], { program })];
+    if (reading.state !== "stale" && reading.state !== "partial") return [];
+    const names = reading.unread.map((query) => t(`work.lens.query.${query}`)).join(", ");
+    if (reading.state === "partial") return [t("work.lens.partial", { host: name, names })];
+    const age = reading.minutes === null ? t("work.lens.staleNow", { host: name }) : t("work.lens.stale", { host: name, minutes: reading.minutes });
+    return [names ? `${age} · ${t("work.lens.unread", { names })}` : age];
   });
-}
-
-function stateLine(reading: PrReading, host: string, t: TFunction<"translation">): string | null {
-  if (reading.state !== "stale" && reading.state !== "partial") return null;
-  const names = reading.unread.map((query) => t(`work.lens.query.${query}`)).join(", ");
-  if (reading.state === "partial") return t("work.lens.partial", { host, names });
-  const age = reading.minutes === null ? t("work.lens.staleNow", { host }) : t("work.lens.stale", { host, minutes: reading.minutes });
-  return names ? `${age} · ${t("work.lens.unread", { names })}` : age;
 }
 
 /**
@@ -126,45 +123,52 @@ export function prReading(projects: readonly Workspace[], now: number): PrReadin
 
 /**
  * The same reading over the statuses a caller already holds, as the phone
- * gets them per project. Statuses are read per host (a status without a
- * declaration is GitHub's): with one host the reading is that host's, as
- * before hosts; with several, each host that is not ready is named beside
- * the reading of the hosts that answered, so one host's success never hides
- * another's refusal or first failure, in whatever order the hosts come.
+ * gets them per project. Statuses are read per host, named by their
+ * declaration (a status without one is GitHub's). The state is the reading
+ * of the hosts that answered, as one host's was before hosts; `hosts` lists
+ * every host refused, failed or read in part with its own reading, so one
+ * host's success never hides another's refusal or first failure, in
+ * whatever order the hosts come. A host still reading its first answer is
+ * not listed: nothing can be done about it, and the list draws a reading
+ * placeholder only while it is empty.
  */
 export function readingOfStatuses(statuses: readonly GithubStatus[], now: number): PrReading {
-  const byHost = new Map<string, { declaration: HostDeclaration | null; statuses: GithubStatus[] }>();
+  const byHost = new Map<string, { named: Omit<HostReading, "reading">; statuses: GithubStatus[] }>();
   for (const status of statuses) {
-    const key = status.host?.key ?? UNDECLARED_HOST;
-    const entry = byHost.get(key) ?? { declaration: null, statuses: [] };
-    entry.declaration ??= status.host ?? null;
+    const named = status.host ? { key: status.host.key, name: status.host.name, program: status.host.access.program } : UNDECLARED;
+    const entry = byHost.get(named.key) ?? { named, statuses: [] };
+    if (status.host) entry.named = named;
     entry.statuses.push(status);
-    byHost.set(key, entry);
+    byHost.set(named.key, entry);
   }
-  if (byHost.size <= 1) return hostReadingOf(statuses, now, false);
-  const hosts: HostReading[] = [...byHost.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, { declaration, statuses: own }]) => ({ key, program: declaration?.access.program ?? UNDECLARED_PROGRAM, reading: hostReadingOf(own, now, true) }));
-  const notReady = hosts.filter((host) => host.reading.state !== "ready");
-  const withHosts = (reading: PrReading): PrReading => (notReady.length > 0 ? { ...reading, hosts: notReady } : reading);
+  // Alone, a host keeps the reading one host had before hosts: a first
+  // failure is still reading. Beside another, it is a failure of its own.
+  const alone = byHost.size <= 1;
+  const hosts: HostReading[] = [...byHost.values()]
+    .sort((left, right) => left.named.key.localeCompare(right.named.key))
+    .map(({ named, statuses: own }) => ({ ...named, reading: hostReadingOf(own, now, !alone) }));
+  const listed = hosts.filter((host) => host.reading.state === "blocked" || host.reading.state === "stale" || host.reading.state === "partial");
+  const withHosts = (reading: PrReading): PrReading => (listed.length > 0 ? { ...reading, hosts: listed } : reading);
+  if (hosts.length === 0) return { state: "reading" };
   if (hosts.every((host) => host.reading.state === "blocked")) return withHosts(hosts[0]!.reading);
-  const answered = hosts.filter((host) => host.reading.state !== "blocked" && host.reading.state !== "reading").map((host) => host.key);
-  const answeredStatuses = statuses.filter((status) => answered.includes(status.host?.key ?? UNDECLARED_HOST));
-  return withHosts(answered.length > 0 ? hostReadingOf(answeredStatuses, now, false) : { state: "reading" });
+  const answered = new Set(hosts.filter((host) => host.reading.state !== "blocked" && host.reading.state !== "reading").map((host) => host.key));
+  const own = statuses.filter((status) => answered.has(status.host?.key ?? UNDECLARED.key));
+  return withHosts(answered.size > 0 ? hostReadingOf(own, now, false) : { state: "reading" });
 }
 
 /**
  * One host's reading. `firstFailure`: a failed read before any success
  * reads as failed with no age rather than as still reading, which is how a
- * host beside another that answered is told apart; one host alone keeps the
- * reading it had before hosts.
+ * host beside another that answered is told apart. A failed read is told by
+ * its state, not by its optional category: an answer cut at the node's
+ * byte cap carries none.
  */
 function hostReadingOf(statuses: readonly GithubStatus[], now: number, firstFailure: boolean): PrReading {
   const answered = statuses.filter((status) => status.last_success_at_unix_ms != null);
   const refusal = statuses.map((status) => status.failure_category).find(isGhRefusal);
   if (refusal && answered.length === 0) return { state: "blocked", category: refusal };
   if (answered.length === 0) {
-    const failed = statuses.some((status) => status.failure_category != null && status.failure_category !== "no_github_remote");
+    const failed = statuses.some((status) => status.failure_category !== "no_github_remote" && (status.stale || status.failure_category != null));
     return firstFailure && failed ? { state: "stale", minutes: null, unread: [] } : { state: "reading" };
   }
   const failed = answered.some((status) => status.stale === true || (status.failure_category != null && !status.available));

@@ -30,7 +30,7 @@ pub(crate) mod host;
 use crate::checkout_git::{Ci, CiState};
 use crate::code_host::{CardRead, DueRead, HostFailure, HostReads, Place, RepositoryRef};
 use crate::model::{
-    GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, MergeQueuePlace,
+    GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, ListCut, MergeQueuePlace,
     MergeState, PR_REVIEWER_LIMIT, PartRead, PrCardFile, PrCardThread, PrCheckCounts,
     PrFailedCheck, PrReviewer, PrReviewerState, PullRequestChecks, PullRequestSnapshot,
     PullRequestWork, ReadHeld, RepositoryIdentity, ReviewAsk, ReviewDecision, ReviewRequest,
@@ -104,11 +104,12 @@ fn glab(node: &dyn NodeLink, arguments: Vec<String>, share: Share) -> Result<Str
     let answer: GlabAnswer = match call_as(node, Call::Glab { args: arguments }, GLAB_CALL_TIMEOUT)
     {
         Ok(answer) => answer,
-        Err(LinkError::Refused(HostError {
-            code: ErrorCode::Unsupported,
-            message,
-            ..
-        })) => {
+        // A node that knows the call and does not run it, or one on an older
+        // protocol that cannot read it (as `launch.rs` reads a profile call).
+        Err(LinkError::Refused(HostError { code, message, .. }))
+            if code == ErrorCode::Unsupported
+                || (code == ErrorCode::InvalidRequest && node.predates_current_protocol()) =>
+        {
             return Err(Refusal::Unsupported(format!(
                 "the node does not run glab: {message}"
             )));
@@ -447,9 +448,9 @@ struct Listed {
     viewer: String,
     identity: RepositoryIdentity,
     pull_requests: Vec<PullRequestSnapshot>,
-    /// The open list passed [`hide_node_link::glab::OPEN_LIMIT`] and holds
-    /// the newest part.
-    open_cut: bool,
+    /// Which lists passed their cap ([`hide_node_link::glab::OPEN_LIMIT`],
+    /// [`hide_node_link::glab::RECENT_LIMIT`]) and hold their newest part.
+    cut: ListCut,
 }
 
 impl Listed {
@@ -462,7 +463,7 @@ impl Listed {
             identity_read: PartRead::Read,
             viewer: Some(self.viewer),
             pull_requests: self.pull_requests,
-            pull_requests_cut: self.open_cut,
+            pull_requests_cut: self.cut,
             status: GithubStatusSnapshot {
                 available: true,
                 last_success_at_unix_ms: Some(now_unix_ms()),
@@ -529,9 +530,13 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
             .and_then(|repository| repository.root_ref),
     };
     let open_total = project.open.count.unwrap_or(0) as usize;
-    let open_cut = open_total > project.open.nodes.len();
-    if open_cut {
-        // Principle 15: the newest part is read, and the log says so.
+    let cut = ListCut {
+        open: open_total > project.open.nodes.len(),
+        settled: project.settled.count.unwrap_or(0) as usize > project.settled.nodes.len(),
+    };
+    if cut.open {
+        // Principle 15: the newest part is read, and the log says so. The
+        // recent window is cut by design, so only the open list is logged.
         crate::diagnostic!(serde_json::json!({
             "component": "gitlab",
             "kind": "pull_requests.list_cut",
@@ -570,7 +575,7 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
         viewer: viewer_name,
         identity,
         pull_requests,
-        open_cut,
+        cut,
     })
 }
 

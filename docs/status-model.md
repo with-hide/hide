@@ -981,6 +981,10 @@ A node that does not know the `glab` call holds the read (`ReadHeld::Unsupported
 The open list past its 100 keeps the newest 100 and says it was cut to the core (`pull_requests_cut` and the `pull_requests.list_cut` diagnostic), and no verdict rests on the cut part; the card's open discussions past their page say the threads were not read whole, from the merge request's own resolvable and resolved counts.
 Every `glab` line that reaches gitlab.com takes one request from one budget for the whole core process (`hide-core/src/gitlab/budget.rs`): 60 a minute of the account's 100, which leaves 40 for the operator's own `glab`, of which background reads take at most 45 and the rest stays for reads the operator opened (a card, a checkout's commits).
 A background read that finds the budget spent is not made that pass (`ReadHeld::BudgetSpent`, the previous answer kept, no failure clock); an opened read is refused with its reason only when its share is spent too.
+The recent window of every state (newest 50) also says when it was cut (`ListCut::settled`), and a list carried over a failed read keeps its cut mark.
+An older node that cannot read `Call::Glab` (a typed `unsupported`, or `invalid_request` from a node on an older protocol) holds the read the same way.
+Each read status carries its host's declaration (`HostDeclaration`: key, name, operations, access); the store does not trust a saved one and gives a restored status its registered unit's declaration by the saved key, none for a key no unit registers.
+The PR list and the phone read each host on its own (`web/src/prWork.ts`, `readingOfStatuses`): the state is that of the hosts that answered, and `hosts` names every host refused, failed or read in part, by its declaration's name and program, so a gitlab.com failure is not hidden by a GitHub success; a host still reading its first answer draws no line, and GitHub alone draws the lines it drew before hosts.
 
 ### Pull request visual states
 

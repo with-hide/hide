@@ -17,8 +17,8 @@ import { ApprovalCount } from "../PrReviewers";
 import { approvalCount, prReview } from "../prReview";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
-import { openCount, groupPrs, projectTag, prsReading, type PrEntry, type PrGroup } from "./prModel";
-import { blockedLines, hostLines } from "../prWork";
+import { openCount, groupPrs, projectTag, prsReading, prsStatusLines, type PrEntry, type PrGroup } from "./prModel";
+import { blockedLines } from "../prWork";
 import { openPrPage } from "./connection";
 import { TabBar } from "./TabBar";
 import { usePhone } from "./store";
@@ -34,8 +34,8 @@ export function PrsScreen() {
   const reading = prs ? prsReading(prs.projects, Date.now()) : null;
   const count = openCount(groups);
   const blocked = reading?.state === "blocked" ? reading.category : null;
-  // Each host that is not ready beside one that answered, in its own words.
-  const hostWords = reading?.hosts && reading.state !== "blocked" ? hostLines(reading.hosts, t) : [];
+  // Each refused or failed host, in its own words (B38).
+  const statusLines = reading ? prsStatusLines(reading, t) : [];
   // A failed read keeps the last list; the line says it is read again (B38).
   const stale = reading?.state === "stale";
   const dim = offline || stale;
@@ -55,10 +55,8 @@ export function PrsScreen() {
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
           <span><OfflineText /></span>
         </div>
-      ) : hostWords.length > 0 ? (
-        <p role="status" className="px-xl py-sm text-body text-subtle-foreground" data-phone-prs-state="hosts">{hostWords.join(" · ")}</p>
-      ) : stale ? (
-        <p role="status" className="px-xl py-sm text-body text-subtle-foreground" data-phone-prs-state="stale">{t("mobile.prs.readFailed")}</p>
+      ) : statusLines.length > 0 ? (
+        <p role="status" className="px-xl py-sm text-body text-subtle-foreground" data-phone-prs-state={stale ? "stale" : "hosts"}>{statusLines.join(" · ")}</p>
       ) : null}
       <div className={cn("flex-1", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {blocked ? (
