@@ -42,11 +42,27 @@ pub struct RepositoryRef {
 pub struct ChangeRequestRef {
     pub repository: RepositoryRef,
     pub number: u32,
+    /// The name every reference to this change request shares, folded the
+    /// way its host folds names ([`CodeHost::repository_key`]): two
+    /// references name the same change request exactly when their keys are
+    /// equal.
+    ///
+    /// This and the fields below are what the unit makes from the repository
+    /// and number; one saved before the unit made one of them reads it empty,
+    /// and restore has the unit make them again.
+    #[serde(default)]
+    pub key: String,
     /// How the host writes its number (`#12`).
+    #[serde(default)]
     pub label: String,
+    /// Its own page.
+    #[serde(default)]
+    pub url: String,
     /// Its checks page.
+    #[serde(default)]
     pub checks_url: String,
     /// Its changed files page.
+    #[serde(default)]
     pub files_url: String,
 }
 
@@ -58,7 +74,9 @@ pub(crate) fn change_request(
     number: u32,
 ) -> ChangeRequestRef {
     ChangeRequestRef {
+        key: format!("{}#{number}", unit.repository_key(&repository)),
         label: unit.number_label(number),
+        url: unit.change_request_url(&repository, number, ChangeRequestPage::Overview),
         checks_url: unit.change_request_url(&repository, number, ChangeRequestPage::Checks),
         files_url: unit.change_request_url(&repository, number, ChangeRequestPage::Files),
         repository,
@@ -209,6 +227,11 @@ pub(crate) trait CodeHost: Sync {
     /// The name a reference of this host is stored and shown by: the inverse
     /// of [`CodeHost::repository`].
     fn stored_name(&self, repository: &RepositoryRef) -> String;
+
+    /// The name every reference to `repository` shares, folded the way the
+    /// host folds names (GitHub reads a repository's path in any case), so
+    /// common code and the screen compare references by equality alone.
+    fn repository_key(&self, repository: &RepositoryRef) -> String;
 
     /// Whether the host finds a checkout's repository itself from the
     /// checkout's remotes, so a checkout whose remotes Hide does not know is
@@ -371,6 +394,14 @@ impl CodeHosts {
         })?;
         let (_, number) = host.change_request_at(url)?;
         Some((host, repository, number))
+    }
+
+    /// The reference the unit of the host an address is on makes for it:
+    /// only for an address Hide holds without one (a session's record, a
+    /// mission node's or a promotion's saved address).
+    pub(crate) fn reference_at(self, url: &str) -> Option<ChangeRequestRef> {
+        let (host, repository, number) = self.change_request_at(url)?;
+        Some(change_request(host.unit(), repository, number))
     }
 
     /// Whether `repository` is on a server its host is known by name

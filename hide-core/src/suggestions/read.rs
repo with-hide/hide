@@ -204,6 +204,12 @@ fn phase(phase: AttemptPhase) -> SuggestionAttemptPhase {
     }
 }
 
+/// A pull request's saved address as the unit of its host names it; the
+/// production registry is the one there is (`CodeHosts::STANDARD`).
+fn reference_at(url: &str) -> Option<crate::code_host::ChangeRequestRef> {
+    crate::code_host::CodeHosts::STANDARD.reference_at(url)
+}
+
 fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
     let attempt = life.attempt.as_ref()?;
     Some(SuggestionAttemptSnapshot {
@@ -215,6 +221,7 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
             .as_ref()
             .map(|pr| pr.url.clone())
             .or_else(|| attempt.issue_url.clone()),
+        reference: attempt.pr.as_ref().and_then(|pr| reference_at(&pr.url)),
         agent_id: attempt.agent_id.clone(),
         agent_pane: None,
         failure: attempt.failure.clone(),
@@ -280,6 +287,10 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
             url: record
                 .pr
                 .and_then(|_| sources.pr_urls.get(&record.id).cloned()),
+            reference: record
+                .pr
+                .and_then(|_| sources.pr_urls.get(&record.id))
+                .and_then(|url| reference_at(url)),
             at_unix_ms: record.at_unix_ms,
             gone: record.session.as_ref().is_some_and(|session| {
                 sources
@@ -388,6 +399,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                     .map(|pr| SuggestionEscalationSnapshot {
                         level: line.level,
                         previous_pr_url: Some(pr.url.clone()),
+                        previous_pr_reference: reference_at(&pr.url),
                     }),
                 evidence: evidence(line, input),
                 attempt: attempt(life),

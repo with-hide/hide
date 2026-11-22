@@ -66,17 +66,14 @@ fn read_named(
     at: u64,
 ) -> GithubProjectSnapshot {
     GithubProjectSnapshot {
-        repository: Some(crate::model::RepositoryIdentity {
-            id: None,
-            public: None,
-            default_branch: None,
-            ..crate::model::RepositoryIdentity::of(
-                crate::code_host::CodeHosts::STANDARD
-                    .repository(name)
-                    .unwrap()
-                    .1,
-            )
-        }),
+        repository: Some(
+            crate::code_host::CodeHosts::STANDARD
+                .repository(name)
+                .map(|(host, repository)| {
+                    crate::model::RepositoryIdentity::named(host.unit(), repository)
+                })
+                .unwrap(),
+        ),
         ..read_ok(root, pull_requests, at)
     }
 }

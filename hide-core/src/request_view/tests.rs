@@ -82,7 +82,13 @@ fn listed(
 ) -> Option<crate::agent_state::work::family::SessionPulls> {
     use crate::agent_state::work::family::Sources;
     let sessions = vec![None; rows.len()];
-    let list = Sources::new(rows.iter(), &sessions, [github]).pulls(Some(index), None, &[]);
+    let list = Sources::new(
+        rows.iter(),
+        &sessions,
+        [github],
+        crate::code_host::CodeHosts::STANDARD,
+    )
+    .pulls(Some(index), None, &[]);
     (!list.pulls.is_empty()).then_some(list)
 }
 

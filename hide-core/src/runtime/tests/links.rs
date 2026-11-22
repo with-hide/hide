@@ -244,12 +244,12 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         id: None,
         public: None,
         default_branch: None,
-        ..crate::model::RepositoryIdentity::of(
-            crate::code_host::CodeHosts::STANDARD
-                .repository("acme/remote")
-                .unwrap()
-                .1,
-        )
+        ..crate::code_host::CodeHosts::STANDARD
+            .repository("acme/remote")
+            .map(|(host, repository)| {
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            })
+            .unwrap()
     });
     runtime.device_github.insert(
         "remote".into(),
@@ -594,14 +594,12 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             // on the issues answer.
             repository: Some(crate::model::RepositoryIdentity {
                 id: Some("R_kgDO".into()),
-                public: None,
-                default_branch: None,
-                ..crate::model::RepositoryIdentity::of(
-                    crate::code_host::CodeHosts::STANDARD
-                        .repository("Acme/Project")
-                        .unwrap()
-                        .1,
-                )
+                ..crate::code_host::CodeHosts::STANDARD
+                    .repository("Acme/Project")
+                    .map(|(host, repository)| {
+                        crate::model::RepositoryIdentity::named(host.unit(), repository)
+                    })
+                    .unwrap()
             }),
         });
     runtime

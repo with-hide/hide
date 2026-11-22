@@ -1440,8 +1440,10 @@ fn identity_on(
             addresses,
         ),
     };
+    let repository = server.and_then(|server| host::repository_on(&server, &viewed.name));
     RepositoryIdentity {
-        repository: server.and_then(|server| host::repository_on(&server, &viewed.name)),
+        url: repository.as_ref().map(host::repository_url),
+        repository,
         name: viewed.name,
         id: viewed.id,
         public: viewed.public,
@@ -4065,6 +4067,7 @@ mod tests {
                 id: Some("R1".to_owned()),
                 public: Some(true),
                 default_branch: Some("main".to_owned()),
+                url: None,
             })
         );
         assert_eq!(project.default_branch(), Some("main"));

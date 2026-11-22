@@ -405,6 +405,9 @@ pub struct LinkedPr {
     pub branch: String,
     pub title: String,
     pub url: String,
+    /// `url` as its host's unit names it, which the screen compares and
+    /// opens it by.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub created_at_unix_ms: Option<u64>,
     pub closed_at_unix_ms: Option<u64>,
     pub merged_at_unix_ms: Option<u64>,

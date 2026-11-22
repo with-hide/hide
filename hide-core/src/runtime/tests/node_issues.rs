@@ -2226,12 +2226,12 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
                     id: None,
                     public: None,
                     default_branch: None,
-                    ..crate::model::RepositoryIdentity::of(
-                        crate::code_host::CodeHosts::STANDARD
-                            .repository("acme/app")
-                            .unwrap()
-                            .1,
-                    )
+                    ..crate::code_host::CodeHosts::STANDARD
+                        .repository("acme/app")
+                        .map(|(host, repository)| {
+                            crate::model::RepositoryIdentity::named(host.unit(), repository)
+                        })
+                        .unwrap()
                 }),
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),

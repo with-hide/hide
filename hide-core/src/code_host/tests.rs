@@ -75,6 +75,10 @@ impl CodeHost for Plain {
         format!("{}/{}", repository.authority, repository.path)
     }
 
+    fn repository_key(&self, repository: &RepositoryRef) -> String {
+        self.stored_name(repository)
+    }
+
     fn resolves_checkout(&self) -> bool {
         false
     }
@@ -152,10 +156,8 @@ impl HostReads for PlainReads {
                     issues_read: PartRead::Unsupported,
                     identity_read: PartRead::Read,
                     repository: Some(RepositoryIdentity {
-                        id: None,
-                        public: None,
                         default_branch: Some("main".to_owned()),
-                        ..crate::model::RepositoryIdentity::of(repository.clone())
+                        ..RepositoryIdentity::named(&PLAIN, repository.clone())
                     }),
                     ..GithubProjectSnapshot::default()
                 };
@@ -296,9 +298,23 @@ fn holds_the_base_contract(host: Host, stored: &str, remotes: &[&str]) {
     );
     let reference = change_request(host.unit(), repository.clone(), 12);
     assert_eq!(
-        (reference.checks_url, reference.files_url, reference.label),
-        (pages[1].clone(), pages[2].clone(), host.number_label(12)),
+        (
+            &reference.url,
+            &reference.checks_url,
+            &reference.files_url,
+            &reference.label
+        ),
+        (&pages[0], &pages[1], &pages[2], &host.number_label(12)),
         "a carried reference holds the unit's own pages and label"
+    );
+    assert_eq!(
+        change_request(host.unit(), read.0, 12).key,
+        reference.key,
+        "the address read back names the same change request"
+    );
+    assert_ne!(
+        change_request(host.unit(), repository.clone(), 13).key,
+        reference.key
     );
     let sha = "0123456789abcdef0123456789abcdef01234567";
     let commit = host.commit_url(&repository, sha);
@@ -371,6 +387,17 @@ fn github_writes_its_own_addresses_and_number_labels() {
     assert_eq!(
         github.repository_url(&enterprise),
         "https://ghe.example.com:8443/acme/app"
+    );
+    // GitHub reads a repository's path in any case, so a session's address
+    // spelled `Acme/App` names the pull request the list holds as `acme/app`.
+    let spelled = github.repository("Acme/App").unwrap();
+    assert_eq!(
+        change_request(github.unit(), spelled, 7).key,
+        "github.com/acme/app#7"
+    );
+    assert_eq!(
+        change_request(github.unit(), enterprise, 7).key,
+        "ghe.example.com:8443/acme/app#7"
     );
 }
 
