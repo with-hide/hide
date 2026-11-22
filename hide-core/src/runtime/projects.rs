@@ -1345,8 +1345,6 @@ impl Runtime {
         (projects, total)
     }
 
-    /// The read clock of a local project's host; a project no host reads has
-    /// the slowest registered one.
     /// The diagnostic component of a line about the project at `path` on
     /// `node` (this machine when `None`): its host's key, or
     /// [`crate::code_host::COMPONENT`] while no host places it.
@@ -1355,6 +1353,8 @@ impl Runtime {
             .map_or(crate::code_host::COMPONENT, |place| place.host().key())
     }
 
+    /// The read clock of a local project's host; a project no host reads has
+    /// the slowest registered one.
     fn read_clock_of(&self, path: &str) -> crate::code_host::ReadClock {
         self.github_place(None, path).map_or_else(
             |_| self.code_hosts.unplaced_clock(),
@@ -1387,7 +1387,7 @@ impl Runtime {
                         .take(crate::issues::ISSUE_LIMIT)
                         .collect(),
                     root: PathBuf::from(&workspace.path),
-                    place: self.github_place(None, &workspace.path).ok(),
+                    place: self.github_placement(None, &workspace.path),
                     generation: self
                         .github_generations
                         .get(&workspace.path)
@@ -1463,7 +1463,9 @@ impl Runtime {
             }
             if let Some(outcome) = self.github_answered.remove(&path) {
                 let failures = match outcome {
-                    GithubReadOutcome::Read | GithubReadOutcome::NoRemote => 0,
+                    GithubReadOutcome::Read
+                    | GithubReadOutcome::NoRemote
+                    | GithubReadOutcome::Held => 0,
                     GithubReadOutcome::IssuesFailed | GithubReadOutcome::Failed => {
                         before.map_or(0, GithubClock::failures).saturating_add(1)
                     }
@@ -3742,7 +3744,11 @@ impl Runtime {
                 crate::code_host::read::GithubProjectRequest {
                     links,
                     root: PathBuf::from(&root),
-                    place,
+                    // A stored name no registered host reads has no place.
+                    place: place.map_or(
+                        crate::code_host::Placement::NoRemote,
+                        crate::code_host::Placement::At,
+                    ),
                     generation: read.generation,
                 }
             })
@@ -3928,7 +3934,7 @@ impl Runtime {
                     path == root.as_ref()
                         && project
                             .place
-                            .as_ref()
+                            .as_place()
                             .and_then(crate::code_host::Place::stored_name)
                             .as_ref()
                             == Some(repository)
@@ -5819,6 +5825,14 @@ fn keep_previous_reads(
     request: &crate::code_host::read::GithubRequest,
 ) {
     for project in &mut answer.projects {
+        // A read not made this pass changes nothing: the previous answer
+        // stands as it was, neither stale nor failed.
+        if project.held.is_some()
+            && let Some(previous) = previous.project(&project.root_path)
+        {
+            *project = previous.clone();
+            continue;
+        }
         if project.repository.is_none()
             && let Some(kept) = previous
                 .project(&project.root_path)
@@ -5831,7 +5845,7 @@ fn keep_previous_reads(
                 .projects
                 .iter()
                 .find(|asked| asked.root.to_string_lossy() == project.root_path)
-                .and_then(|asked| asked.place.as_ref());
+                .and_then(|asked| asked.place.as_place());
             let named = place
                 .and_then(crate::code_host::Place::repository)
                 .zip(named_repository)

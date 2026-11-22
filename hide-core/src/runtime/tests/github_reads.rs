@@ -1535,7 +1535,10 @@ fn a_checkouts_host_is_chosen_from_its_remote_address_with_no_sign_in_reaching_t
             runtime.catalog_paths.remotes(&root).listed(),
             Some(&["https://code.example/group/sub/project.git".to_owned()][..])
         );
-        runtime.github_request().projects[0].place.clone()
+        runtime.github_request().projects[0]
+            .place
+            .as_place()
+            .cloned()
     };
     let plain = place(crate::code_host::tests::BOTH).expect("a host reads it");
     assert_eq!(plain.host().key(), "plain");

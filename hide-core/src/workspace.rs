@@ -412,7 +412,18 @@ impl PathIndex {
             paths,
             notes: facts.repositories,
             remotes: facts.remotes,
-            remote_addresses: facts.remote_addresses,
+            // An older node sends its addresses as the config holds them.
+            remote_addresses: facts
+                .remote_addresses
+                .into_iter()
+                .map(|(root, addresses)| {
+                    let addresses = addresses
+                        .iter()
+                        .map(|address| hide_node_link::catalog::without_credentials(address))
+                        .collect();
+                    (root, addresses)
+                })
+                .collect(),
             unread,
         }
     }

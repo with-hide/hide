@@ -976,7 +976,11 @@ The review decision is GraphQL's `approved` and the reviewers' states, never RES
 "Mine" is the author's username equal to the signed-in account's; a review is asked of the account when it is a reviewer who has not reviewed.
 gitlab.com has no merge queue Hide reads, so a merge request's queue place is `unsupported`, which the PR list does not judge as unknown, and a merge request is listed by the same groups as a pull request.
 The card reads its body, its changed files and its open resolvable discussions by one query (`HideGitlabMergeRequestCard`), and a checkout's commits by another (`HideGitlabCommitChecks`) whose pipeline must name the asked commit.
-A failure is named in `GithubFailureCategory`'s classes: no `glab` is not installed, an older one than the minimum is outdated, a refused sign-in is not logged in, and the rest (the network, a limit, a refused query) is a network or rate-limit failure.
+A failure is named in `GithubFailureCategory`'s classes: no `glab` is not installed, an older one than the minimum is outdated, a refused sign-in is not logged in, and a broken link, the network, a limit or a refused query is a network or rate-limit failure; an answer past the node's byte cap is a failed read of its own, not filed under any of these.
+A node that does not know the `glab` call holds the read (`ReadHeld::Unsupported`): the project keeps its previous answer and no failure clock starts.
+The open list past its 100 keeps the newest 100 and says it was cut to the core (`pull_requests_cut` and the `pull_requests.list_cut` diagnostic), and no verdict rests on the cut part; the card's open discussions past their page say the threads were not read whole, from the merge request's own resolvable and resolved counts.
+Every `glab` line that reaches gitlab.com takes one request from one budget for the whole core process (`hide-core/src/gitlab/budget.rs`): 60 a minute of the account's 100, which leaves 40 for the operator's own `glab`, of which background reads take at most 45 and the rest stays for reads the operator opened (a card, a checkout's commits).
+A background read that finds the budget spent is not made that pass (`ReadHeld::BudgetSpent`, the previous answer kept, no failure clock); an opened read is refused with its reason only when its share is spent too.
 
 ### Pull request visual states
 

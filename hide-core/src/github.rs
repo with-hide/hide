@@ -482,6 +482,9 @@ fn read_project(
     match issues {
         Ok((issues, warning)) => (
             GithubProjectSnapshot {
+                held: None,
+                pull_requests_cut: false,
+                remotes_not_known: false,
                 root_path,
                 viewer: viewer.map(str::to_owned),
                 issues,
@@ -3847,10 +3850,11 @@ mod tests {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         let checkout = crate::code_host::CodeHosts::STANDARD
-            .place_of_checkout(
+            .placement_of_checkout(
                 Path::new("/repo"),
                 crate::code_host::CheckoutRemotes::Unknown,
             )
+            .place()
             .unwrap();
         let named = crate::code_host::CodeHosts::STANDARD
             .place_of("acme/project")
@@ -3872,7 +3876,8 @@ mod tests {
     fn a_read_pass_asks_by_name_for_a_repository_place_and_in_its_folder_for_a_checkout() {
         let named = CodeHosts::STANDARD.place_of("acme/project").unwrap();
         let checkout = CodeHosts::STANDARD
-            .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .placement_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .place()
             .unwrap();
         for (place, folder, name) in [
             (named, None, Some("acme/project")),
@@ -4092,7 +4097,8 @@ mod tests {
         };
         let head = "a".repeat(40);
         let checkout = CodeHosts::STANDARD
-            .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .placement_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .place()
             .unwrap();
         let merge = |node: &Answering| {
             let unit = checkout.host();
@@ -4277,7 +4283,9 @@ mod tests {
                 remotes,
                 remotes_complete,
                 ..
-            }) = CodeHosts::STANDARD.place_of_checkout(Path::new("/repo"), read)
+            }) = CodeHosts::STANDARD
+                .placement_of_checkout(Path::new("/repo"), read)
+                .place()
             else {
                 panic!("{listed:?} is read in the checkout");
             };
@@ -4411,6 +4419,24 @@ mod tests {
                 "{remotes:?} signed in to {signed_in:?} with {addresses:?}"
             );
         }
+        // With GitHub registered alone, nothing reads a gitlab.com remote, so
+        // it is an unconfirmed host beside the GitHub one, as before
+        // gitlab.com was registered.
+        let listed = vec![GITHUB.to_owned(), "git@gitlab.com:acme/app.git".to_owned()];
+        let Some(Place::Checkout {
+            remotes,
+            remotes_complete,
+            ..
+        }) = crate::code_host::tests::GITHUB_ONLY
+            .placement_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(&listed))
+            .place()
+        else {
+            panic!("{listed:?} is read in the checkout");
+        };
+        assert_eq!(
+            server_of_checkout((&remotes, remotes_complete), "acme/app", &[], &[]),
+            None
+        );
         // A remote no unit reads is an unconfirmed host that could carry the
         // repository's name: the remotes alone settle nothing beside it.
         let unread = "http://ghe.example/acme/app.git";
@@ -4465,7 +4491,8 @@ mod tests {
         *fake.auth_status.lock().unwrap() = TWO_SERVERS;
         let alias = ["git@work:acme/project.git".to_owned()];
         let checkout = CodeHosts::STANDARD
-            .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(&alias))
+            .placement_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(&alias))
+            .place()
             .unwrap();
         let project = fake.read_at(&checkout, &RefusedProjects::default());
         assert_eq!(project.identity_read, PartRead::Read);
@@ -4497,7 +4524,8 @@ mod tests {
         ];
         for (remotes, server) in [(&renamed[..], Some("github.com")), (&mixed[..], None)] {
             let place = CodeHosts::STANDARD
-                .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(remotes))
+                .placement_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(remotes))
+                .place()
                 .unwrap();
             let project = fake.read_at(&place, &RefusedProjects::default());
             let identity = project.repository.unwrap();

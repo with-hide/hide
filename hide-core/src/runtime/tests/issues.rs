@@ -324,6 +324,9 @@ fn a_pass_that_cannot_read_dependencies_keeps_the_blockers_read_before() {
         blocked.blocked_by = blocked_by;
         GithubSnapshot {
             projects: vec![GithubProjectSnapshot {
+                held: None,
+                pull_requests_cut: false,
+                remotes_not_known: false,
                 viewer: None,
                 issues: ProjectIssuesSnapshot {
                     repository: Some("acme/project".into()),

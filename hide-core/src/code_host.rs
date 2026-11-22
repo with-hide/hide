@@ -577,8 +577,12 @@ impl CodeHosts {
     /// Where a checkout of the core's machine is read, from its remotes as
     /// its node read them:
     ///
-    /// - no remote that names a server (an empty list): `None`, answered "no
-    ///   remote" with no host asked;
+    /// - no remote that names a server (an empty list of addresses):
+    ///   [`Placement::NoRemote`], answered "no remote" with no host asked;
+    /// - an older node's GitHub-shaped names and none of them:
+    ///   [`Placement::RemotesNotKnown`], since those names say nothing of
+    ///   another host's remote; answered with no host asked and kept apart
+    ///   from no remote;
     /// - remotes of one host alone: that host, in the checkout when it finds
     ///   the remote itself, else by the first remote's repository;
     /// - remotes the node did not list, an address no registered unit reads,
@@ -589,11 +593,11 @@ impl CodeHosts {
     ///
     /// An older node's GitHub-shaped names are read as stored names, as they
     /// were; a name no unit reads names nothing.
-    pub(crate) fn place_of_checkout(
+    pub(crate) fn placement_of_checkout(
         self,
         root: &Path,
         remotes: CheckoutRemotes<'_>,
-    ) -> Option<Place> {
+    ) -> Placement {
         let in_checkout =
             |host: Host, named: &[(Host, RepositoryRef)], complete: bool| Place::Checkout {
                 host,
@@ -608,10 +612,13 @@ impl CodeHosts {
         let resolving = |named: &[(Host, RepositoryRef)], complete: bool| {
             self.hosts()
                 .find(|host| host.resolves_checkout())
-                .map(|host| in_checkout(host, named, complete))
+                .map_or(Placement::NoRemote, |host| {
+                    Placement::At(in_checkout(host, named, complete))
+                })
         };
         let (named, listed): (Vec<(Host, RepositoryRef)>, usize) = match remotes {
             CheckoutRemotes::Unknown => return resolving(&[], false),
+            CheckoutRemotes::Named([]) => return Placement::RemotesNotKnown,
             CheckoutRemotes::Addresses(addresses) => (
                 addresses
                     .iter()
@@ -631,16 +638,50 @@ impl CodeHosts {
         if !complete && matches!(remotes, CheckoutRemotes::Addresses(_)) {
             return resolving(&named, false);
         }
-        let (first, rest) = named.split_first()?;
+        let Some((first, rest)) = named.split_first() else {
+            return Placement::NoRemote;
+        };
         if rest.iter().any(|(host, _)| *host != first.0) {
             return resolving(&named, complete);
         }
         let (host, repository) = first.clone();
-        Some(if host.resolves_checkout() {
+        Placement::At(if host.resolves_checkout() {
             in_checkout(host, &named, complete)
         } else {
             Place::Repository { host, repository }
         })
+    }
+}
+
+/// What the registry makes of a checkout's remotes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Placement {
+    /// Its host reads it there.
+    At(Place),
+    /// No remote names a server a registered host reads.
+    NoRemote,
+    /// The node did not say enough to tell: an older node names only
+    /// GitHub-shaped remotes, and named none. Not a failed read and not no
+    /// remote; a later pass from a node that sends its addresses decides.
+    RemotesNotKnown,
+}
+
+impl Placement {
+    pub(crate) fn as_place(&self) -> Option<&Place> {
+        match self {
+            Self::At(place) => Some(place),
+            Self::NoRemote | Self::RemotesNotKnown => None,
+        }
+    }
+
+    /// The place alone, for a test that asserts only where a checkout is
+    /// read.
+    #[cfg(test)]
+    pub(crate) fn place(self) -> Option<Place> {
+        match self {
+            Self::At(place) => Some(place),
+            Self::NoRemote | Self::RemotesNotKnown => None,
+        }
     }
 }
 

@@ -283,6 +283,30 @@ fn the_signed_in_account_decides_mine_and_review_asks() {
     }
 }
 
+/// The public project's answer as the reviewer asked on !4429 reads it
+/// (the recording's account replaced by that reviewer): asked of the account
+/// itself, and listed as a review it owes. Its reviewer who already approved
+/// is asked nothing.
+#[test]
+fn a_review_asked_of_the_signed_in_account_is_a_review_it_owes() {
+    let as_viewer = |name: &str| {
+        let mut value: serde_json::Value = serde_json::from_str(FORKS).unwrap();
+        value["data"]["currentUser"]["username"] = name.into();
+        parse_list(&value.to_string(), &KnownChecks::default()).unwrap()
+    };
+    let asked = as_viewer("member-6");
+    let request = pull(&asked, 4429);
+    assert_eq!(request.work.mine, Some(false));
+    assert_eq!(request.work.asked_of_me, ReviewAsk::Direct);
+    assert_eq!(
+        places(&asked.pull_requests).get(&4429),
+        Some(&("needs_you", "review"))
+    );
+    let approved = as_viewer("member-4");
+    assert_eq!(pull(&approved, 4429).work.asked_of_me, ReviewAsk::None);
+    assert_eq!(places(&approved.pull_requests).get(&4429), None);
+}
+
 /// Merge requests from forks and from the project, with change requests and
 /// required approvals, from the public project.
 #[test]
@@ -539,6 +563,55 @@ fn a_card_reads_its_head_files_and_open_discussions() {
     assert_eq!(card.merge, None);
 }
 
+/// The card answer with `edit` applied to its merge request and `errors`
+/// beside it, as gitlab.com answers a field it could not read.
+fn card_with(edit: impl FnOnce(&mut serde_json::Value), errors: serde_json::Value) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(CARD).unwrap();
+    edit(&mut value["data"]["project"]["mergeRequest"]);
+    value["errors"] = errors;
+    value.to_string()
+}
+
+/// A field gitlab.com could not read is a part not read, never an empty
+/// one: a refused description is no body, and the card keeps the last one.
+#[test]
+fn a_card_field_gitlab_com_refused_is_unread_not_empty() {
+    let body = card_with(
+        |merge_request| merge_request["description"] = serde_json::Value::Null,
+        serde_json::json!([{"message": "Internal error", "path": ["project", "mergeRequest", "description"]}]),
+    );
+    let card = parse_card(&body).unwrap();
+    assert_eq!(card.body, None);
+    assert_eq!(card.failed, ["body"]);
+    assert!(card.files.is_some());
+
+    let note = card_with(
+        |merge_request| merge_request["discussions"]["nodes"] = serde_json::json!([]),
+        serde_json::json!([{"message": "x", "path": ["project", "mergeRequest", "discussions", "nodes", 0, "notes"]}]),
+    );
+    let card = parse_card(&note).unwrap();
+    assert_eq!((card.threads, card.failed), (None, vec!["threads"]));
+
+    let unplaced = card_with(|_| {}, serde_json::json!([{"message": "Timeout"}]));
+    assert!(parse_card(&unplaced).is_err());
+}
+
+/// The page of discussions holds the first ones, resolved or not; fewer open
+/// ones on it than gitlab.com counts is a part not read whole.
+#[test]
+fn open_discussions_past_the_page_say_the_threads_were_not_read_whole() {
+    let cut = card_with(
+        |merge_request| {
+            merge_request["resolvableDiscussionsCount"] = 60.into();
+            merge_request["resolvedDiscussionsCount"] = 59.into();
+        },
+        serde_json::json!([]),
+    );
+    let card = parse_card(&cut).unwrap();
+    assert_eq!(card.threads, Some(Vec::new()));
+    assert_eq!(card.failed, ["threads"]);
+}
+
 #[test]
 fn commit_checks_name_each_commit_and_refuse_another_commit() {
     let value: serde_json::Value = serde_json::from_str(COMMITS).unwrap();
@@ -559,7 +632,7 @@ fn commit_checks_name_each_commit_and_refuse_another_commit() {
 }
 
 #[test]
-fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
+fn gitlab_com_names_and_addresses_round_trip_and_refuse_a_credential() {
     let unit: &dyn CodeHost = &host::GITLAB;
     let repository = unit.repository("gitlab.com/group/sub/project").unwrap();
     assert_eq!(
@@ -568,7 +641,6 @@ fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
     );
     for remote in [
         "https://gitlab.com/group/sub/project.git",
-        "https://oauth2:glpat-secret@gitlab.com/group/sub/project.git",
         "https://gitlab.com:443/group/sub/project",
         "git@gitlab.com:group/sub/project.git",
         "ssh://git@gitlab.com:22/group/sub/project.git",
@@ -578,9 +650,13 @@ fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
             .remote_repository(remote)
             .unwrap_or_else(|| panic!("{remote}"));
         assert_eq!(read, repository, "{remote}");
-        assert!(!format!("{read:?}").contains("secret"));
     }
     for other in [
+        // A user part in an http(s) address, or a password in any: the node
+        // and the core's entry strip them, so the unit takes none.
+        "https://someone@gitlab.com/group/sub/project.git",
+        "https://oauth2:glpat-secret@gitlab.com/group/sub/project.git",
+        "ssh://git:secret@gitlab.com/group/sub/project.git",
         "https://github.com/acme/app.git",
         "https://gitlab.example.com/group/project.git",
         "git@gitlab.com:project.git",
@@ -618,10 +694,11 @@ fn the_registry_places_gitlab_com_remotes_with_gitlab() {
     let root = std::path::Path::new("/fixture/app");
     let only_gitlab = ["https://gitlab.com/acme/sub/app.git".to_owned()];
     let place = hosts
-        .place_of_checkout(
+        .placement_of_checkout(
             root,
             crate::code_host::CheckoutRemotes::Addresses(&only_gitlab),
         )
+        .place()
         .unwrap();
     assert_eq!(place.host().key(), "gitlab");
     assert_eq!(
@@ -635,7 +712,8 @@ fn the_registry_places_gitlab_com_remotes_with_gitlab() {
         "https://github.com/acme/app.git".to_owned(),
     ];
     let place = hosts
-        .place_of_checkout(root, crate::code_host::CheckoutRemotes::Addresses(&both))
+        .placement_of_checkout(root, crate::code_host::CheckoutRemotes::Addresses(&both))
+        .place()
         .unwrap();
     assert_eq!(place.host().key(), "github");
     // A stored repository setting names the gitlab.com project outright.
@@ -657,4 +735,159 @@ fn gitlab_com_declares_only_the_operations_it_offers() {
     assert_eq!(github.key, "github");
     assert_eq!(github.operations.len(), 12);
     assert_eq!(github.access.program, "gh");
+}
+
+type Answer = Result<crate::node_access::LinkAnswer, hide_node_link::LinkError>;
+
+/// A node that answers `glab --version` with a current release and every
+/// other `glab` line with its function.
+struct Answering(fn() -> Answer);
+
+impl crate::node_access::NodeLink for Answering {
+    fn call(&self, call: hide_node_link::protocol::Call, _timeout: std::time::Duration) -> Answer {
+        let hide_node_link::protocol::Call::Glab { args } = call else {
+            panic!("only glab is asked: {call:?}");
+        };
+        if args.first().map(String::as_str) == Some(VERSION[0]) {
+            return Ok(serde_json::to_value(GlabAnswer::Output {
+                stdout: "glab 1.80.0 (2026-01-01)".to_owned(),
+                cut: false,
+            })
+            .unwrap()
+            .into());
+        }
+        (self.0)()
+    }
+}
+
+fn read_with(node: &Answering) -> GithubProjectSnapshot {
+    let repository = host::GITLAB.repository("gitlab.com/acme/app").unwrap();
+    let place = Place::Repository {
+        host: crate::code_host::CodeHosts::STANDARD
+            .host(host::GITLAB.key())
+            .unwrap(),
+        repository,
+    };
+    let root = std::path::PathBuf::from("/fixture/app");
+    let due = crate::code_host::DueRead {
+        root: &root,
+        place: &place,
+        root_path: "/fixture/app",
+        links: &[],
+        generation: 1,
+    };
+    let mut reads = GitlabReads::default();
+    reads.read(node, &[due]).remove(0)
+}
+
+/// A node that does not know the call holds the read: unsupported there,
+/// not failed, and no failure clock starts. A link that failed is a
+/// network failure, in its class.
+#[test]
+fn a_node_that_does_not_know_glab_holds_the_read_and_a_broken_link_fails_it() {
+    let unsupported = read_with(&Answering(|| {
+        Err(hide_node_link::LinkError::Refused(
+            hide_node_link::HostError {
+                code: hide_node_link::ErrorCode::Unsupported,
+                message: "unknown call".into(),
+                actual_revision: None,
+                confirm: None,
+                home: false,
+            },
+        ))
+    }));
+    assert_eq!(unsupported.held, Some(ReadHeld::Unsupported));
+    assert_eq!(
+        unsupported.read_outcome(),
+        crate::model::GithubReadOutcome::Held
+    );
+    assert_eq!(unsupported.status.failure_category, None);
+
+    let broken = read_with(&Answering(|| {
+        Err(hide_node_link::LinkError::NotConnected("gone".into()))
+    }));
+    assert_eq!(broken.held, None);
+    assert_eq!(
+        broken.status.failure_category,
+        Some(GithubFailureCategory::NetworkOrRateLimit)
+    );
+    assert_eq!(
+        broken.read_outcome(),
+        crate::model::GithubReadOutcome::Failed
+    );
+}
+
+/// An answer cut at the byte cap is a failed read of its own, not a
+/// network failure.
+#[test]
+fn an_answer_past_the_byte_cap_is_a_failed_read_of_its_own() {
+    let cut = read_with(&Answering(|| {
+        Ok(serde_json::to_value(GlabAnswer::Output {
+            stdout: String::new(),
+            cut: true,
+        })
+        .unwrap()
+        .into())
+    }));
+    assert_eq!(cut.read_outcome(), crate::model::GithubReadOutcome::Failed);
+    assert_eq!(cut.status.failure_category, None);
+    assert!(cut.status.unavailable_reason.unwrap().contains("bytes"));
+}
+
+/// With the account's background share spent, a list read is not made this
+/// pass: held, with nothing that reaches gitlab.com asked of the node. The
+/// budget is the process's, which nextest gives this test alone.
+#[test]
+fn a_spent_background_budget_holds_the_list_read_without_asking() {
+    {
+        let mut budget = budget::ACCOUNT.lock().unwrap();
+        let now = std::time::Instant::now();
+        while budget.take(now, budget::Share::Background) {}
+    }
+    let held = read_with(&Answering(|| {
+        panic!("nothing reaches gitlab.com with the budget spent")
+    }));
+    assert_eq!(held.held, Some(ReadHeld::BudgetSpent));
+    assert_eq!(held.read_outcome(), crate::model::GithubReadOutcome::Held);
+}
+
+/// An open list past its cap keeps the newest part and says it was cut to
+/// the core.
+#[test]
+fn an_open_list_past_its_cap_says_it_was_cut() {
+    let mut value: serde_json::Value = serde_json::from_str(SCENES).unwrap();
+    value["data"]["project"]["open"]["count"] = 150.into();
+    let cut = parse_list(&value.to_string(), &KnownChecks::default()).unwrap();
+    assert!(cut.open_cut);
+    assert!(cut.into_snapshot("/fixture/app").pull_requests_cut);
+    let whole = listed(SCENES);
+    assert!(!whole.open_cut);
+    assert!(!whole.into_snapshot("/fixture/app").pull_requests_cut);
+}
+
+/// An older node sends its origin as the config holds it: what the core
+/// keeps of it, and the repository it names, carry no user part.
+#[test]
+fn an_older_nodes_raw_origin_enters_the_core_without_its_credentials() {
+    for raw in [
+        "https://oauth2:glpat-secret@gitlab.com/acme/app.git",
+        "https://someone@gitlab.com/acme/app.git",
+    ] {
+        let held =
+            crate::worktrees::project_snapshot(hide_node_link::worktrees::RepositoryWorktrees {
+                root_path: "/fixture/app".into(),
+                origin_url: Some(raw.into()),
+                ..Default::default()
+            });
+        assert_eq!(
+            held.origin_url.as_deref(),
+            Some("https://gitlab.com/acme/app.git"),
+            "{raw}"
+        );
+        assert_eq!(
+            held.repository.as_deref(),
+            Some("gitlab.com/acme/app"),
+            "{raw}"
+        );
+    }
 }

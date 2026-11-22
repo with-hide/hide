@@ -933,7 +933,7 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
     assert_eq!(
         request.projects[0]
             .place
-            .as_ref()
+            .as_place()
             .and_then(crate::code_host::Place::stored_name)
             .as_deref(),
         Some("acme/app")
@@ -961,6 +961,9 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
         &Default::default(),
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
+                held: None,
+                pull_requests_cut: false,
+                remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
@@ -1205,7 +1208,7 @@ fn a_node_s_origin_is_named_by_the_registered_hosts() {
             .device_github_request(NODE, std::time::Instant::now())
             .projects
             .iter()
-            .filter_map(|project| project.place.as_ref())
+            .filter_map(|project| project.place.as_place())
             .map(|place| (place.host().key(), place.stored_name()))
             .collect::<Vec<_>>()
     };
@@ -1386,6 +1389,9 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
             &Default::default(),
             crate::model::GithubSnapshot {
                 projects: vec![crate::model::GithubProjectSnapshot {
+                    held: None,
+                    pull_requests_cut: false,
+                    remotes_not_known: false,
                     viewer: None,
                     pull_requests_read: true,
                     issues_read: crate::model::PartRead::Read,
@@ -1766,7 +1772,7 @@ fn a_device_this_core_dials_has_its_pull_requests_read_with_this_machine_s_login
                     project.root.clone(),
                     project
                         .place
-                        .as_ref()
+                        .as_place()
                         .and_then(crate::code_host::Place::stored_name),
                 )
             })
@@ -2218,6 +2224,9 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
         &Default::default(),
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
+                held: None,
+                pull_requests_cut: false,
+                remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
@@ -2582,6 +2591,9 @@ fn ingest_node_issues(runtime: &mut Runtime, repo: &Repo, numbers: &[u32]) {
         &Default::default(),
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
+                held: None,
+                pull_requests_cut: false,
+                remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,

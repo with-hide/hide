@@ -194,6 +194,7 @@ impl Runtime {
                 let repository = facts
                     .origin_url
                     .take()
+                    .map(|url| hide_node_link::catalog::without_credentials(&url))
                     .as_deref()
                     .and_then(|url| self.code_hosts.remote(url))
                     .filter(|(host, repository)| {

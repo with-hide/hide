@@ -3,10 +3,10 @@
 // decided the groups; this only gathers them and words how reading stands.
 
 import { describe, expect, it } from "vitest";
-import { hasPullRequests, prListModel, prReading, readingWarning } from "./prWork";
+import { hasPullRequests, prListModel, prReading, readingOfStatuses, readingWarning } from "./prWork";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import type { PrBoard } from "./agentScope";
-import type { GithubStatus, Workspace } from "./snapshot";
+import type { GithubStatus, HostDeclaration, Workspace } from "./snapshot";
 
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const status = (over: Partial<GithubStatus>): GithubStatus => ({ available: true, ...over }) as GithubStatus;
@@ -64,6 +64,57 @@ describe("prReading", () => {
   it("keeps naming the unanswered questions beside a failed read", () => {
     const board = { rows: [], groups: [], needs_you: 0 };
     expect(prReading([project("a", { last_success_at_unix_ms: 4 * 60_000, stale: true, unread_queries: ["review_requests"] }, board, [])], NOW)).toEqual({ state: "stale", minutes: 6, unread: ["review_requests"] });
+  });
+});
+
+describe("each host's reading", () => {
+  const NOW = 10 * 60_000;
+  const declared = (key: string, program: string): HostDeclaration => ({ key, operations: [], access: { program, minimum_version: "1", sign_in: `${program} auth login` } });
+  const github = declared("github", "gh");
+  const gitlab = declared("gitlab", "glab");
+  const answered = { last_success_at_unix_ms: 4 * 60_000 };
+  const both = (first: GithubStatus, second: GithubStatus) => [readingOfStatuses([first, second], NOW), readingOfStatuses([second, first], NOW)];
+
+  it("names a host refused before its first read beside one that answered, in either order", () => {
+    for (const reading of both(status({ ...answered, host: github }), status({ failure_category: "not_logged_in", host: gitlab }))) {
+      expect(reading).toEqual({ state: "ready", hosts: [{ key: "gitlab", program: "glab", reading: { state: "blocked", category: "not_logged_in" } }] });
+      expect(readingWarning(reading, t)).toBe("Not signed in to glab");
+    }
+  });
+
+  it("names a host whose first read failed, which alone would still read as reading", () => {
+    for (const reading of both(status({ ...answered, host: github }), status({ failure_category: "network_or_rate_limit", host: gitlab }))) {
+      expect(reading.hosts).toEqual([{ key: "gitlab", program: "glab", reading: { state: "stale", minutes: null, unread: [] } }]);
+      expect(readingWarning(reading, t)).toBe("glab read failed · last value");
+    }
+    expect(readingOfStatuses([status({ failure_category: "network_or_rate_limit", host: gitlab })], NOW)).toEqual({ state: "reading" });
+  });
+
+  it("names a host that failed after a success with its age, and the other host's partial read", () => {
+    const [reading] = both(status({ ...answered, unread_queries: ["account"], host: github }), status({ ...answered, stale: true, host: gitlab }));
+    expect(reading).toEqual({
+      state: "stale",
+      minutes: 6,
+      unread: ["account"],
+      hosts: [
+        { key: "github", program: "gh", reading: { state: "partial", unread: ["account"] } },
+        { key: "gitlab", program: "glab", reading: { state: "stale", minutes: 6, unread: [] } },
+      ],
+    });
+    expect(readingWarning(reading!, t)).toBe("gh read incomplete · could not read the signed-in account · glab read failed · value from 6 min ago");
+  });
+
+  it("blocks only when every host is refused, naming each", () => {
+    const reading = readingOfStatuses([status({ failure_category: "outdated", host: github }), status({ failure_category: "not_installed", host: gitlab })], NOW);
+    expect(reading.state).toBe("blocked");
+    expect(reading.hosts?.map((host) => host.reading)).toEqual([{ state: "blocked", category: "outdated" }, { state: "blocked", category: "not_installed" }]);
+  });
+
+  it("reads GitHub alone as before hosts, a status without a declaration being GitHub's", () => {
+    const old = status({ failure_category: "not_logged_in" });
+    expect(readingOfStatuses([old], NOW)).toEqual({ state: "blocked", category: "not_logged_in" });
+    expect(readingOfStatuses([old, status({ ...answered, host: github })], NOW)).toEqual({ state: "ready" });
+    expect(readingOfStatuses([status({ ...answered, stale: true }), status({ ...answered, host: github })], NOW)).toEqual({ state: "stale", minutes: 6, unread: [] });
   });
 });
 

@@ -34,6 +34,8 @@ pub struct CheckoutGit {
     pub ahead: Option<u32>,
     pub behind: Option<u32>,
     pub last_fetch_unix_ms: Option<u64>,
+    /// The checkout's `origin` address, without the user and password a
+    /// `scheme://` address carries: a token stays on the node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
     /// The upstream's commits HEAD does not have yet, newest first, at most
@@ -269,7 +271,9 @@ pub struct RepositoryWorktrees {
     /// means the repository genuinely has none.
     pub unavailable_reason: Option<String>,
     /// The `origin` remote's URL from the repository's own configuration,
-    /// which names its GitHub repository for a core on another machine.
+    /// which names its repository through the core's registered hosts on
+    /// another machine; without the user and password a `scheme://` address
+    /// carries, so a token stays on the node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
 }

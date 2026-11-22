@@ -11,12 +11,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Hint } from "./components/ui/tooltip";
 import { Elapsed } from "./components/elapsed";
 import { useInterfaceTranslation } from "./i18n/client";
-import { GH_REFUSAL_KEY, type GhRefusal } from "./githubFailure";
+import { type GhRefusal } from "./githubFailure";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { holdsCommandKey } from "./host";
 import { cn } from "./lib/utils";
 import { issueDate } from "./projectBoard";
-import { FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
+import { blockedLines, FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
 import { GROUP_TONE, ReasonLine } from "./prReason";
 import { approvalCount, prReview } from "./prReview";
 import { ApprovalCount, ReviewerMarks } from "./PrReviewers";
@@ -56,7 +56,7 @@ export function PrList({ model, actions, onlyCheckout, showProject, onAllCheckou
     return next;
   });
   const { reading } = model;
-  if (reading.state === "blocked") return <GithubLine category={reading.category} actions={actions} />;
+  if (reading.state === "blocked") return <GithubLine category={reading.category} lines={blockedLines(reading, t)} actions={actions} />;
   if (reading.state === "reading" && model.groups.length === 0) {
     return (
       <div className="flex flex-col gap-xs px-md py-sm" role="status" aria-label={t("work.reading")} data-prs-view="reading">
@@ -297,12 +297,12 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   );
 }
 
-/** `gh` is not installed, too old or not signed in: one line and where to fix it (B42). */
-function GithubLine({ category, actions }: { category: GhRefusal; actions: Actions }) {
+/** The host's program is not installed, too old or not signed in: one line per host and where to fix it (B42). */
+function GithubLine({ category, lines, actions }: { category: GhRefusal; lines: string[]; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-prs-view="blocked" data-prs-gh={category}>
-      <p>{t(GH_REFUSAL_KEY[category])}</p>
+      {lines.map((line) => <p key={line}>{line}</p>)}
       <Button variant="secondary" size="sm" onClick={() => actions.openSettings("github")} data-prs-open-settings="true">{t("work.gh.settings")}</Button>
     </div>
   );

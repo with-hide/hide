@@ -7410,12 +7410,38 @@ pub struct GithubProjectSnapshot {
     /// The repository's main worktree, which is what identifies a project.
     pub root_path: String,
     pub status: GithubStatusSnapshot,
+    /// The read named no remote because the node did not say enough to
+    /// tell (`code_host::Placement::RemotesNotKnown`): kept apart from no
+    /// remote here and in the store, and read as no remote everywhere else,
+    /// since nothing truer can be shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remotes_not_known: bool,
+    /// The read was not made this pass, and is no failure
+    /// ([`ReadHeld`]): the runtime keeps the previous answer and starts no
+    /// failure clock. Internal reader provenance.
+    #[serde(skip)]
+    pub held: Option<ReadHeld>,
+    /// The open list passed its host's cap and holds its newest part only.
+    /// Internal reader provenance, for the core's own use; no screen draws
+    /// it yet.
+    #[serde(skip)]
+    pub pull_requests_cut: bool,
     /// The account `gh` is signed in as, which "mine" is judged against;
     /// absent before the first successful read.
     #[serde(default)]
     pub viewer: Option<String>,
     /// One entry per branch that has a pull request.
     pub pull_requests: Vec<PullRequestSnapshot>,
+}
+
+/// Why a host's read was not made this pass, which is no failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadHeld {
+    /// The node refused the host's call as one it does not know: a node
+    /// older than the host's reads.
+    Unsupported,
+    /// The account's request budget for background reads is spent.
+    BudgetSpent,
 }
 
 /// How a project's read ended, as the re-read clock counts it.
@@ -7434,6 +7460,9 @@ pub enum GithubReadOutcome {
     /// The repository has no GitHub remote: there is nothing to ask GitHub,
     /// and nothing changes that until its remotes do.
     NoRemote,
+    /// The read was not made this pass ([`ReadHeld`]): no failure, and the
+    /// next read comes on the ordinary clock.
+    Held,
 }
 
 impl PartRead {
@@ -7473,6 +7502,8 @@ impl GithubProjectSnapshot {
     pub fn read_outcome(&self) -> GithubReadOutcome {
         if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
             GithubReadOutcome::NoRemote
+        } else if self.held.is_some() {
+            GithubReadOutcome::Held
         } else if !self.pull_requests_read {
             GithubReadOutcome::Failed
         } else if matches!(self.issues_read, PartRead::NotRead | PartRead::Failed)
@@ -7889,7 +7920,8 @@ pub struct ProjectWorktreesSnapshot {
     #[serde(skip)]
     pub repository: Option<String>,
     /// The address of its `origin`, which names `repository` through the
-    /// registered code hosts.
+    /// registered code hosts; without the user and password a `scheme://`
+    /// address carries, whatever the node sent.
     #[serde(skip)]
     pub origin_url: Option<String>,
 }

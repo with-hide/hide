@@ -26,6 +26,7 @@ const PLAIN_SERVER: &str = "code.example";
 pub(crate) const BOTH: CodeHosts = CodeHosts(&[&crate::github::host::GITHUB, &PLAIN]);
 
 const PLAIN_ONLY: CodeHosts = CodeHosts(&[&PLAIN]);
+pub(crate) const GITHUB_ONLY: CodeHosts = CodeHosts(&[&crate::github::host::GITHUB]);
 
 impl CodeHost for Plain {
     fn key(&self) -> &'static str {
@@ -465,10 +466,14 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         remotes.iter().map(|remote| (*remote).to_owned()).collect()
     };
     let by_address = |hosts: CodeHosts, remotes: &[&str]| {
-        hosts.place_of_checkout(root, CheckoutRemotes::Addresses(&list(remotes)))
+        hosts
+            .placement_of_checkout(root, CheckoutRemotes::Addresses(&list(remotes)))
+            .place()
     };
     let by_name = |hosts: CodeHosts, remotes: &[&str]| {
-        hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
+        hosts
+            .placement_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
+            .place()
     };
     // Read in the checkout, with the remotes the registry gives that host
     // and whether every remote was read by a registered unit.
@@ -581,7 +586,7 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
 }
 
 fn hosts_place(hosts: CodeHosts, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
-    hosts.place_of_checkout(root, remotes)
+    hosts.placement_of_checkout(root, remotes).place()
 }
 
 #[test]
@@ -778,7 +783,10 @@ fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
     let project = |root: &str, place: Option<Place>| GithubProjectRequest {
         links: Vec::new(),
         root: PathBuf::from(root),
-        place,
+        place: place.map_or(
+            crate::code_host::Placement::NoRemote,
+            crate::code_host::Placement::At,
+        ),
         generation: 1,
     };
     let request = GithubRequest {
@@ -897,7 +905,10 @@ fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
     let project = |root: &str, place: Option<Place>| GithubProjectRequest {
         links: Vec::new(),
         root: PathBuf::from(root),
-        place,
+        place: place.map_or(
+            crate::code_host::Placement::NoRemote,
+            crate::code_host::Placement::At,
+        ),
         generation: 1,
     };
     let request = GithubRequest {

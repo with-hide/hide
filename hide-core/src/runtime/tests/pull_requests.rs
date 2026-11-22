@@ -71,6 +71,9 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
         .github
         .projects
         .push(crate::model::GithubProjectSnapshot {
+            held: None,
+            pull_requests_cut: false,
+            remotes_not_known: false,
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {
@@ -1242,4 +1245,28 @@ fn githubs_operations_pass_the_declaration() {
         serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
     )));
     assert_ne!(card(&runtime, 2).write.unwrap().reason, Some("unsupported"));
+}
+
+/// A gitlab.com card whose description gitlab.com refused beside the rest
+/// keeps the body an earlier read found and names the body unread.
+#[test]
+fn a_gitlab_com_card_keeps_its_last_body_when_the_description_is_refused() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        2,
+        "open-work",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    runtime.pr_card_slot("w", 2).body = Some("The earlier body".into());
+    runtime.pr_card_slot("w", 2).reading = true;
+    let mut answer: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/gitlab/card.json")).unwrap();
+    answer["data"]["project"]["mergeRequest"]["description"] = serde_json::Value::Null;
+    answer["errors"] =
+        serde_json::json!([{"message": "x", "path": ["project", "mergeRequest", "description"]}]);
+    let read = crate::gitlab::parse_card(&answer.to_string());
+    runtime.ingest_pr_card("w", 2, read);
+    let card = card(&runtime, 2);
+    assert_eq!(card.body.as_deref(), Some("The earlier body"));
+    assert_eq!(card.failed, ["body"]);
 }

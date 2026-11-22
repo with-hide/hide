@@ -18,10 +18,28 @@ pub(crate) struct Gitlab;
 pub(crate) static GITLAB: Gitlab = Gitlab;
 
 /// The path of a gitlab.com address's repository part, with the server
-/// checked and any credentials left out: `https://[user@]gitlab.com[:443]/P`,
-/// `git@gitlab.com:P`, `ssh://git@gitlab.com[:port]/P`.
+/// checked: `https://gitlab.com[:443]/P`, `git@gitlab.com:P`,
+/// `ssh://git@gitlab.com[:port]/P`. An `https` address with a user part,
+/// and any address with a password, is none (see below).
 fn remote_path(url: &str) -> Option<&str> {
     let url = url.trim();
+    if let Some((scheme, rest)) = url.split_once("://") {
+        let authority = rest
+            .split_once('/')
+            .map_or(rest, |(authority, _)| authority);
+        // The node strips the user part of an http(s) address (and the core
+        // again on entry); one that still has it was never meant to reach
+        // here. An SSH address's user names an account, never a secret,
+        // unless it carries a password.
+        let user = authority.rsplit_once('@').map(|(user, _)| user);
+        let refused = match scheme {
+            "https" | "http" => user.is_some(),
+            _ => user.is_some_and(|user| user.contains(':')),
+        };
+        if refused {
+            return None;
+        }
+    }
     let (server, path) = if let Some(rest) = url.strip_prefix("https://") {
         let rest = rest.rsplit_once('@').map_or(rest, |(_, rest)| rest);
         let (server, path) = rest.split_once('/')?;
@@ -146,8 +164,9 @@ impl CodeHost for Gitlab {
         }
     }
 
-    /// Each project costs one request every five minutes against the
-    /// account's hundred a minute, beside two per pass.
+    /// The most projects one pass reads: a cap on one pass, not on the
+    /// account. The account's requests are capped by `super::budget`, which
+    /// every `glab` request takes from whatever pass or card makes it.
     fn project_limit(&self) -> usize {
         32
     }

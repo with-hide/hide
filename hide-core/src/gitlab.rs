@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+mod budget;
 pub(crate) mod host;
 
 use crate::checkout_git::{Ci, CiState};
@@ -32,16 +33,18 @@ use crate::model::{
     GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, MergeQueuePlace,
     MergeState, PR_REVIEWER_LIMIT, PartRead, PrCardFile, PrCardThread, PrCheckCounts,
     PrFailedCheck, PrReviewer, PrReviewerState, PullRequestChecks, PullRequestSnapshot,
-    PullRequestWork, RepositoryIdentity, ReviewAsk, ReviewDecision, ReviewRequest,
+    PullRequestWork, ReadHeld, RepositoryIdentity, ReviewAsk, ReviewDecision, ReviewRequest,
     ReviewRequestKind,
 };
 use crate::node_access::{NodeLink, call_as};
 use crate::observed::{Observation, now_unix_ms};
+use budget::Share;
 use hide_node_link::glab::{
     AUTH_STATUS, GlabAnswer, GlabVersion, MINIMUM_VERSION, VERSION, card_arguments,
     commit_checks_arguments, merge_requests_arguments,
 };
 use hide_node_link::protocol::Call;
+use hide_node_link::{ErrorCode, HostError, LinkError};
 
 /// The node bounds one `glab` command at fifteen seconds.
 const GLAB_CALL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -51,23 +54,78 @@ const GLAB_CALL_TIMEOUT: Duration = Duration::from_secs(20);
 /// checks it was last seen open with are found.
 type KnownChecks = HashMap<(u32, String), PullRequestChecks>;
 
-/// Runs one allowed `glab` line on the core's own node.
-fn glab(node: &dyn NodeLink, arguments: Vec<String>) -> Result<String, HostFailure> {
-    let answer: GlabAnswer = call_as(node, Call::Glab { args: arguments }, GLAB_CALL_TIMEOUT)
-        .map_err(|error| HostFailure {
-            category: GithubFailureCategory::NetworkOrRateLimit,
-            reason: format!("the node did not run glab: {error}"),
-        })?;
-    match answer {
-        GlabAnswer::Output { cut: true, .. } => Err(HostFailure {
-            category: GithubFailureCategory::NetworkOrRateLimit,
-            reason: format!(
+/// Why a `glab` line gave no output to read.
+#[derive(Debug)]
+enum Refusal {
+    /// The node does not know the call (a node older than gitlab.com
+    /// reads): the read is unsupported there, never failed.
+    Unsupported(String),
+    /// The account's request budget is spent for this share
+    /// ([`budget`]): nothing was asked.
+    Spent,
+    /// The answer passed the byte cap and cannot be read: a failed read of
+    /// its own, not a network failure.
+    TooLarge,
+    /// `glab` or the link failed, in the class it failed in.
+    Failed(HostFailure),
+}
+
+impl From<HostFailure> for Refusal {
+    fn from(failure: HostFailure) -> Self {
+        Self::Failed(failure)
+    }
+}
+
+impl Refusal {
+    fn reason(&self) -> String {
+        match self {
+            Self::Unsupported(reason) => reason.clone(),
+            Self::Spent => format!(
+                "Hide's share of the account's gitlab.com requests ({} a minute) is spent",
+                budget::HIDE_PER_MINUTE
+            ),
+            Self::TooLarge => format!(
                 "glab's answer passed {} bytes and was cut",
                 hide_node_link::glab::ANSWER_BYTE_LIMIT
             ),
-        }),
+            Self::Failed(failure) => failure.reason.clone(),
+        }
+    }
+}
+
+/// Runs one allowed `glab` line on the core's own node: the only function
+/// that starts `glab`, so the account's request budget is taken here, for
+/// every line that reaches gitlab.com.
+fn glab(node: &dyn NodeLink, arguments: Vec<String>, share: Share) -> Result<String, Refusal> {
+    let asks_gitlab = arguments.first().map(String::as_str) != Some(VERSION[0]);
+    if asks_gitlab && !budget::take(share) {
+        return Err(Refusal::Spent);
+    }
+    let answer: GlabAnswer = match call_as(node, Call::Glab { args: arguments }, GLAB_CALL_TIMEOUT)
+    {
+        Ok(answer) => answer,
+        Err(LinkError::Refused(HostError {
+            code: ErrorCode::Unsupported,
+            message,
+            ..
+        })) => {
+            return Err(Refusal::Unsupported(format!(
+                "the node does not run glab: {message}"
+            )));
+        }
+        Err(error) => {
+            return Err(Refusal::Failed(HostFailure {
+                category: GithubFailureCategory::NetworkOrRateLimit,
+                reason: format!("the node did not run glab: {error}"),
+            }));
+        }
+    };
+    match answer {
+        GlabAnswer::Output { cut: true, .. } => Err(Refusal::TooLarge),
         GlabAnswer::Output { stdout, cut: false } => Ok(stdout),
-        GlabAnswer::Failed { category, reason } => Err(HostFailure { category, reason }),
+        GlabAnswer::Failed { category, reason } => {
+            Err(Refusal::Failed(HostFailure { category, reason }))
+        }
     }
 }
 
@@ -80,16 +138,16 @@ fn owned(words: &[&str]) -> Vec<String> {
 /// goes on with a diagnostic, since the commands still fail if it is too
 /// old; a `--version` that failed is followed by `auth status`, which names
 /// a missing `glab` or a lapsed login.
-fn access(node: &dyn NodeLink) -> Result<(), HostFailure> {
-    match glab(node, owned(&VERSION)) {
+fn access(node: &dyn NodeLink) -> Result<(), Refusal> {
+    match glab(node, owned(&VERSION), Share::Background) {
         Ok(output) => match GlabVersion::of_output(&output) {
             Some(version) if version < MINIMUM_VERSION => {
-                return Err(HostFailure {
+                return Err(Refusal::Failed(HostFailure {
                     category: GithubFailureCategory::Outdated,
                     reason: format!(
                         "glab {version} is older than {MINIMUM_VERSION}, the oldest release Hide reads gitlab.com with"
                     ),
-                });
+                }));
             }
             Some(_) => {}
             None => crate::diagnostic!(serde_json::json!({
@@ -98,16 +156,19 @@ fn access(node: &dyn NodeLink) -> Result<(), HostFailure> {
                 "message": output.lines().next().unwrap_or_default(),
             })),
         },
-        Err(failure) if failure.category == GithubFailureCategory::NotInstalled => {
-            return Err(failure);
+        Err(Refusal::Failed(failure))
+            if failure.category == GithubFailureCategory::NotInstalled =>
+        {
+            return Err(Refusal::Failed(failure));
         }
-        Err(failure) => crate::diagnostic!(serde_json::json!({
+        Err(refusal @ Refusal::Unsupported(_)) => return Err(refusal),
+        Err(refusal) => crate::diagnostic!(serde_json::json!({
             "component": "gitlab",
             "kind": "glab.version_unread",
-            "message": failure.reason,
+            "message": refusal.reason(),
         })),
     }
-    glab(node, owned(&AUTH_STATUS)).map(|_| ())
+    glab(node, owned(&AUTH_STATUS), Share::Background).map(|_| ())
 }
 
 /// gitlab.com's read of its projects ([`HostReads`]): one access check per
@@ -128,7 +189,7 @@ impl HostReads for GitlabReads {
                 let started = Instant::now();
                 let known = self.carried.remove(due.root).unwrap_or_default();
                 let answer = match access.get_or_init(|| self::access(node)) {
-                    Err(failure) => signed_out(due.root_path, failure),
+                    Err(refusal) => refused(due.root_path, refusal),
                     Ok(()) => read_project(node, due, &known),
                 };
                 crate::code_host::read::log_answer(
@@ -154,8 +215,33 @@ impl HostReads for GitlabReads {
     }
 }
 
+/// A project read with no answer from gitlab.com. A node that does not run
+/// `glab`, or a spent budget, holds the read: the runtime keeps the previous
+/// answer, with no failure clock ([`ReadHeld`]). The rest fail: an answer
+/// too large to read, and the access check's refusals (`glab` missing, too
+/// old or signed out), which fail every project of the pass alike.
+fn refused(root_path: &str, refusal: &Refusal) -> GithubProjectSnapshot {
+    let held = |held: ReadHeld| GithubProjectSnapshot {
+        root_path: root_path.to_owned(),
+        issues_read: PartRead::Unsupported,
+        identity_read: PartRead::Unsupported,
+        held: Some(held),
+        status: GithubStatusSnapshot {
+            available: true,
+            ..GithubStatusSnapshot::default()
+        },
+        ..GithubProjectSnapshot::default()
+    };
+    match refusal {
+        Refusal::Unsupported(_) => held(ReadHeld::Unsupported),
+        Refusal::Spent => held(ReadHeld::BudgetSpent),
+        Refusal::TooLarge => failed(root_path, None, refusal.reason()),
+        Refusal::Failed(failure) => signed_out(root_path, failure),
+    }
+}
+
 /// A project read with no access to gitlab.com: `glab` missing, too old or
-/// signed out, which fails every project of the pass alike.
+/// signed out.
 fn signed_out(root_path: &str, failure: &HostFailure) -> GithubProjectSnapshot {
     GithubProjectSnapshot {
         root_path: root_path.to_owned(),
@@ -171,9 +257,14 @@ fn signed_out(root_path: &str, failure: &HostFailure) -> GithubProjectSnapshot {
     }
 }
 
-/// A project whose list read failed: the previous answer is kept as stale by
-/// the runtime (`keep_previous_reads`).
-fn failed(root_path: &str, failure: HostFailure) -> GithubProjectSnapshot {
+/// A project whose list read failed, in `category` when the failure has
+/// one: the previous answer is kept as stale by the runtime
+/// (`keep_previous_reads`).
+fn failed(
+    root_path: &str,
+    category: Option<GithubFailureCategory>,
+    reason: String,
+) -> GithubProjectSnapshot {
     GithubProjectSnapshot {
         root_path: root_path.to_owned(),
         issues_read: PartRead::Unsupported,
@@ -181,8 +272,8 @@ fn failed(root_path: &str, failure: HostFailure) -> GithubProjectSnapshot {
         status: GithubStatusSnapshot {
             available: true,
             stale: true,
-            unavailable_reason: Some(failure.reason),
-            failure_category: Some(failure.category),
+            unavailable_reason: Some(reason),
+            failure_category: category,
             ..GithubStatusSnapshot::default()
         },
         ..GithubProjectSnapshot::default()
@@ -208,25 +299,25 @@ fn read_project(
     let Some(repository) = repository_of(due.place) else {
         return failed(
             due.root_path,
-            HostFailure {
-                category: GithubFailureCategory::NetworkOrRateLimit,
-                reason: "the checkout names no gitlab.com project".to_owned(),
-            },
+            Some(GithubFailureCategory::NetworkOrRateLimit),
+            "the checkout names no gitlab.com project".to_owned(),
         );
     };
     let answer = merge_requests_arguments(&repository.path)
-        .ok_or_else(|| HostFailure {
-            category: GithubFailureCategory::NetworkOrRateLimit,
-            reason: format!(
+        .ok_or_else(|| {
+            Refusal::Failed(unreadable(format!(
                 "{} is not a project path glab may be asked about",
                 repository.path
-            ),
+            )))
         })
-        .and_then(|arguments| glab(node, arguments))
-        .and_then(|output| parse_list(&output, known));
+        .and_then(|arguments| glab(node, arguments, Share::Background))
+        .and_then(|output| parse_list(&output, known).map_err(Refusal::from));
     match answer {
         Ok(listed) => listed.into_snapshot(due.root_path),
-        Err(failure) => failed(due.root_path, failure),
+        Err(Refusal::Failed(failure)) => {
+            failed(due.root_path, Some(failure.category), failure.reason)
+        }
+        Err(refusal) => refused(due.root_path, &refusal),
     }
 }
 
@@ -356,6 +447,9 @@ struct Listed {
     viewer: String,
     identity: RepositoryIdentity,
     pull_requests: Vec<PullRequestSnapshot>,
+    /// The open list passed [`hide_node_link::glab::OPEN_LIMIT`] and holds
+    /// the newest part.
+    open_cut: bool,
 }
 
 impl Listed {
@@ -368,6 +462,7 @@ impl Listed {
             identity_read: PartRead::Read,
             viewer: Some(self.viewer),
             pull_requests: self.pull_requests,
+            pull_requests_cut: self.open_cut,
             status: GithubStatusSnapshot {
                 available: true,
                 last_success_at_unix_ms: Some(now_unix_ms()),
@@ -434,7 +529,8 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
             .and_then(|repository| repository.root_ref),
     };
     let open_total = project.open.count.unwrap_or(0) as usize;
-    if open_total > project.open.nodes.len() {
+    let open_cut = open_total > project.open.nodes.len();
+    if open_cut {
         // Principle 15: the newest part is read, and the log says so.
         crate::diagnostic!(serde_json::json!({
             "component": "gitlab",
@@ -474,6 +570,7 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
         viewer: viewer_name,
         identity,
         pull_requests,
+        open_cut,
     })
 }
 
@@ -753,7 +850,8 @@ fn still_asked(reviewer: &Reviewer) -> bool {
 }
 
 /// Each reviewer and approver and where they stand, approvals and change
-/// requests first, with how many reviewers the page did not hold.
+/// requests first, with how many reviewers and approvers the pages did not
+/// hold (both pages' leftovers, which overlap only when both are full).
 fn reviewers(listed: &MergeRequest) -> (Vec<PrReviewer>, u32) {
     let mut reviewers: Vec<PrReviewer> = Vec::new();
     let mut more = 0;
@@ -777,6 +875,12 @@ fn reviewers(listed: &MergeRequest) -> (Vec<PrReviewer>, u32) {
                 at_unix_ms: None,
             });
         }
+    }
+    if let Some(approved) = &listed.approved_by {
+        more += approved
+            .count
+            .unwrap_or(0)
+            .saturating_sub(approved.nodes.len() as u32);
     }
     // An approver need not be a reviewer: anyone allowed may approve.
     for approver in listed
@@ -883,22 +987,58 @@ pub(crate) fn read_card(
 ) -> Result<CardRead, String> {
     let arguments = card_arguments(&repository.path, number)
         .ok_or_else(|| "the project cannot be asked about a card".to_owned())?;
-    let output = glab(node, arguments).map_err(|failure| failure.reason)?;
+    let output = glab(node, arguments, Share::Opened).map_err(|refusal| refusal.reason())?;
     parse_card(&output)
 }
 
-fn parse_card(output: &str) -> Result<CardRead, String> {
+/// The card's parts a GraphQL error names by its path (`project`,
+/// `mergeRequest`, then the field), or `None` when an error names no part:
+/// gitlab.com answers the fields it could read beside the errors of those it
+/// could not, and an unread field is not an empty one.
+fn failed_card_parts(value: &serde_json::Value) -> Option<Vec<&'static str>> {
+    let mut parts = Vec::new();
+    for error in value["errors"].as_array().into_iter().flatten() {
+        let field = error["path"].get(2).and_then(serde_json::Value::as_str);
+        let part = match field {
+            Some("description") => "body",
+            Some("diffStats" | "diffStatsSummary") => "files",
+            Some("discussions" | "resolvableDiscussionsCount" | "resolvedDiscussionsCount") => {
+                "threads"
+            }
+            _ => return None,
+        };
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    }
+    Some(parts)
+}
+
+pub(crate) fn parse_card(output: &str) -> Result<CardRead, String> {
     let value: serde_json::Value = serde_json::from_str(output)
         .map_err(|error| format!("glab returned a card Hide could not read: {error}"))?;
+    let failed = failed_card_parts(&value).ok_or_else(|| {
+        format!(
+            "gitlab.com refused part of the card: {}",
+            value["errors"][0]["message"]
+                .as_str()
+                .unwrap_or("no message")
+        )
+    })?;
     let merge_request = &value["data"]["project"]["mergeRequest"];
     if merge_request.is_null() {
         return Err("gitlab.com returned no such merge request".to_owned());
     }
     let mut read = CardRead {
         head: merge_request["diffHeadSha"].as_str().map(str::to_owned),
+        failed,
         ..CardRead::default()
     };
+    let unread = |part: &str| read.failed.contains(&part);
+    let (body_unread, files_unread, threads_unread) =
+        (unread("body"), unread("files"), unread("threads"));
     match &merge_request["description"] {
+        _ if body_unread => {}
         serde_json::Value::String(body) => {
             read.body = Some(crate::github::card::capped_body(body));
         }
@@ -906,6 +1046,7 @@ fn parse_card(output: &str) -> Result<CardRead, String> {
         _ => read.failed.push("body"),
     }
     match merge_request["diffStats"].as_array() {
+        _ if files_unread => {}
         Some(nodes) => {
             let files: Vec<PrCardFile> = nodes
                 .iter()
@@ -931,33 +1072,43 @@ fn parse_card(output: &str) -> Result<CardRead, String> {
         }
         None => read.failed.push("files"),
     }
+    let open_total = merge_request["resolvableDiscussionsCount"]
+        .as_u64()
+        .zip(merge_request["resolvedDiscussionsCount"].as_u64())
+        .map(|(resolvable, resolved)| resolvable.saturating_sub(resolved));
     match merge_request["discussions"]["nodes"].as_array() {
+        _ if threads_unread => {}
         Some(nodes) => {
-            read.threads = Some(
-                nodes
-                    .iter()
-                    .filter(|node| {
-                        node["resolvable"].as_bool() == Some(true)
-                            && node["resolved"].as_bool() == Some(false)
-                    })
-                    .map(|node| {
-                        let first = &node["notes"]["nodes"][0];
-                        let position = &first["position"];
-                        PrCardThread {
-                            reviewer: first["author"]["username"].as_str().map(str::to_owned),
-                            path: position["newPath"]
-                                .as_str()
-                                .or(position["oldPath"].as_str())
-                                .unwrap_or_default()
-                                .to_owned(),
-                            line: position["newLine"].as_u64().map(|line| line as u32),
-                            text: crate::github::card::first_sentence(
-                                first["body"].as_str().unwrap_or_default(),
-                            ),
-                        }
-                    })
-                    .collect(),
-            );
+            let threads: Vec<PrCardThread> = nodes
+                .iter()
+                .filter(|node| {
+                    node["resolvable"].as_bool() == Some(true)
+                        && node["resolved"].as_bool() == Some(false)
+                })
+                .map(|node| {
+                    let first = &node["notes"]["nodes"][0];
+                    let position = &first["position"];
+                    PrCardThread {
+                        reviewer: first["author"]["username"].as_str().map(str::to_owned),
+                        path: position["newPath"]
+                            .as_str()
+                            .or(position["oldPath"].as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
+                        line: position["newLine"].as_u64().map(|line| line as u32),
+                        text: crate::github::card::first_sentence(
+                            first["body"].as_str().unwrap_or_default(),
+                        ),
+                    }
+                })
+                .collect();
+            // The page holds the first discussions, resolved or not: when it
+            // holds fewer open ones than gitlab.com counts, the threads drawn
+            // are some of them, and the part says it was not read whole.
+            if open_total.is_none_or(|total| (threads.len() as u64) < total) {
+                read.failed.push("threads");
+            }
+            read.threads = Some(threads);
         }
         None => read.failed.push("threads"),
     }
@@ -976,7 +1127,7 @@ pub(crate) fn read_commit_checks(
 ) -> Result<Vec<Ci>, String> {
     let arguments = commit_checks_arguments(&repository.path, commits)
         .ok_or("Invalid exact-SHA check targets")?;
-    let output = glab(node, arguments).map_err(|failure| failure.reason)?;
+    let output = glab(node, arguments, Share::Opened).map_err(|refusal| refusal.reason())?;
     let unit: &dyn crate::code_host::CodeHost = &host::GITLAB;
     parse_commit_checks(&output, commits, |sha| unit.commit_url(repository, sha))
 }

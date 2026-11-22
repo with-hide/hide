@@ -95,7 +95,7 @@ export function githubAccessLine(access: GithubAccess, t: Translate, coreMachine
   if (access.state === "connected") return { text: t("common.connected"), tone: "ok" };
   if (access.category === "not_logged_in" && coreMachine) return { text: t("issueSettings.ghNotLoggedInOn", { machine: coreMachine }), tone: "warn" };
   const key = GH_FAILURE_KEY[access.category];
-  return { text: key ? t(key) : access.category, tone: "warn" };
+  return { text: key ? t(key, { program: "gh" }) : access.category, tone: "warn" };
 }
 
 export type IssueSourceChoice = "auto" | "github" | "local";

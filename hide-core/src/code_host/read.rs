@@ -9,12 +9,12 @@
 //! projects it reads ([`HostReads`]), and keeps every answer, so the next
 //! pass re-reads only what is due and hands the rest back as it was.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{CodeHosts, DueRead, Host, HostReads, Place};
+use super::{CodeHosts, DueRead, Host, HostReads, Place, Placement};
 use crate::model::{
     GithubFailureCategory, GithubProjectSnapshot, GithubReadOutcome, GithubSnapshot,
     GithubStatusSnapshot,
@@ -33,11 +33,9 @@ pub(crate) struct GithubProjectRequest {
     /// A path inside the repository.
     pub(crate) root: PathBuf,
     /// Where its host reads it, as the registry chose
-    /// ([`CodeHosts::place_of_checkout`], [`CodeHosts::place_of`]); `None`
-    /// when its node read the checkout's remotes and none names a repository
-    /// a registered host reads, which is answered "no remote" with no host
-    /// asked.
-    pub(crate) place: Option<Place>,
+    /// ([`CodeHosts::placement_of_checkout`], [`CodeHosts::place_of`]); no
+    /// remote and remotes not known are answered with no host asked.
+    pub(crate) place: Placement,
     /// Bumped on Git section opening and explicit header refresh.
     /// Each repository's generation coalesces repeated requests independently.
     pub(crate) generation: u64,
@@ -85,7 +83,7 @@ pub(crate) fn read_reason(cached: Option<u64>, generation: u64) -> Option<ReadRe
 
 struct Cached {
     generation: u64,
-    place: Option<Place>,
+    place: Placement,
     answer: GithubProjectSnapshot,
 }
 
@@ -97,6 +95,9 @@ struct Cached {
 pub(super) struct Reads {
     hosts: Vec<(Host, Box<dyn HostReads>)>,
     cache: HashMap<PathBuf, Cached>,
+    /// The checkouts whose remotes were not known that the log has named,
+    /// so it names each once, not on every pass; as large as the request.
+    not_known_logged: HashSet<PathBuf>,
 }
 
 impl Reads {
@@ -104,6 +105,7 @@ impl Reads {
         Self {
             hosts: hosts.hosts().map(|host| (host, host.reads())).collect(),
             cache: HashMap::new(),
+            not_known_logged: HashSet::new(),
         }
     }
 }
@@ -154,6 +156,7 @@ pub(super) fn read(
 ) -> GithubSnapshot {
     let asked = |root: &Path| request.projects.iter().any(|project| project.root == root);
     reads.cache.retain(|root, _| asked(root));
+    reads.not_known_logged.retain(|root| asked(root));
     for (_, host) in &mut reads.hosts {
         host.forget(&asked);
     }
@@ -178,11 +181,10 @@ pub(super) fn read(
             Vec<&(&GithubProjectRequest, ReadReason)>,
         > = std::collections::BTreeMap::new();
         for due in &due {
-            let component = due
-                .0
-                .place
-                .as_ref()
-                .map_or(super::COMPONENT, |place| place.host().key());
+            let component = match &due.0.place {
+                Placement::At(place) => place.host().key(),
+                Placement::NoRemote | Placement::RemotesNotKnown => super::COMPONENT,
+            };
             by_host.entry(component).or_default().push(due);
         }
         for (component, due) in by_host {
@@ -203,11 +205,11 @@ pub(super) fn read(
         for (project, _) in due {
             let started = Instant::now();
             let found = match &project.place {
-                Some(Place::Repository { .. }) => Some((
-                    project.place.clone(),
+                Placement::At(place @ Place::Repository { .. }) => Some((
+                    Some(place.clone()),
                     hide_platform::path::to_wire_lossy(&project.root),
                 )),
-                Some(Place::Checkout {
+                Placement::At(Place::Checkout {
                     host,
                     root,
                     remotes,
@@ -224,8 +226,10 @@ pub(super) fn read(
                         root_path,
                     )
                 }),
-                None => main_worktree(node, &project.root)
-                    .map(|main| (None, hide_platform::path::to_wire_lossy(&main))),
+                Placement::NoRemote | Placement::RemotesNotKnown => {
+                    main_worktree(node, &project.root)
+                        .map(|main| (None, hide_platform::path::to_wire_lossy(&main)))
+                }
             };
             let answer = match found {
                 // A path inside no repository has nothing to report.
@@ -239,8 +243,24 @@ pub(super) fn read(
                     continue;
                 }
                 Some((None, root_path)) => {
-                    let answer = no_remote(root_path);
-                    log_answer(super::COMPONENT, project.generation, &answer, started, None);
+                    let mut answer = no_remote(root_path);
+                    if project.place == Placement::RemotesNotKnown {
+                        answer.remotes_not_known = true;
+                        if reads.not_known_logged.insert(project.root.clone()) {
+                            crate::diagnostic!(serde_json::json!({
+                                "component": super::COMPONENT,
+                                "kind": "pull_requests.remotes_not_known",
+                                "project": answer.root_path,
+                                "reason": "the node names only GitHub-shaped remotes, from before it sent their addresses, and named none",
+                                // The link knows only whether the node speaks
+                                // an older protocol, not its number.
+                                "node_protocol": if node.predates_current_protocol() { "older" } else { "current" },
+                                "core_protocol": hide_node_link::protocol::PROTOCOL_VERSION,
+                            }));
+                        }
+                    } else {
+                        log_answer(super::COMPONENT, project.generation, &answer, started, None);
+                    }
                     answer
                 }
             };
@@ -408,9 +428,8 @@ mod tests {
         }
         let root = PathBuf::from("/nowhere");
         let unread = CodeHosts::STANDARD
-            .place_of_checkout(&root, super::super::CheckoutRemotes::Unknown)
-            .unwrap();
-        for place in [None, Some(unread)] {
+            .placement_of_checkout(&root, super::super::CheckoutRemotes::Unknown);
+        for place in [Placement::NoRemote, Placement::RemotesNotKnown, unread] {
             let request = GithubRequest {
                 projects: vec![GithubProjectRequest {
                     links: Vec::new(),
@@ -426,5 +445,54 @@ mod tests {
                 "{place:?}"
             );
         }
+    }
+
+    /// A checkout whose node named only GitHub-shaped remotes, and none, is
+    /// answered with no host asked, as no remote on the wire and kept apart
+    /// from it in the core; a checkout whose node listed no address is no
+    /// remote. Neither starts a failure.
+    #[test]
+    fn remotes_not_known_and_no_remote_are_answered_apart_with_no_host_asked() {
+        struct Repository;
+        impl NodeLink for Repository {
+            fn call(
+                &self,
+                call: Call,
+                _timeout: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+                match call {
+                    Call::Git {
+                        command: GitCommand::CommonDir,
+                        ..
+                    } => Ok(serde_json::json!("/repo/.git").into()),
+                    other => panic!("no host is asked: {other:?}"),
+                }
+            }
+        }
+        let root = PathBuf::from("/repo");
+        let answer = |remotes: super::super::CheckoutRemotes<'_>| {
+            let request = GithubRequest {
+                projects: vec![GithubProjectRequest {
+                    links: Vec::new(),
+                    root: root.clone(),
+                    place: CodeHosts::STANDARD.placement_of_checkout(&root, remotes),
+                    generation: 1,
+                }],
+            };
+            let mut reads = Reads::new(CodeHosts::STANDARD);
+            let mut projects = read(&mut reads, &Repository, &request).projects;
+            assert_eq!(projects.len(), 1);
+            projects.remove(0)
+        };
+        let older = answer(super::super::CheckoutRemotes::Named(&[]));
+        assert!(older.remotes_not_known);
+        assert_eq!(older.read_outcome(), GithubReadOutcome::NoRemote);
+        assert_eq!(
+            older.status.failure_category,
+            Some(GithubFailureCategory::NoGithubRemote)
+        );
+        let none = answer(super::super::CheckoutRemotes::Addresses(&[]));
+        assert!(!none.remotes_not_known);
+        assert_eq!(none.read_outcome(), GithubReadOutcome::NoRemote);
     }
 }

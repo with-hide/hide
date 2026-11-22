@@ -277,7 +277,7 @@ fn unacknowledged_save_keeps_consumers_on_confirmed_repository() {
 fn asked_repository(runtime: &Runtime) -> Option<String> {
     runtime.github_request().projects[0]
         .place
-        .as_ref()
+        .as_place()
         .and_then(crate::code_host::Place::stored_name)
 }
 
