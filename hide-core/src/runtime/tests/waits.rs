@@ -3,16 +3,51 @@
 //! an agent's own wait from asking to its notice, and a wait kept across a
 //! restart.
 
-use super::missions::{checked, command, conducting, github, node_view, pull};
+use super::missions::{PROJECT, checked, command, conducting, github, node_view, pull};
 use super::*;
 use crate::missions::{AttentionReason, MissionStatus, NodeStatus, WakeEvent};
 use crate::model::{PullRequestBadge, PullRequestChecks};
+use crate::runtime::mission_outside::Found;
 use crate::waits::{WaitOutcome, WaitTarget};
 use serde_json::{Value, json};
 
 const HOUR_MS: u64 = 60 * 60 * 1000;
 /// Longer than the wait clock's period, so the next tick runs.
 const TICK_MS: u64 = 60 * 1000;
+
+/// The project's read coming back with `found` for every ask it holds: the
+/// node `key` of mission-1 waiting on `target`, and the agents' waits.
+fn read_back(runtime: &mut Runtime, found: crate::runtime::mission_outside::Found) {
+    use crate::runtime::mission_outside::{Ask, Owner, Watch};
+    let mut asks = Vec::new();
+    if let Some(mission) = runtime.missions.book.get("mission-1") {
+        for node in &mission.nodes {
+            if let Some(target) = node.wait_target.clone() {
+                asks.push(Ask {
+                    owner: Owner::node("mission-1", &node.key),
+                    watch: Watch::Outside {
+                        target,
+                        ahead: None,
+                        reopens: runtime.missions.outside.reopens_of("mission-1"),
+                        round: node.outside_round,
+                    },
+                });
+            }
+        }
+    }
+    for wait in runtime.snapshot.ui_state.waits.open() {
+        asks.push(Ask {
+            owner: Owner::Agent(wait.id.clone()),
+            watch: Watch::Agent {
+                target: wait.target.clone(),
+                ahead: None,
+            },
+        });
+    }
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let answers = asks.into_iter().map(|ask| (ask, found.clone())).collect();
+    runtime.ingest_outside(&place, answers);
+}
 
 /// `sender` conducts mission-1, which waits on `wait` before `fix`.
 fn waiting_on(runtime: &mut Runtime, wait: Value) {
@@ -305,11 +340,14 @@ fn a_waiting_node_past_its_deadline_is_raised_until_planned_again() {
         "{until}"
     );
 
-    // The deadline asks one last look first, and fails the wait only once
+    // The deadline asks one last read first, and fails the wait only once
     // that read came back with it still open.
     runtime.tick_waits(until + 1);
     assert_eq!(node_view(&runtime, "wait").wait_outcome, None);
-    assert!(runtime.tick_waits(until + 1 + TICK_MS));
+    runtime.tick_waits(until + 1 + TICK_MS);
+    assert_eq!(node_view(&runtime, "wait").wait_outcome, None);
+    read_back(&mut runtime, Found::NoOwnWork { replaced: false });
+    assert!(runtime.tick_waits(until + 1 + 2 * TICK_MS));
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
     assert_eq!(view.wait_outcome, Some("expired"));
@@ -576,6 +614,7 @@ fn an_agents_wait_outlives_a_restart_and_expires_at_the_first_tick() {
     runtime.missions.waits_next_tick_unix_ms = 0;
     runtime.tick_waits(until + 1);
     assert!(runtime.snapshot.ui_state.waits.waits[0].ended.is_none());
+    read_back(&mut runtime, Found::NoOwnWork { replaced: false });
     assert!(runtime.tick_waits(until + 1 + TICK_MS));
     let ended = runtime.snapshot.ui_state.waits.waits[0]
         .ended
@@ -624,9 +663,10 @@ fn an_agent_with_another_open_wait_is_marked_again_once_one_ends() {
 
 /// O1 of the review (D-07): an agent's wait on a branch past its deadline
 /// is read once more before it fails, so a target met in the last look's
-/// gap is not lost.
+/// gap is met, and no read back (one held at the host's rate floor) keeps
+/// it open.
 #[test]
-fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_look() {
+fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_read() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     registered(&mut runtime);
@@ -639,17 +679,53 @@ fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_look() {
     let until = made["until_unix_ms"].as_u64().unwrap();
     assert!(runtime.snapshot.ui_state.waits.waits[0].project.is_some());
 
-    runtime.missions.waits_next_tick_unix_ms = 0;
-    runtime.tick_waits(until + 1);
-    assert!(runtime.snapshot.ui_state.waits.waits[0].ended.is_none());
-    assert!(runtime.tick_waits(until + 1 + TICK_MS));
-    assert_eq!(
-        runtime.snapshot.ui_state.waits.waits[0]
+    let outcome = |runtime: &Runtime, at: usize| {
+        runtime.snapshot.ui_state.waits.waits[at]
             .ended
             .as_ref()
-            .map(|ended| ended.outcome.clone()),
-        Some(WaitOutcome::Expired)
+            .map(|ended| ended.outcome.clone())
+    };
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(until + 1);
+    runtime.tick_waits(until + 1 + TICK_MS);
+    assert_eq!(outcome(&runtime, 0), None, "no read came back yet");
+    read_back(&mut runtime, Found::NoOwnWork { replaced: false });
+    assert!(runtime.tick_waits(until + 1 + 2 * TICK_MS));
+    assert_eq!(outcome(&runtime, 0), Some(WaitOutcome::Expired));
+
+    // The read the deadline asks finds the branch in main: met, not expired.
+    let (made, _) = wait(
+        &mut runtime,
+        "sender",
+        json!({"branch": "feat/b", "for": "1h"}),
+    )
+    .unwrap();
+    let until = made["until_unix_ms"].as_u64().unwrap();
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(until + 1);
+    read_back(&mut runtime, Found::InMain(None));
+    assert_eq!(outcome(&runtime, 1), Some(WaitOutcome::Merged));
+}
+
+/// N1 of the review (D-05): a read by number says only that the pull
+/// request is open, never how its checks ended, so a CI wait's failure
+/// stands through it with its raise.
+#[test]
+fn a_ci_failure_stands_through_a_read_that_does_not_see_the_checks() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    waiting_on(&mut runtime, json!({"pr": 1232, "ci": true}));
+    read_back(
+        &mut runtime,
+        Found::Ended(WaitOutcome::CiFailed {
+            checks: vec!["lint".into()],
+        }),
     );
+    assert_eq!(node_view(&runtime, "wait").wait_outcome, Some("ci_failed"));
+    read_back(&mut runtime, Found::OpenUnchecked);
+    let view = node_view(&runtime, "wait");
+    assert_eq!(view.wait_outcome, Some("ci_failed"));
+    assert_eq!(reason(&runtime, "wait"), Some(AttentionReason::CiFailed));
 }
 
 /// M2 of the review: a store whose waits all went is still kept, so the

@@ -347,6 +347,13 @@ impl Runtime {
                     let mut event = mark.event("agent_sleep.mark_skipped");
                     event["reason"] = json!(why);
                     crate::diagnostic!(event);
+                    // One asleep already is marked again once it wakes; any
+                    // other refusal lasts, so its wait is not marked again.
+                    if matches!(mark.origin, Origin::Wait { .. }) && why != "asleep" {
+                        self.missions
+                            .wait_marks_refused
+                            .insert(mark.agent_id.clone());
+                    }
                 }
                 Verdict::Sleep(_) if budget == 0 => kept.push(mark),
                 Verdict::Sleep(pane) => {

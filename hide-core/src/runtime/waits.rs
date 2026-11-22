@@ -172,7 +172,7 @@ impl Runtime {
         }
         for (device, project) in look {
             self.missions.outside.deadline_look(&device, &project, now);
-            ended |= self.follow_outside_stored(&device, &project);
+            ended |= self.follow_outside_read(&device, &project);
         }
         book_moved | ended
     }
@@ -660,6 +660,8 @@ impl Runtime {
             "component": "waits", "kind": "wait.started", "wait": id, "agent_id": agent,
             "target": target.words(),
         }));
+        // A new wait asks again for a sleep refused before.
+        self.missions.wait_marks_refused.remove(agent);
         self.mark_wait_sleep(agent, &id);
         self.persist_ui_state();
         self.wait_rows_moved();
@@ -770,6 +772,20 @@ impl Runtime {
     /// a mark is spent once its agent slept and one wait's end drops the
     /// mark another open wait of the same agent still needs.
     pub(super) fn mark_waiting_agents(&mut self) {
+        let waiting: BTreeSet<String> = self
+            .snapshot
+            .ui_state
+            .waits
+            .open()
+            .map(|wait| wait.agent_id.clone())
+            .collect();
+        self.missions
+            .wait_marks_refused
+            .retain(|agent| waiting.contains(agent));
+        if self.snapshot.ui_state.agent_sleep_after_hours.is_none() {
+            // Sleep is off: the sleep pass would drop every mark.
+            return;
+        }
         let ledger = self
             .delivery_ledger
             .as_ref()
@@ -781,11 +797,12 @@ impl Runtime {
             .waits
             .open()
             .filter(|wait| {
-                !self
-                    .missions
-                    .sleep_marks
-                    .iter()
-                    .any(|mark| mark.agent_id == wait.agent_id)
+                !self.missions.wait_marks_refused.contains(&wait.agent_id)
+                    && !self
+                        .missions
+                        .sleep_marks
+                        .iter()
+                        .any(|mark| mark.agent_id == wait.agent_id)
             })
             .map(|wait| (wait.agent_id.clone(), wait.id.clone()))
             .collect();

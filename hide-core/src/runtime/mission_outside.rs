@@ -119,10 +119,12 @@ pub(crate) struct Outside {
     /// the tick's level look counts from; one entry per followed project,
     /// the rest let go each tick.
     looked: BTreeMap<Place, u64>,
-    /// When a passed deadline last asked each project for its final look,
-    /// on the wait clock (PRD core-wait D-07); one entry per followed
-    /// project, let go with `looked`.
+    /// When a passed deadline last asked each project for its final read,
+    /// on the wait clock (PRD core-wait D-07), and the ask the last read
+    /// that came back answered; one entry per followed project each, let go
+    /// with `looked`.
     deadline_looked: BTreeMap<Place, u64>,
+    deadline_answered: BTreeMap<Place, u64>,
 }
 
 impl Outside {
@@ -134,16 +136,15 @@ impl Outside {
         *self.reopens.entry(mission.to_owned()).or_default() += 1;
     }
 
-    /// Whether `project` on `device` has no read out, no pass left and no
-    /// look waiting.
-    /// Whether a passed deadline asked `project` on `device` for its look
-    /// at or after `since`, and that look's read has come back: a deadline
-    /// fails a wait on the code host only once a read after it found it
-    /// still open (PRD core-wait D-07), so a merge just before the deadline
-    /// is not lost to the look's clock.
+    /// Whether a read asked for a passed deadline of `project` on `device`
+    /// at or after `since` has come back: a deadline fails a wait on the
+    /// code host only once a read after it found it still open (PRD
+    /// core-wait D-07), so a merge just before the deadline is not lost to
+    /// the look's clock, and a read held back at the host's rate floor holds
+    /// the deadline with it.
     pub(super) fn read_after(&self, device: &str, project: &str, since: u64) -> bool {
         let place = (device.to_owned(), project.to_owned());
-        self.deadline_looked
+        self.deadline_answered
             .get(&place)
             .is_some_and(|at| *at >= since)
             && !self.reading.contains(&place)
@@ -151,13 +152,22 @@ impl Outside {
             && !self.pending.contains(&place)
     }
 
-    /// Records the look a passed deadline asked of `project` on `device` at
+    /// Records the read a passed deadline asked of `project` on `device` at
     /// `now`, on the wait clock.
     pub(super) fn deadline_look(&mut self, device: &str, project: &str, now: u64) {
         self.deadline_looked
             .insert((device.to_owned(), project.to_owned()), now);
     }
 
+    /// A read of `place` came back: it answers the deadline's ask out then.
+    fn read_came_back(&mut self, place: &Place) {
+        if let Some(asked) = self.deadline_looked.get(place) {
+            self.deadline_answered.insert(place.clone(), *asked);
+        }
+    }
+
+    /// Whether `project` on `device` has no read out, no pass left and no
+    /// look waiting.
     #[cfg(test)]
     pub(crate) fn idle_for_test(&self, device: &str, project: &str) -> bool {
         let place = (device.to_owned(), project.to_owned());
@@ -212,6 +222,10 @@ pub(crate) enum Found {
         replaced: bool,
     },
     InMain(Option<String>),
+    /// A change request read by its number is open, and that read says
+    /// nothing of its checks: a CI wait stays as it stands, a failure it
+    /// holds included, until the list judges the checks again.
+    OpenUnchecked,
     /// A change request, or its CI, ended so (met or failed).
     Ended(WaitOutcome),
     Unread(String),
@@ -329,7 +343,11 @@ fn branch_line(found: &Found) -> Option<&'static str> {
         ),
         Found::Ahead(_) => Some("Waiting: the branch has commits main does not have yet."),
         Found::InMain(_) => Some("In main: the branch's own work reached main."),
-        Found::Open | Found::Ended(_) | Found::Unread(_) | Found::BaseUnread(_) => None,
+        Found::Open
+        | Found::OpenUnchecked
+        | Found::Ended(_)
+        | Found::Unread(_)
+        | Found::BaseUnread(_) => None,
     }
 }
 
@@ -488,7 +506,7 @@ fn outcome_of(found: &Found) -> Option<Option<WaitOutcome>> {
         Found::Open | Found::Ahead(_) | Found::NoOwnWork { .. } => Some(None),
         Found::InMain(_) => Some(Some(WaitOutcome::Merged)),
         Found::Ended(outcome) => Some(Some(outcome.clone())),
-        Found::Unread(_) | Found::BaseUnread(_) => None,
+        Found::OpenUnchecked | Found::Unread(_) | Found::BaseUnread(_) => None,
     }
 }
 
@@ -612,6 +630,10 @@ impl Runtime {
             .outside
             .deadline_looked
             .retain(|place, _| places.contains(place));
+        self.missions
+            .outside
+            .deadline_answered
+            .retain(|place, _| places.contains(place));
         let front = self
             .focused_local_checkout()
             .map(|(workspace, _)| workspace.path.clone());
@@ -641,16 +663,30 @@ impl Runtime {
     /// `project`, with the stored pull request list. Returns whether
     /// anything changed.
     pub(crate) fn follow_outside_stored(&mut self, device: &str, project: &str) -> bool {
+        self.follow_outside_with(device, project, true)
+    }
+
+    /// Follows them with no list at all, every ask read: the read a passed
+    /// deadline asks for (PRD core-wait D-07), which a list from before the
+    /// deadline must not answer.
+    pub(super) fn follow_outside_read(&mut self, device: &str, project: &str) -> bool {
+        self.follow_outside_with(device, project, false)
+    }
+
+    fn follow_outside_with(&mut self, device: &str, project: &str, use_list: bool) -> bool {
         // A list no read has replaced for a while answers nothing: with no
         // window another machine's list is not read again, and what it says
         // of a change request is asked by its number instead.
         let now = super::memory::now_ms();
-        let listed = self.github_project_on(device, project).filter(|listed| {
-            listed
-                .status
-                .last_success_at_unix_ms
-                .is_some_and(|at| now.saturating_sub(at) <= STORED_LIST_FRESH_MS)
-        });
+        let listed = self
+            .github_project_on(device, project)
+            .filter(|_| use_list)
+            .filter(|listed| {
+                listed
+                    .status
+                    .last_success_at_unix_ms
+                    .is_some_and(|at| now.saturating_sub(at) <= STORED_LIST_FRESH_MS)
+            });
         let (found, asks) = outside_asks(
             &self.missions.book,
             &self.snapshot.ui_state.waits,
@@ -669,6 +705,12 @@ impl Runtime {
         project: &str,
         listed: Option<&GithubProjectSnapshot>,
     ) -> bool {
+        if listed.is_some() {
+            // A list just answered: it is the read a deadline asked for.
+            self.missions
+                .outside
+                .read_came_back(&(device.to_owned(), project.to_owned()));
+        }
         let (found, asks) = outside_asks(
             &self.missions.book,
             &self.snapshot.ui_state.waits,
@@ -895,6 +937,7 @@ impl Runtime {
     /// The answer of one project's read.
     pub(crate) fn ingest_outside(&mut self, place: &Place, answers: Vec<(Ask, Found)>) -> bool {
         self.missions.outside.reading.remove(place);
+        self.missions.outside.read_came_back(place);
         let mut changed = self.settle_outside(answers);
         // A pass with asks left reads them now, and a look that came while
         // this read was out starts the next pass now, not at the next look;
@@ -1231,10 +1274,15 @@ fn read_one(
             "The project's code host reads no change request by its number".to_owned()
         })?;
         // An open change request's CI is judged on the project's list, which
-        // the next read brings.
-        return by_number.standing(node, place, number).map(|standing| {
-            crate::waits::judge_standing(standing).map_or(Found::Open, Found::Ended)
-        });
+        // the next read brings; this read leaves it as it stands.
+        let open = if matches!(watch.target(), Some(WaitTarget::Ci(_))) {
+            Found::OpenUnchecked
+        } else {
+            Found::Open
+        };
+        return by_number
+            .standing(node, place, number)
+            .map(|standing| crate::waits::judge_standing(standing).map_or(open, Found::Ended));
     }
     let head = head.ok_or("The node names no branch")??;
     let against = against.ok_or("The project's default branch is not known yet")?;

@@ -937,6 +937,12 @@ pub(crate) struct MissionRuntime {
     /// request by number there before then (PRD core-wait D-13). Memory
     /// only, one entry per host.
     pub(super) hosts_resting: std::collections::BTreeMap<String, u64>,
+    /// The agents whose wait's sleep mark the sleep pass dropped for a
+    /// reason that lasts (an agent that cannot sleep, another session in
+    /// its pane), which the wait clock does not mark again until the agent
+    /// makes another wait (PRD core-wait D-09). Memory only, at most one
+    /// entry per agent with an open wait.
+    pub(super) wait_marks_refused: std::collections::BTreeSet<String>,
     /// The nodes finished as the book last read, by mission and node, so a
     /// save tells a node that has just finished (PRD mission-worker-sleep
     /// D-17). Set from the book read at start, so a restart sleeps nothing
