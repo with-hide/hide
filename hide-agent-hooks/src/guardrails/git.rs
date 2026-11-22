@@ -465,9 +465,9 @@ fn host(facts: &Facts<'_>, dir: &Path, call: HostCall) -> Option<Refusal> {
             _ => None,
         },
         Where::Git(target) => match call {
-            HostCall::Merge { host, route } if merge_barred(&target.project.rules) => Some(
-                Refusal::new(Rule::AgentMerge, merge_sentence(host, route)),
-            ),
+            HostCall::Merge { host, route } if merge_barred(&target.project.rules) => {
+                Some(Refusal::new(Rule::AgentMerge, merge_sentence(host, route)))
+            }
             HostCall::Checkout
                 if target.project.rules.worktree_folder && target.checkout.original() =>
             {

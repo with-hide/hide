@@ -620,8 +620,7 @@ mod tests {
             }
         }
         for command in ["gh -R owner/repo pr merge 12", "glab mr merge 3"] {
-            for (runtime, action) in
-                crate::guardrails::payload::every_runtimes_shell_call(command)
+            for (runtime, action) in crate::guardrails::payload::every_runtimes_shell_call(command)
             {
                 assert!(
                     matches!(refusal(&worker, &action), Some(Refused::MissionMerge(_))),
@@ -631,7 +630,10 @@ mod tests {
         }
         // A mission that goes through the merge lets its worker merge.
         assert_eq!(
-            refusal(&mission_agent("merge", "worker"), &shell_action("glab mr merge 3")),
+            refusal(
+                &mission_agent("merge", "worker"),
+                &shell_action("glab mr merge 3")
+            ),
             None
         );
         assert!(

@@ -129,7 +129,9 @@ fn api_merges(host: Host, args: &[String]) -> bool {
         let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
         matches!(segments.as_slice(), [.., kind, _, "merge"] if *kind == collection)
     });
-    endpoint && method_values(args).any(|method| method.eq_ignore_ascii_case("PUT") || method.contains(['$', '`']))
+    endpoint
+        && method_values(args)
+            .any(|method| method.eq_ignore_ascii_case("PUT") || method.contains(['$', '`']))
 }
 
 /// Every value given to `-X`/`--method` in `args`.
@@ -144,7 +146,9 @@ fn method_values(args: &[String]) -> impl Iterator<Item = &str> {
         }
         // A short cluster whose `X` takes the rest of it, or the next word
         // (`-X PUT`, `-XPUT`, `-X=PUT`, `-iX PUT`).
-        let letters = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-'))?;
+        let letters = arg
+            .strip_prefix('-')
+            .filter(|rest| !rest.starts_with('-'))?;
         let (_, value) = letters.split_once('X')?;
         match value.strip_prefix('=').unwrap_or(value) {
             "" => next(),
@@ -209,7 +213,10 @@ fn git_arms_merge(args: &[String]) -> bool {
 
 /// The values of a `git push`'s `-o`/`--push-option` options.
 fn push_options(args: &[String]) -> impl Iterator<Item = &str> {
-    let end = args.iter().position(|arg| arg == "--").unwrap_or(args.len());
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
     let args = &args[..end];
     args.iter().enumerate().filter_map(|(at, arg)| {
         let next = || args.get(at + 1).map(String::as_str);
@@ -220,9 +227,15 @@ fn push_options(args: &[String]) -> impl Iterator<Item = &str> {
             return Some(value);
         }
         // `-o` takes the rest of its cluster, or the next word.
-        let letters = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-'))?;
+        let letters = arg
+            .strip_prefix('-')
+            .filter(|rest| !rest.starts_with('-'))?;
         let (_, value) = letters.split_once('o')?;
-        if value.is_empty() { next() } else { Some(value) }
+        if value.is_empty() {
+            next()
+        } else {
+            Some(value)
+        }
     })
 }
 
@@ -231,7 +244,11 @@ fn push_options(args: &[String]) -> impl Iterator<Item = &str> {
 /// (deprecated in GitLab 17.11), under either namespace GitLab reads
 /// (`mr.` is its alias), with or without a value.
 fn merging_option(option: &str) -> bool {
-    let key = option.split('=').next().unwrap_or_default().to_ascii_lowercase();
+    let key = option
+        .split('=')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let Some((namespace, name)) = key.split_once('.') else {
         return false;
     };
