@@ -110,6 +110,13 @@ pub struct PlanKeys {
     pub keep_planning: Vec<String>,
     #[serde(default)]
     pub row: Option<String>,
+    /// The words of the row `approve` picks, after its place, when the menu
+    /// offers more than one way to approve: the screen must show them on that
+    /// row as the pick is typed, so a menu whose rows moved or read otherwise
+    /// is answered in the terminal and never picks a row that widens what the
+    /// agent may do (Claude Code's first row switches it to auto mode).
+    #[serde(default)]
+    pub approve_label: Option<String>,
 }
 
 /// A tool call waiting for permission: allow it once, allow it from now on
@@ -194,6 +201,14 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     {
         return Err(format!(
             "{name}: answer.marker is 1 to {MAX_ROW_BYTES} bytes of text"
+        ));
+    }
+    if let Some(plan) = &answer.plan_approval
+        && let Some(label) = &plan.approve_label
+        && (!text(label) || plan.row.is_none() || answer.marker.is_none())
+    {
+        return Err(format!(
+            "{name}: answer.plan_approval.approve_label is 1 to {MAX_ROW_BYTES} bytes of text, on a kind with a marker and a row"
         ));
     }
     for (kind, row, lists) in kinds {
@@ -1147,8 +1162,9 @@ mod tests {
 
     /// A row the core cannot find on the screen is refused at the build:
     /// one with no marker to find it by, one that does not name its place,
-    /// a choice's label outside a question, or keys that move the highlight
-    /// in a way its row count cannot follow.
+    /// a choice's label outside a question, keys that move the highlight
+    /// in a way its row count cannot follow, or a plan's approving row named
+    /// by words on a screen with no row to read them on.
     #[test]
     fn an_answer_row_the_core_cannot_follow_is_refused_by_the_read_the_build_runs() {
         let file = |answer: &str| {
@@ -1166,6 +1182,9 @@ mod tests {
             "marker = \"❯\"\nquestion = { down = \"down\", pick = \"enter\", row = \"1.\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{label}\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], allow_always = [\"right\", \"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
+            "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
+            "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",
+            "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], row = \"{n}.\", approve_label = \" \" }\n",
         ] {
             assert!(read_answer(refused).is_err(), "{refused}");
         }

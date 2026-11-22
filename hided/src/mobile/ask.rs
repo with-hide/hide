@@ -189,6 +189,7 @@ pub fn keys(
     let screen = operator_input::choice_screen(
         &agent.agent_kind,
         shown.kind,
+        choice,
         labels.as_deref().unwrap_or_default(),
     );
     let screen = match &shown.command {
