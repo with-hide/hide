@@ -2,9 +2,11 @@
 // doop final board's F1 list and F2 device sheet, drawn from production parts.
 // Names, places and counts are fixtures, never operator data.
 
+import { ADD_HINTS_KEY } from "../mobile/addHint";
 import { HOSTS_KEY } from "../mobile/hosts";
 import type { LookContent } from "../mobile/lookContent";
 import type { AgentGroup, AgentKey, GroupRow, LookFile, LookRow, PhoneAgent, PhoneDevice, PhoneSleepingSession } from "../mobile/protocol";
+import type { Presence } from "../mobile/presence";
 import type { Detail } from "../mobile/store";
 
 export const PHONE_ROOM = "a".repeat(43);
@@ -104,13 +106,44 @@ export function phoneDevices(groups: readonly AgentGroup[]): PhoneDevice[] {
   ];
 }
 
-/** The one paired Mac the hosted phone's picker lists, written before the sheet reads it. */
-export function seedPairedMac(): void {
+/** The other computers the gathered view's phone is paired with (PRD device-connect-iroh B55, B62), invented: one answers, one is still connecting, one is out of reach and one speaks another phone protocol. */
+export const GATHERED_COMPUTERS = [
+  { room: "c".repeat(43), name: "회사 iMac" },
+  { room: "d".repeat(43), name: "Windows PC" },
+  { room: "e".repeat(43), name: "build-box" },
+  { room: "f".repeat(43), name: "집 Mac" },
+] as const;
+
+/** The one paired Mac the hosted phone's picker lists, written before the sheet reads it; `gathered` adds the other computers. */
+/** The machine the Mac opens that runs work of its own and that the phone keeps no pairing with (`phone-add-hint`, PRD device-connect-iroh B56). */
+export const ADD_HINT_MACHINES = [{ machine: "gallery-mini", name: "맥미니" }];
+
+export function seedPairedMac(gathered = false): void {
+  const hosts = [{ room: PHONE_ROOM, name: PHONE_MAC }, ...(gathered ? GATHERED_COMPUTERS : [])];
   try {
-    localStorage.setItem(HOSTS_KEY, JSON.stringify([{ room: PHONE_ROOM, name: PHONE_MAC, noiseKey: "b".repeat(43), credential: "gallery", protocol: 2, lastSeen: null }]));
+    localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts.map((host) => ({ ...host, noiseKey: "b".repeat(43), credential: "gallery", protocol: 2, lastSeen: null }))));
+    // Each visit draws the add hint again (`phone-add-hint`), however the last one ended it.
+    localStorage.removeItem(ADD_HINTS_KEY);
   } catch {
     // The picker then says storage is unavailable, which is the state it draws.
   }
+}
+
+/** What each other computer of the gathered view says, in place of a socket: Windows PC never answers, so it stays connecting; the iMac also has an automation waiting on a person and a cut list. */
+export function gatheredWatch(host: { room: string }, changed: (presence: Presence) => void): () => void {
+  const [imac, , box, home] = GATHERED_COMPUTERS;
+  if (host.room === imac.room) {
+    changed({ online: true, lastSeen: Date.now(), gathered: [
+      { group: "needs_you", count: 1, rows: [row(agent("i1", "야간 미션 · 리뷰 기다림", 7, { device_id: "imac", group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "bot · main", line: asking("리뷰어가 고친 점 두 가지를 반영할까요?") }))] },
+      { group: "done", count: 1, rows: [row(agent("i2", "테스트 고치기", 12, { device_id: "imac", group: "done", mark: "done", status_code: "idle", emphasized: true, place: "shop-api · fix/tests", line: { text: "완료 · 바뀐 파일 4개", mode: "news", tone: "news" } }))] },
+    ],
+    // An automation of that computer stopped for a person, and its list left agents out to fit one relay message.
+    asks: [{ id: "morning-report", name: "아침 리포트", reason: "login_expired" }],
+    omitted: 3 });
+  }
+  if (host.room === box.room) changed({ online: false, lastSeen: Date.now() - 90 * MINUTE });
+  if (host.room === home.room) changed({ online: false, lastSeen: null, protocolMismatch: 6 });
+  return () => {};
 }
 
 /** The scenes of the 볼 것 tab and its viewers (PRD mobile-companion-ui B10-B19, B23, B26, B27), in the order the board draws them. */

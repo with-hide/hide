@@ -6,7 +6,8 @@ Before=hide-iroh-relay.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /opt/hide-relay/current/iroh-relay.nft
-ExecStop=/usr/sbin/nft delete table inet hide_iroh_relay
+# `-`: the meter stops this unit when the table is already gone (iroh-relay-meter.py).
+ExecStop=-/usr/sbin/nft delete table inet hide_iroh_relay
 TimeoutStartSec=20
 StandardOutput=null
 StandardError=journal

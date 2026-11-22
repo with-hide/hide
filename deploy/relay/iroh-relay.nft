@@ -21,8 +21,8 @@ table inet hide_iroh_relay {
 		# here could refuse phone connections behind one shared NAT.
 		iif "lo" tcp dport 3443 ct state new limit rate over 10/second burst 30 packets reject with tcp reset
 		# Each device connection holds two of Caddy's descriptors (client and
-		# relay). Caddy's LimitNOFILE is 4096 (hide-relay-proxy.service):
-		# 2 x 1024 device + 2 x 512 phone (hide-relay MAX_CONNECTIONS) = 3072,
+		# relay). Caddy's LimitNOFILE is 6144 (hide-relay-proxy.service):
+		# 2 x 1024 device + 2 x 1536 phone (hide-relay MAX_CONNECTIONS) = 5120,
 		# leaving 1024 for listeners, certificates, health checks and pools.
 		iif "lo" tcp dport 3443 ct state new ct count over 1024 reject with tcp reset
 		iif "lo" tcp dport 3443 ct state new counter name "connections"

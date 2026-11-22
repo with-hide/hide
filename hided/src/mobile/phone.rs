@@ -327,12 +327,18 @@ fn automations_frame(automations: &PhoneAutomations) -> Value {
 }
 
 fn meta_frame(meta: &PhoneMeta) -> Value {
-    json!({
+    let mut frame = json!({
         "type": "meta",
         "push_mode": meta.push_mode.as_str(),
         // Other phones on a live connection, for "폰 n대 더 연결됨".
         "other_phones": meta.live_phones.saturating_sub(1),
-    })
+    });
+    // An addition (PRD device-connect-iroh B56): only a computer that opens
+    // another names it, and an older bundle ignores the field.
+    if !meta.machines.is_empty() {
+        frame["machines"] = json!(meta.machines);
+    }
+    frame
 }
 
 /// Which half of a detail the phone shows.
@@ -827,7 +833,7 @@ async fn run(
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heard = tokio::time::Instant::now();
     let record = mobile.phone(phone_id);
-    let hello = json!({
+    let mut hello = json!({
         "type": "hello",
         "mac_name": mobile.mac_name(),
         "phone_id": phone_id,
@@ -839,6 +845,15 @@ async fn run(
             _ => "unasked",
         },
     });
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // shows the gathered view only for a computer that says it offers
+    // connections between two Hides; an older bundle ignores the field.
+    if mobile.device_connect() {
+        hello["device_connect"] = json!(true);
+        // This computer's product device id, which another computer's
+        // `machines` names it by, so the phone knows which of those it has.
+        hello["machine"] = json!(mobile.node().as_str());
+    }
     let mut agents_omitted = 0;
     let (agents, omitted) = agents_frame(&projection.borrow_and_update());
     note_agents_omitted(phone_id, &mut agents_omitted, omitted);
@@ -2141,6 +2156,44 @@ async fn input(
 mod tests {
     use super::*;
     use hide_core::missions::ANSWER_LIMIT;
+
+    /// PRD device-connect-iroh B56: the phone is told each other machine
+    /// this computer opens that tells it work of its own, by the name the
+    /// peers list gives it; one the peers list does not name, or one that
+    /// tells no work, is not told, and a computer that opens none sends the
+    /// meta frame as before.
+    #[test]
+    fn the_phone_is_told_the_machines_this_computer_opens_that_run_their_own_work() {
+        let rest = json!({"navigator": {
+            "peers": [
+                {"key": "k1", "device_id": "mini", "name": "맥미니"},
+                {"key": "k2", "device_id": "pc", "name": "Windows PC"},
+                {"key": "k3", "device_id": "nas", "name": "NAS"},
+            ],
+            "peer_work": [
+                {"device_id": "mini", "key": "k1", "needs_you": 1, "done": 0},
+                {"device_id": "pc", "key": "k2", "needs_you": 0, "done": 0},
+                {"device_id": "ghost", "key": "k9", "needs_you": 0, "done": 0},
+            ],
+        }});
+        let machines = super::super::other_machines(&rest);
+        let meta = PhoneMeta {
+            machines,
+            ..PhoneMeta::default()
+        };
+        assert_eq!(
+            meta_frame(&meta)["machines"],
+            json!([
+                {"machine": "pc", "name": "Windows PC"},
+                {"machine": "mini", "name": "맥미니"},
+            ])
+        );
+        let none = PhoneMeta {
+            machines: super::super::other_machines(&json!({"navigator": {}})),
+            ..PhoneMeta::default()
+        };
+        assert!(meta_frame(&none).get("machines").is_none());
+    }
 
     #[test]
     fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {

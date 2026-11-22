@@ -665,6 +665,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         done: "읽을 것",
         observer_unconfirmed: "관찰자가 경고를 확인하지 않았어요",
         letter_undelivered: "편지가 전달되지 않았어요",
+        phone_paired: "새 폰이 연결됐어요",
         status_question: "질문",
         status_approval: "승인",
         status_error: "막힘",

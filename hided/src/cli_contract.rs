@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `pane`,
+//! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `phone`, `pane`,
 //! `access`, `skill`, `mcp`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
@@ -39,9 +39,11 @@ pub const PAIRING_ONLY: &[&str] = &[
     "carry",
 ];
 
-/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
+/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`], and every
+/// `hide phone` command, which ships with connections between two Hides.
 fn hidden(spec: &Spec) -> bool {
     matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+        || matches!(spec.words, ["phone", ..])
 }
 
 /// The topics whose every command is in the table.
@@ -55,6 +57,7 @@ const TOPICS: &[&str] = &[
     "task",
     "automation",
     "device",
+    "phone",
     "pane",
     "access",
     "skill",
@@ -1485,6 +1488,55 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_projects_listed"],
         refusals: &[],
     },
+    // The phones paired with this computer (PRD device-connect-iroh D-70),
+    // for a computer with no window to open Settings > Mobile in. `pair`
+    // draws the pairing QR for a person at a terminal outside Hide's panes
+    // and waits until a phone scans it; it never prints the link the QR
+    // holds. A program in a pane may list and remove.
+    Spec {
+        words: &["phone", "pair"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["phone_paired"],
+        refusals: &[
+            "phone_pair_from_pane",
+            "phone_pair_needs_terminal",
+            "phone_window_small",
+            "phone_limit",
+            "phone_pair_ended",
+            "mobile_unreachable",
+            "mobile_failed",
+        ],
+    },
+    Spec {
+        words: &["phone", "list"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["phone_list"],
+        refusals: &[],
+    },
+    // A phone by its id or, when only one phone has it, its name.
+    Spec {
+        words: &["phone", "remove"],
+        arguments: &[Arg {
+            name: "phone",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["phone_removed"],
+        refusals: &["phone_unknown", "phone_ambiguous"],
+    },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
     // engine-bundle-1 D-5, D-13). A read prints the pane's text unless
@@ -2749,6 +2801,13 @@ fn answers() -> Value {
         "device_list".into(),
         shape(&["devices", "peers", "guest_panes"]),
     );
+    // The phones paired with this computer, as Settings > Mobile lists them.
+    map.insert(
+        "phone_list".into(),
+        shape(&["enabled", "phones", "max_phones"]),
+    );
+    map.insert("phone_removed".into(), shape(&["phone_id", "name"]));
+    map.insert("phone_paired".into(), shape(&["name"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
@@ -2928,6 +2987,7 @@ mod tests {
                 | CommandKind::AgentArchive { .. }
                 | CommandKind::FoldAsk { .. }
                 | CommandKind::Device(_)
+                | CommandKind::Phone(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)
                 | CommandKind::Store(_)

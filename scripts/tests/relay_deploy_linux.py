@@ -269,6 +269,20 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
             # A relay process that dies is started again by systemd.
             subprocess.run(["systemctl", "kill", "--signal=SIGKILL", "hide-iroh-relay"], check=True)
             wait_for(lambda: device("/ping").endswith(b"\n200"), "device relay did not restart")
+            # Another tool flushes the counters table under a running relay: the meter cannot count it, so it
+            # stops the relay with its limits and reports, and its next tick that counts starts both, table and all.
+            # The timer stays out of the way so each tick is this script's.
+            subprocess.run(["systemctl", "stop", "hide-iroh-relay-meter.timer"], check=True)
+            subprocess.run(["nft", "delete", "table", "inet", "hide_iroh_relay"], check=True)
+            assert subprocess.run(["systemctl", "start", "hide-iroh-relay-meter.service"], check=False).returncode
+            assert not active("hide-iroh-relay.service") and not active("hide-iroh-relay-limits.service")
+            wait_for(lambda: any(entry["jsonPayload"] == {"event": "device_relay_meter_failed"}
+                     for batch in received for entry in batch["entries"]), "collector delivered no meter failure")
+            meter()
+            wait_for(lambda: device("/ping").endswith(b"\n200"), "device relay did not come back with its table")
+            assert subprocess.run(["nft", "list", "table", "inet", "hide_iroh_relay"],
+                                  capture_output=True, check=False).returncode == 0, "the relay came back with no table"
+            subprocess.run(["systemctl", "start", "hide-iroh-relay-meter.timer"], check=True)
             for batch in received:
                 for entry in batch["entries"]:
                     assert set(entry["jsonPayload"]) == {"event"}, entry

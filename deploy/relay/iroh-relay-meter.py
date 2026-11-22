@@ -4,11 +4,14 @@
 Run every minute by hide-iroh-relay-meter.timer, as root: it reads the
 nftables counters iroh-relay.nft keeps, adds what the relay sent to this UTC
 month, warns once at 80%, and stops the relay for the rest of the month at the
+cap. A tick that cannot count or save what the relay sent stops the relay and
+its limits until one can: a relay the meter does not count is not under its
 cap. The phone relay is metered by no part of this. `resume` lets the operator
 start it again before the month ends. Every line it prints is a categorical
 event with counts; no address, endpoint id or key ever reaches it.
 """
 
+import contextlib
 import datetime
 import fcntl
 import hashlib
@@ -21,6 +24,8 @@ import sys
 CAP_BYTES = 300 * 10**9
 WARN_BYTES = CAP_BYTES * 8 // 10
 UNIT = "hide-iroh-relay.service"
+# Stopping it removes the table; the relay's next start loads it again (Requires=).
+LIMITS = "hide-iroh-relay-limits.service"
 TABLE = ("inet", "hide_iroh_relay")
 STATE = Path("/var/lib/hide-iroh-relay-meter")
 CERTIFICATE = Path("/var/lib/hide-relay-proxy/caddy/certificates/acme-v02.api.letsencrypt.org-directory"
@@ -103,6 +108,14 @@ def paused(state):
     return state["stopped"] and not state["resumed"]
 
 
+def active_state(command):
+    return command("systemctl", "show", "--property=ActiveState", "--value", UNIT).strip()
+
+
+def is_running(active):
+    return active in (b"active", b"activating", b"reloading")
+
+
 def reconcile(state, directory, certificate, command):
     """Make the relay and Caddy's marker match the state; safe to repeat.
 
@@ -116,8 +129,8 @@ def reconcile(state, directory, certificate, command):
         marker.touch()
     else:
         marker.unlink(missing_ok=True)
-    active = command("systemctl", "show", "--property=ActiveState", "--value", UNIT).strip()
-    running = active in (b"active", b"activating", b"reloading")
+    active = active_state(command)
+    running = is_running(active)
     if paused(state) or not certificate.exists():
         if running:
             command("systemctl", "stop", UNIT)
@@ -150,40 +163,65 @@ def save(directory, state):
     temporary.replace(directory / "state.json")
 
 
+@contextlib.contextmanager
+def locked(directory):
+    """One meter at a time: the timer's tick and the operator's resume."""
+    directory.mkdir(exist_ok=True)
+    with open(directory / "lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def emit(events):
     for event in events:
         print(json.dumps(event, separators=(",", ":")), flush=True)
 
 
 def tick(directory=STATE, now=None, command=run, certificate=CERTIFICATE):
-    state, events = advance(load(directory), read_counters(command),
-                            now or datetime.datetime.now(datetime.timezone.utc))
-    # An alert printed twice after a crash is better than one never printed.
-    emit(events)
-    save(directory, state)
-    reconcile(state, directory, certificate, command)
+    """One reading, and the relay made to match it.
+
+    Fails closed: when the counters, the state or its save fail, or the relay
+    runs with no table to count it (another tool flushed the ruleset), the
+    relay and its limits are stopped before the failure is reported, so no
+    relay forwards while what it sends goes uncounted. The next tick that
+    counts and saves starts them again, and the table with them.
+    """
+    try:
+        with locked(directory):
+            counters = read_counters(command)
+            state, events = advance(load(directory), counters, now or datetime.datetime.now(datetime.timezone.utc))
+            # An alert printed twice after a crash is better than one never printed.
+            emit(events)
+            save(directory, state)
+            if counters is None and is_running(active_state(command)):
+                raise RuntimeError("the relay runs with no counters table loaded")
+            reconcile(state, directory, certificate, command)
+    except Exception as error:
+        try:
+            command("systemctl", "stop", UNIT, LIMITS)
+        except Exception as stopping:
+            raise RuntimeError(f"{type(error).__name__}: {error}; stopping the relay failed: {stopping}") from error
+        raise
 
 
 def resume(directory=STATE, now=None, command=run, certificate=CERTIFICATE):
     """The operator starts a stopped relay again until the month ends."""
-    state, events = advance(load(directory), read_counters(command),
-                            now or datetime.datetime.now(datetime.timezone.utc))
-    if not state["stopped"]:
-        raise ValueError("the device relay is not stopped by its monthly limit")
-    state["resumed"] = True
-    events.append({"event": "device_relay_resumed"})
-    emit(events)
-    save(directory, state)
-    reconcile(state, directory, certificate, command)
+    with locked(directory):
+        state, events = advance(load(directory), read_counters(command),
+                                now or datetime.datetime.now(datetime.timezone.utc))
+        if not state["stopped"]:
+            raise ValueError("the device relay is not stopped by its monthly limit")
+        state["resumed"] = True
+        events.append({"event": "device_relay_resumed"})
+        emit(events)
+        save(directory, state)
+        reconcile(state, directory, certificate, command)
 
 
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ("tick", "resume"):
         raise ValueError("usage: iroh-relay-meter.py tick|resume")
-    STATE.mkdir(exist_ok=True)
-    with open(STATE / "lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        (tick if sys.argv[1] == "tick" else resume)()
+    (tick if sys.argv[1] == "tick" else resume)()
 
 
 if __name__ == "__main__":

@@ -498,9 +498,13 @@ class Systemd:
         self.actions = []
         self.certificate = folder / "caddy.crt"
         self.certificate.write_text("first")
+        self.nft_fails = False
+        self.handles = 7
 
     def __call__(self, *args):
         if args[:2] == ("/usr/sbin/nft", "-j"):
+            if self.nft_fails:
+                raise RuntimeError("/usr/sbin/nft -j failed (exit 1)")
             if args[2:4] == ("list", "tables"):
                 tables = [{"table": {"family": "inet", "name": "hide_iroh_relay", "handle": self.table["table"]}}
                           ] if self.table else []
@@ -514,8 +518,15 @@ class Systemd:
         self.actions.append(args[1])
         if args[1] in ("start", "restart"):
             self.active = b"active"
+            # Requires=: starting the relay starts its limits, which load the table when it is gone.
+            if self.table is None:
+                self.handles += 1
+                self.table = {"table": self.handles, "sent": 0, "connections": 0}
         elif args[1] == "stop":
             self.active = b"inactive"
+            # Stopping the limits unit deletes the table.
+            if "hide-iroh-relay-limits.service" in args[2:]:
+                self.table = None
         return b""
 
 
@@ -569,14 +580,58 @@ class DeviceRelayMeter(unittest.TestCase):
         self.tick(sent=7, connections=1)
         self.os.table = {"table": 9, "sent": 0, "connections": 0}
         self.tick(sent=11, connections=4)
-        self.os.table = None
-        self.tick()
         self.assertEqual(self.month(), 23)
         self.assertEqual(self.tick(minutes=60), ["device_relay_hour"])
         self.assertEqual(self.printed[-1], {"event": "device_relay_hour", "hour": "2026-11-19T10",
                                             "connections": 7, "sent_bytes": 23})
         for line in self.printed:
             self.assertLessEqual(set(line), {"event", "hour", "connections", "sent_bytes"})
+
+    def test_a_tick_that_cannot_count_or_save_stops_the_relay_until_one_can(self):
+        state = self.state / "state.json"
+        saved = {}
+
+        def unlocked():
+            (self.state / "lock").unlink()
+            (self.state / "lock").mkdir()
+
+        def unsaved():
+            (self.state / "state.json.next").mkdir()
+
+        def unreadable():
+            saved["state"] = state.read_text()
+            state.write_text("{")
+
+        def uncounted():
+            self.os.nft_fails = True
+
+        def flushed():
+            self.os.table = None
+
+        def heal():
+            for folder in (self.state / "state.json.next", self.state / "lock"):
+                if folder.is_dir():
+                    folder.rmdir()
+            if "state" in saved:
+                state.write_text(saved.pop("state"))
+            self.os.nft_fails = False
+
+        self.tick(sent=5)
+        faults = (("lock", unlocked), ("save", unsaved), ("state", unreadable), ("counters", uncounted), ("table", flushed))
+        for name, fault in faults:
+            with self.subTest(fault=name):
+                self.assertEqual(self.os.active, b"active")
+                fault()
+                with self.assertRaises(Exception):
+                    self.tick(sent=7)
+                self.assertEqual(self.os.active, b"inactive", "a relay the meter cannot count does not forward")
+                self.assertIsNone(self.os.table, "its limits go with it, so its next start loads the table again")
+                heal()
+                self.tick()
+                self.assertEqual(self.os.active, b"active")
+                self.assertIsNotNone(self.os.table)
+        self.assertEqual(self.os.actions, ["start"] + ["stop", "start"] * len(faults))
+        self.assertEqual(self.month(), 5)
 
     def test_operator_resumes_a_stopped_relay_for_the_rest_of_the_month(self):
         with self.assertRaisesRegex(ValueError, "not stopped"):

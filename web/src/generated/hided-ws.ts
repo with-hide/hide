@@ -785,7 +785,7 @@ export interface TerminalFrame {
   terminal_sequence: number;
 }
 /**
- * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile.
+ * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile. `phones` says a phone was paired with a machine this computer may open (PRD device-connect-iroh D-70): the window shows it whichever notification switch is on and whoever is at this computer, named by that machine and the phone.
  */
 export interface AgentNotice {
   notices: {
@@ -875,6 +875,14 @@ export interface AgentNotice {
         };
   }[];
   clear: string[];
+  /**
+   * Phones newly paired with a machine this computer may open, each told once: `peer` is that machine's connection id (`navigator.peers[].key`), `phone` the name it gave the phone (at most 64 characters), and `tag` the notification's tag, of the form `peer:<connection id>|phone|<name>`. Absent when there are none.
+   */
+  phones?: {
+    tag: string;
+    peer: string;
+    phone: string;
+  }[];
 }
 /**
  * Payload of the `desktop_notices` client event, accepted only from a desktop window and never sent to the core: wanted says whether this window shows agent notifications. The daemon judges agent changes while any window wants them, and a window's closing withdraws its wish; turning on announces nothing that was already waiting.

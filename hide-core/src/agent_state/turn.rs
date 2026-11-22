@@ -1273,6 +1273,9 @@ pub mod push {
         NeedsYou,
         Done,
         ObserverUnconfirmed,
+        /// A new phone paired with this computer, told to the phones already
+        /// paired (PRD device-connect-iroh D-70); it names no agent.
+        PhonePaired,
     }
 
     impl NoticeState {
@@ -1281,6 +1284,7 @@ pub mod push {
                 Self::NeedsYou => "needs_you",
                 Self::Done => "done",
                 Self::ObserverUnconfirmed => "observer_unconfirmed",
+                Self::PhonePaired => "phone_paired",
             }
         }
     }

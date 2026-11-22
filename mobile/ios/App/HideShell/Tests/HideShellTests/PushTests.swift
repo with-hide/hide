@@ -15,6 +15,8 @@ final class PushTests: XCTestCase {
         XCTAssertTrue(inbox.offer(["room": room, "device_id": "mini", "pane_id": "w1:p1"]))
         XCTAssertEqual(inbox.take(), PushOpenInbox.Target(room: room, deviceId: "mini", paneId: "w1:p1"))
         XCTAssertNil(inbox.take(), "given out once")
+        XCTAssertTrue(inbox.offer(["room": room, "device_id": "", "pane_id": ""]), "a notice about the computer itself opens its list")
+        XCTAssertEqual(inbox.take(), PushOpenInbox.Target(room: room, deviceId: "", paneId: ""))
     }
 
     func testTheTokenIsAskedForOnceAndAnswersEveryWaiter() {

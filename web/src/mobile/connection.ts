@@ -38,7 +38,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openPr, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
@@ -48,7 +48,7 @@ import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { HOST_LIST_LINK, hostStore, type PairedHost } from "./hosts";
+import { HOST_LIST_LINK, hostStore, validMachine, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -286,7 +286,7 @@ function connect(): void {
     if (frame.type === "hello") {
       attempt = 0;
       if (relayHost) {
-        relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now() };
+        relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now(), deviceConnect: frame.device_connect === true, machine: validMachine(frame.machine) ? frame.machine : undefined };
         patch({ relayError: usePhone.getState().relayError === "loadError" ? "loadError" : null });
         storeCredential(credential);
       }
@@ -1141,6 +1141,9 @@ async function startRelay(): Promise<void> {
       const { open } = parseFragment(`#open=${encodeURIComponent(tag)}`);
       if (open) patch({ pendingOpen: open });
     }
+    // Another computer's automation that stopped for a person, pressed in the gathered view, opens on its page here.
+    const automation = query.get("automation");
+    if (automation) openAutomation(automation);
     if (relayPair) {
       relayHost = { room: relayPair.room, noiseKey: relayPair.noise_key, name: relayPair.name,
         credential: null, protocol: PHONE_PROTOCOL, lastSeen: null };

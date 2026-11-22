@@ -254,7 +254,8 @@ fn core_messages() -> Vec<CoreMessage> {
             | CoreMessage::Seat { .. }
             | CoreMessage::Notice { .. }
             | CoreMessage::NoticeAnswer { .. }
-            | CoreMessage::NoticeClear { .. } => {}
+            | CoreMessage::NoticeClear { .. }
+            | CoreMessage::PhonePaired { .. } => {}
         }
     }
     let _ = exhaustive;
@@ -304,6 +305,7 @@ fn core_messages() -> Vec<CoreMessage> {
             taken: false,
         },
         CoreMessage::NoticeClear { tags: vec![text()] },
+        CoreMessage::PhonePaired { phone: text() },
     ]
 }
 
@@ -524,6 +526,7 @@ pub fn shape() -> Value {
             "notice_fields": fields(&sample_notice()),
             "notice_states": ["needs_you", "done"],
             "max_clear_tags": crate::core::MAX_CLEAR_TAGS,
+            "max_phone_name_chars": crate::core::MAX_PHONE_NAME_CHARS,
             "items": names!(Item: Agent, Pane),
             "asks": names!(Ask: Delivery, Pane),
         },

@@ -48,6 +48,9 @@ pub(crate) struct Outbound {
     // Separate budgets reserve lifecycle capacity while one FIFO preserves
     // PeerJoined-before-data and data-before-PeerLeft ordering.
     pub capacity: OwnedSemaphorePermit,
+    /// A data frame's share of the relay-wide queued bytes
+    /// (`limits::MAX_QUEUED_BYTES`), held, like `capacity`, through its write.
+    pub bytes: Option<OwnedSemaphorePermit>,
 }
 struct Peer {
     role: Role,
@@ -155,6 +158,8 @@ pub(crate) struct State {
     /// Whether this relay has an FCM project, and so forwards FCM requests.
     fcm_enabled: bool,
     next_socket: u64,
+    /// The relay-wide queued data bytes, one permit per byte.
+    queued_bytes: Arc<Semaphore>,
     peers: HashMap<u64, Peer>,
     rooms: HashMap<String, Room>,
     usage: HashMap<String, Usage>,
@@ -173,6 +178,7 @@ impl State {
             push_enabled,
             fcm_enabled: false,
             next_socket: 0,
+            queued_bytes: Arc::new(Semaphore::new(limits.queued_bytes)),
             peers: HashMap::new(),
             rooms: HashMap::new(),
             usage: HashMap::new(),
@@ -481,8 +487,25 @@ impl State {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, cap))?;
+        let bytes = match &message {
+            Message::Binary(data) => Some(
+                u32::try_from(data.len())
+                    .ok()
+                    .and_then(|len| {
+                        Arc::clone(&self.queued_bytes)
+                            .try_acquire_many_owned(len)
+                            .ok()
+                    })
+                    .ok_or(Rejection::cap(Refusal::ConnectionLimit, "queued_bytes"))?,
+            ),
+            _ => None,
+        };
         peer.output
-            .try_send(Outbound { message, capacity })
+            .try_send(Outbound {
+                message,
+                capacity,
+                bytes,
+            })
             .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, cap))
     }
     pub fn control(&self, id: u64, message: ServerMessage) -> Result<(), Rejection> {
@@ -541,6 +564,7 @@ impl State {
                                 .try_send(Outbound {
                                     message: Message::Text(text.into()),
                                     capacity,
+                                    bytes: None,
                                 })
                                 .map_err(|_| {
                                     Rejection::cap(Refusal::ConnectionLimit, "control_queue")

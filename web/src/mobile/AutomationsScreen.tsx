@@ -16,6 +16,7 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { pressAutomation } from "./connection";
 import { OfflineText } from "./OfflineText";
+import { DeviceTag } from "./parts";
 import { noticeText, type AutomationAction, type PhoneAutomation } from "./protocol";
 import { TabBar } from "./TabBar";
 import { automationOf, openAutomation, usePhone } from "./store";
@@ -130,7 +131,8 @@ function RowNotice({ id }: { id: string }) {
 }
 
 /** The automations the core counts as the operator's turn, oldest pause first, each one line of 내 차례: its name, `<why> · 고치고` and [다시 켜기], the press the tab's row sends (D-12, B23); the line opens its page. */
-export function AutomationAskRows() {
+/** `computer` is the gathered view's: the name of the computer these automations run on, drawn under each one's line. */
+export function AutomationAskRows({ computer }: { computer?: string } = {}) {
   const { t } = useInterfaceTranslation();
   const automations = usePhone((s) => s.automations);
   const asks = usePhone((s) => s.automationAsks);
@@ -147,18 +149,31 @@ export function AutomationAskRows() {
           <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => openAutomation(automation.id)} />
           <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
             <RepeatIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" />
-            <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">
-              <span className="font-medium text-foreground">{automation.name}</span>
-              <span className="text-warning">{" · "}</span>
-              {/* `<why> · 고치고` wraps as one piece, so 고치고 never stands alone on a line. */}
-              <span className="inline-block text-warning" data-phone-automation-ask-line={paused.reason}>{t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) })}</span>
-            </span>
+            {computer ? (
+              <span className="flex min-w-0 flex-1 flex-col items-start gap-xs">
+                <AskLine name={automation.name} reason={paused.reason} />
+                <DeviceTag label={computer} computer />
+              </span>
+            ) : <AskLine name={automation.name} reason={paused.reason} grow />}
             <ResumeButton automation={automation} connected={connected} />
           </div>
           <RowNotice id={automation.id} />
         </li>
       ))}
     </ul>
+  );
+}
+
+/** An automation's name and why it stopped for a person, as one line of 내 차례; the gathered view draws other computers' with it. */
+export function AskLine({ name, reason, grow = false }: { name: string; reason: NonNullable<PhoneAutomation["paused"]>["reason"]; grow?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <span className={cn("break-keep text-body wrap-anywhere", grow && "min-w-0 flex-1")}>
+      <span className="font-medium text-foreground">{name}</span>
+      <span className="text-warning">{" · "}</span>
+      {/* `<why> · 고치고` wraps as one piece, so 고치고 never stands alone on a line. */}
+      <span className="inline-block text-warning" data-phone-automation-ask-line={reason}>{t("mobile.automations.ask", { reason: pauseReasonText(reason, t) })}</span>
+    </span>
   );
 }
 

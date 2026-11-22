@@ -736,6 +736,59 @@ impl DesktopNotices {
         shown
     }
 
+    /// A phone named `phone` was paired with this machine: each connected
+    /// computer that may open it is told once, whether or not someone is at
+    /// it, so a pairing no one there made is seen (PRD device-connect-iroh
+    /// D-70). They are the computers that told this machine their seat, at
+    /// most [`MAX_COMPUTERS`]; one that is not connected now is not told.
+    /// Returns how many were.
+    pub fn phone_paired(&self, phone: &str) -> usize {
+        let computers: Vec<String> = {
+            let use_state = self.computer_use.lock().expect("computer use");
+            use_state.peers.keys().cloned().collect()
+        };
+        let told = computers
+            .iter()
+            .filter(|key| {
+                self.tell(
+                    key,
+                    CoreMessage::PhonePaired {
+                        phone: phone.to_owned(),
+                    },
+                )
+            })
+            .count();
+        hide_core::diagnostic!(json!({
+            "component": "desktop_notices", "kind": "desktop_notices.phone_paired_told",
+            "computers": computers.len(), "told": told,
+        }));
+        told
+    }
+
+    /// The machine under `key`, which this computer may open, says a phone
+    /// named `phone` was paired with it (D-70). Every window here that takes
+    /// notifications shows it, whoever is at this computer: it is the
+    /// operator's one sign of a pairing they did not make.
+    pub fn show_phone_paired(&self, key: &str, phone: &str) -> bool {
+        if !wire::valid_phone_name(phone) {
+            return false;
+        }
+        let frame = json!({
+            "type": "agent_notice",
+            "payload": {
+                "notices": [],
+                "clear": [],
+                "phones": [{"tag": peer_tag(key, &format!("phone|{phone}")), "peer": key, "phone": phone}],
+            },
+        });
+        let shown = self.frames.send(Arc::from(frame.to_string())).is_ok();
+        hide_core::diagnostic!(json!({
+            "component": "desktop_notices", "kind": "desktop_notice.phone_paired",
+            "peer": key, "shown": shown,
+        }));
+        shown
+    }
+
     /// The machine under `key` says the notices under `tags` are over.
     pub fn withdraw(&self, key: &str, tags: &[String]) {
         let clear: Vec<String> = tags

@@ -37,6 +37,30 @@ pub fn update_inputs(
         "sleeping_sessions",
         rest.navigator.sleeping_sessions
     );
+    // The machines this one opens, for the hint that one of them can be added
+    // to the phone (PRD device-connect-iroh B56): only the ids and names it
+    // reads (`super::other_machines`), so a count another machine tells moves
+    // nothing here.
+    if rest.navigator.peers.revision > have {
+        let peers = rest
+            .navigator
+            .peers
+            .value
+            .iter()
+            .map(|peer| serde_json::json!({"key": peer.key, "device_id": peer.device_id, "name": peer.name}))
+            .collect();
+        changed |= replace(&mut kept["navigator"]["peers"], Value::Array(peers));
+    }
+    if rest.navigator.peer_work.revision > have {
+        let work = rest
+            .navigator
+            .peer_work
+            .value
+            .iter()
+            .map(|work| serde_json::json!({"key": work.key, "device_id": work.device_id}))
+            .collect();
+        changed |= replace(&mut kept["navigator"]["peer_work"], Value::Array(work));
+    }
     field!("status", "remote", rest.status.remote);
     field!("status", "background_ai", rest.status.background_ai);
     field!("status", "last_error", rest.status.last_error);
@@ -64,6 +88,15 @@ pub fn update_inputs(
         changed = true;
     }
     Ok(changed)
+}
+
+/// Puts `next` in `slot` and says whether that changed it.
+fn replace(slot: &mut Value, next: Value) -> bool {
+    if *slot == next {
+        return false;
+    }
+    *slot = next;
+    true
 }
 
 #[cfg(test)]
@@ -380,6 +413,65 @@ mod tests {
             Some("zh-CN"),
             "the string is not validated here"
         );
+    }
+
+    /// PRD device-connect-iroh B56, through the follower's own input
+    /// boundary: the machines this one opens that tell it work reach
+    /// `other_machines` from the typed snapshot on the first read, a new one
+    /// joins on a later read, a count another machine tells moves nothing,
+    /// and a machine whose work is gone leaves.
+    #[test]
+    fn the_machines_this_one_opens_reach_the_follower_and_leave_it() {
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
+            "schema_version": 2, "node_id": "test-node", "app_state_path": ""
+        }))
+        .unwrap();
+        let peer = |key: &str, device: &str, name: &str| {
+            serde_json::from_value(json!({
+                "key": key, "device_id": device, "name": name, "opens": "active",
+                "opened_by": null, "connected": true, "path": null, "reason": null, "update": null,
+            }))
+            .unwrap()
+        };
+        let work = |key: &str, device: &str, needs_you: u32| {
+            serde_json::from_value(
+                json!({"key": key, "device_id": device, "needs_you": needs_you, "done": 0}),
+            )
+            .unwrap()
+        };
+        let mini = "a".repeat(64);
+        let pc = "b".repeat(64);
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        snapshot.navigator.peers =
+            vec![peer(&mini, "mini", "맥미니"), peer(&pc, "pc", "Windows PC")];
+        snapshot.navigator.peer_work = vec![work(&mini, "mini", 1)];
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
+        let mut kept = Value::Null;
+        assert!(update_inputs(&mut kept, &first, 0).unwrap());
+        let named = |kept: &Value| -> Vec<String> {
+            super::super::other_machines(kept)
+                .into_iter()
+                .map(|machine| format!("{}={}", machine.machine, machine.name))
+                .collect()
+        };
+        assert_eq!(named(&kept), ["mini=맥미니"]);
+
+        snapshot.navigator.peer_work = vec![work(&mini, "mini", 1), work(&pc, "pc", 0)];
+        let joined = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
+        assert!(update_inputs(&mut kept, &joined, 1).unwrap());
+        assert_eq!(named(&kept), ["pc=Windows PC", "mini=맥미니"]);
+
+        snapshot.navigator.peer_work = vec![work(&mini, "mini", 3), work(&pc, "pc", 2)];
+        let counted = hide_core::RestSections::capture(&snapshot, Some(&joined), 3);
+        assert!(
+            !update_inputs(&mut kept, &counted, 2).unwrap(),
+            "a count moves no phone input"
+        );
+
+        snapshot.navigator.peer_work = vec![work(&pc, "pc", 2)];
+        let left = hide_core::RestSections::capture(&snapshot, Some(&counted), 4);
+        assert!(update_inputs(&mut kept, &left, 3).unwrap());
+        assert_eq!(named(&kept), ["pc=Windows PC"]);
     }
 
     #[test]
