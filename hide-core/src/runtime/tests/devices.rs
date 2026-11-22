@@ -1265,9 +1265,14 @@ fn a_paired_machine_whose_link_failed_while_away_is_dialed_when_its_connection_i
         .expect("peer machines event");
         runtime.dispatch_json(&event)
     };
+    // Registered while connected; this test's connector reaches no paired
+    // machine, so its link's attempt is started here, then fails as a dial
+    // that gave up while the machine slept.
     told(&mut runtime, true);
+    runtime.start_device_host("windows-pc", super::hosts::HostAttempt::Background);
     told(&mut runtime, false);
     let generation = runtime.device_host_generation("windows-pc");
+    assert!(generation > 0, "its link was attempted");
     runtime.ingest_host_established(
         "windows-pc",
         generation,
