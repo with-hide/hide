@@ -3083,19 +3083,24 @@ fn apply_named(
         .map_err(failed)?;
     let hosts = crate::code_host::CodeHosts::STANDARD;
     for mark in &facts.named {
-        // The record names a repository by its host's record name; a name
-        // the registry does not read (a newer node's host) is kept by
-        // nothing rather than guessed.
+        // The record names a repository by its host's record name, and
+        // keeps change requests only on a server their host names, as it
+        // does a printed address (`PullRequestSnapshot::sighting_key`):
+        // GitHub's record name drops the server, so an Enterprise server's
+        // `acme/app` would read as github.com's. A name the registry does
+        // not read (a newer node's host) is kept by nothing either, never
+        // guessed.
         let repo_name = match mark.pr.repository.as_deref() {
             None => String::new(),
             Some(name) => match hosts
                 .repository(name)
+                .filter(|(_, repository)| hosts.on_named_server(repository))
                 .and_then(|(_, repository)| hosts.record_name(&repository))
             {
                 Some(record) => record,
                 None => {
                     crate::diagnostic!(serde_json::json!({
-                        "component": "links", "kind": "session.named_unread",
+                        "component": "links", "kind": "session.named_unkept",
                         "device_id": device, "agent": agent, "session_id": id,
                     }));
                     continue;

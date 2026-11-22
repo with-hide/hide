@@ -996,6 +996,15 @@ mod tests {
                 "https://gitlab.com/acme/sub/app/-/merge_requests/12",
                 Some(place("gitlab", Some("gitlab.com/acme/sub/app"))),
             ),
+            // The server is kept, so the core tells it from github.com's.
+            (
+                "https://ghe.example/acme/app/pull/12",
+                Some(place("github", Some("ghe.example/acme/app"))),
+            ),
+            (
+                "https://github.com/acme/app/pull/12",
+                Some(place("github", Some("github.com/acme/app"))),
+            ),
         ] {
             let merge_request = words(&["node", "a", "--pr", written, "--base-pr", "!3"]);
             let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =

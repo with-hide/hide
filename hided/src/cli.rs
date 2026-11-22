@@ -4652,7 +4652,7 @@ mod tests {
         );
         assert_eq!(
             parse(&["hide", "links", "pr", "https://github.com/Acme/App/pull/5"]),
-            pr(5, Some("github"), Some("acme/app"))
+            pr(5, Some("github"), Some("github.com/acme/app"))
         );
         for refused in ["%12", "!0", "!x", "https://gitlab.com/acme/app/-/issues/3"] {
             assert_eq!(

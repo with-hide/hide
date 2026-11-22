@@ -998,7 +998,18 @@ fn a_steps_change_request_of_another_host_or_repository_is_refused() {
     assert_eq!(
         refusal(
             &mut runtime,
-            json!({"host": "github", "repository": "acme/other"})
+            json!({"host": "github", "repository": "ghe.example/acme/app"})
+        ),
+        (
+            "change_request_other_repository".to_owned(),
+            Some("acme/app".to_owned())
+        ),
+        "an Enterprise server's acme/app is another repository"
+    );
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"host": "github", "repository": "github.com/acme/other"})
         ),
         (
             "change_request_other_repository".to_owned(),
@@ -1007,7 +1018,7 @@ fn a_steps_change_request_of_another_host_or_repository_is_refused() {
     );
     for place in [
         json!({"host": "github"}),
-        json!({"host": "github", "repository": "acme/app"}),
+        json!({"host": "github", "repository": "github.com/acme/app"}),
     ] {
         if let Err(refused) = turn(
             &mut runtime,

@@ -1760,6 +1760,69 @@ fn a_merge_request_and_a_pull_request_of_one_name_and_number_link_only_their_own
     );
 }
 
+/// A call that names a repository on another server than github.com, with
+/// github.com's path, links nothing of github.com's: the record keeps change
+/// requests only on a server their host names, as it does printed
+/// addresses, and GitHub's record name has no server to tell them apart.
+/// The same path written for github.com links, from any folder.
+#[test]
+fn a_named_repository_on_another_server_never_links_githubs_of_the_same_path() {
+    let calls = [
+        ("s-ghe", "gh pr view 7 -R ghe.example/acme/app"),
+        (
+            "s-ghe-address",
+            "gh pr view 7 -R https://ghe.example/acme/app",
+        ),
+        (
+            "s-ghe-variable",
+            "GH_REPO=ghe.example/acme/app gh pr view 7",
+        ),
+        ("s-other", "gh pr view 7 -R https://other.example/acme/app"),
+        ("s-ghe-pr", "gh pr view https://ghe.example/acme/app/pull/7"),
+        ("s-github", "gh pr view 7 -R github.com/acme/app"),
+        (
+            "s-ghe-then-github",
+            "gh pr view 7 -R ghe.example/acme/app; gh pr view 7 -R acme/app",
+        ),
+        (
+            "s-github-then-ghe",
+            "gh pr view 7 -R acme/app; gh pr view 7 -R ghe.example/acme/app",
+        ),
+    ];
+    // github.com's row known before the sessions are read, and after.
+    for project_first in [true, false] {
+        let home = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let mut store = open(state.path());
+        let github = project(vec![pr(7, "feat/x", T0, None)]);
+        if project_first {
+            store.apply_project(&github, T0).unwrap();
+        }
+        for (id, command) in calls {
+            let file = claude_call(
+                home.path(),
+                id,
+                "/elsewhere",
+                T0 + 10 * MIN,
+                "봐 줘",
+                command,
+                None,
+            );
+            ingest(&mut store, home.path(), &file);
+        }
+        if !project_first {
+            store.apply_project(&github, T0).unwrap();
+        }
+        let mut ids: Vec<String> = panel(&store, 7).into_iter().map(|line| line.id).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            ["s-ghe-then-github", "s-github", "s-github-then-ghe"],
+            "project first: {project_first}"
+        );
+    }
+}
+
 /// `gh pr view 7` and `glab mr view 7` in one session and one folder are
 /// two references, whichever comes first: each links the session to its own
 /// host's change request, and appending to the file or opening the record

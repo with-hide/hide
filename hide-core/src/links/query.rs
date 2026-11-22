@@ -76,8 +76,19 @@ fn written_for(
         .as_deref()
         .and_then(|name| hosts.repository(name))
         .map_or_else(|| hosts.before_hosts(), |(host, _)| host);
+    // `repository` is the address's repository key. The record keys change
+    // requests only on a server their host names (a GitHub Enterprise
+    // server's are not kept, and GitHub's record name drops the server), so
+    // an address on any other server is not the project's whatever its path.
+    let of_project = |written: &str| {
+        hosts.repository(written).is_some_and(|(host, repository)| {
+            host.repository_key(&repository) == written
+                && hosts.on_named_server(&repository)
+                && hosts.record_name(&repository).as_deref() == row.name.as_deref()
+        })
+    };
     host.is_none_or(|host| hosts.host(host) == Some(project_host))
-        && repository.is_none_or(|repository| row.name.as_deref() == Some(repository))
+        && repository.is_none_or(of_project)
 }
 
 /// The registered Projects as the runtime knows them when the query came.
@@ -555,7 +566,7 @@ mod tests {
         };
         for held in [
             target(Some("github"), None),
-            target(Some("github"), Some("acme/app")),
+            target(Some("github"), Some("github.com/acme/app")),
         ] {
             let answer = run(
                 &scope,
@@ -568,7 +579,11 @@ mod tests {
         for other in [
             target(Some("gitlab"), None),
             target(Some("gitlab"), Some("gitlab.com/acme/app")),
-            target(Some("github"), Some("acme/other")),
+            target(Some("github"), Some("github.com/acme/other")),
+            // An Enterprise server's `acme/app` is not github.com's, and a
+            // name that is no repository key places nothing.
+            target(Some("github"), Some("ghe.example/acme/app")),
+            target(Some("github"), Some("acme/app")),
         ] {
             assert_eq!(
                 run(

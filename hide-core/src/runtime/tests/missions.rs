@@ -20670,7 +20670,7 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
             "GitHub",
         ),
         (
-            json!({"pr": 12, "pr_place": {"host": "github", "repository": "acme/other"}}),
+            json!({"pr": 12, "pr_place": {"host": "github", "repository": "github.com/acme/other"}}),
             "change_request_other_repository",
             "acme/app",
         ),
@@ -20678,6 +20678,17 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
             json!({"pr": 12, "base_pr": 2, "base_pr_place": {"host": "gitlab"}}),
             "change_request_other_host",
             "GitHub",
+        ),
+        // An Enterprise server's `acme/app` is another repository.
+        (
+            json!({"pr": 12, "pr_place": {"host": "github", "repository": "ghe.example/acme/app"}}),
+            "change_request_other_repository",
+            "acme/app",
+        ),
+        (
+            json!({"pr": 12, "base_pr": 2, "base_pr_place": {"host": "github", "repository": "ghe.example/acme/app"}}),
+            "change_request_other_repository",
+            "acme/app",
         ),
     ] {
         assert_eq!(
@@ -20690,7 +20701,7 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
     for patch in [
         json!({"pr": 12}),
         json!({"pr": 13, "pr_place": {"host": "github"}}),
-        json!({"pr": 14, "pr_place": {"host": "github", "repository": "acme/app"}, "base_pr": 2}),
+        json!({"pr": 14, "pr_place": {"host": "github", "repository": "github.com/acme/app"}, "base_pr": 2}),
     ] {
         node(&mut runtime, patch.clone()).unwrap();
     }
@@ -20700,6 +20711,28 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
         "{:?}",
         held(&runtime)
     );
+
+    // On an Enterprise project github.com's `acme/app` is another
+    // repository, and the server's own address is the project's.
+    runtime.github = read_as("ghe.example/acme/app");
+    for (field, place) in [("pr_place", "pr"), ("base_pr_place", "base_pr")] {
+        assert_eq!(
+            node(
+                &mut runtime,
+                json!({(place): 20, (field): {"host": "github", "repository": "github.com/acme/app"}})
+            ),
+            Err((
+                "change_request_other_repository".to_owned(),
+                Some("ghe.example/acme/app".to_owned())
+            )),
+            "{field}"
+        );
+        node(
+            &mut runtime,
+            json!({(place): 21, (field): {"host": "github", "repository": "ghe.example/acme/app"}}),
+        )
+        .unwrap();
+    }
 
     // On a gitlab.com project `#12` is GitHub's label and `!12` its own.
     runtime.github = read_as("gitlab.com/acme/app");

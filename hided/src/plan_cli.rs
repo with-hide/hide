@@ -418,6 +418,11 @@ mod tests {
                 Some("gitlab"),
                 Some("gitlab.com/acme/sub/app"),
             ),
+            (
+                "https://ghe.example/acme/app/pull/1890",
+                Some("github"),
+                Some("ghe.example/acme/app"),
+            ),
         ] {
             let Ok(PlanCli::Command(PlanCommand::Node { pr, pr_place, .. })) =
                 parse(words(&["node", "pr", "--status", "done", "--pr", written]).iter())

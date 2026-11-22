@@ -94,8 +94,10 @@ pub struct WrittenChangeRequest {
     /// The key of the host its label or address is of; `None` for a bare
     /// number, which any host's project may hold.
     pub host: Option<String>,
-    /// The record name of the repository its address names
-    /// ([`CodeHosts::record_name`]); `None` without an address.
+    /// The repository key of the repository its address names, server and
+    /// path ([`CodeHost::repository_key`]); `None` without an address. A
+    /// change request is placed by this key, never by the record's name,
+    /// which GitHub keeps without a server.
     pub repository: Option<String>,
 }
 
@@ -183,7 +185,7 @@ pub fn written_change_request(word: &str) -> Option<WrittenChangeRequest> {
     Some(WrittenChangeRequest {
         number: u64::from(number),
         host: Some(host.key().to_owned()),
-        repository: hosts.record_name(&repository),
+        repository: Some(host.repository_key(&repository)),
     })
 }
 
@@ -683,8 +685,10 @@ impl CodeHosts {
                 host.name(),
             ));
         }
-        if let Some(repository) = &place.repository
-            && Some(repository) != self.record_name(project).as_ref()
+        if place
+            .repository
+            .as_ref()
+            .is_some_and(|written| *written != host.repository_key(project))
         {
             return Err(crate::coordination::refusal(
                 "change_request_other_repository",

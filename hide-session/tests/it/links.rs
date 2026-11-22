@@ -854,7 +854,7 @@ fn an_address_with_a_user_part_is_no_reference_in_every_format() {
         "https://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
         "https://user:example-secret@github.com/acme/app/pull/12",
         "https://example-secret@www.github.com/acme/app/pull/12",
-        "user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+        "ssh://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
     ] {
         for call in [
             "bash scripts/ship.sh",
