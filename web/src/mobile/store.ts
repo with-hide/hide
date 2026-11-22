@@ -114,12 +114,19 @@ export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOI
 
 export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" };
 
-/** A choice picked on the agent's ask: sending, sent (until the ask moves on), or refused with why. */
-export type ChoiceState = { turn: string; choice: string; state: "sending" | "sent" } | { turn: string; choice: string; state: "failed"; notice: Notice };
+/**
+ * A choice picked on an agent's ask (`askIdentity`): sending, sent, or refused with why. `inTerminal` says nothing more is sent
+ * from the phone for that ask: the computer could not say whether the keys landed, or the terminal's highlight moved.
+ */
+export type ChoiceState = { choice: string; state: "sending" | "sent" } | { choice: string; state: "failed"; notice: Notice; inTerminal: boolean };
 
-/** Whether two asks are the same question, plan or command, whichever turn each came under. */
-function sameAsk(left: PhoneAsk | null, right: PhoneAsk): boolean {
-  return left !== null && left.kind === right.kind && left.text === right.text && left.command === right.command;
+/** The asks answered from this phone that it still remembers, newest last. */
+export const ANSWERS_KEPT = 16;
+
+/** `answers` with `identity`'s state set, newest last and at most `ANSWERS_KEPT`, the oldest going first. */
+export function withAnswer(answers: Record<string, ChoiceState>, identity: string, state: ChoiceState): Record<string, ChoiceState> {
+  const rest = Object.entries(answers).filter(([kept]) => kept !== identity);
+  return Object.fromEntries([...rest.slice(Math.max(0, rest.length - ANSWERS_KEPT + 1)), [identity, state]]);
 }
 
 type PhoneState = {
@@ -227,8 +234,10 @@ type PhoneState = {
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
   inputError: Notice | null;
-  /** The choice picked on the open detail's ask, for the ask it was picked on. */
-  choice: ChoiceState | null;
+  /** The choices picked on agents' asks, by the ask each was picked on (`askIdentity`), kept across the detail closing and the link dropping. */
+  answers: Record<string, ChoiceState>;
+  /** The ask the choice being sent was picked on. */
+  answering: string | null;
   /** Done on a person's turn hided has not answered, or refused (PRD ask-human B19); one at a time, keyed by its declaration. */
   humanTurn: { declaration: string; requestId: string | null; failed: boolean } | null;
   /** One request or failure at a time, keyed by the stable conversation intent. */
@@ -298,7 +307,8 @@ const initial: PhoneState = {
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
-  choice: null,
+  answers: {},
+  answering: null,
   humanTurn: null,
   sleepAction: null,
   installHint: false,
@@ -424,12 +434,9 @@ export function applyFrame(frame: ServerFrame): void {
     case "ask": {
       const detail = state.detail;
       if (!detail || !sameKey(detail.key, frame)) return;
-      // A choice belongs to the ask it was picked on: once the agent asks something else, or nothing, it is over. An answered ask
-      // that stands under a new turn is still that ask: a permission stays open until its command ends, and the agent's state
-      // moves meanwhile, so the answer sent keeps its mark rather than offering the choices again.
-      const ask = frame.ask;
-      const kept = state.choice && ask && (state.choice.turn === ask.turn || (state.choice.state !== "failed" && sameAsk(detail.ask, ask)));
-      patch({ detail: { ...detail, ask }, choice: kept ? { ...state.choice!, turn: ask.turn } : null });
+      // A choice belongs to the ask it was picked on (`askIdentity`, read by the card), so a new ask starts fresh and an answered
+      // one that stays open under a new turn, as a permission does until its command ends, keeps its mark.
+      patch({ detail: { ...detail, ask: frame.ask } });
       return;
     }
     case "looks": {

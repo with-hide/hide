@@ -31,6 +31,7 @@ import { attachPicked, pickFiles } from "./pickFiles";
 import { removeFile, retryFile, shownFiles } from "./uploads";
 import {
   MAX_MESSAGES,
+  askIdentity,
   QUICK_KEYS,
   boxDrawingRow,
   inputFailure,
@@ -415,7 +416,8 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   const lastAt = messages.at(-1)?.at_ms ?? 0;
   const working = agent?.status_code === "working";
   const commandSince = working && running?.kind === "command" ? running.since_ms : null;
-  const thinkingSince = working && commandSince === null ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
+  // An unknown running line claims neither: a command may run among the calls the computer did not keep.
+  const thinkingSince = working && commandSince === null && running?.kind !== "unknown" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
   // The activity line and the ask are content too: one that appears with no new word still pulls a reader at the bottom down to it.
   const thinking = thinkingSince !== null || commandSince !== null;
   const content = useMemo(() => ({ messages, thinking, ask }), [messages, thinking, ask]);
@@ -455,21 +457,23 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
 /** The card on the phone: the choice marked here is kept for its turn, and 답하기 sends it to the computer (`sendChoice`). */
 export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
-  const choice = usePhone((s) => s.choice);
-  const [marked, setMarked] = useState<{ turn: string; id: string } | null>(null);
+  const key = usePhone((s) => s.detail?.key ?? null);
+  const identity = key ? askIdentity(key, ask) : null;
+  const answered = usePhone((s) => (identity ? s.answers[identity] : undefined)) ?? null;
+  const [marked, setMarked] = useState<{ identity: string; id: string } | null>(null);
   const waited = useElapsed(ask.since_ms);
-  // The answer sent for this turn stands for the mark too, so a card drawn again (the strip unfolded) still shows what was sent.
-  const answered = choice?.turn === ask.turn ? choice : null;
+  // The answer sent for this ask stands for the mark too, so a card drawn again (the strip unfolded, the detail opened again)
+  // still shows what was sent.
   return (
     <AskCardView
       ask={ask}
       disabled={disabled}
       waited={waited}
-      picked={marked?.turn === ask.turn ? marked.id : (answered?.choice ?? null)}
+      picked={marked && marked.identity === identity ? marked.id : (answered?.choice ?? null)}
       answer={answered?.state ?? null}
       error={answered?.state === "failed" ? noticeText(t, answered.notice) : null}
-      moved={answered?.state === "failed" && answered.notice.key === "mobile.input.highlightMoved"}
-      onPick={(id) => setMarked({ turn: ask.turn, id })}
+      inTerminal={answered?.state === "failed" && answered.inTerminal}
+      onPick={(id) => identity && setMarked({ identity, id })}
       onAnswer={sendChoice}
       onTerminal={() => setTab("terminal")}
     />
@@ -517,11 +521,11 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
         {QUICK_KEYS.map((quick) => (
           <Button
             key={quick.key}
-            variant="ghost"
+            variant="secondary"
             aria-label={t(quick.name)}
             disabled={blocked}
             data-phone-key={quick.key}
-            className="h-(--size-touch-target) rounded-md font-mono text-body"
+            className="h-(--size-touch-target) min-w-0 rounded-md px-xs font-mono text-body"
             onClick={() => sendKey(quick.key)}
           >
             {quick.label}

@@ -142,18 +142,17 @@ it("draws the agent's question with each choice's note and sends the picked choi
     expect(card.querySelector("[data-phone-ask-hint]")).not.toBeNull();
     expect(inputs()).toEqual([]);
     await act(async () => answerButton().click());
-    expect(inputs()).toEqual([expect.objectContaining({ type: "input", device_id: "local", pane_id: "w1:p1", turn: "100", choice: "2" })]);
+    expect(inputs()).toEqual([expect.objectContaining({ type: "input", device_id: "local", pane_id: "w1:p1", turn: "100", kind: "question", choice: "2" })]);
     expect(inputs()[0]).not.toHaveProperty("text");
     await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: true, reason: null });
     expect(container.querySelector('[data-phone-ask-sent="2"]')).not.toBeNull();
-    // The same ask under a new turn (the agent's state moved while it still holds it) keeps the answer sent, and offers nothing.
-    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "130", since_ms: 130 } });
-    expect(container.querySelector('[data-phone-ask-sent="2"]')).not.toBeNull();
-    expect(container.querySelector("[data-phone-ask-send]")).toBeNull();
-    // Another ask is answered afresh.
-    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "140", since_ms: 140, text: "다음 PR도 이렇게 할까요?" } });
+    // Other choices under the same turn are another question, answered afresh; so is a question the computer ties to no call
+    // under a new turn, with the same words.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, choices: [{ id: "1", label: "Keep files" }, { id: "2", label: "Delete files" }] } });
     expect(container.querySelector("[data-phone-ask-sent]")).toBeNull();
     expect(container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.disabled).toBe(true);
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "140", since_ms: 140 } });
+    expect(container.querySelector("[data-phone-ask-sent]")).toBeNull();
     // Once the agent asks nothing, the card goes.
     await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: null });
     expect(container.querySelector("[data-phone-ask]")).toBeNull();
@@ -181,7 +180,7 @@ it("shows a permission its computer has no keys for with the command it waits on
   }
 });
 
-it("sends the operator to the terminal when the computer refuses a choice because the terminal's highlight moved", async () => {
+it("sends the operator to the terminal when the computer refuses a choice because the terminal no longer shows the card's ask", async () => {
   const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
   try {
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "지울게요.", truncated: false, at_ms: 1 }], before: null, running: null });
@@ -189,14 +188,79 @@ it("sends the operator to the terminal when the computer refuses a choice becaus
     const card = container.querySelector<HTMLElement>('[data-phone-ask="permission"]')!;
     await act(async () => card.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
     await act(async () => card.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
-    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: false, reason: "highlight_moved" });
-    expect(card.querySelector("[data-phone-ask-error]")!.textContent).toBe("The highlighted choice was moved in the terminal. Answer in the terminal tab.");
+    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: false, reason: "screen_differs" });
+    expect(card.querySelector("[data-phone-ask-error]")!.textContent).toBe("The terminal no longer shows what this card asks. Answer in the terminal tab.");
     // The choice cannot be sent again from here; the terminal is where it is answered.
     expect(card.querySelector("[data-phone-ask-send]")).toBeNull();
     expect(card.querySelector<HTMLButtonElement>('[data-phone-ask-choice="deny"]')!.disabled).toBe(true);
-    await act(async () => card.querySelector<HTMLButtonElement>('[data-phone-ask-terminal="moved"]')!.click());
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-phone-ask-terminal="refused"]')!.click());
     expect(container.querySelector('[data-phone-view="terminal"]')!.getAttribute("data-state")).toBe("active");
     expect(inputs()).toHaveLength(1);
+  } finally {
+    await unmount();
+  }
+});
+
+it("keeps an answered permission while its call stays open under new turns, and answers the next one afresh", async () => {
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
+  try {
+    const waiting = (turn: string, call?: string): PhoneAsk => ({ kind: "permission", turn, since_ms: Number(turn), command: "pnpm build", command_truncated: false, ...(call ? { call } : {}), answerable: true, choices: [{ id: "allow" }, { id: "deny" }] });
+    const allow = async () => {
+      await act(async () => container.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+      await serve({ type: "input_result", request_id: String(inputs().at(-1)!.request_id), ok: true, reason: null });
+    };
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: waiting("100", "call-a") });
+    await allow();
+    // The allowed command runs and the agent's state moves while the same call is open: still sent, nothing offered.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: waiting("130", "call-a") });
+    expect(container.querySelector('[data-phone-ask-sent="allow"]')).not.toBeNull();
+    expect(container.querySelector("[data-phone-ask-send]")).toBeNull();
+    // The next call asks for the same command: a new ask.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: waiting("160", "call-b") });
+    expect(container.querySelector("[data-phone-ask-sent]")).toBeNull();
+    // Asks tied to no call (Codex records a call only once it is allowed) are told apart by their turn.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: waiting("200") });
+    await allow();
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: waiting("230") });
+    expect(container.querySelector("[data-phone-ask-sent]")).toBeNull();
+    expect(container.querySelector("[data-phone-ask-send]")).not.toBeNull();
+    expect(inputs()).toHaveLength(2);
+  } finally {
+    await unmount();
+  }
+});
+
+it("never sends a choice again once the computer could not say whether it landed, whatever the phone does next", async () => {
+  const { container, socket, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
+  try {
+    const connection = await import("./connection");
+    const { usePhone } = await import("./store");
+    const { askIdentity } = await import("./protocol");
+    const asked: PhoneAsk = { kind: "permission", turn: "100", since_ms: 100, command: "rm -rf build", command_truncated: false, call: "call-a", answerable: true, choices: [{ id: "allow" }, { id: "deny" }] };
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: asked });
+    await act(async () => container.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: false, reason: "uncertain" });
+    expect(container.querySelector('[data-phone-ask-terminal="refused"]')).not.toBeNull();
+    // Leaving the agent and coming back, and the same ask told again under a new turn, keep it in the terminal.
+    await act(async () => connection.closeDetail());
+    await act(async () => connection.openDetail({ device_id: "local", pane_id: "w1:p1" }));
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "130", since_ms: 130 } });
+    expect(container.querySelector("[data-phone-ask-send]")).toBeNull();
+    expect(container.querySelector('[data-phone-ask-terminal="refused"]')).not.toBeNull();
+    connection.sendChoice("deny");
+    expect(inputs()).toHaveLength(1);
+    // A choice still on its way when the link drops may have landed too.
+    const next: PhoneAsk = { ...asked, call: "call-b", turn: "160" };
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: next });
+    await act(async () => container.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+    await act(async () => socket.onclose?.());
+    expect(usePhone.getState().answers[askIdentity({ device_id: "local", pane_id: "w1:p1" }, next)]).toMatchObject({ state: "failed", inTerminal: true });
   } finally {
     await unmount();
   }
@@ -212,6 +276,9 @@ it("says a command runs by the clock from its start, never by what it runs", asy
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "append", messages: [], running: null });
     expect(container.querySelector('[data-phone-activity="Running a command"]')).toBeNull();
     expect(container.querySelector('[data-phone-activity="Thinking"]')).not.toBeNull();
+    // Past the calls the computer kept, it cannot say what runs, and the foot claims neither.
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "append", messages: [], running: { kind: "unknown", since_ms: null } });
+    expect(container.querySelector("[data-phone-activity]")).toBeNull();
   } finally {
     await unmount();
   }

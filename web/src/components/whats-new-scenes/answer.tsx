@@ -74,7 +74,7 @@ export function AnswerScene({ at }: SceneProps) {
                 <p className="text-body">{t("whatsNewScene.answer.read")}</p>
                 <p className="mt-md flex justify-end"><span className="rounded-xl bg-secondary px-md py-xs text-body">{t("whatsNewScene.answer.choice2")}</span></p>
                 <p className="mt-md text-body">{t("whatsNewScene.answer.next")}</p>
-                <ActivityLine word={t("mobile.runningCommand")} since={0} time={formatRunning(at - MOVED + 1_000)} />
+                <ActivityLine word={t("mobile.runningCommand")} since={0} clock time={formatRunning(at - MOVED + 1_000)} />
               </div>
             ) : (
               <AskCardView
