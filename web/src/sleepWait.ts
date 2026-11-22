@@ -1,6 +1,6 @@
 // The line under a sleeping agent's row while it waits (PRD core-wait D-15,
-// B18): what it waits on in a few words, `#12 CI 기다림`, and under a day
-// before its deadline the hours left. Pure, so the sidebar row, the sleeping
+// B18): what it waits on in a few words, `#12 CI 기다림`, led under a day
+// before its deadline by the hours left, which the narrow row must not cut. Pure, so the sidebar row, the sleeping
 // session row and their tests read one value.
 
 import type { TFunction } from "i18next";
@@ -19,5 +19,5 @@ export function sleepWaitWords(wait: SleepWait, now: number, t: TFunction<"trans
         : "mission" in target ? t("agents.sleep.wait.mission", { mission: target.mission })
           : t("agents.sleep.wait.node", { mission: target.node.mission, node: target.node.node });
   const left = wait.until_unix_ms - now;
-  return left > 0 && left < DAY_MS ? `${what} · ${t("mission.wait.left", { hours: String(Math.max(1, Math.ceil(left / HOUR_MS))) })}` : what;
+  return left > 0 && left < DAY_MS ? `${t("mission.wait.left", { hours: String(Math.max(1, Math.ceil(left / HOUR_MS))) })} · ${what}` : what;
 }

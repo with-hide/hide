@@ -461,7 +461,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     wake_available: true,
     checking: false,
     // One sleeps on its own wait and says what it waits on under its title, with the hours left under a day (PRD core-wait B18).
-    ...(id === "sticky-notes" ? { wait: { target: { ci: 1232 }, until_unix_ms: nowMs + 5 * 3_600_000 - 60_000, reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" } } } : {}),
+    ...(id === "codex-daemon-apply-spec" ? { wait: { target: { ci: 1232 }, until_unix_ms: nowMs + 5 * 3_600_000 - 60_000, reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" } } } : {}),
   }));
 
   const world = devices !== "one" ? deviceWorld(content, workspaces, now, folds, devices === "busy") : null;

@@ -31,7 +31,7 @@ export function SleepingSessionRow({ session, actions, inset = "var(--spacing-xs
   return (
     <li data-sleeping-session={session.sleep_id} className="flex min-w-0 items-start gap-xs rounded-sm py-xs pr-xs text-body" style={{ paddingLeft: inset }}>
       {/* A grey moon at full strength, the one mark outside the four (status-marks D-21, B31), on the task row's body (D-72). */}
-      <Hint label={[session.identity_label, agentProductName(session.kind), session.reason ? startReasonText(session.reason, t) : null, caption].filter(Boolean).join("\n")}>
+      <Hint label={[session.identity_label, agentProductName(session.kind), session.reason ? startReasonText(session.reason, t) : null, caption, waiting].filter(Boolean).join("\n")}>
         <span className="flex min-w-0 flex-1">
         <SessionRowBody
           mark={<><StatusMark mark="asleep" data-agent-status-mark="asleep" /><AgentRowMark kind={session.kind} /></>}
