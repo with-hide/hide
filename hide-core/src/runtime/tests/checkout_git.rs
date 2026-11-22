@@ -314,6 +314,16 @@ fn commits_whose_remote_is_unknown_get_no_page_and_the_reason_stays_off_the_wire
             .len(),
         1
     );
+    // The page is the commit's on the host its origin names.
+    let link = runtime.checkout_header_snapshot(&key).unwrap().commit_links[0].clone();
+    assert_eq!(link.sha, "a".repeat(40));
+    assert_eq!(
+        link.url,
+        format!(
+            "https://github.com/example/fixture/commit/{}",
+            "a".repeat(40)
+        )
+    );
 
     let unread = CheckoutGit {
         commits_unread: Some("rev-list timed out under /private/fixture".into()),

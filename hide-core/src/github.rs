@@ -3654,6 +3654,8 @@ mod tests {
         /// own name is still answered.
         identity_fails: bool,
         asked: Mutex<Vec<Vec<String>>>,
+        /// Where each call was asked: its folder and its repository name.
+        places: Mutex<Vec<(Option<String>, Option<String>)>>,
         /// What `gh auth status` prints; when its scopes leave out
         /// `read:project`, an issue list with Projects fields is refused.
         auth_status: Mutex<&'static str>,
@@ -3672,6 +3674,7 @@ mod tests {
                 list_fails,
                 identity_fails: false,
                 asked: Mutex::default(),
+                places: Mutex::default(),
                 auth_status: Mutex::new(SCOPED),
             }
         }
@@ -3721,10 +3724,16 @@ mod tests {
             call: Call,
             _timeout: Duration,
         ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
-            let Call::Gh { args, .. } = call else {
+            let Call::Gh {
+                args,
+                cwd,
+                repository,
+            } = call
+            else {
                 panic!("only gh is asked");
             };
             self.asked.lock().unwrap().push(args.clone());
+            self.places.lock().unwrap().push((cwd, repository));
             let words: Vec<&str> = args.iter().map(String::as_str).collect();
             let output = |stdout: &str| GhAnswer::Output {
                 stdout: stdout.to_owned(),
@@ -3855,21 +3864,108 @@ mod tests {
         }
     }
 
+    /// A repository place, a repository setting or a device's origin, is
+    /// read by its name in no folder; a checkout, its remotes listed or not,
+    /// in its folder by no name. Only the account's own questions carry
+    /// neither.
+    #[test]
+    fn a_read_pass_asks_by_name_for_a_repository_place_and_in_its_folder_for_a_checkout() {
+        let named = CodeHosts::STANDARD.place_of("acme/project").unwrap();
+        let checkout = CodeHosts::STANDARD
+            .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .unwrap();
+        for (place, folder, name) in [
+            (named, None, Some("acme/project")),
+            (checkout, Some("/repo"), None),
+        ] {
+            let fake = Repository::new("gh version 2.76.2 (2025-07-30)\n", false);
+            fake.read_at(&place, &RefusedProjects::default());
+            let asked = fake.asked.lock().unwrap().clone();
+            let places = fake.places.lock().unwrap().clone();
+            for (args, (cwd, repository)) in asked.iter().zip(&places) {
+                let account = matches!(
+                    args.iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    ["--version"] | ["auth", "status", "--active"] | ["api", "user", ..]
+                );
+                if account {
+                    continue;
+                }
+                assert_eq!(cwd.as_deref(), folder, "{args:?}");
+                assert_eq!(repository.as_deref(), name, "{args:?}");
+            }
+            assert!(fake.asked_for_pull_requests(), "{place:?}");
+        }
+    }
+
+    /// A repository's identity from one `gh repo view`: its name, its id,
+    /// its default branch (none for an empty repository) and whether it is
+    /// public: `PUBLIC` is, `PRIVATE` and `INTERNAL` are not, anything else
+    /// is not known.
+    #[test]
+    fn a_repositorys_identity_is_its_name_id_default_branch_and_visibility() {
+        let viewed = |visibility: &'static str, branch: &'static str| {
+            let node = Answering::new(move |words| match words {
+                ["repo", "view", "--json", fields]
+                    if *fields == hide_node_link::gh::REPOSITORY_FIELDS =>
+                {
+                    Some(format!(
+                        r#"{{"nameWithOwner":"acme/app","id":"R1","visibility":"{visibility}","defaultBranchRef":{branch}}}"#
+                    ))
+                }
+                other => panic!("not an identity read: {other:?}"),
+            });
+            read_identity(&node, &Where::Repository("acme/app".to_owned())).unwrap()
+        };
+        let public = viewed("PUBLIC", r#"{"name":"main"}"#);
+        assert_eq!(public.name, "acme/app");
+        assert_eq!(public.id.as_deref(), Some("R1"));
+        assert_eq!(public.public, Some(true));
+        assert_eq!(public.default_branch.as_deref(), Some("main"));
+        assert_eq!(viewed("PRIVATE", "null").public, Some(false));
+        assert_eq!(viewed("INTERNAL", "null").public, Some(false));
+        assert_eq!(viewed("SECRET", "null").public, None);
+        assert_eq!(viewed("PUBLIC", "null").default_branch, None);
+        assert_eq!(viewed("PUBLIC", r#"{"name":""}"#).default_branch, None);
+    }
+
     /// A node whose `gh` answers each call by `answer`: `None` is a call
-    /// GitHub refused. The calls asked are kept.
+    /// refused with `refusal`, GitHub's 404 unless a test names another. The
+    /// calls asked are kept.
     type Answer = Box<dyn Fn(&[&str]) -> Option<String> + Send + Sync>;
 
     struct Answering {
         answer: Answer,
+        refusal: (GithubFailureCategory, &'static str),
         asked: Mutex<Vec<Vec<String>>>,
     }
 
     impl Answering {
         fn new(answer: impl Fn(&[&str]) -> Option<String> + Send + Sync + 'static) -> Self {
+            Self::refusing(
+                (
+                    GithubFailureCategory::NetworkOrRateLimit,
+                    "HTTP 404: Not Found",
+                ),
+                answer,
+            )
+        }
+
+        fn refusing(
+            refusal: (GithubFailureCategory, &'static str),
+            answer: impl Fn(&[&str]) -> Option<String> + Send + Sync + 'static,
+        ) -> Self {
             Self {
                 answer: Box::new(answer),
+                refusal,
                 asked: Mutex::default(),
             }
+        }
+
+        fn asked(&self) -> Vec<Vec<String>> {
+            self.asked.lock().unwrap().clone()
         }
     }
 
@@ -3887,8 +3983,8 @@ mod tests {
             let answer = match (self.answer)(&words) {
                 Some(stdout) => GhAnswer::Output { stdout },
                 None => GhAnswer::Failed {
-                    category: GithubFailureCategory::NetworkOrRateLimit,
-                    reason: "HTTP 404: Not Found".to_owned(),
+                    category: self.refusal.0,
+                    reason: self.refusal.1.to_owned(),
                 },
             };
             Ok(serde_json::to_value(answer).unwrap().into())
@@ -3980,6 +4076,184 @@ mod tests {
             pr_standing(&refused, &Where::Repository("acme/app".to_owned()), 7),
             Err("HTTP 404: Not Found".to_owned())
         );
+    }
+
+    /// A write from a card is its one command line; a merge GitHub says was
+    /// already made counts as done, so asking again after a lost answer
+    /// converges; a branch update first names its repository; any other
+    /// failure is a code the card words, with GitHub's text kept for the log.
+    #[test]
+    fn a_card_write_is_its_one_command_and_a_merge_already_made_is_done() {
+        let line = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let head = "a".repeat(40);
+        let checkout = CodeHosts::STANDARD
+            .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Unknown)
+            .unwrap();
+        let merge = |node: &Answering| {
+            let unit = checkout.host();
+            unit.merge().unwrap().merge(node, &checkout, 7, None, &head)
+        };
+        let update = |node: &Answering| {
+            let unit = checkout.host();
+            unit.update_branch()
+                .unwrap()
+                .update_branch(node, &checkout, 7, &head)
+        };
+        let refused = |text: &'static str| {
+            Answering::refusing((GithubFailureCategory::NetworkOrRateLimit, text), |_| None)
+        };
+
+        let merged = Answering::new(|words| matches!(words, ["pr", "merge", ..]).then(String::new));
+        assert_eq!(merge(&merged), Ok(()));
+        assert_eq!(
+            merged.asked(),
+            vec![line(&["pr", "merge", "7", "--match-head-commit", &head])]
+        );
+        assert_eq!(
+            merge(&refused("! Pull request acme/app#7 was already merged")),
+            Ok(())
+        );
+        let blocked = "X Pull request acme/app#7 is not mergeable: the base branch policy prohibits the merge";
+        assert_eq!(
+            merge(&refused(blocked)),
+            Err(crate::code_host::WriteFailure {
+                reason: "not_mergeable",
+                detail: blocked.to_owned(),
+            })
+        );
+
+        let named = |words: &[&str]| {
+            matches!(words, ["repo", "view", "--json", "nameWithOwner"])
+                .then(|| r#"{"nameWithOwner":"acme/app"}"#.to_owned())
+        };
+        let updated = Answering::new(move |words| match words {
+            ["api", "--method", "PUT", ..] => Some("{}".to_owned()),
+            other => named(other),
+        });
+        assert_eq!(update(&updated), Ok(()));
+        assert_eq!(
+            updated.asked(),
+            vec![
+                line(&["repo", "view", "--json", "nameWithOwner"]),
+                line(&[
+                    "api",
+                    "--method",
+                    "PUT",
+                    "repos/acme/app/pulls/7/update-branch",
+                    "-f",
+                    &format!("expected_head_sha={head}"),
+                ]),
+            ]
+        );
+        // A branch update is no merge: "already merged" is its failure.
+        let late = Answering::refusing(
+            (
+                GithubFailureCategory::NetworkOrRateLimit,
+                "Pull request is already merged",
+            ),
+            named,
+        );
+        assert_eq!(update(&late).unwrap_err().reason, "failed");
+        // A repository `gh` cannot name takes no write.
+        let unnamed = refused("HTTP 404: Not Found");
+        assert_eq!(update(&unnamed).unwrap_err().reason, "failed");
+        assert_eq!(unnamed.asked().len(), 1);
+    }
+
+    /// What the agent a pull request is handed to starts from, read in one
+    /// `gh pr view`: its body, the checks that failed and each reviewer's
+    /// standing request for changes; a read GitHub refused is its reason.
+    #[test]
+    fn handed_over_feedback_is_the_body_the_failed_checks_and_the_standing_change_requests() {
+        let place = CodeHosts::STANDARD.place_of("acme/app").unwrap();
+        let feedback = |node: &Answering| {
+            let unit = place.host();
+            unit.handover().unwrap().feedback(node, &place, 7)
+        };
+        let node = Answering::new(|words| {
+            match words {
+            ["pr", "view", "7", "--json", fields] if *fields == PR_FEEDBACK_FIELDS => Some(
+                r#"{
+                    "body": "Reads the remote primary.",
+                    "statusCheckRollup": [
+                        {"__typename":"CheckRun","name":"verify","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/app/actions/runs/1"},
+                        {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"}
+                    ],
+                    "reviews": [
+                        {"author":{"login":"ana"},"state":"CHANGES_REQUESTED","body":"Split the reader."},
+                        {"author":{"login":"bo"},"state":"APPROVED","body":""}
+                    ]
+                }"#
+                .to_owned(),
+            ),
+            other => panic!("not a feedback read: {other:?}"),
+        }
+        });
+        let read = feedback(&node).unwrap();
+        assert_eq!(read.body, "Reads the remote primary.");
+        assert_eq!(
+            read.failed_checks,
+            vec![crate::model::PrFailedCheck {
+                name: Some("verify".into()),
+                url: Some("https://github.com/acme/app/actions/runs/1".into()),
+            }]
+        );
+        assert_eq!(
+            read.change_requests,
+            vec![crate::model::PrChangeRequest {
+                author: Some("ana".into()),
+                body: "Split the reader.".into(),
+            }]
+        );
+        assert_eq!(node.asked().len(), 1);
+        assert_eq!(
+            feedback(&Answering::new(|_| None)).unwrap_err(),
+            "HTTP 404: Not Found"
+        );
+    }
+
+    /// A `gh` that is not installed, or not signed in, is named in the read's
+    /// status by its category, and nothing is listed with it.
+    #[test]
+    fn a_gh_that_is_missing_or_signed_out_is_named_and_asked_for_no_list() {
+        let place = CodeHosts::STANDARD.place_of("acme/project").unwrap();
+        for (category, text) in [
+            (GithubFailureCategory::NotInstalled, "gh: command not found"),
+            (
+                GithubFailureCategory::NotLoggedIn,
+                "You are not logged into any GitHub hosts. To log in, run: gh auth login",
+            ),
+        ] {
+            let node = Answering::refusing((category, text), |_| None);
+            let due = DueRead {
+                root: Path::new("/repo"),
+                place: &place,
+                root_path: "/repo",
+                links: &[],
+                generation: 1,
+            };
+            let project = read_root(
+                &node,
+                (&std::cell::OnceCell::new(), &RefusedProjects::default()),
+                &due,
+                &KnownChecks::default(),
+                &mut UnresolvedLinks::new(),
+            );
+            assert_eq!(project.status.failure_category, Some(category));
+            assert!(!project.status.available, "{category:?}");
+            assert!(!project.pull_requests_read, "{category:?}");
+            let listed = node
+                .asked()
+                .into_iter()
+                .filter(|args| matches!(args.first().map(String::as_str), Some("pr" | "issue")))
+                .collect::<Vec<_>>();
+            assert_eq!(listed, Vec::<Vec<String>>::new(), "{category:?}");
+        }
     }
 
     /// The server of a checkout `gh` read in place, row by row from the
@@ -4104,12 +4378,14 @@ mod tests {
                 &[pull],
                 at("ghe.example"),
             ),
+            // gitlab.com's unit reads its remote, so beside a GitHub one the
+            // checkout's list is complete and the GitHub remote decides.
             (
                 &[GITHUB, "git@gitlab.com:acme/app.git"],
                 &[],
                 "acme/app",
                 &[],
-                None,
+                at("github.com"),
             ),
             (
                 &[GITHUB, "git@gitlab.com:acme/app.git"],

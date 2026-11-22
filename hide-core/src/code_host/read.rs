@@ -384,4 +384,47 @@ mod tests {
         assert_eq!(read_reason(Some(0), 1), Some(ReadReason::Generation));
         assert_eq!(read_reason(Some(1), 1), None);
     }
+
+    /// A project whose folder is in no repository has nothing to report: the
+    /// reader answers nothing for it and asks no host, whether its remotes
+    /// were read or not.
+    #[test]
+    fn a_project_in_no_repository_is_answered_with_nothing_and_no_host_is_asked() {
+        struct NoRepository;
+        impl NodeLink for NoRepository {
+            fn call(
+                &self,
+                call: Call,
+                _timeout: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+                match call {
+                    Call::Git {
+                        command: GitCommand::CommonDir,
+                        ..
+                    } => Ok(serde_json::json!("").into()),
+                    other => panic!("only the repository is asked for: {other:?}"),
+                }
+            }
+        }
+        let root = PathBuf::from("/nowhere");
+        let unread = CodeHosts::STANDARD
+            .place_of_checkout(&root, super::super::CheckoutRemotes::Unknown)
+            .unwrap();
+        for place in [None, Some(unread)] {
+            let request = GithubRequest {
+                projects: vec![GithubProjectRequest {
+                    links: Vec::new(),
+                    root: root.clone(),
+                    place: place.clone(),
+                    generation: 1,
+                }],
+            };
+            let mut reads = Reads::new(CodeHosts::STANDARD);
+            assert_eq!(
+                read(&mut reads, &NoRepository, &request).projects,
+                Vec::new(),
+                "{place:?}"
+            );
+        }
+    }
 }

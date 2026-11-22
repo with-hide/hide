@@ -2399,3 +2399,50 @@ fn a_device_workers_parent_is_named_by_its_own_devices_pane_not_a_local_one_of_t
     assert_eq!(fact.parent_session_id, "lead-native");
     assert_eq!(fact.parent_name, "agent-2");
 }
+
+/// The repository a pull request's address names, as its two readers take
+/// it: the link record keys only a github.com address, by its `owner/name`
+/// in lower case and its number; a review's pre-check takes `owner/name` in
+/// lower case on any server; an address that is no pull request's names
+/// nothing to either.
+#[test]
+fn a_pull_requests_address_names_its_repository_to_the_link_record_and_the_pre_check() {
+    let hosts = crate::code_host::CodeHosts::STANDARD;
+    let at = |url: &str| PullRequestSnapshot {
+        url: url.to_owned(),
+        ..pull_request(7, "feature", &[])
+    };
+    let pre_check = |url: &str| {
+        at(url)
+            .named(hosts)
+            .map(|(repository, _)| repository.path.to_ascii_lowercase())
+    };
+    /// An address, its link record key and its pre-check repository.
+    type Case = (
+        &'static str,
+        Option<(&'static str, u64)>,
+        Option<&'static str>,
+    );
+    let cases: [Case; 4] = [
+        (
+            "https://github.com/Acme/Project/pull/7",
+            Some(("acme/project", 7)),
+            Some("acme/project"),
+        ),
+        (
+            "https://ghe.example/Acme/App/pull/7",
+            None,
+            Some("acme/app"),
+        ),
+        ("https://example.invalid/pull/7", None, None),
+        ("", None, None),
+    ];
+    for (url, link_record, check) in cases {
+        assert_eq!(
+            at(url).sighting_key(hosts),
+            link_record.map(|(repository, number)| (repository.to_owned(), number)),
+            "{url}"
+        );
+        assert_eq!(pre_check(url).as_deref(), check, "{url}");
+    }
+}
