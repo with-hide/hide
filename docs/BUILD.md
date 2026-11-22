@@ -258,6 +258,7 @@ A check script calls these scripts rather than cargo or pnpm directly, so the ta
 | test | `bash scripts/verify-cargo.sh test` | `target/debug`; locked workspace tests |
 | lint | `bash scripts/verify-cargo.sh lint` | `cargo fmt --check` then `cargo clippy -D warnings` over every target |
 | hakari | `bash scripts/verify-cargo.sh hakari` | nothing written; fails when `workspace-hack` is out of date ([One feature set per dependency](#one-feature-set-per-dependency)) |
+| update | `bash scripts/verify-cargo.sh update -p <crate> --precise <version>` | updates one dependency in `Cargo.lock` without building; verification continues to use the lockfile |
 | release | `bash scripts/verify-cargo.sh release` | `target/release/{hided,hide,hide-agent-hooks,hide-holder}`, the binaries the desktop packager ships |
 | cli | `bash scripts/verify-cargo.sh cli` | `target/debug/{hide,hided,hide-agent-hooks}` for isolated CLI, daemon, SessionStart and install kit checks |
 | web | `bash scripts/verify-web.sh` | `pnpm install --frozen-lockfile`, then typecheck, lint, test and build for both `web` and `desktop`: `web/dist` and `desktop/dist` |
