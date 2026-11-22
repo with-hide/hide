@@ -73,6 +73,7 @@ pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_core;
 pub mod peer_dial;
 pub mod peer_host;
 pub mod peer_inbox;
@@ -649,11 +650,14 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         }),
     );
     // A build that does not offer connections between two Hides takes no
-    // other machine's work: no guest's stream is handled and no guest node
-    // is started again from the folders a development build left.
+    // other machine's work: no guest's stream is handled, no guest node is
+    // started again from the folders a development build left, and the two
+    // cores' stream (D-72) is neither handled nor opened, so no letter, read
+    // or start reaches another machine's core or comes from one.
     let remote_screens = remote_screen::RemoteScreens::new();
     if env.device_connect {
         guests.serve(&peers, shutdown.clone());
+        peer_core::PeerCore::serve(&core, &peers, shutdown.clone());
         remote_screens.serve(&peers);
     }
     // A paired machine's login item follows the peer records (PRD

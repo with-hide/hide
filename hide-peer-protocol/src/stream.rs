@@ -28,6 +28,10 @@ pub enum StreamKind {
     /// Another machine's view of this one: its socket's control and
     /// terminal frames (PRD D-67).
     Screen,
+    /// What the two machines' cores say to each other (D-72): opened by a
+    /// side that holds a grant, written by both, and apart from the
+    /// management stream, which belongs to a guest's node.
+    Core,
     /// The same view's page, its assets and its file bytes, behind
     /// everything else, so neither a page load nor a file read holds a
     /// key's echo (D-67).
@@ -35,7 +39,7 @@ pub enum StreamKind {
 }
 
 impl StreamKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Hello,
         Self::Pairing,
         Self::Revoke,
@@ -46,6 +50,7 @@ impl StreamKind {
         Self::File,
         Self::Page,
         Self::Screen,
+        Self::Core,
         Self::ScreenBulk,
     ];
 
@@ -61,6 +66,7 @@ impl StreamKind {
             Self::File => 8,
             Self::Page => 9,
             Self::Screen => 10,
+            Self::Core => 11,
             Self::ScreenBulk => 12,
         }
     }
@@ -81,6 +87,7 @@ impl StreamKind {
             Self::File => "file",
             Self::Page => "page",
             Self::Screen => "screen",
+            Self::Core => "core",
             Self::ScreenBulk => "screen_bulk",
         }
     }
@@ -92,7 +99,7 @@ impl StreamKind {
     pub const fn priority(self) -> i32 {
         match self {
             Self::Keys => 100,
-            Self::Hello | Self::Pairing | Self::Revoke | Self::Management => 75,
+            Self::Hello | Self::Pairing | Self::Revoke | Self::Management | Self::Core => 75,
             Self::NodeLink => 50,
             Self::Terminal | Self::Screen => 0,
             Self::File | Self::Page | Self::ScreenBulk => -100,

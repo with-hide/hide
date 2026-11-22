@@ -2248,6 +2248,13 @@
                         "body": {
                             "type": "string"
                         },
+                        "core_id": {
+                            "description": "The id the sending core's ledger gives this letter, on a letter an agent of another core sent (PRD device-connect-iroh D-72): on the link a letter is named by its sender's machine and that id, so a reply to this one names it. Absent on every other letter; an older build drops the field at its next save.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "created_at_unix_ms": {
                             "format": "uint64",
                             "minimum": 0.0,
@@ -2416,7 +2423,8 @@
                         "bell_route",
                         "input_noticed",
                         "input_noticed_at_unix_ms",
-                        "bell_ended"
+                        "bell_ended",
+                        "core_id"
                     ],
                     "type": "object"
                 },
@@ -2863,6 +2871,13 @@
                 "body": {
                     "type": "string"
                 },
+                "core_id": {
+                    "description": "The id the sending core's ledger gives this letter, on a letter an agent of another core sent (PRD device-connect-iroh D-72): on the link a letter is named by its sender's machine and that id, so a reply to this one names it. Absent on every other letter; an older build drops the field at its next save.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "created_at_unix_ms": {
                     "format": "uint64",
                     "minimum": 0.0,
@@ -3031,7 +3046,8 @@
                 "bell_route",
                 "input_noticed",
                 "input_noticed_at_unix_ms",
-                "bell_ended"
+                "bell_ended",
+                "core_id"
             ],
             "title": "Letter",
             "type": "object"
@@ -5677,11 +5693,24 @@
                     "value": null
                 },
                 {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": null
                 }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "machine_not_permitted",
+                "machine_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5710,7 +5739,9 @@
             ],
             "refusals": [
                 "agent_unavailable",
-                "target_ambiguous"
+                "target_ambiguous",
+                "machine_not_permitted",
+                "machine_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6174,6 +6205,7 @@
                 "native_identity_unavailable",
                 "identity_waits_full",
                 "session_too_long",
+                "sender_not_registered",
                 "codex_capability_unknown",
                 "invalid_brief",
                 "invalid_agent_name",
@@ -7043,7 +7075,9 @@
                 "pane_required",
                 "lines_out_of_range",
                 "pane_unavailable",
-                "guest_pane_read"
+                "guest_pane_read",
+                "machine_not_permitted",
+                "machine_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7127,7 +7161,8 @@
                 "keys_not_sent",
                 "send_unconfirmed",
                 "operator_typing",
-                "guest_pane_keys"
+                "guest_pane_keys",
+                "machine_not_permitted"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7196,7 +7231,9 @@
                 "pane_required",
                 "lines_out_of_range",
                 "agent_unavailable",
-                "target_ambiguous"
+                "target_ambiguous",
+                "machine_not_permitted",
+                "machine_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7342,10 +7379,13 @@
                 "composer_not_empty",
                 "composer_unconfirmed",
                 "force_target_asleep",
+                "machine_not_permitted",
                 "no_parent",
                 "outbox_full",
                 "outbox_unavailable",
-                "participant_registering"
+                "participant_registering",
+                "recipient_not_agent",
+                "sender_not_registered"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9307,7 +9347,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ab1dfd55f652e192e81c2b7f30114920c45cefb2b69142535b1d8743b9351f45",
+    "digest": "sha256:93bc909d947a528e3ad587ca368d34c2a80a4f012f1a5f61c7f26964ff9a67ef",
     "envelopes": {
         "access": {
             "answer": "value",

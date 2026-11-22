@@ -18,24 +18,34 @@ use serde_json::{Value, json};
 const PANES: [&str; 2] = ["worker", "other"];
 const KEY: &str = "5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5";
 
-struct Fixture {
-    runtime: Arc<Mutex<Runtime>>,
-    ids: std::collections::HashMap<&'static str, String>,
+pub(super) struct Fixture {
+    pub(super) runtime: Arc<Mutex<Runtime>>,
+    pub(super) ids: std::collections::HashMap<&'static str, String>,
     _worker: Worker,
     _root: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn start() -> Self {
-        Self::start_with(&PANES, &PANES)
+    pub(super) fn start() -> Self {
+        Self::start_over(tempfile::tempdir().unwrap(), &PANES, &PANES)
+    }
+
+    /// The fixture over `root`, whose `state` folder may hold what an
+    /// earlier core left there.
+    pub(super) fn start_in(root: tempfile::TempDir) -> Self {
+        Self::start_over(root, &PANES, &PANES)
     }
 
     /// An engine whose agents run in `panes`, each shown in the tab with its
     /// own terminal `terminal-<pane>`, of which `roots` are registered as
     /// the operator's own agents.
     fn start_with(panes: &[&'static str], roots: &[&'static str]) -> Self {
+        Self::start_over(tempfile::tempdir().unwrap(), panes, roots)
+    }
+
+    /// [`Fixture::start_with`] over `root`.
+    fn start_over(root: tempfile::TempDir, panes: &[&'static str], roots: &[&'static str]) -> Self {
         let panes = panes.to_vec();
-        let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let native = |pane: &str| {
             json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
@@ -116,8 +126,21 @@ impl Fixture {
         started
     }
 
+    /// Ends the core and its store's worker; the folder they ran over.
+    pub(super) fn stop(self) -> tempfile::TempDir {
+        let Self {
+            runtime,
+            _worker,
+            _root,
+            ..
+        } = self;
+        drop(_worker);
+        drop(runtime);
+        _root
+    }
+
     /// A command of the agent in `pane`.
-    fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
+    pub(super) fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
         let context = authority(&Actor {
             pane_id: pane.into(),
             name: pane.into(),
@@ -144,7 +167,7 @@ impl Fixture {
 
     /// Bot `name` with `key` asks under request id `id`, and the operator
     /// approves it in `mode`; its connection's id.
-    fn connect_as(&self, name: &str, key: &str, id: &str, mode: Mode) -> String {
+    pub(super) fn connect_as(&self, name: &str, key: &str, id: &str, mode: Mode) -> String {
         let mut guard = self.runtime.lock().unwrap();
         let (answer, _) = guard.access_call(Call::Request {
             name: name.into(),
@@ -181,7 +204,7 @@ impl Fixture {
         )
     }
 
-    fn tool(&self, connection: &str, command: Command) -> Result<Value, String> {
+    pub(super) fn tool(&self, connection: &str, command: Command) -> Result<Value, String> {
         self.prepare_tool(connection, None, command)?
             .run(Duration::from_secs(5))
     }
@@ -733,7 +756,10 @@ fn the_agent_list_names_no_tools_own_identity() {
         names
     };
     let list = || Command::Agents {
-        command: crate::coordination::Command::List { live: false },
+        command: crate::coordination::Command::List {
+            live: false,
+            machine: None,
+        },
     };
     assert_eq!(
         names(fixture.agent("worker", list()).unwrap()),
@@ -1050,7 +1076,10 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
         .tool(
             &a,
             Command::Agents {
-                command: crate::coordination::Command::List { live: false },
+                command: crate::coordination::Command::List {
+                    live: false,
+                    machine: None,
+                },
             },
         )
         .unwrap()["items"]

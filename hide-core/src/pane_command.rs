@@ -42,6 +42,8 @@ pub const COMMAND_LIMIT: usize = 1_000;
 
 /// How long one engine call of these commands waits.
 const CALL_WAIT: Duration = Duration::from_secs(5);
+/// How long another machine's core has to answer a read asked of it.
+const CORE_WAIT: Duration = Duration::from_secs(15);
 /// How long a pane `hide pane open` made gets for its shell to take the
 /// command: the shell alone holding the terminal, as an agent start waits.
 const SHELL_WAIT: Duration = Duration::from_secs(10);
@@ -229,6 +231,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "pane_unavailable" => {
             "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, a pane of another machine is remote:<device id>:pane:<id>, and another machine's work running on this one is guest:<device id>:pane:<id> (hide device list shows the device ids and the guest panes)"
         }
+        crate::access::MACHINE_NOT_PERMITTED => crate::access::MACHINE_NOT_PERMITTED_NEXT,
         "guest_pane_read" => {
             "This pane is another machine's work running here: this machine draws it in the Hide window but keeps no text of it. Read it on the machine it belongs to"
         }
@@ -345,6 +348,8 @@ pub(crate) enum Step {
         text: Option<String>,
         enter: bool,
     },
+    /// A read another machine's core answers (`Runtime::core_pane_forward`).
+    Core(Box<crate::core_calls::Forward>),
     Open {
         caller: String,
         cwd: String,
@@ -403,13 +408,14 @@ impl Prepared {
                 text,
                 enter,
             } => return send_to_guest(terminals.as_ref(), &caller, pane, text, enter),
+            Step::Core(forward) => return forward.run(CORE_WAIT),
             step => step,
         };
         let engine = engine.ok_or_else(|| "engine_unavailable".to_owned())?;
         let engine = engine.as_ref();
         let wait = Wait::Each(CALL_WAIT);
         let value = match step {
-            Step::GuestSend { .. } => unreachable!("answered above"),
+            Step::GuestSend { .. } | Step::Core(_) => unreachable!("answered above"),
             Step::ReadScreen { pane, raw } => {
                 let read = engine
                     .read_screen(wait, &raw)

@@ -72,6 +72,24 @@ impl NodeLink for Node {
                     "this node answers only the spawn's reads".to_owned(),
                 ));
             }
+            // Where a branch a spawn makes starts: the repository is on
+            // `main` and has no fetched `origin/main`, so the start is left
+            // to the engine.
+            Call::Git {
+                command: hide_node_link::git::GitCommand::CurrentBranch,
+                ..
+            } => json!("main"),
+            Call::Git {
+                command: hide_node_link::git::GitCommand::RefCommit { .. },
+                ..
+            } => {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::NotFound,
+                    "no such ref",
+                )));
+            }
+            // Codex's trust of the worktree a spawn made.
+            Call::AgentTrust { trusted: true, .. } => Value::Null,
             other => panic!("unexpected call {other:?}"),
         }))
     }
@@ -91,6 +109,9 @@ struct Device {
     rename_refused: bool,
     /// Whether the caller's worktree is no longer listed.
     worktree_gone: bool,
+    /// Whether the branch a spawn asks for has no worktree yet, so the
+    /// spawn makes it.
+    unmade: bool,
     /// How many more terminal reads fail, as a reply lost on the way.
     lost_reads: usize,
     /// The workspaces carrying an owner mark, as the engine lists them.
@@ -111,6 +132,17 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
             "worktree_path" if device.worktree_gone => {
                 refused("internal_error", "the repository is gone")
             }
+            "worktree_path" if device.unmade => reply(None::<String>),
+            // The engine opens the worktree it makes in a workspace of its
+            // own, whose first tab the spawn replaces with its launch.
+            "create_worktree" => reply(crate::engine::CreatedWorktree {
+                tab_label: "repo".into(),
+                workspace_id: "w3".into(),
+                tab_id: "w3:t1".into(),
+                pane_id: "w3:p0".into(),
+                path: format!("/srv/{}", params["branch"].as_str().unwrap()),
+                branch: params["branch"].as_str().map(str::to_owned),
+            }),
             // Another branch is another checkout of the repository.
             "worktree_path" if params["branch"] != "topic" => {
                 reply(Some(format!("/srv/{}", params["branch"].as_str().unwrap())))
@@ -757,6 +789,40 @@ fn a_local_beside_handoff_is_drawn_at_once_beside_its_caller() {
             .any(|operation| operation.created_pane_id.as_deref() == Some("w2:p1")),
         "the split is drawn before the engine's layout lists it"
     );
+}
+
+/// A start that makes its worktree on this machine asks for the catalog
+/// again: with no window the Git watch rests, so nothing else would list the
+/// new worktree and a mission made in it would not find its project
+/// (`Runtime::worktree_made_here`). One that opens a worktree already there
+/// changed nothing in Git and asks for nothing.
+#[test]
+fn a_start_that_makes_its_worktree_here_asks_for_the_catalog() {
+    let reads_asked = |unmade: bool| {
+        let spawner = local_spawner();
+        spawner.device.lock().unwrap().unmade = unmade;
+        let asked = || {
+            let runtime = spawner.runtime.lock().unwrap();
+            runtime.worktrees_request().generation
+        };
+        let before = asked();
+        let child = spawner
+            .spawn(
+                "own-tab",
+                Ask {
+                    parent: None,
+                    beside: false,
+                    branch: "fresh",
+                    ..BESIDE
+                },
+            )
+            .unwrap();
+        assert_eq!(child["project"], "/srv/fresh");
+        assert_eq!(spawner.count("create_worktree"), usize::from(unmade));
+        asked() - before
+    };
+    assert_eq!(reads_asked(false), 0);
+    assert_eq!(reads_asked(true), 1);
 }
 
 /// The split's label is cleared once the record names the pane, and running

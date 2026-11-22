@@ -436,7 +436,7 @@ impl Agent {
     /// Starts the stand-in on `session` in the account's project, as the
     /// start panel resumes a session, and registers it as `name`.
     #[allow(clippy::too_many_arguments)]
-    fn start(
+    pub fn start(
         daemon: &Daemon,
         commands: PathBuf,
         environment: Environment,
@@ -1361,7 +1361,7 @@ impl Drop for Fixture {
 /// `$HOME/.fixture-ready` by the pane its machine names (`HIDE_PANE_ID`), and
 /// runs each script `$HOME/.fixture-run` hands that pane (`run_order`),
 /// writing the script's run time beside it once the script ended.
-const SHIM: &str = r#"
+pub const SHIM: &str = r#"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
