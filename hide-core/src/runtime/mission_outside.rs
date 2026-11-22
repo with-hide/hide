@@ -449,7 +449,7 @@ fn found_of(target: &WaitTarget, pull: &crate::model::PullRequestSnapshot) -> Fo
         None if matches!(target, WaitTarget::Ci(_))
             && pull.ci_end() == crate::model::CiEnd::Unread =>
         {
-            Found::Unread("The change request's checks could not be read".to_owned())
+            Found::Unread("The change request's checks could not be read or judged".to_owned())
         }
         None => Found::Open,
     }

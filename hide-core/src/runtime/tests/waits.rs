@@ -741,7 +741,7 @@ fn a_ci_failure_stands_through_a_read_that_does_not_see_the_checks() {
     assert_eq!(node_view(&runtime, "wait").wait_outcome, Some("ci_failed"));
     read_back(
         &mut runtime,
-        Found::Unread("The change request's checks could not be read".into()),
+        Found::Unread("The change request's checks could not be read or judged".into()),
     );
     let view = node_view(&runtime, "wait");
     assert_eq!(view.wait_outcome, Some("ci_failed"));
