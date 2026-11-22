@@ -1264,7 +1264,9 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            registry.display_still(&source(), "browser-a", 1024).unwrap(),
+            registry
+                .display_still(&source(), "browser-a", 1024)
+                .unwrap(),
             Ok(b"\xff\xd8\xffjpeg".to_vec())
         );
         assert_eq!(asked.lock().unwrap().len(), 1);
