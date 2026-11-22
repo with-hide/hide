@@ -6,7 +6,7 @@
 
 import { ArrowUpIcon, ChevronLeftIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { Elapsed } from "../components/elapsed";
+import { Elapsed, useRunningClock } from "../components/elapsed";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -89,15 +89,23 @@ export function StatusStrip({ word, tone, line, since }: { word: string; tone: s
   );
 }
 
-/** What the agent does now, at the foot of its conversation, its time counted on the phone (Doop 09): `생각 중 · 4초`. */
-export function ActivityLine({ word, since }: { word: string; since: number }) {
+/**
+ * What the agent does now, at the foot of its conversation, its time counted on the phone: `생각 중 · 4초` (Doop 09), or with
+ * `clock` a running clock, `명령 실행 중 · 0:42` (Doop 02).
+ */
+export function ActivityLine({ word, since, clock = false }: { word: string; since: number; clock?: boolean }) {
   return (
     <p className="flex items-center gap-xs pt-xs text-body" data-phone-activity={word}>
       <span className="text-agent-working opacity-(--opacity-secondary)">{word}</span>
       <span aria-hidden="true" className="text-muted-foreground">·</span>
-      <Elapsed since={since} className="font-mono text-muted-foreground" />
+      {clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
     </p>
   );
+}
+
+function RunningClock({ since }: { since: number }) {
+  const text = useRunningClock(since);
+  return text === null ? null : <span className="font-mono text-muted-foreground">{text}</span>;
 }
 
 /** The most lines a reply field grows to before it scrolls (Doop 06). */

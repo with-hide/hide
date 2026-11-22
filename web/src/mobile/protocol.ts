@@ -372,7 +372,11 @@ export type ServerFrame =
       messages?: ConversationMessage[];
       /** The cursor for the page before the oldest message; null at the start. */
       before?: number | null;
+      /** What the agent runs now, on a reset or an append from a computer that answers (its hello says `answer`); null while nothing does. */
+      running?: Running | null;
     }
+  /** What the agent asks on its own screen, sent while its detail is open by a computer that answers; null once it asks nothing. */
+  | { type: "ask"; device_id: string; pane_id: string; ask: PhoneAsk | null }
   /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
   | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
   | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
@@ -408,7 +412,7 @@ export type PhoneMessage =
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
-  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
+  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey } | { turn: string; choice: string }))
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
@@ -482,6 +486,33 @@ export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageK
 export const MAX_REPLY_CHARS = 2000;
 
 /** The most bytes one message from the phone may hold; hided drops a longer one unread (hided/src/mobile/phone.rs MAX_FRAME). */
+/**
+ * What the agent asks on its own screen (hided/src/mobile/ask.rs, Doop 03, 04): its question with each choice's note, its plan
+ * waiting for approval, or a tool call waiting for permission with the first of the command it runs. `turn` names the ask an
+ * answer is written for; `answerable` says the computer types a picked choice as the keys the agent's screen takes, and when it is
+ * false the choices are shown and answered in the terminal. A question's choice is its place (`1` for the first); a plan's is
+ * `approve` or `keep_planning`; a permission's is `allow`, `allow_always` or `deny`.
+ */
+export type PhoneAsk = {
+  kind: "question" | "plan_approval" | "permission";
+  turn: string;
+  since_ms: number | null;
+  text?: string;
+  truncated?: boolean;
+  command?: string;
+  command_truncated?: boolean;
+  choices: { id: string; label?: string; note?: string }[];
+  answerable: boolean;
+};
+
+/** What runs now under the agent's turn, by kind and since when, never by what it runs (Doop 02). */
+export type Running = { kind: string; since_ms: number | null };
+
+/** The input that picks `choice` on the ask the phone showed: typed by the computer as keys, never as text. */
+export function choiceMessage(key: AgentKey, ask: Pick<PhoneAsk, "turn">, choice: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, turn: ask.turn, choice };
+}
+
 export const MAX_FRAME_BYTES = 16 * 1024;
 
 /**
@@ -532,6 +563,9 @@ export function inputFailure(reason: string | null, lines = false): Notice {
       return lines ? { key: "mobile.input.controlCharacter" } : { key: "mobile.input.controlCharacters" };
     case "gone":
       return { key: "mobile.input.gone" };
+    case "stale":
+    case "unknown_choice":
+      return { key: "mobile.input.stale" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":

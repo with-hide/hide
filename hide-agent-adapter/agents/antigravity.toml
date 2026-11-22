@@ -34,7 +34,6 @@ state = "~/.gemini/config"
 usage = false
 mcp = "~/.gemini/config/mcp_config.json"
 mcp_format = "agy"
-
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 1
@@ -92,3 +91,10 @@ priority = 100
 region = "bottom_non_empty_lines(12)"
 visible_working = true
 line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of Antigravity CLI 1.5.14 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+[answer]
+question = { down = "down", pick = "enter" }
+permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"] }

@@ -20,7 +20,7 @@ import {
   parseFragment,
   prFailure,
   refusalOf,
-  replyMessage,
+  choiceMessage, replyMessage,
   replyProblem,
   sameKey,
   sleepTarget,
@@ -369,7 +369,8 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  if (state.pendingInput?.kind === "choice" && state.choice) patch({ pendingInput: null, choice: { turn: state.choice.turn, choice: state.choice.choice, state: "failed", notice: inputFailure("uncertain") } });
+  else if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
   if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
@@ -425,7 +426,7 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   }
   const view: DetailView = "conversation";
   dropTransfer();
-  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null }, inputError: null, pendingInput: null });
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null, choice: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
@@ -448,7 +449,7 @@ export function setTab(tab: DetailTab): void {
 
 export function closeDetail(): void {
   dropTransfer();
-  patch({ detail: null, inputError: null, pendingInput: null });
+  patch({ detail: null, inputError: null, pendingInput: null, choice: null });
   send({ type: "close" });
 }
 
@@ -732,6 +733,25 @@ export function sendKey(key: QuickKey): void {
 }
 
 /**
+ * Answers the agent's own ask with one of its choices (Doop 03, 04): the computer types the keys the agent's screen takes for it,
+ * only while the agent still asks what the phone showed (`turn`). The choice says sending, then sent until the ask moves on, or
+ * why it did not land.
+ */
+export function sendChoice(choice: string): void {
+  const state = usePhone.getState();
+  const detail = state.detail;
+  const ask = detail?.ask;
+  if (!detail || !ask || !ask.answerable || state.pendingInput) return;
+  const requestId = newRequestId();
+  const sent = send(choiceMessage(detail.key, ask, choice, requestId));
+  patch(
+    sent
+      ? { pendingInput: { requestId, kind: "choice" }, choice: { turn: ask.turn, choice, state: "sending" } }
+      : { choice: { turn: ask.turn, choice, state: "failed", notice: inputFailure("offline") } },
+  );
+}
+
+/**
  * Done on the person's turn `agent` leads with (PRD ask-human B18, B19):
  * hided sends the declaring agent one letter and the turn goes from the
  * list once the Mac says so; a refusal or a lost link says so under it, and
@@ -762,7 +782,14 @@ export function onReplyResult(listener: ReplyListener): () => void {
 }
 
 function onInputResult(ok: boolean, reason: string | null): void {
-  const pending = usePhone.getState().pendingInput;
+  const { pendingInput: pending, choice } = usePhone.getState();
+  if (pending?.kind === "choice") {
+    patch({
+      pendingInput: null,
+      choice: choice && (ok ? { ...choice, state: "sent" } : { turn: choice.turn, choice: choice.choice, state: "failed", notice: inputFailure(reason) }),
+    });
+    return;
+  }
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     if (ok) lastReply = null;

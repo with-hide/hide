@@ -504,6 +504,11 @@ pub mod phone {
         /// human_turn`, PRD ask-human), which the phone draws with Done.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub human_turn: Option<Value>,
+        /// The agent's own question or plan with its choices, as its session
+        /// records it (`SidebarAgentSnapshot::user_turn`). Never in the list
+        /// frame: the phone's detail is told it alone (`hided/src/mobile/ask.rs`).
+        #[serde(skip)]
+        pub user_turn: Option<hide_session::turns::UserTurnFact>,
         /// Every declaration on the row and the ones raised to it, so a new
         /// one is announced once even while the row already stands in Needs
         /// You (B5, B17), by declaration id with what each says. Used only by
@@ -1197,6 +1202,10 @@ pub mod phone {
                     .get("human_turn")
                     .filter(|lead| !lead.is_null())
                     .cloned(),
+                user_turn: agent
+                    .get("user_turn")
+                    .filter(|fact| !fact.is_null())
+                    .and_then(|fact| serde_json::from_value(fact.clone()).ok()),
                 human_turns: declared_subject(agent)
                     .into_iter()
                     .chain(

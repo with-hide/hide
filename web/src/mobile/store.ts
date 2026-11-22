@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneAsk, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, Running, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
@@ -90,6 +90,10 @@ export type Detail = {
   olderAskedAt: number | null;
   looks: Looks | null;
   look: Viewing | null;
+  /** What the agent asks on its own screen, from a computer that answers; null otherwise. */
+  ask: PhoneAsk | null;
+  /** What the agent runs now, from a computer that answers; null otherwise. */
+  running: Running | null;
 };
 
 /**
@@ -107,7 +111,10 @@ export type StartSheet = {
 
 export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOICE, pending: null, error: null };
 
-export type PendingInput = { requestId: string; kind: "text" | "key" };
+export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" };
+
+/** A choice picked on the agent's ask: sending, sent (until the ask moves on), or refused with why. */
+export type ChoiceState = { turn: string; choice: string; state: "sending" | "sent" } | { turn: string; choice: string; state: "failed"; notice: Notice };
 
 type PhoneState = {
   /** The sample host is open (demoSocket.ts): every host name is marked as sample data and nothing is stored. */
@@ -208,6 +215,8 @@ type PhoneState = {
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
   inputError: Notice | null;
+  /** The choice picked on the open detail's ask, for the ask it was picked on. */
+  choice: ChoiceState | null;
   /** Done on a person's turn hided has not answered, or refused (PRD ask-human B19); one at a time, keyed by its declaration. */
   humanTurn: { declaration: string; requestId: string | null; failed: boolean } | null;
   /** One request or failure at a time, keyed by the stable conversation intent. */
@@ -274,6 +283,7 @@ const initial: PhoneState = {
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
+  choice: null,
   humanTurn: null,
   sleepAction: null,
   installHint: false,
@@ -391,7 +401,16 @@ export function applyFrame(frame: ServerFrame): void {
       if (!detail || !sameKey(detail.key, frame)) return;
       const current = detail.conversation === "none" ? null : detail.conversation;
       const conversation = frame.state === "ok" ? mergeConversation(current, frame) : "none";
-      patch({ detail: { ...detail, conversation } });
+      const running = frame.state !== "ok" ? null : frame.running === undefined ? detail.running : frame.running;
+      patch({ detail: { ...detail, conversation, running } });
+      return;
+    }
+    case "ask": {
+      const detail = state.detail;
+      if (!detail || !sameKey(detail.key, frame)) return;
+      // A choice belongs to the ask it was picked on: once the agent asks something else, or nothing, it is over.
+      const choice = state.choice && state.choice.turn === frame.ask?.turn ? state.choice : null;
+      patch({ detail: { ...detail, ask: frame.ask }, choice });
       return;
     }
     case "looks": {

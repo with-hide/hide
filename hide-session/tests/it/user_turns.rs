@@ -281,7 +281,8 @@ fn native_question_fixtures_preserve_exact_text_and_choices_through_serde() {
             serde_json::to_value(fact(&answer)).unwrap(),
             json!({
                 "kind":"question", "content":{"text":"배포 대상을 골라주세요\n검토 방식을 고르세요",
-                "choices":["미리보기","운영","직접","자동"], "truncated":false}
+                "choices":["미리보기","운영","직접","자동"],
+                "notes":["검토용 배포","공개 배포","직접 검토","자동 검토"], "truncated":false}
             })
         );
     }
@@ -365,6 +366,43 @@ fn anchor_replay_and_session_replacement_do_not_reopen_an_answered_question() {
         assert!(replaced.rescanned.is_some());
         assert_eq!(fact(&replaced), None, "{agent:?} replacement");
     }
+}
+
+/// One question of one choice at a time is a pick a phone can make by the
+/// choice's place, with what the agent says under each choice; a question of
+/// several choices at once, or several questions, is answered by text alone.
+#[test]
+fn one_question_of_one_choice_keeps_each_choice_note_and_is_one_pick() {
+    for agent in [Agent::Claude, Agent::Codex] {
+        let mut session = Session::question(agent);
+        let asked = session.read();
+        session.resume(&asked);
+        session.append(&session.human("one question"));
+        let one = json!([{"question":"어느 쪽으로 할까요?","header":"방식","multiSelect":false,"options":[
+            {"label":"전부 반영","description":"리뷰 4건을 이 PR에서 고칩니다"},
+            {"label":"나눠서"}]}]);
+        session.append(&session.native_question("one", one));
+        let answer: LabelTranscript =
+            serde_json::from_slice(&serde_json::to_vec(&session.read()).unwrap()).unwrap();
+        let content = fact(&answer).unwrap().content.unwrap();
+        assert_eq!(content.choices(), ["전부 반영", "나눠서"]);
+        assert_eq!(content.note(0), Some("리뷰 4건을 이 PR에서 고칩니다"));
+        assert_eq!(content.note(1), None);
+        assert!(content.pick_one(), "{agent:?}");
+
+        let mut several = Session::question(agent);
+        let first = several.read();
+        several.resume(&first);
+        several.append(&several.human("several at once"));
+        let many = json!([{"question":"무엇을 넣을까요?","multiSelect":true,"options":[{"label":"A"},{"label":"B"}]}]);
+        several.append(&several.native_question("many", many));
+        let content = fact(&several.read()).unwrap().content.unwrap();
+        assert!(!content.pick_one(), "{agent:?}");
+        assert_eq!(content.note(0), None);
+    }
+    // Two questions in one call are answered in turn, never by one pick.
+    let two = fact(&Session::question(Agent::Claude).read()).unwrap().content.unwrap();
+    assert!(!two.pick_one());
 }
 
 #[test]

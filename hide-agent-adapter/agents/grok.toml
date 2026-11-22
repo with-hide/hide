@@ -39,7 +39,6 @@ state = "{GROK_HOME}"
 usage = false
 mcp = "{GROK_HOME}/config.toml"
 mcp_format = "grok"
-
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 3
@@ -175,3 +174,10 @@ not = [
   { contains = ["esc:cancel"] },
   { contains = ["ctrl+c:cancel"] },
 ]
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of Grok Build 1.0.77 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+[answer]
+question = { down = "down", pick = "enter" }
+plan_approval = { approve = ["a"], keep_planning = ["q"] }

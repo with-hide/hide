@@ -1672,6 +1672,13 @@ fn typed_keys(keys: &[&str]) -> Answer<Vec<PaneInput>> {
     Ok(typed)
 }
 
+/// Whether `send_keys` types every one of `keys`, for a table of keys
+/// checked against the engine that presses them.
+#[cfg(test)]
+pub(crate) fn types_keys(keys: &[&str]) -> bool {
+    typed_keys(keys).is_ok()
+}
+
 /// The bytes of a single character, or the control byte of a Ctrl chord of
 /// a letter (`ctrl+o` or `ctrl-o`).
 fn typed_bytes(key: &str) -> Option<Vec<u8>> {

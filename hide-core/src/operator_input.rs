@@ -7,8 +7,9 @@
 //! The write waits for the pane node's input permit (the creation holder's
 //! byte reservation, so a fork's caps count every surface's input together),
 //! takes an admission from the core's input gate (a pane whose agent ends,
-//! sleeps or wakes takes none), asks its caller once more whether the pane
-//! is still the one it meant, last, and only then types: words through the
+//! sleeps or wakes takes none), asks its caller last for the engine to type
+//! with (the caller's last look that the pane is still the one it meant, and
+//! the engine of the pane's machine), and only then types: words through the
 //! engine's `prompt_agent`, as the operator's (one paste where the program
 //! takes bracketed paste, then Enter after the prompt's gap), keys one by
 //! one as the engine's key input.
@@ -98,9 +99,9 @@ pub enum Unwritten {
     /// The engine never answered, or answered past its contract: the input
     /// may have landed.
     Uncertain,
-    /// The caller's last look said the pane moved on, for the reason it
-    /// named; nothing was typed.
-    Moved(&'static str),
+    /// The caller's last step refused, for the reason it named: the pane
+    /// moved on, or its machine's engine could not be had; nothing was typed.
+    Unready(&'static str),
 }
 
 impl Unwritten {
@@ -112,7 +113,7 @@ impl Unwritten {
             Self::Gone => "pane_gone",
             Self::Unavailable => "unavailable",
             Self::Uncertain => "uncertain",
-            Self::Moved(reason) => reason,
+            Self::Unready(reason) => reason,
         }
     }
 
@@ -136,17 +137,17 @@ impl Unwritten {
 }
 
 /// Types `typed` into `raw_pane`, the engine's id of the pane the core knows
-/// as `core_pane`, after the node's permit and the gate's admission, and
-/// after `still` says once more, last, that the pane is still the one meant.
-/// Blocks, so a caller runs it off the runtime lock and off any async loop.
+/// as `core_pane`, after the node's permit and the gate's admission, with the
+/// engine `ready` answers last: it looks once more that the pane is still the
+/// one meant, and nothing is typed when it refuses. Blocks, so a caller runs
+/// it off the runtime lock and off any async loop.
 pub fn write(
-    engine: &EngineHandle,
     terminals: &dyn TerminalNode,
     gate: &Arc<PaneInputGate>,
     core_pane: &str,
     raw_pane: &str,
     typed: Typed<'_>,
-    still: &dyn Fn() -> Result<(), &'static str>,
+    ready: &dyn Fn() -> Result<EngineHandle, &'static str>,
 ) -> Result<(), Unwritten> {
     match wait_for_input_permit(terminals, core_pane, typed.reserved()) {
         Ok(()) => {}
@@ -156,7 +157,7 @@ pub fn write(
     // Held until the write returns: a sleep that starts now waits for these
     // words to land, and a pane closed since refuses them.
     let _admission = gate.admit(core_pane).map_err(|_| Unwritten::Asleep)?;
-    still().map_err(Unwritten::Moved)?;
+    let engine = ready().map_err(Unwritten::Unready)?;
     match typed {
         Typed::Words(text) => engine
             .prompt_agent(raw_pane, text, STEP_TIMEOUT)
@@ -182,6 +183,102 @@ pub fn write(
             Ok(())
         }
     }
+}
+
+/// An ask on the agent's own screen that a choice answers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Ask {
+    /// The agent's question of one choice, with how many choices it lists.
+    Question(usize),
+    PlanApproval,
+    /// A tool call waiting for the operator's permission.
+    Permission,
+}
+
+impl Ask {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Question(_) => "question",
+            Self::PlanApproval => "plan_approval",
+            Self::Permission => "permission",
+        }
+    }
+}
+
+/// The choices the agent's key table lets a screen that is not its terminal
+/// pick on `ask`, in the order its screen lists them: a question's by place
+/// (`1` for the first), a plan's `approve` and `keep_planning`, a permission's
+/// `allow`, `allow_always` where the agent offers it, and `deny`. Empty for
+/// an agent, or a kind of ask, that has no table (`[answer]` in its
+/// definition file), which is answered in the terminal.
+pub fn choices(agent_kind: &str, ask: Ask) -> Vec<String> {
+    let Some(answer) = answer_table(agent_kind) else {
+        return Vec::new();
+    };
+    match ask {
+        Ask::Question(count) if answer.question.is_some() => {
+            (1..=count.min(QUESTION_CHOICES)).map(|at| at.to_string()).collect()
+        }
+        Ask::PlanApproval if answer.plan_approval.is_some() => {
+            vec!["approve".to_owned(), "keep_planning".to_owned()]
+        }
+        Ask::Permission => match &answer.permission {
+            Some(permission) => std::iter::once("allow")
+                .chain(permission.allow_always.as_ref().map(|_| "allow_always"))
+                .chain(["deny"])
+                .map(str::to_owned)
+                .collect(),
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// The keys that pick `choice` on `ask`, from the agent's key table; `None`
+/// for a choice [`choices`] does not offer.
+pub fn choice_keys(agent_kind: &str, ask: Ask, choice: &str) -> Option<Vec<String>> {
+    if !choices(agent_kind, ask).iter().any(|offered| offered == choice) {
+        return None;
+    }
+    let answer = answer_table(agent_kind)?;
+    Some(match ask {
+        Ask::Question(_) => {
+            let keys = answer.question.as_ref()?;
+            let place: usize = choice.parse().ok()?;
+            std::iter::repeat_n(keys.down.clone(), place - 1)
+                .chain([keys.pick.clone()])
+                .collect()
+        }
+        Ask::PlanApproval => {
+            let keys = answer.plan_approval.as_ref()?;
+            match choice {
+                "approve" => keys.approve.clone(),
+                _ => keys.keep_planning.clone(),
+            }
+        }
+        Ask::Permission => {
+            let keys = answer.permission.as_ref()?;
+            match choice {
+                "allow" => keys.allow.clone(),
+                "allow_always" => keys.allow_always.clone()?,
+                _ => keys.deny.clone(),
+            }
+        }
+    })
+}
+
+/// The most choices of a question picked by place: as many as a question's
+/// record keeps (`hide_session::turns::CHOICE_LIMIT`), each reached with at
+/// most that many keys.
+const QUESTION_CHOICES: usize = hide_session::turns::CHOICE_LIMIT;
+
+/// The key table of the built-in agent `agent_kind` names (its id or an
+/// alias): the tables are checked on each agent's screens before they ship,
+/// so an operator's own file carries none.
+fn answer_table(agent_kind: &str) -> Option<&'static hide_agent_adapter::definition::Answer> {
+    hide_agent_adapter::definition::find(hide_agent_adapter::definition::builtins(), agent_kind)?
+        .answer
+        .as_ref()
 }
 
 #[cfg(test)]
@@ -247,10 +344,11 @@ mod tests {
     fn a_write_types_only_after_the_permit_the_gate_and_the_last_look() {
         let fake = FakeEngine::start(|_, _| reply(()));
         let engine = EngineHandle::new(fake.engine());
+        let ready = || Ok(engine.clone());
         let gate = Arc::new(PaneInputGate::default());
         let open = node(None);
         let words = "first line\nsecond\tline";
-        let written = write(&engine, &open, &gate, "w1:p1", "p1", Typed::Words(words), &|| Ok(()));
+        let written = write(&open, &gate, "w1:p1", "p1", Typed::Words(words), &ready);
         assert_eq!(written, Ok(()));
         assert_eq!(*open.asked.lock().unwrap(), [words.len() + 1]);
         assert_eq!(
@@ -259,7 +357,7 @@ mod tests {
         );
         let keys = ["down", "enter"];
         assert_eq!(
-            write(&engine, &open, &gate, "w1:p1", "p1", Typed::Keys(&keys), &|| Ok(())),
+            write(&open, &gate, "w1:p1", "p1", Typed::Keys(&keys), &ready),
             Ok(())
         );
         assert_eq!(
@@ -274,23 +372,75 @@ mod tests {
         let asleep = node(Some(InputPermitError::Asleep));
         let moved = || Err("stale");
         assert_eq!(
-            write(&engine, &refused, &gate, "w1:p1", "p1", Typed::Words("yes"), &|| Ok(())),
+            write(&refused, &gate, "w1:p1", "p1", Typed::Words("yes"), &ready),
             Err(Unwritten::Refused)
         );
         assert_eq!(
-            write(&engine, &asleep, &gate, "w1:p1", "p1", Typed::Words("yes"), &|| Ok(())),
+            write(&asleep, &gate, "w1:p1", "p1", Typed::Words("yes"), &ready),
             Err(Unwritten::Asleep)
         );
         assert_eq!(
-            write(&engine, &open, &gate, "w1:p1", "p1", Typed::Keys(&keys), &moved),
-            Err(Unwritten::Moved("stale"))
+            write(&open, &gate, "w1:p1", "p1", Typed::Keys(&keys), &moved),
+            Err(Unwritten::Unready("stale"))
         );
         gate.close("w1:p1");
         assert_eq!(
-            write(&engine, &open, &gate, "w1:p1", "p1", Typed::Words("yes"), &|| Ok(())),
+            write(&open, &gate, "w1:p1", "p1", Typed::Words("yes"), &ready),
             Err(Unwritten::Asleep)
         );
         assert_eq!(fake.methods(), ["prompt_agent", "send_keys", "send_keys"]);
+    }
+
+    /// A choice is typed as the keys the agent's own screen takes for it,
+    /// as checked in its real pane: a question's place as that many moves
+    /// down and a pick, an approval's choice as its table's keys; an agent or
+    /// a kind of ask without a table offers nothing and types nothing.
+    #[test]
+    fn a_choice_is_the_keys_its_agents_screen_takes_and_nothing_without_a_table() {
+        assert_eq!(choices("claude", Ask::Question(3)), ["1", "2", "3"]);
+        assert_eq!(
+            choice_keys("claude", Ask::Question(3), "3"),
+            Some(vec!["down".to_owned(), "down".to_owned(), "enter".to_owned()])
+        );
+        assert_eq!(choice_keys("claude", Ask::Question(3), "4"), None);
+        assert_eq!(choice_keys("claude", Ask::Question(3), "0"), None);
+        assert_eq!(
+            choices("opencode", Ask::Permission),
+            ["allow", "allow_always", "deny"]
+        );
+        assert_eq!(
+            choice_keys("opencode", Ask::Permission, "allow_always"),
+            Some(vec!["right".to_owned(), "enter".to_owned()])
+        );
+        assert_eq!(choices("omp", Ask::Permission), ["allow", "deny"]);
+        assert_eq!(choice_keys("omp", Ask::Permission, "allow_always"), None);
+        assert_eq!(
+            choice_keys("grok", Ask::PlanApproval, "approve"),
+            Some(vec!["a".to_owned()])
+        );
+        assert!(choices("grok", Ask::Permission).is_empty());
+        assert!(choices("pi", Ask::Question(2)).is_empty());
+        assert!(choices("not-an-agent", Ask::Permission).is_empty());
+    }
+
+    /// Every key a built-in table names is one the core's own engine
+    /// presses, so a choice never fails at the pane for its spelling.
+    #[test]
+    fn every_key_in_a_built_in_table_is_one_the_engine_types() {
+        for definition in hide_agent_adapter::definition::builtins() {
+            for ask in [Ask::Question(QUESTION_CHOICES), Ask::PlanApproval, Ask::Permission] {
+                for choice in choices(&definition.id, ask) {
+                    let keys = choice_keys(&definition.id, ask, &choice).unwrap();
+                    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+                    assert!(
+                        crate::engine::own::types_keys(&keys),
+                        "{} {} {choice}: {keys:?}",
+                        definition.id,
+                        ask.name()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -310,6 +460,6 @@ mod tests {
             Unwritten::Uncertain
         );
         assert!(!Unwritten::Uncertain.certain());
-        assert!(Unwritten::Moved("stale").certain());
+        assert!(Unwritten::Unready("stale").certain());
     }
 }

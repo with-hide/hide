@@ -56,6 +56,99 @@ struct File {
     /// so the build script needs no rule grammar.
     #[serde(default)]
     pub screen: Option<toml::Table>,
+    /// The keys that answer the agent's own question and approval screens
+    /// ([`Answer`]); the built-in files' alone.
+    #[serde(default)]
+    pub answer: Option<Answer>,
+}
+
+/// The keys that answer an agent's own screens from a screen that is not its
+/// terminal (`[answer]`), by the kind of ask: each choice is the keys that
+/// pick it, typed as key presses and never pasted, since a pasted choice is
+/// read as text and the Enter after it picks whatever the screen has
+/// highlighted (docs/ARCHITECTURE.md, The mobile companion). A kind with no
+/// table is shown and answered in the terminal. Each key is a key name
+/// ([`KEY_NAMES`]) or one printable ASCII character.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Answer {
+    #[serde(default)]
+    pub question: Option<QuestionKeys>,
+    #[serde(default)]
+    pub plan_approval: Option<PlanKeys>,
+    #[serde(default)]
+    pub permission: Option<PermissionKeys>,
+}
+
+/// A question of one choice: its screen opens on the first choice, `down`
+/// moves one choice down and `pick` picks the one it stands on.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionKeys {
+    pub down: String,
+    pub pick: String,
+}
+
+/// A plan waiting for approval: approve it, or keep planning (the operator
+/// says what to change in a reply after it).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanKeys {
+    pub approve: Vec<String>,
+    pub keep_planning: Vec<String>,
+}
+
+/// A tool call waiting for permission: allow it once, allow it from now on
+/// where the agent offers that, or refuse it (the operator says what to do
+/// instead in a reply after it).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionKeys {
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub allow_always: Option<Vec<String>>,
+    pub deny: Vec<String>,
+}
+
+/// The key names an `[answer]` table may name, as the core's own engine
+/// presses them.
+pub const KEY_NAMES: [&str; 7] = ["enter", "esc", "tab", "up", "down", "left", "right"];
+/// The most keys one choice types.
+pub const MAX_ANSWER_KEYS: usize = 8;
+
+fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
+    let key = |key: &String| {
+        KEY_NAMES.contains(&key.as_str())
+            || (key.len() == 1 && key.bytes().all(|byte| byte.is_ascii_graphic()))
+    };
+    let mut lists: Vec<(&str, Vec<&String>)> = Vec::new();
+    if let Some(question) = &answer.question {
+        lists.push(("question", vec![&question.down, &question.pick]));
+    }
+    if let Some(plan) = &answer.plan_approval {
+        lists.push(("plan_approval.approve", plan.approve.iter().collect()));
+        lists.push(("plan_approval.keep_planning", plan.keep_planning.iter().collect()));
+    }
+    if let Some(permission) = &answer.permission {
+        lists.push(("permission.allow", permission.allow.iter().collect()));
+        if let Some(always) = &permission.allow_always {
+            lists.push(("permission.allow_always", always.iter().collect()));
+        }
+        lists.push(("permission.deny", permission.deny.iter().collect()));
+    }
+    for (field, keys) in lists {
+        if keys.is_empty() || keys.len() > MAX_ANSWER_KEYS {
+            return Err(format!(
+                "{name}: answer.{field} holds 1 to {MAX_ANSWER_KEYS} keys"
+            ));
+        }
+        if let Some(bad) = keys.into_iter().find(|candidate| !key(candidate)) {
+            return Err(format!(
+                "{name}: answer.{field} key {bad:?} is not a key name or one printable character"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Which of Hide's own code reads the agent's hooks, sessions and thread:
@@ -155,6 +248,7 @@ pub struct Fields {
     pub resume_last: Option<Vec<String>>,
     pub account: Option<AccountRule>,
     pub screen: Option<toml::Table>,
+    pub answer: Option<Answer>,
 }
 
 /// Parse one file and check every field it carries: the one reading of a
@@ -180,6 +274,13 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     }
     if origin == Origin::Builtin && file.based_on.is_some() {
         return Err(format!("{name}: based_on is for the operator's files"));
+    }
+    // Each table is checked on the agent's own screens before it ships.
+    if origin == Origin::User && file.answer.is_some() {
+        return Err(format!("{name}: answer is for the built-in agents' files"));
+    }
+    if let Some(answer) = &file.answer {
+        check_answer(name, answer)?;
     }
     if let Some(display) = &file.name
         && (display.trim().is_empty()
@@ -243,6 +344,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         resume_last: resume.last,
         account,
         screen: file.screen,
+        answer: file.answer,
     })
 }
 

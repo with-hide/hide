@@ -12,6 +12,8 @@
 //! What the renderer sees is one `mobile` frame, republished on every
 //! change; what it asks is one of the `mobile_*` events.
 
+pub mod ask;
+pub mod calls;
 pub mod command;
 pub mod conversation;
 pub mod html_look;
@@ -803,6 +805,11 @@ impl Mobile {
 
     pub fn subscribe_projection(&self) -> watch::Receiver<Arc<Projection>> {
         self.projection.subscribe()
+    }
+
+    /// The agent list as it stands now, for a last look before a write.
+    pub fn projection_now(&self) -> Arc<Projection> {
+        Arc::clone(&self.projection.borrow())
     }
 
     pub fn subscribe_missions(&self) -> watch::Receiver<Arc<PhoneMissions>> {

@@ -47,7 +47,6 @@ mcp_format = "opencode"
 
 [account.forbid]
 vars = ["OPENCODE_CONFIG_DIR", "OPENCODE_DB"]
-
 [screen]
 version = "2026.11.05.1"
 min_engine_version = 1
@@ -93,3 +92,10 @@ state = "idle"
 priority = 10
 region = "whole_recent"
 regex = ['┃ +\S[^\n]* · \S[^\n]*\n *╹▀']
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of OpenCode 2.0.29 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+[answer]
+question = { down = "down", pick = "enter" }
+permission = { allow = ["enter"], allow_always = ["right", "enter"], deny = ["esc"] }

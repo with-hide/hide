@@ -524,13 +524,12 @@ impl Runtime {
                 // staging, their permit or the pane's admission: the write
                 // asks once more, last.
                 crate::operator_input::write(
-                    &engine,
                     terminals.as_ref(),
                     &gate,
                     &core_pane,
                     &raw_pane,
                     crate::operator_input::Typed::Words(&text),
-                    still,
+                    &|| still().map(|()| engine.clone()),
                 )
                 .map_err(crate::operator_input::Unwritten::reason)
             };

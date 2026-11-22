@@ -32,3 +32,11 @@ mcp_format = "claude"
 
 [account.forbid]
 vars = ["PI_CODING_AGENT_DIR", "PI_PROFILE", "PI_CONFIG_DIR"]
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of oh-my-pi (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+[answer]
+question = { down = "down", pick = "enter" }
+plan_approval = { approve = ["enter"], keep_planning = ["down", "down", "down", "enter"] }
+permission = { allow = ["enter"], deny = ["esc"] }

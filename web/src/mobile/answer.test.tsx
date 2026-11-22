@@ -115,3 +115,77 @@ it("keeps the one-line reply of 2,000 characters on a computer before answering"
     await unmount();
   }
 });
+
+it("draws the agent's question with each choice's note and sends the picked choice as a choice for that ask, never as its words", async () => {
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "question", status_code: "question", changed_at_unix_ms: 100 }));
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "코멘트 3건을 모두 읽었어요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({
+      type: "ask", device_id: "local", pane_id: "w1:p1",
+      ask: { kind: "question", turn: "100", since_ms: 100, text: "리뷰 코멘트 3건을 모두 반영할까요?", truncated: false, answerable: true, choices: [
+        { id: "1", label: "모두 반영 (Recommended)", note: "문구 2건과 테스트 1건" },
+        { id: "2", label: "문구 수정 2건만", note: "테스트는 다음에" },
+        { id: "3", label: "반영하지 않기" },
+      ] },
+    });
+    const card = container.querySelector<HTMLElement>('[data-phone-ask="question"]')!;
+    expect(card.querySelector("[data-phone-ask-text]")!.textContent).toBe("리뷰 코멘트 3건을 모두 반영할까요?");
+    // The conversation answers with the card; the quick keys stay with the terminal (Doop 05).
+    expect(container.querySelector("[data-phone-key]")).toBeNull();
+    expect(container.querySelector("[data-phone-reply]")!.getAttribute("placeholder")).toBe("Or write a reply");
+    expect(card.textContent).toContain("테스트는 다음에");
+    // The agent's own recommendation mark becomes the tag; the label keeps its words alone.
+    expect(card.querySelector("[data-phone-ask-recommended]")!.closest("label")!.textContent).toContain("모두 반영");
+    expect(card.textContent).not.toContain("(Recommended)");
+    // Nothing is sent until a choice is marked and Answer pressed.
+    const answerButton = () => card.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!;
+    expect(answerButton().disabled).toBe(true);
+    await act(async () => card.querySelector<HTMLElement>('[data-phone-ask-choice="2"]')!.click());
+    expect(card.querySelector("[data-phone-ask-hint]")).not.toBeNull();
+    expect(inputs()).toEqual([]);
+    await act(async () => answerButton().click());
+    expect(inputs()).toEqual([expect.objectContaining({ type: "input", device_id: "local", pane_id: "w1:p1", turn: "100", choice: "2" })]);
+    expect(inputs()[0]).not.toHaveProperty("text");
+    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: true, reason: null });
+    expect(container.querySelector('[data-phone-ask-sent="2"]')).not.toBeNull();
+    // Once the agent asks nothing, the card goes.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: null });
+    expect(container.querySelector("[data-phone-ask]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("shows a permission its computer has no keys for with the command it waits on, and answers it in the terminal", async () => {
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100, agent_kind: "pi" }));
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드해 볼게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "100", since_ms: 100, command: "pnpm --dir site build", command_truncated: false, answerable: false, choices: [] } });
+    const card = container.querySelector<HTMLElement>('[data-phone-ask="permission"]')!;
+    expect(card.querySelector("[data-phone-ask-command]")!.textContent).toBe("pnpm --dir site build");
+    expect(card.textContent).toContain("Run this command?");
+    expect(card.querySelector("[data-phone-ask-send]")).toBeNull();
+    await act(async () => card.querySelector<HTMLButtonElement>("[data-phone-ask-terminal]")!.click());
+    expect(container.querySelector('[data-phone-view="terminal"]')!.getAttribute("data-state")).toBe("active");
+    expect(container.querySelectorAll("[data-phone-key]")).toHaveLength(5);
+    expect(container.querySelector("[data-phone-reply]")!.getAttribute("placeholder")).toBe("Send to the terminal");
+    expect(inputs()).toEqual([]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("says a command runs by the clock from its start, never by what it runs", async () => {
+  const { container, serve, unmount } = await openDetail({ answer: true }, agent({ status_code: "working", mark: "going", changed_at_unix_ms: Date.now() - 60_000 }));
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "테스트를 돌려 볼게요.", truncated: false, at_ms: 1 }], before: null, running: { kind: "command", since_ms: Date.now() - 42_000 } });
+    const line = container.querySelector<HTMLElement>('[data-phone-activity="Running a command"]')!;
+    expect(line.textContent).toMatch(/Running a command·0:4\d/);
+    // A command ended with no new word: the line goes back to thinking.
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "append", messages: [], running: null });
+    expect(container.querySelector('[data-phone-activity="Running a command"]')).toBeNull();
+    expect(container.querySelector('[data-phone-activity="Thinking"]')).not.toBeNull();
+  } finally {
+    await unmount();
+  }
+});

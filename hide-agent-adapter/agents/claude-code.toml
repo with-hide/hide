@@ -43,7 +43,6 @@ state = "{CLAUDE_CONFIG_DIR}"
 usage = "{CLAUDE_CONFIG_DIR}/.credentials.json"
 mcp = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
 mcp_format = "claude"
-
 [screen]
 version = "2026.10.11.1"
 min_engine_version = 2
@@ -285,3 +284,11 @@ state = "idle"
 priority = 250
 region = "osc_progress"
 regex = ['^4;0']
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of Claude Code 2.1.330 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+[answer]
+question = { down = "down", pick = "enter" }
+plan_approval = { approve = ["enter"], keep_planning = ["esc"] }
+permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"] }
