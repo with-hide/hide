@@ -62,6 +62,8 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
         tailscale_bin: Some(dir.path().join("missing-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: None,
+        peer_relay: None,
+        peer_relay_only: false,
         search_path: None,
     };
     let running = hided::start_daemon(env).await.unwrap();

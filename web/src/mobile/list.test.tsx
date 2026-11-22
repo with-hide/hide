@@ -43,7 +43,7 @@ it("dims an unknown row on the phone's list and leaves a sleeping one bright", a
 it("leads a tool's row's second line with the tool's name, and the operator's row with none", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   patch({ screen: "app", groups: [{ group: "needs_you", count: 3, rows: [
-    agent("asking", { group: "needs_you", mark: "turn", tool: "nightly", place: "fixture · main" }),
+    agent("asking", { group: "needs_you", mark: "turn", tool: "nightly", place: "fixture · main", project: "fixture" }),
     agent("look", { group: "needs_you", mark: "look", tool: "nightly" }),
     agent("own", { group: "needs_you", mark: "turn", place: "fixture · main" }),
   ].map((row) => ({ kind: "agent" as const, ...row })) }] });
@@ -51,12 +51,14 @@ it("leads a tool's row's second line with the tool's name, and the operator's ro
   const root = createRoot(container);
   await act(async () => root.render(<App />));
   try {
-    const row = (pane: string) => container.querySelector<HTMLElement>(`[data-phone-agent="local|${pane}"]`)!;
+    const row = (pane: string) => container.querySelector<HTMLElement>(`[data-phone-row="local|${pane}"]`)!;
     const second = (pane: string) => row(pane).querySelector("[data-phone-tool]")?.parentElement?.textContent ?? null;
-    expect(second("asking")).toBe("nightly·fixture · main");
+    // The list's row names the project alone (Doop 01); a Mac that predates the project field has its row name the whole place.
+    expect(second("asking")).toBe("nightly·fixture");
     expect(second("look")).toBe("nightly");
     expect(row("own").querySelector("[data-phone-tool]")).toBeNull();
-    expect(row("asking").getAttribute("aria-label")).toContain("nightly, fixture · main");
+    expect(row("own").querySelector("[data-phone-place]")?.textContent).toBe("fixture · main");
+    expect(container.querySelector(`[data-phone-agent="local|asking"]`)!.getAttribute("aria-label")).toContain("nightly, fixture · main");
   } finally {
     await act(async () => root.unmount());
   }

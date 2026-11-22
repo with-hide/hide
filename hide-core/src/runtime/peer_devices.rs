@@ -235,6 +235,19 @@ impl Runtime {
                 } else {
                     self.connect_remote_device(&registration, super::hosts::HostAttempt::Background)
                 };
+                continue;
+            }
+            // Its connection came back: a link that failed while it was
+            // away is dialed now, not at the end of a wait that grew
+            // meanwhile, once per outage as an engine session's return.
+            let was_connected = before
+                .iter()
+                .any(|earlier| earlier.key == machine.key && earlier.connected);
+            if machine.connected && !was_connected {
+                let device = self.snapshot.ui_state.device_registrations[index]
+                    .id
+                    .clone();
+                changed |= self.device_reachable_again(&device);
             }
         }
         changed

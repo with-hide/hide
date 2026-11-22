@@ -47,6 +47,8 @@ export type PhoneAgent = {
   agent_kind: string;
   title: string;
   place: string | null;
+  /** The project alone, which the list row's second line names; absent where `place` is and from a Mac that predates it, where the row names `place`. */
+  project?: string;
   device_label: string | null;
   /** When the Mac's core last saw this agent change state (epoch ms); the phone counts the elapsed time from it. */
   changed_at_unix_ms: number | null;
@@ -136,6 +138,8 @@ export type PhoneMissionNode = MissionNodeBrief & {
   /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
   external_state?: PrState;
   stage: number | null;
+  /** When the step last went to work, its start or back from a finish; the step list's `작업 중 · N분` counts from it. Absent before it started and from a Mac that predates it, where the line has no time. */
+  worked_at_unix_ms?: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;
@@ -265,9 +269,16 @@ export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "r
 export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 
 /** The answer states of `look_result`: everything that is not content. */
-/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout); a bundle
- * from before them shows either as a failed read. */
-export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable" | "not_found" | "outside_roots";
+/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout), and
+ * `grant_expired`, `file_replaced` and `no_window` why a file outside every checkout cannot (the desktop app no longer holds its
+ * opening, it became a link or a folder, no desktop app is open to read it); a bundle from before them shows each as a failed read. */
+export type LookResultState =
+  | "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable"
+  | "not_found" | "outside_roots" | "grant_expired" | "file_replaced" | "no_window";
+
+/** Why a page's screen cannot be taken, when the operator can act on it (no desktop app, the window on another computer, a page
+ * the app has not drawn); absent for any other reason, and a bundle from before it ignores it and says the screen cannot be taken now. */
+export type LookPageReason = "no_window" | "window_elsewhere" | "not_drawn";
 
 /**
  * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
@@ -368,7 +379,7 @@ export type ServerFrame =
     }
   /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
   | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
-  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
+  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string; reason?: LookPageReason }
   | { type: "look_changes"; request_id: string; view_id: string; files: LookFile[]; count: number; added: number; removed: number }
   | LookHead
   | { type: "look_chunk"; request_id: string; seq: number; data: string }

@@ -36,6 +36,7 @@ fn local() -> Options {
         mdns: false,
         bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
         port: None,
+        relay_only: false,
     }
 }
 
@@ -435,6 +436,7 @@ async fn an_endpoint_given_a_port_holds_it_on_every_interface() {
         mdns: false,
         bind: None,
         port: Some(free),
+        relay_only: false,
     };
     let transport = within("the endpoint", IrohTransport::open(&key.secret(), options))
         .await

@@ -28,6 +28,8 @@ mod bootstrap_origin;
 #[cfg(unix)]
 mod core_letters;
 #[cfg(unix)]
+mod fault_run;
+#[cfg(unix)]
 mod guest_work;
 #[cfg(unix)]
 mod moved_core;
@@ -62,6 +64,8 @@ fn host_env(root: &Path) -> Env {
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
+        peer_relay: None,
+        peer_relay_only: false,
         search_path: None,
     }
 }
@@ -1104,6 +1108,8 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         device: "moved-off".to_owned(),
         release: false,
         direct: Some("127.0.0.1:0".parse().unwrap()),
+        relay: None,
+        relay_only: false,
         wsl: None,
     };
     // The split runs where the node role runs it: on a thread no runtime

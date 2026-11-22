@@ -42,6 +42,7 @@ export const automationWordsEnglish = {
   "automation.record.missed_other": "{{first}} ~ {{last}} · missed {{count}} times · {{why}}",
   "automation.record.missedCoreOff": "Hide was off",
   "automation.record.missedAsleep": "the computer was asleep",
+  "automation.record.missedOnce": "missed · {{why}}",
 } as const;
 
 const ko: Catalog<typeof automationWordsEnglish> = {
@@ -83,6 +84,7 @@ const ko: Catalog<typeof automationWordsEnglish> = {
   "automation.record.missed_other": "{{first}} ~ {{last}} · 놓침 {{count}}회 · {{why}}",
   "automation.record.missedCoreOff": "Hide가 꺼져 있었음",
   "automation.record.missedAsleep": "컴퓨터가 잠들어 있었음",
+  "automation.record.missedOnce": "놓침 · {{why}}",
 };
 
 const zh: Catalog<typeof automationWordsEnglish> = {
@@ -124,6 +126,7 @@ const zh: Catalog<typeof automationWordsEnglish> = {
   "automation.record.missed_other": "{{first}} ~ {{last}} · 错过 {{count}} 次 · {{why}}",
   "automation.record.missedCoreOff": "Hide 未运行",
   "automation.record.missedAsleep": "电脑处于睡眠",
+  "automation.record.missedOnce": "错过 · {{why}}",
 };
 
 const ja: Catalog<typeof automationWordsEnglish> = {
@@ -165,6 +168,7 @@ const ja: Catalog<typeof automationWordsEnglish> = {
   "automation.record.missed_other": "{{first}} ~ {{last}} · {{count}}回見逃し · {{why}}",
   "automation.record.missedCoreOff": "Hide が停止していた",
   "automation.record.missedAsleep": "コンピュータがスリープしていた",
+  "automation.record.missedOnce": "見逃し · {{why}}",
 };
 
 export const automationWordsCatalogs = { en: automationWordsEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof automationWordsEnglish>;
