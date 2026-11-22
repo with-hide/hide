@@ -197,6 +197,7 @@ pub struct Invite {
     pub name: String,
     pub mode: Mode,
     code: String,
+    /// When its code was drawn: made, or given a new code.
     pub created_ms: u64,
     /// When its code stops joining; past it the row stays, says so and
     /// holds no seat, until the operator asks a new code or cancels it.
@@ -709,6 +710,7 @@ impl Access {
         }
         let invite = &mut self.invites[index];
         invite.code = code;
+        invite.created_ms = now_ms;
         invite.expires_ms = now_ms + INVITE_TTL_MS;
         Ok(invite)
     }

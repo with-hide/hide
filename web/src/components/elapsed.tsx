@@ -82,13 +82,15 @@ export function useMinuteClock(): number {
 /**
  * The time left before `deadline` on the same clock, in the largest whole
  * unit rounded up (a Factory question's 21h left); `past` once it passed and
- * `null` without a deadline.
+ * `null` without a deadline. Given `since`, when the deadline was set, the
+ * clock, which moves once a minute, never reads earlier than it, so a fresh
+ * ten-minute code never says 11 minutes.
  */
-export function useRemaining(deadline: number | null | undefined): { text: string } | "past" | null {
+export function useRemaining(deadline: number | null | undefined, since?: number): { text: string } | "past" | null {
   const language = requireInterfaceLanguage(useInterfaceTranslation().i18n.language);
   const text = useSyncExternalStore(subscribe, () => {
     if (deadline == null) return null;
-    const left = deadline - (timer === null ? Date.now() : now);
+    const left = deadline - Math.max(timer === null ? Date.now() : now, since ?? 0);
     if (left <= 0) return "";
     const hours = Math.ceil(left / 3_600_000);
     return hours >= 1 && left >= 3_600_000 ? formatUnit(language, hours, "hour") : formatUnit(language, Math.ceil(left / 60_000), "minute");

@@ -1002,6 +1002,9 @@ export interface AccessInvite {
   id: string;
   name: string;
   mode: AccessMode;
+  /**
+   * When its code was drawn: made, or given a new code.
+   */
   created_ms: number;
   /**
    * When its code stops joining, ten minutes after it was made or renewed. Before it the bot holds one of the seats; past it the row stays, holds no seat, and its code joins nothing until the window asks a new one.

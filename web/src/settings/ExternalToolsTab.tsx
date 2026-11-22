@@ -216,7 +216,7 @@ function SentenceDialog({ bot, machine, actions, onClose }: { bot: MadeBot; mach
  */
 function InviteRow({ invite, machine, actions, onShow }: { invite: AccessInvite; machine: string; actions: Actions; onShow: (made: MadeBot) => void }) {
   const { t } = useInterfaceTranslation();
-  const remaining = useRemaining(invite.expires_ms);
+  const remaining = useRemaining(invite.expires_ms, invite.created_ms);
   const expired = remaining === "past";
   const [copied, setCopied] = useState(false);
   const copy = async () => {

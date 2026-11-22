@@ -11,6 +11,7 @@ import type { BotModeKind } from "../bots";
 import { BotTileView, RailTileView } from "../components/device-rail";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import { ExternalToolsTab } from "../settings/ExternalToolsTab";
 import type { AccessConnection, AccessInvite, AccessMode, AccessSection } from "../snapshot";
 import { useShellStore } from "../store";
@@ -46,7 +47,7 @@ function answerCall(call: AccessCall): { ok: true; value: { id: string; name: st
   const found = current.invites.find((one) => one.id === call.id);
   if (!found) return { ok: false, code: "access_invite_gone" };
   if (call.call === "renew") {
-    const renewed = { ...found, expires_ms: now + CODE_MINUTES * MINUTE };
+    const renewed = { ...found, created_ms: now, expires_ms: now + CODE_MINUTES * MINUTE };
     useShellStore.setState({ access: { ...current, invites: current.invites.map((one) => (one.id === found.id ? renewed : one)) } });
     return { ok: true, value: { ...renewed, code: GALLERY_CODE } };
   }
@@ -117,7 +118,8 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
     return () => void configureAccessCalls(before);
   }, []);
   useLayoutEffect(() => {
-    useShellStore.setState({ connection: "live", access: fixture(state), rest: { ui_state: { interface_language: language } } } as never);
+    // This machine's own window, which makes, approves and changes bots; another machine's view lists them only.
+    useShellStore.setState({ connection: "live", access: fixture(state), pairing: NOTHING_UNDER_WAY, rest: { ui_state: { interface_language: language }, navigator: { devices: [{ id: "local", kind: "local", label: null, machine_name: "studio-mac" }] } } } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));

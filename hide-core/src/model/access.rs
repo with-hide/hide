@@ -39,6 +39,8 @@ pub struct AccessInviteSnapshot {
     pub id: String,
     pub name: String,
     pub mode: Mode,
+    /// When its code was drawn: made, or given a new code. The window's
+    /// clock, which moves once a minute, never counts from earlier.
     pub created_ms: u64,
     /// When its code stops joining; the window counts down to it and, past
     /// it, offers a new code.
