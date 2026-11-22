@@ -118,7 +118,7 @@ if (problems.length) {
 const SECTIONS = [
   ["Start and stop Hide", ["status", "stop", "version"]],
   ["For agents and tools", ["guide", "issue", "contract"]],
-  ["Letters and watches", ["request", "inbox", "watch"]],
+  ["Letters and watches", ["request", "inbox", "watch", "wait"]],
   ["Agents", ["agent", "ps"]],
   ["Skills and MCP servers", ["skill", "mcp"]],
   ["Missions", ["mission"]],
