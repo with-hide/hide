@@ -26,6 +26,8 @@ type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[cfg(unix)]
+mod core_letters;
+#[cfg(unix)]
 mod guest_work;
 #[cfg(unix)]
 mod moved_core;

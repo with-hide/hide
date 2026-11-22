@@ -23,6 +23,7 @@
 //! host on a port this test found free, so the guest finds it again after
 //! either daemon starts anew.
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,10 @@ pub(super) struct Machine {
     /// listed and typed into for a caller in a project Hide has
     /// (`hided::pane_auth`).
     pub(super) project: PathBuf,
+    /// What the account's sessions set beyond the terminal's own: the login
+    /// shell and `PATH` of a machine whose panes run an agent, which its
+    /// daemon starts them from.
+    pub(super) account: Vec<(OsString, OsString)>,
 }
 
 impl Machine {
@@ -69,6 +74,7 @@ impl Machine {
             .env("HIDE_PEER_DIRECT", &self.direct)
             // The daemon stays while this test's terminal is away from it.
             .env("HIDE_IDLE_SECS", "3600")
+            .envs(self.account.iter().map(|(name, value)| (name, value)))
             .current_dir(&self.project);
         command
     }
@@ -206,7 +212,7 @@ pub(super) fn place_build(
 
 /// Pairs the two by the host's link, both operators saying yes, and answers
 /// the id the guest lists its host under.
-async fn pair(host: &Machine, guest: &Machine) -> String {
+pub(super) async fn pair(host: &Machine, guest: &Machine) -> String {
     let screen = host.screen();
     let mut window = Window::open_at(screen.port, &screen.token, "web").await;
     window
@@ -359,6 +365,7 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
             hide: at("p").join("hide"),
             direct,
             project: at(home).join("own"),
+            account: Vec::new(),
         }
     };
     let host = machine("hh", "h", HOST, format!("127.0.0.1:{}", free_port()));

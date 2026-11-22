@@ -1402,7 +1402,7 @@ pub fn place_stand_in(build: &Environment, scratch: &Path, home: &Path) -> Resul
 /// `$HOME/.fixture-ready` by the pane its machine names (`HIDE_PANE_ID`), and
 /// runs each script `$HOME/.fixture-run` hands that pane (`run_order`),
 /// writing the script's run time beside it once the script ended.
-const SHIM: &str = r#"
+pub const SHIM: &str = r#"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

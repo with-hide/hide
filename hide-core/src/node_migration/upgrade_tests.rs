@@ -68,11 +68,48 @@ fn copy_tree(from: &Path, to: &Path) {
 /// store then reads as.
 pub(crate) fn started(fixture: &Path) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    copy_tree(fixture, dir.path());
-    let node = node_of(dir.path());
-    convert(dir.path(), &node).unwrap();
-    name_devices(dir.path(), &node).unwrap();
+    started_at(fixture, dir.path());
     dir
+}
+
+/// [`started`], with the folder at `state`.
+pub(crate) fn started_at(fixture: &Path, state: &Path) {
+    copy_tree(fixture, state);
+    let node = node_of(state);
+    convert(state, &node).unwrap();
+    name_devices(state, &node).unwrap();
+}
+
+/// What a start over `state` does that a start over a folder an earlier
+/// start already converted must not: change or refuse something, or write
+/// a file. Empty when it does none of them.
+pub(crate) fn second_start(state: &Path) -> Vec<String> {
+    let node = node_of(state);
+    let mut failures = Vec::new();
+    let before = digest(state);
+    match (convert(state, &node), name_devices(state, &node)) {
+        (Ok(converted), Ok(named)) => {
+            if !converted.files.is_empty() || !named.renamed.is_empty() || !named.held.is_empty() {
+                failures.push(format!(
+                    "a second start changed something: {converted:?} {named:?}"
+                ));
+            }
+        }
+        (converted, named) => {
+            failures.push(format!("a second start refused: {converted:?} {named:?}"))
+        }
+    }
+    let written = digest(state);
+    let changed: Vec<&String> = before
+        .iter()
+        .filter(|(path, bytes)| written.get(*path) != Some(*bytes))
+        .map(|(path, _)| path)
+        .chain(written.keys().filter(|path| !before.contains_key(*path)))
+        .collect();
+    if !changed.is_empty() {
+        failures.push(format!("a second start wrote {changed:?}"));
+    }
+    failures
 }
 
 /// The node the core of a released folder ran as, which a start of this
@@ -308,29 +345,7 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         }
     }
 
-    let migrated = digest(state);
-    match (convert(state, &node), name_devices(state, &node)) {
-        (Ok(converted), Ok(named)) => {
-            if !converted.files.is_empty() || !named.renamed.is_empty() || !named.held.is_empty() {
-                failures.push(format!(
-                    "a second start changed something: {converted:?} {named:?}"
-                ));
-            }
-        }
-        (converted, named) => {
-            failures.push(format!("a second start refused: {converted:?} {named:?}"))
-        }
-    }
-    let written = digest(state);
-    let changed: Vec<&String> = migrated
-        .iter()
-        .filter(|(path, bytes)| written.get(*path) != Some(*bytes))
-        .map(|(path, _)| path)
-        .chain(written.keys().filter(|path| !migrated.contains_key(*path)))
-        .collect();
-    if !changed.is_empty() {
-        failures.push(format!("a second start wrote {changed:?}"));
-    }
+    failures.extend(second_start(state));
 
     let after = counts(state);
     if after != before {

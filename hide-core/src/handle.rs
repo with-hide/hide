@@ -770,6 +770,66 @@ impl Core {
         lock_recover(&self.runtime).prepare_kept_letter(device, pane, terminal, command)
     }
 
+    /// Gives the core its connection to the other machines' cores (PRD
+    /// device-connect-iroh D-72), once, at the daemon's start.
+    pub fn set_core_link(&self, link: Arc<dyn crate::core_calls::CoreLink>) {
+        lock_recover(&self.runtime).set_core_link(link);
+    }
+
+    /// The letters this core's agents wrote that wait to go to the core of
+    /// machine `key` (`Runtime::core_outbox`).
+    pub fn core_outbox(&self, key: &str) -> crate::core_calls::Outbox {
+        if !check_owner_thread(self, "core_calls.outbox") {
+            return crate::core_calls::Outbox::default();
+        }
+        lock_recover(&self.runtime).core_outbox(key)
+    }
+
+    /// A letter the core of machine `key` sent for one of its agents
+    /// (`Runtime::prepare_core_letter`).
+    pub fn prepare_core_letter(
+        &self,
+        key: &str,
+        letter: crate::core_calls::Letter,
+    ) -> Result<crate::core_calls::Taking, String> {
+        if !check_owner_thread(self, "core_calls.letter") {
+            return Err("delivery_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_core_letter(key, letter)
+    }
+
+    /// What the core of machine `key` answered for this core's letter `id`
+    /// (`Runtime::core_letter_answered`).
+    pub fn core_letter_answered(
+        &self,
+        key: &str,
+        id: &str,
+        outcome: crate::core_calls::Outcome,
+    ) -> Option<crate::core_calls::Settle> {
+        if !check_owner_thread(self, "core_calls.answered") {
+            return None;
+        }
+        lock_recover(&self.runtime).core_letter_answered(key, id, outcome)
+    }
+
+    /// A read or a start the core of machine `key` asked for one of its
+    /// agents (`Runtime::prepare_core_call`).
+    pub fn prepare_core_call(
+        &self,
+        key: &str,
+        from: &crate::core_calls::Party,
+        asked: crate::core_calls::Asked,
+    ) -> Result<crate::core_calls::Call, String> {
+        if !check_owner_thread(self, "core_calls.call") {
+            return Err("delivery_unavailable".into());
+        }
+        let mut call = lock_recover(&self.runtime).prepare_core_call(key, from, asked)?;
+        if let crate::core_calls::Call::Pane(prepared) = &mut call {
+            prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
+        }
+        Ok(call)
+    }
+
     /// One call hided makes for an external tool (PRD
     /// hide-external-control): its request, status, leave, its key's proof
     /// or a command's check, under one short lock; the list is saved by its

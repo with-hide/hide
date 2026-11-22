@@ -242,6 +242,9 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
             hide,
             direct,
             project: at(home).join(project),
+            // The stand-in is found through the account's shell files
+            // (`place_stand_in`), so the terminal's own values are enough.
+            account: Vec::new(),
         }
     };
     // Declared before the machines, so it ends the holders after their

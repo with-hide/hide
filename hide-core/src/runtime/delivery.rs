@@ -176,6 +176,11 @@ pub(crate) enum Target {
     Spawn(Box<crate::coordination::SpawnRecord>),
     /// An agent the engine shows in a pane before it registers.
     Observed(Box<Observation>),
+    /// An agent of another core, by its address
+    /// (`core:<device>:agent:<id>`): no pane or registration of this core.
+    /// Only a letter reaches it, and the send reads which paired machine
+    /// answers for the address (`Runtime::core_send_target`).
+    Core(String),
 }
 
 impl Target {
@@ -184,7 +189,21 @@ impl Target {
         match self {
             Target::Agent(record) => Some(&record.actor),
             Target::Observed(observation) => Some(&observation.actor),
-            Target::Spawn(_) => None,
+            Target::Spawn(_) | Target::Core(_) => None,
+        }
+    }
+
+    /// Whether `stored`, the recipient a letter was recorded with, is the
+    /// one this names: the same identity, or for another core's agent the
+    /// same address.
+    fn names(&self, stored: &Actor) -> bool {
+        match self {
+            Target::Core(address) => stored
+                .core_address()
+                .is_some_and(|kept| kept.to_string() == *address),
+            _ => self
+                .actor()
+                .is_some_and(|actor| actor.same_identity(stored)),
         }
     }
 }
@@ -924,7 +943,7 @@ impl Runtime {
     /// registration (`Letter::to`, `Letter::from`, B3). None for an agent
     /// already registered, one Hide owns, or one whose pane, session or row
     /// the core does not hold now; such a letter follows the agent alone.
-    fn party_registration(
+    pub(super) fn party_registration(
         &self,
         ledger: &Ledger,
         actor: &Actor,
@@ -1711,12 +1730,18 @@ impl Runtime {
     /// resolve_key`), or else an agent the engine shows in that pane, or by
     /// the name it gave, before it registered. A name or pane whose only
     /// registration ended stands for the agent the pane shows now, if one.
+    /// An address of another core's agent names that agent, which this
+    /// ledger and this engine do not hold ([`Target::Core`]).
     pub(crate) fn resolve_target(
         &self,
         caller: Option<&Actor>,
         device: &str,
         key: &str,
     ) -> Result<Option<Target>, String> {
+        // An address of another core's agent is no key of this ledger.
+        if crate::address::CoreAddress::parse(key).is_some() {
+            return Ok(Some(Target::Core(key.to_owned())));
+        }
         let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
         let named = match self.delivery_ledger.as_ref() {
             Ok(ledger) => match crate::coordination::resolve_key(ledger, caller, &pane, key)? {
@@ -1757,7 +1782,7 @@ impl Runtime {
     fn delivery_target(&self, target: &Target, asleep: bool) -> Option<Observation> {
         let record = match target {
             Target::Observed(observation) => return Some((**observation).clone()),
-            Target::Spawn(_) => return None,
+            Target::Spawn(_) | Target::Core(_) => return None,
             Target::Agent(record) if record.ended => return None,
             Target::Agent(record) => record,
         };
@@ -1898,7 +1923,7 @@ impl Runtime {
 
     /// What a delivery command of `actor` does, once who that is has been
     /// settled.
-    fn prepare_as(
+    pub(super) fn prepare_as(
         &mut self,
         device: &str,
         caller: &str,
@@ -1919,6 +1944,26 @@ impl Runtime {
             && let Some(name) = machine.as_mut()
         {
             *name = self.machine_named(name)?;
+        }
+        // A read or a start another machine's core runs is asked of it,
+        // and nothing of it is prepared here (D-59, D-72).
+        if let Some((forward, start)) = self.core_delivery_forward(&actor, &command)? {
+            actor.require_native_identity()?;
+            return Ok(Prepared::new(
+                self.delivery_client.clone().ok_or("delivery_unavailable")?,
+                Authority {
+                    caller: caller.to_owned(),
+                    context,
+                    also_reads: Vec::new(),
+                    proven,
+                    registers: Vec::new(),
+                    written: None,
+                },
+                actor,
+                None,
+                command,
+            )
+            .forwarded(forward, start));
         }
         let actor_pane = actor.pane_id.as_str();
         // A prompt hook's digest is the agent's own record of the prompt it
@@ -2149,32 +2194,40 @@ impl Runtime {
                 matches!(&named, Some(Target::Agent(record)) if own.agents.contains(&record.id)),
             )?;
         }
-        let named_actor = named.as_ref().and_then(Target::actor).cloned();
-        let retry = match &command {
-            Command::Send {
-                intent, kind, body, ..
-            } => match (self.delivery_ledger.as_ref(), &named_actor) {
-                (Ok(ledger), Some(named)) => crate::delivery::mailbox::retried_send(
-                    ledger,
-                    &actor,
-                    intent,
-                    kind,
-                    body,
-                    None,
-                    |stored| named.same_identity(stored),
-                    unix_milliseconds(),
-                )
-                .map(|letter| letter.recipient.clone()),
-                _ => None,
-            },
+        let retry = match (&command, self.delivery_ledger.as_ref(), &named) {
+            (
+                Command::Send {
+                    intent, kind, body, ..
+                },
+                Ok(ledger),
+                Some(named),
+            ) => crate::delivery::mailbox::retried_send(
+                ledger,
+                &actor,
+                intent,
+                kind,
+                body,
+                None,
+                |stored| named.names(stored),
+                unix_milliseconds(),
+            )
+            .map(|letter| letter.recipient.clone()),
             _ => None,
         };
         let repeated = retry.is_some();
+        // An agent of another core is no pane of this one: it is the one
+        // the key was read as, judged by how its machine stands.
+        let core_target = if repeated {
+            None
+        } else {
+            self.core_send_target(&actor, &command, named.as_ref())?
+        };
         let target = match &command {
             Command::Send { .. } if repeated => retry.map(|recipient| Observation {
                 status: "repeated".into(),
                 ..super::agent_sleep::letters::asleep_observation(recipient)
             }),
+            Command::Send { .. } if core_target.is_some() => core_target,
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
             Command::Pull {
@@ -2598,6 +2651,7 @@ impl Runtime {
         // A child's report to its parent asks it to sleep at its next rest.
         let previous = self.delivery_ledger.as_ref().ok().map(Arc::clone);
         self.note_reports(previous.as_deref(), &ledger);
+        self.note_core_outbox(&ledger);
         self.delivery_ledger = Ok(ledger);
         if succeeded {
             self.follow_successors();
@@ -2646,6 +2700,14 @@ impl Runtime {
             ) && self
                 .access_actor(connection)
                 .is_some_and(|(_, current)| current.same_identity(actor));
+        }
+        // Another core's agent acts as the caller its identity was made
+        // of, its machine's connection id and its slot, while the machine
+        // on that connection stands (D-72). What it asks is judged again
+        // where it applies (`core_command_current`).
+        if actor.core_address().is_some() {
+            return crate::engine::tokens::session_digest(caller) == actor.session
+                && self.core_actor_current(actor);
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
@@ -5487,7 +5549,10 @@ pub(crate) mod tests {
                 actor: None,
             },
             Command::Agents {
-                command: crate::coordination::Command::List { live: false },
+                command: crate::coordination::Command::List {
+                    live: false,
+                    machine: None,
+                },
             },
         ];
         let mut guard = runtime.lock().unwrap();

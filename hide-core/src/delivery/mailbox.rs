@@ -386,6 +386,7 @@ fn send_written(
         input_noticed_at_unix_ms: 0,
         bell_failure: None,
         bell_ended: Some(0),
+        core_id: None,
     };
     ledger.letters.push(letter.clone());
     Ok(letter)

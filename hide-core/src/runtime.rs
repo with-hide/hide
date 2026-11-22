@@ -33,7 +33,9 @@ mod checks_wait;
 mod clone;
 mod closed_registrations;
 pub(crate) use closed_registrations::settle_reopen;
+pub(crate) use core_calls::SENDER_NOT_REGISTERED;
 mod control_lane;
+mod core_calls;
 pub(crate) mod delivery;
 mod desk;
 mod detail;
@@ -82,6 +84,7 @@ mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;
 mod mission_pull;
+mod mission_report;
 pub(crate) mod mission_views;
 pub(crate) mod missions;
 mod op_timing;
@@ -1995,6 +1998,8 @@ pub struct Runtime {
     /// The wakes letters to sleeping agents ask for, and the letters a
     /// failed one leaves waiting (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
+    /// Letters to and from other machines' cores (`core_calls`).
+    core_letters: core_calls::CoreLetters,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
     /// The lines owed to agents a heal resumed after their work was cut
@@ -2780,6 +2785,7 @@ impl Runtime {
             memory_pressure: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
+            core_letters: Default::default(),
             unreadable_letters: Default::default(),
             heal_letters: Default::default(),
             blocked_children: Default::default(),
