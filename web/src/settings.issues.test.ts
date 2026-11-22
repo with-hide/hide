@@ -80,7 +80,7 @@ describe("Issue settings", () => {
     const rows = hostAccessRows([signedOut, healthy], []);
     expect(rows.map((row) => [row.key, row.access])).toEqual([["github", { state: "connected" }], ["gitlab", { state: "failed", category: "not_logged_in" }]]);
     expect(rows[1]!.declaration?.access.sign_in).toBe("glab auth login --hostname gitlab.com");
-    expect(githubAccessLineIn({ state: "failed", category: "not_logged_in" }, t, null, "glab").text).toBe("glab 로그인 안 됨");
+    expect(githubAccessLineIn({ state: "failed", category: "not_logged_in" }, t, null, rows[1]!.declaration).text).toBe("로그인 필요");
   });
 
   it("names what Auto resolves to only where the core has shown it, and offers GitHub only to a Git project", () => {

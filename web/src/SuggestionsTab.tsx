@@ -199,7 +199,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
       {row.escalated ? (
         <span className="flex min-w-0 items-center gap-xs" data-suggestion-escalated={row.escalated.level}>
           <span className="shrink-0 text-warning">{t("suggestions.escalated")}</span>
-          {row.escalated.previous_pr_url ? <PrLink project={project} actions={actions} url={row.escalated.previous_pr_url} reference={row.escalated.previous_pr_reference ?? null} label={row.escalated.previous_pr_reference ? t("suggestions.previousPr", { pull: pullName(row.escalated.previous_pr_reference) }) : row.escalated.previous_pr_url} /> : null}
+          {row.escalated.previous_pr_url ? <PrLink project={project} actions={actions} url={row.escalated.previous_pr_url} reference={row.escalated.previous_pr_reference ?? null} label={row.escalated.previous_pr_reference ? t("suggestions.previousPr", { pull: pullName({ number: row.escalated.previous_pr_reference.number, reference: row.escalated.previous_pr_reference }) }) : row.escalated.previous_pr_url} /> : null}
         </span>
       ) : null}
       {row.returned_after_skip ? <span className="text-warning" data-suggestion-returned="true">{t("suggestions.returnedAfterSkip")}</span> : null}
@@ -217,7 +217,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
             <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
           )}
           {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging" || row.attempt.phase === "syncing") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
-          {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={row.attempt.reference ? pullName(row.attempt.reference) : t("suggestions.openIssue")} /> : null}
+          {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : pullName({ number: row.attempt.pr_number ?? row.attempt.reference?.number ?? 0, reference: row.attempt.reference })} /> : null}
           {/* A ready branch's line below names the agent once. */}
           {row.attempt?.phase === "ready" && row.attempt.branch ? null : <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />}
         </span>

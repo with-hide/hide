@@ -11,7 +11,7 @@ import type { PrReasonKind } from "../agentScope";
 import { confirmHolds, defaultMethod, mergeWhy, primaryAction, type Confirmed, type MergeWhy } from "../prCardModel";
 import { hostLines, readingOfStatuses, type PrReading } from "../prWork";
 import type { TFunction } from "i18next";
-import { offers } from "../codeHost";
+import { actionHost, offers } from "../codeHost";
 import type { HostDeclaration, PrMergeMethod } from "../snapshot";
 import type { PhonePr, PhonePrProject } from "./protocol";
 
@@ -114,9 +114,7 @@ export function prOf(items: readonly PhonePr[] | null, key: string | null): Phon
  * before its card arrives offers no button its host refuses; null on a core that names no host, which is GitHub's.
  */
 export function prHostOf(pr: PhonePr, projects: readonly PhonePrProject[]): HostDeclaration | null {
-  if (pr.card?.host) return pr.card.host;
-  const project = projects.find((candidate) => candidate.id === pr.project);
-  return project?.github.find((status) => status.host)?.host ?? null;
+  return actionHost(pr.card?.host, projects.find((candidate) => candidate.id === pr.project)?.github ?? []);
 }
 
 /** Whether this pull request's projects name their device: a project away from the paired Mac does. */

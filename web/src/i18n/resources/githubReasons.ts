@@ -1,4 +1,4 @@
-// The words for a code host read that failed where the core sends only a code:
+// The words for a GitHub read that failed where the core sends only a code:
 // a checkout card's `github.failure_category`, a PR's checks and review
 // comments (`pr_work.feedback.failure`) and an issue's body
 // (`issue_work.detail.failure`); the name of a failed check GitHub gives none
@@ -8,11 +8,13 @@
 import type { Catalogs } from "../schema";
 
 export const githubReasonsEnglish = {
-  "githubReason.not_installed": "{{program}} isn't installed",
-  "githubReason.outdated": "{{program}} is too old",
-  "githubReason.not_logged_in": "Not signed in to {{program}}",
-  "githubReason.network_or_rate_limit": "{{host}} didn't answer",
-  "githubReason.other": "{{host}} couldn't be read",
+  "githubReason.not_installed": "gh isn't installed",
+  "githubReason.outdated": "gh is too old",
+  "githubReason.not_logged_in": "Not signed in to gh",
+  "githubReason.network_or_rate_limit": "GitHub didn't answer",
+  "githubReason.other": "GitHub couldn't be read",
+  "githubReason.hostUnanswered": "{{host}} didn't answer",
+  "githubReason.hostUnread": "{{host}} couldn't be read",
   "githubReason.feedbackReadFailed": "Couldn't read the checks and review comments.",
   "githubReason.issueBodyReadFailed": "Only the title was filled because the body couldn't be read.",
   "githubReason.unnamedCheck": "Unnamed check",
@@ -20,11 +22,13 @@ export const githubReasonsEnglish = {
 } as const;
 
 const ko = {
-  "githubReason.not_installed": "{{program}} 설치 안 됨",
-  "githubReason.outdated": "{{program}} 버전이 오래됐어요",
-  "githubReason.not_logged_in": "{{program}} 로그인 안 됨",
-  "githubReason.network_or_rate_limit": "{{host}} 응답 없음",
-  "githubReason.other": "{{host}} 읽기 실패",
+  "githubReason.not_installed": "gh가 설치되지 않았어요",
+  "githubReason.outdated": "gh 버전이 오래됐어요",
+  "githubReason.not_logged_in": "gh에 로그인하지 않았어요",
+  "githubReason.network_or_rate_limit": "GitHub가 응답하지 않았어요",
+  "githubReason.other": "GitHub를 읽지 못했어요",
+  "githubReason.hostUnanswered": "{{host}} 응답 없음",
+  "githubReason.hostUnread": "{{host}} 읽기 실패",
   "githubReason.feedbackReadFailed": "검사와 리뷰 코멘트를 읽지 못했어요.",
   "githubReason.issueBodyReadFailed": "본문을 불러오지 못해 제목만 넣었어요.",
   "githubReason.unnamedCheck": "이름 없는 검사",
@@ -32,11 +36,13 @@ const ko = {
 } satisfies Record<keyof typeof githubReasonsEnglish, string>;
 
 const zhCN = {
-  "githubReason.not_installed": "未安装 {{program}}",
-  "githubReason.outdated": "{{program}} 版本过旧",
-  "githubReason.not_logged_in": "未登录 {{program}}",
-  "githubReason.network_or_rate_limit": "{{host}} 没有响应",
-  "githubReason.other": "无法读取 {{host}}",
+  "githubReason.not_installed": "未安装 gh",
+  "githubReason.outdated": "gh 版本过旧",
+  "githubReason.not_logged_in": "未登录 gh",
+  "githubReason.network_or_rate_limit": "GitHub 没有响应",
+  "githubReason.other": "无法读取 GitHub",
+  "githubReason.hostUnanswered": "{{host}} 没有响应",
+  "githubReason.hostUnread": "无法读取 {{host}}",
   "githubReason.feedbackReadFailed": "无法读取检查和评审评论。",
   "githubReason.issueBodyReadFailed": "未能读取正文，仅填入了标题。",
   "githubReason.unnamedCheck": "未命名的检查",
@@ -44,11 +50,13 @@ const zhCN = {
 } satisfies Record<keyof typeof githubReasonsEnglish, string>;
 
 const ja = {
-  "githubReason.not_installed": "{{program}} がインストールされていません",
-  "githubReason.outdated": "{{program}} が古すぎます",
-  "githubReason.not_logged_in": "{{program}} にログインしていません",
-  "githubReason.network_or_rate_limit": "{{host}} が応答しませんでした",
-  "githubReason.other": "{{host}} を読み込めませんでした",
+  "githubReason.not_installed": "gh がインストールされていません",
+  "githubReason.outdated": "gh が古すぎます",
+  "githubReason.not_logged_in": "gh にログインしていません",
+  "githubReason.network_or_rate_limit": "GitHub が応答しませんでした",
+  "githubReason.other": "GitHub を読み込めませんでした",
+  "githubReason.hostUnanswered": "{{host}} が応答しませんでした",
+  "githubReason.hostUnread": "{{host}} を読み込めませんでした",
   "githubReason.feedbackReadFailed": "チェックとレビューコメントを読み込めませんでした。",
   "githubReason.issueBodyReadFailed": "本文を読み込めなかったため、タイトルだけを入力しました。",
   "githubReason.unnamedCheck": "名前のないチェック",

@@ -13,15 +13,26 @@ import type { ChangeRequestRef, GithubStatus, HostDeclaration, HostOperation, Wo
  * What a host looks like on the screen. `item` is what it calls a change request (`PR`, `MR`), which no language
  * translates; `description` is its row's line in Settings › Remote repositories.
  */
-export type HostLook = { key: string; name: string; Mark: LucideIcon; item: string; numberLabel: (number: number) => string; description: MessageKey | null };
+export type HostLook = { key: string; name: string; Mark: LucideIcon; item: string; noun: MessageKey; numberLabel: (number: number) => string; description: MessageKey | null };
 
 const LOOKS: Readonly<Record<string, HostLook>> = {
-  github: { key: "github", name: "GitHub", Mark: GithubIcon, item: "PR", numberLabel: (number) => `#${number}`, description: "settings.githubDescription" },
-  gitlab: { key: "gitlab", name: "GitLab", Mark: GitlabIcon, item: "MR", numberLabel: (number) => `!${number}`, description: "settings.gitlabDescription" },
+  github: { key: "github", name: "GitHub", Mark: GithubIcon, item: "PR", noun: "settings.hostNoun.github", numberLabel: (number) => `#${number}`, description: "settings.githubDescription" },
+  gitlab: { key: "gitlab", name: "GitLab", Mark: GitlabIcon, item: "MR", noun: "settings.hostNoun.gitlab", numberLabel: (number) => `!${number}`, description: "settings.gitlabDescription" },
 };
 
 /** The host a value without a host is from: a core older than hosts read GitHub alone. */
 const UNDECLARED = "github";
+
+/** A host as a reading names it: its key, its name and the program the core reads it with. */
+export type NamedHost = { key: string; name: string; program: string };
+
+/**
+ * The host `declaration` names, or the one a status without a declaration is from: GitHub, read with `gh`, as by a
+ * core before hosts. Every screen that names a status's host or program asks here.
+ */
+export function namedHost(declaration: HostDeclaration | null | undefined): NamedHost {
+  return declaration ? { key: declaration.key, name: declaration.name, program: declaration.access.program } : { key: UNDECLARED, name: LOOKS[UNDECLARED]!.name, program: "gh" };
+}
 
 /**
  * The look of the host `key` names; no key is GitHub's, as a core before hosts sent none. A host the core
@@ -31,7 +42,7 @@ const UNDECLARED = "github";
 export function hostLook(key: string | null | undefined): HostLook {
   const found = LOOKS[key ?? UNDECLARED];
   if (found) return found;
-  return { key: key!, name: key!, Mark: FolderGit2Icon, item: LOOKS[UNDECLARED]!.item, numberLabel: LOOKS[UNDECLARED]!.numberLabel, description: null };
+  return { ...LOOKS[UNDECLARED]!, key: key!, name: key!, Mark: FolderGit2Icon, description: null };
 }
 
 /** Whether `declaration` offers `operation`: an absent declaration is GitHub's from before hosts, which offered every one. */
@@ -40,7 +51,7 @@ export function offers(declaration: HostDeclaration | null | undefined, operatio
 }
 
 /** A change request as a list or a mark holds it: its number and, from a core that carries one, its reference. */
-type Pull = { number: number; reference?: ChangeRequestRef | null };
+type Pull = { number: number; reference?: ChangeRequestRef | null; /** A bare reference is not a pull: hand `{ number, reference }`. */ repository?: never };
 
 /** The host a pull request is on. */
 export function pullHost(pull: Pull): HostLook {
@@ -72,8 +83,24 @@ function hostStatuses(workspace: Workspace): GithubStatus[] {
 
 /** The host that reads `workspace`, as its last read declared it; null before any host answered and for a project no host reads. */
 export function projectHost(workspace: Workspace): HostDeclaration | null {
-  return hostStatuses(workspace)[0]?.host ?? null;
+  return statusesHost(hostStatuses(workspace));
 }
+
+/** The host the first of `statuses` that a host answered for declares; null when none did. */
+export function statusesHost(statuses: readonly GithubStatus[]): HostDeclaration | null {
+  return statuses.find((status) => status.host)?.host ?? null;
+}
+
+/**
+ * The host whose operations decide a pull request's buttons: the one its card's read declared, else its project's,
+ * so a list row or a page drawn before its card arrives offers no button its host refuses. The desktop and the
+ * phone both ask here.
+ */
+export function actionHost(cardHost: HostDeclaration | null | undefined, projectStatuses: readonly GithubStatus[]): HostDeclaration | null {
+  return cardHost ?? statusesHost(projectStatuses);
+}
+
+
 
 /** The repository the host's read named for `workspace`, with its page; null before a read named one. */
 export function hostRepository(workspace: Workspace): { name: string; url: string } | null {

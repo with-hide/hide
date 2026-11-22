@@ -8,8 +8,9 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { humanTurnText } from "./humanTurn";
-import { mergePull, attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, safetyNetLine, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation, type WorkerHuman } from "./missions";
+import { attentionReasonText, type EscalationCause, heldLettersText, liveNodes, mergePull, missionCounts, missionOpen, pullsByNumber, safetyNetLine, type TurnItem, turnItems, type WorkerEscalation, type WorkerHuman } from "./missions";
 import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionSafetyNet, MissionStatus, Workspace } from "./snapshot";
+import { pullLabel } from "./codeHost";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
 export const MISSION_GROUPS = ["turn", "running", "merge_wait", "closed"] as const;
@@ -188,9 +189,9 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "human_turn":
       return `${line.node.title} · ${humanTurnText(t, line.human)}`;
     case "attention":
-      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
+      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes, pullsByNumber([line.node]))}`;
     case "landing":
-      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => { const pr = line.join ? { number: node.pr, more: 0 } : mergePull(node); return pr.number != null ? `#${pr.number}${pr.more > 0 ? ` +${pr.more}` : ""}` : node.title; }).join(" → ")}`;
+      return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => { const pr = line.join ? { number: node.pr, reference: node.pr_reference ?? null, more: 0 } : mergePull(node); return pr.number != null ? `${pullLabel({ number: pr.number, reference: pr.reference })}${pr.more > 0 ? ` +${pr.more}` : ""}` : node.title; }).join(" → ")}`;
     case "planning":
       return t("mission.planning");
     case "now":

@@ -35,7 +35,7 @@ function HostRow({ row, actions, onCheckAgain }: { row: HostAccessRow; actions: 
   const look = hostLook(row.key);
   const { access, declaration } = row;
   const coreMachine = coreMachineAway(devices, t);
-  const line = access ? githubAccessLine(access, t, coreMachine, declaration?.access.program) : null;
+  const line = access ? githubAccessLine(access, t, coreMachine, declaration) : null;
   // Signed out: the command the host declared to sign its program in, and the core's machine to run it on when this window is on another.
   const signIn = access?.state === "failed" && access.category === "not_logged_in" ? declaration?.access.sign_in ?? null : null;
   return (

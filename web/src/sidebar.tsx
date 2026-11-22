@@ -1,5 +1,5 @@
 import { useCenterReconnect } from "./centerReconnect";
-import { hostLook, hostRepository, projectHost, pullWords } from "./codeHost";
+import { hostLook, hostRepository, projectHost, pullHost, pullLabel } from "./codeHost";
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -1403,7 +1403,7 @@ function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; de
         type="button"
         data-checkout-pr-glyph={pr.number}
         data-checkout-glyph="true"
-        aria-label={t("sidebar.openPullRequest", pullWords(pr))}
+        aria-label={t("sidebar.openPullRequest", { label: pullLabel(pr), noun: t(pullHost(pr).noun) })}
         className={cn(
           "pointer-events-auto relative flex size-(--size-checkout-icon) shrink-0 cursor-pointer items-center justify-center rounded-xs outline-none hover:ring-1 hover:ring-current focus-visible:ring-1 focus-visible:ring-ring",
           PR_LOOK[pr.state].tone,

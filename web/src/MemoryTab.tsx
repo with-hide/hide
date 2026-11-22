@@ -1,5 +1,5 @@
 import { ArchiveRestoreIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
-import { pullLabel, pullName } from "./codeHost";
+import { pullHost, pullLabel } from "./codeHost";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
@@ -585,7 +585,7 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
         ) : null}
         {row.promotion?.state === "pr_open" && row.promotion.pr_number !== null ? (
           <span className="flex items-center gap-sm text-caption text-subtle-foreground">
-            <Button variant="ghost" size="inline" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { pull: pullName({ number: row.promotion.pr_number, reference: row.promotion.pr_reference }) })} onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url, reference: row.promotion.pr_reference })}>
+            <Button variant="ghost" size="inline" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { noun: t(pullHost({ number: row.promotion.pr_number, reference: row.promotion.pr_reference }).noun), number: row.promotion.pr_number })} onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url, reference: row.promotion.pr_reference })}>
               <PrMark state="pending" label={pullLabel({ number: row.promotion.pr_number, reference: row.promotion.pr_reference })} />
             </Button>
             {t("memory.prOpen")}

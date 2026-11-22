@@ -1,5 +1,5 @@
 import { CopyIcon, LoaderCircleIcon, MessageSquareIcon, PlayIcon, CircleHelpIcon, SquareTerminalIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { projectPullWords } from "./codeHost";
+import { hostLook, offers, projectHost, projectPullWords } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -78,6 +78,10 @@ export function LinkTimeline({
   const { shown, earlier } = foldTimeline(entries, (entry) => entry.kind === "session", (entry) => entry.kind === "session" && entry.session.live !== null, unfolded);
   const finding = panel.loading || filling;
   const empty = lines.length === 0 && !panel.failure && !panel.loading;
+  // The pull request's word and its hand-over follow the project's host; an action it does not offer is not drawn
+  // (docs/UI_BEHAVIOR.md, Code hosts).
+  const host = projectHost(project);
+  const item = hostLook(host?.key).item;
   return (
     <div className="flex flex-col gap-xs" data-link-sessions={panel.total} data-link-loading={finding ? "true" : undefined}>
       {finding ? (
@@ -108,8 +112,8 @@ export function LinkTimeline({
       ) : null}
       {empty ? (
         <p className="flex min-w-0 flex-wrap items-center gap-sm text-caption text-muted-foreground" data-link-none="true">
-          {t("links.noSessions")}
-          {pr && pr.state !== "merged" && pr.state !== "closed" ? (
+          {t("links.noSessions", { item })}
+          {pr && pr.state !== "merged" && pr.state !== "closed" && offers(host, "handover") ? (
             <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-link-delegate={pr.number}>
               <PlayIcon aria-hidden="true" />
               {t("prList.delegate")}
@@ -121,7 +125,7 @@ export function LinkTimeline({
         <ol className={cn("relative flex flex-col", RAIL)} aria-label={t("work.card.timeline")} data-pr-card-timeline-rows={shown.length}>
           {shown.map((entry) => {
             if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} actions={actions} />;
-            if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} />;
+            if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} item={item} />;
             return <NowRow key="now" running={entry.running} pr={pr} />;
           })}
         </ol>
@@ -131,10 +135,10 @@ export function LinkTimeline({
 }
 
 /** A milestone's word and colour (B5): what happened, in the colour the PR marks use for it. */
-function milestoneLook(milestone: Milestone, t: ReturnType<typeof useInterfaceTranslation>["t"]): { text: string; tone: string } {
+function milestoneLook(milestone: Milestone, item: string, t: ReturnType<typeof useInterfaceTranslation>["t"]): { text: string; tone: string } {
   switch (milestone.kind) {
     case "opened":
-      return { text: t("work.card.milestone.opened"), tone: "text-subtle-foreground" };
+      return { text: t("work.card.milestone.opened", { item }), tone: "text-subtle-foreground" };
     case "checks_passed":
       return { text: t("work.card.milestone.checksPassed"), tone: "text-pr-mergeable" };
     case "checks_failed":
@@ -151,9 +155,9 @@ function milestoneLook(milestone: Milestone, t: ReturnType<typeof useInterfaceTr
 }
 
 /** One milestone of the pull request (D-05, B5): the square in its colour, the word, the time at the right. */
-function MilestoneRow({ milestone }: { milestone: Milestone }) {
+function MilestoneRow({ milestone, item }: { milestone: Milestone; item: string }) {
   const { t } = useInterfaceTranslation();
-  const look = milestoneLook(milestone, t);
+  const look = milestoneLook(milestone, item, t);
   return (
     <SessionRow mark={<span className={ON_RAIL}><MilestoneMark className={look.tone} /></span>} title={look.text} right={milestone.at !== null ? <span className="font-mono text-caption text-muted-foreground">{timeText(milestone.at)}</span> : null} data-timeline-milestone={milestone.kind} data-timeline-at={milestone.at ?? undefined} />
   );

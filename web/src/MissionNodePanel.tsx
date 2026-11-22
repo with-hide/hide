@@ -18,30 +18,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeSpans, useNodeTimes, useWorkerRow } from "./missionParts";
-import {
-  attentionWords,
-  cardLine,
-  checkerState,
-  criteriaTally,
-  criterionName,
-  criterionNote,
-  dependencyNodes,
-  eventWords,
-  gateWaitedLong,
-  hideWords,
-  landingLeft,
-  lineOutrun,
-  mainCommit,
-  missionOpen,
-  nodeLook,
-  nodeQuestion,
-  nodeSteps,
-  nodePace,
-  nodeResumable,
-  openAttention,
-  ownCriteria,
-  shortCommit,
-} from "./missions";
+import { attentionWords, cardLine, checkerState, criteriaTally, criterionName, criterionNote, dependencyNodes, eventWords, gateWaitedLong, hideWords, landingLeft, lineOutrun, mainCommit, missionOpen, type MissionPulls, nodeLook, nodePace, nodeQuestion, nodeResumable, nodeSteps, openAttention, ownCriteria, pullsByNumber, shortCommit } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
 import { PILL_TONE, ProgressCells } from "./components/mission-tone";
 import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
@@ -82,7 +59,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
       <HideRecord mission={mission} node={node} events={events} />
-      <Events node={node} events={events} />
+      <Events node={node} events={events} pulls={pullsByNumber(mission.nodes)} />
       <Brief key={node.key} mission={mission} node={node} actions={actions} />
     </MapPanel>
   );
@@ -410,14 +387,14 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
       </ul>,
     ]);
   }
-  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
+  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url, reference: null }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
   const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
   if (prs.length > 0 || node.base_pr != null) {
     rows.push([
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
-        {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} />)}
+        {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} reference={pr.reference} state={pr.state} stale={mission.github_stale} />)}
         {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { label: pullLabel({ number: node.base_pr, reference: node.prs.find((pr) => pr.number === node.base_pr)?.reference ?? mission.nodes.find((other) => other.pr === node.base_pr)?.pr_reference }) })}</span> : null}
       </span>,
     ]);
@@ -656,6 +633,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
   const language = requireInterfaceLanguage(i18n.language);
   const own = events?.filter((event) => event.node === node.key && HIDE_KINDS.has(event.kind)) ?? [];
   const mark = hideWords(mission, node, t);
+  const pulls = pullsByNumber(mission.nodes);
   if (own.length === 0 && !mark) return null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
@@ -663,7 +641,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
       {own.length > 0 ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-panel-hide-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, pulls);
             return (
               <li key={index} className="contents" data-panel-hide-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
@@ -686,7 +664,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
 const HIDE_KINDS: ReadonlySet<MissionEvent["kind"]> = new Set(["hide", "hide_closed", "raised", "raised_to_operator", "resolved"]);
 
 /** The node's events in order, folded under their count (B31). */
-function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | null }) {
+function Events({ node, events, pulls }: { node: MissionNode; events: MissionEvent[] | null; pulls: MissionPulls }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const [open, setOpen] = useState(false);
@@ -702,7 +680,7 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
       {open ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-flow-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, pulls);
             return (
               <li key={index} className="contents" data-panel-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>

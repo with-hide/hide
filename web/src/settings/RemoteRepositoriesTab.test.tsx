@@ -109,7 +109,7 @@ it("draws GitLab's row beside GitHub's only once a gitlab.com project was read, 
   const { q, copied, unmount } = await mount(both);
   expect(q("[data-settings-host=github] [data-issue-source-github]")?.textContent).toContain("Connected");
   expect(q("[data-settings-host=gitlab]")?.textContent).toContain("GitLab");
-  expect(q("[data-settings-host=gitlab] [data-issue-source-github]")?.textContent).toMatch(/Not signed in to glab$/);
+  expect(q("[data-settings-host=gitlab] [data-issue-source-github]")?.textContent).toMatch(/Sign-in needed$/);
   expect(q("[data-settings-host=gitlab] [data-github-fix-command] code")?.textContent).toBe("glab auth login --hostname gitlab.com");
   await act(async () => q("[data-settings-host=gitlab] [data-github-fix-command] button")!.click());
   expect(copied).toEqual(["glab auth login --hostname gitlab.com"]);

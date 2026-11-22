@@ -172,7 +172,7 @@ describe("row menus", () => {
       "Open",
       "New tab here ⌘T",
       "New group…",
-      "Open PR #180",
+      "Open pull request #180",
       "─",
       "Set purpose…",
       "Set as default checkout",
@@ -282,7 +282,7 @@ describe("row menus", () => {
     const menu = folderMenu(workspace({ is_git: false, checkouts: [folder] }), folder, desktop);
     expect(drawn(menu)).toEqual(["Project settings", "Rename project…", "New worktree…", "New tab in main ⌘T", "─", "Reveal in Finder", "Copy path", "─", "Pin", "Remove project…", "─", "Open", "New group…", "Set purpose…"]);
     const pr = { number: 7, title: "", url: "https://example.invalid/pull/7", badge: "open" as const, review: null, is_draft: false, state: "pending" as const };
-    expect(drawn(folderMenu(workspace({ checkouts: [folder] }), { ...folder, pull_request: pr }, browser)).slice(-5)).toEqual(["─", "Open", "New group…", "Open PR #7", "Set purpose…"]);
+    expect(drawn(folderMenu(workspace({ checkouts: [folder] }), { ...folder, pull_request: pr }, browser)).slice(-5)).toEqual(["─", "Open", "New group…", "Open pull request #7", "Set purpose…"]);
   });
 
   it("says what removing a project closes and that an unregistered row leaves with Herdr's workspace (B3)", () => {
