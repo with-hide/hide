@@ -252,7 +252,7 @@ it("lists the steps by default, says how long a worked step has worked from the 
   }
 });
 
-// PRD core-wait D-17, B4 (with-hide/hide#2848 verifier finding 3): a waiting step whose pull request closed without a merge
+// PRD core-wait D-17, B4 (the core-wait verifier's third finding): a waiting step whose pull request closed without a merge
 // says so in its state word's place, as the map's card ends its line in it.
 it("says how a waiting step's wait failed on a pull request that closed without a merge", async () => {
   const page = mission("m-wait", { nodes: [

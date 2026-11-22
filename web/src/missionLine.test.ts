@@ -112,7 +112,7 @@ it("says what a waiting node waits on, the progress of a mission and how the wai
   expect(waitLineWords(waitLine(waiting({ wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } }))!, t())).toBe("mission-91 · 끝 2/7");
   expect(waitLineWords(waitLine(waiting({ wait_target: { node: { mission: "mission-91", node: "gitlab-write" } }, wait_outcome: "node_dropped" }))!, t())).toBe("mission-91 · gitlab-write · 노드 빠짐");
   // A pull request's merge and a branch keep their branch line, which ends in how the wait failed as the wait line does
-  // (B4, D-17; with-hide/hide#2848 verifier finding 3); a node of another kind has no wait line.
+  // (B4, D-17; the core-wait verifier's third finding); a node of another kind has no wait line.
   expect(waitLine(waiting({ wait_target: { pr: 1232 }, external: { pr: 1232 } }))).toBeNull();
   const closed = branchLine(waiting({ wait_target: { pr: 2528 }, external: { pr: 2528 }, outside: { base: "main", state: "closed" }, wait_outcome: "closed_unmerged" }), "main");
   expect(closed).toMatchObject({ mark: "closed", pr: { number: 2528, outside: true }, to: { kind: "branch", name: "main" }, failed: "closed_unmerged" });
