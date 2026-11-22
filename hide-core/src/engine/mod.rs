@@ -778,6 +778,14 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
+    /// A pane's visible screen as plain text, without styling; each step of
+    /// the call waits up to `timeout`.
+    pub fn read_visible(&self, pane: &str, timeout: Duration) -> Result<String, EngineError> {
+        self.engine
+            .read_pane(Wait::Each(timeout), pane, "visible", 0)
+            .map(|read| read.text)
+    }
+
     /// Types the operator's `text` into the agent's input in `pane` and
     /// submits it, as a letter's bell is typed ([`Engine::prompt_agent`]):
     /// an agent reads a slash command sent this way as the command (#2354).

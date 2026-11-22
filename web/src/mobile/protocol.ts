@@ -568,6 +568,8 @@ export function inputFailure(reason: string | null, lines = false): Notice {
     case "stale":
     case "unknown_choice":
       return { key: "mobile.input.stale" };
+    case "highlight_moved":
+      return { key: "mobile.input.highlightMoved" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":

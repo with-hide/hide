@@ -2212,7 +2212,7 @@ async fn input(
     };
     let result = tokio::task::spawn_blocking(move || {
         let result = (|| {
-            let chosen: Vec<String>;
+            let chosen: (Vec<String>, Option<operator_input::Start>);
             let chosen_keys: Vec<&str>;
             let pressed;
             let typed = match (&text, engine_key, &choice) {
@@ -2226,8 +2226,16 @@ async fn input(
                     let agent = projection.find(&asked_key).ok_or("gone")?;
                     let turn = turn.as_deref().ok_or("invalid_request")?;
                     chosen = ask::keys(agent, turn, choice)?;
-                    chosen_keys = chosen.iter().map(String::as_str).collect();
-                    Typed::Keys(&chosen_keys)
+                    chosen_keys = chosen.0.iter().map(String::as_str).collect();
+                    match &chosen.1 {
+                        // Keys that count from the highlighted row: typed
+                        // only while the agent's screen shows it there.
+                        Some(start) => Typed::FromStart {
+                            keys: &chosen_keys,
+                            start,
+                        },
+                        None => Typed::Keys(&chosen_keys),
+                    }
                 }
                 (None, None, None) => unreachable!("validated above"),
             };

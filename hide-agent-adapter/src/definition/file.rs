@@ -69,9 +69,17 @@ struct File {
 /// highlighted (docs/ARCHITECTURE.md, The mobile companion). A kind with no
 /// table is shown and answered in the terminal. Each key is a key name
 /// ([`KEY_NAMES`]) or one printable ASCII character.
+///
+/// Keys other than `esc` and a character move from, or pick, the row the
+/// screen has highlighted, so they are typed only while that row is the one
+/// they count from: the screen draws `marker` before the highlighted row,
+/// and a kind's `first` is the start row's text after it. A kind whose keys
+/// need the highlight and that has no `first` is answered in the terminal.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Answer {
+    #[serde(default)]
+    pub marker: Option<String>,
     #[serde(default)]
     pub question: Option<QuestionKeys>,
     #[serde(default)]
@@ -81,12 +89,15 @@ pub struct Answer {
 }
 
 /// A question of one choice: its screen opens on the first choice, `down`
-/// moves one choice down and `pick` picks the one it stands on.
+/// moves one choice down and `pick` picks the one it stands on. In `first`,
+/// [`FIRST_LABEL`] stands for the question's first choice.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionKeys {
     pub down: String,
     pub pick: String,
+    #[serde(default)]
+    pub first: Option<String>,
 }
 
 /// A plan waiting for approval: approve it, or keep planning (the operator
@@ -96,6 +107,8 @@ pub struct QuestionKeys {
 pub struct PlanKeys {
     pub approve: Vec<String>,
     pub keep_planning: Vec<String>,
+    #[serde(default)]
+    pub first: Option<String>,
 }
 
 /// A tool call waiting for permission: allow it once, allow it from now on
@@ -108,6 +121,8 @@ pub struct PermissionKeys {
     #[serde(default)]
     pub allow_always: Option<Vec<String>>,
     pub deny: Vec<String>,
+    #[serde(default)]
+    pub first: Option<String>,
 }
 
 /// The key names an `[answer]` table may name, as the core's own engine
@@ -115,6 +130,10 @@ pub struct PermissionKeys {
 pub const KEY_NAMES: [&str; 7] = ["enter", "esc", "tab", "up", "down", "left", "right"];
 /// The most keys one choice types.
 pub const MAX_ANSWER_KEYS: usize = 8;
+/// What a question's `first` names its first choice by.
+pub const FIRST_LABEL: &str = "{label}";
+/// The longest `marker` or `first`, in bytes.
+const MAX_START_BYTES: usize = 64;
 
 fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     let key = |key: &String| {
@@ -138,6 +157,53 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
             lists.push(("permission.allow_always", always.iter().collect()));
         }
         lists.push(("permission.deny", permission.deny.iter().collect()));
+    }
+    let firsts = [
+        (
+            "question",
+            answer
+                .question
+                .as_ref()
+                .and_then(|keys| keys.first.as_ref()),
+        ),
+        (
+            "plan_approval",
+            answer
+                .plan_approval
+                .as_ref()
+                .and_then(|keys| keys.first.as_ref()),
+        ),
+        (
+            "permission",
+            answer
+                .permission
+                .as_ref()
+                .and_then(|keys| keys.first.as_ref()),
+        ),
+    ];
+    let text = |value: &str| {
+        !value.trim().is_empty()
+            && value.len() <= MAX_START_BYTES
+            && !value.chars().any(char::is_control)
+    };
+    if let Some(marker) = &answer.marker
+        && !text(marker)
+    {
+        return Err(format!(
+            "{name}: answer.marker is 1 to {MAX_START_BYTES} bytes of text"
+        ));
+    }
+    for (field, first) in firsts {
+        let Some(first) = first else { continue };
+        if answer.marker.is_none() {
+            return Err(format!("{name}: answer.{field}.first needs answer.marker"));
+        }
+        if !text(first) || (field != "question" && first.contains(FIRST_LABEL)) {
+            return Err(format!(
+                "{name}: answer.{field}.first is 1 to {MAX_START_BYTES} bytes of text, \
+                 {FIRST_LABEL} only in a question's"
+            ));
+        }
     }
     for (field, keys) in lists {
         if keys.is_empty() || keys.len() > MAX_ANSWER_KEYS {
@@ -1060,5 +1126,34 @@ mod tests {
             read("x.toml", &fine, Origin::Builtin).unwrap().home,
             Some(vec![".x".to_owned()])
         );
+    }
+
+    /// A start row the core cannot find on the screen is refused at the
+    /// build: one with no marker to find it by, or a choice's label outside
+    /// a question.
+    #[test]
+    fn an_answer_start_without_its_marker_is_refused_by_the_read_the_build_runs() {
+        let file = |answer: &str| {
+            format!(
+                "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[answer]\n{answer}"
+            )
+        };
+        let unmarked = file("question = { down = \"down\", pick = \"enter\", first = \"1.\" }\n");
+        assert_eq!(
+            read("x.toml", &unmarked, Origin::Builtin).unwrap_err(),
+            "x.toml: answer.question.first needs answer.marker"
+        );
+        let labelled = file(
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], first = \"{label}\" }\n",
+        );
+        assert!(read("x.toml", &labelled, Origin::Builtin).is_err());
+        let marked = file(
+            "marker = \"❯\"\nquestion = { down = \"down\", pick = \"enter\", first = \"○ {label}\" }\n",
+        );
+        let answer = read("x.toml", &marked, Origin::Builtin)
+            .unwrap()
+            .answer
+            .unwrap();
+        assert_eq!(answer.marker.as_deref(), Some("❯"));
     }
 }

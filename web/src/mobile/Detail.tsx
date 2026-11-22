@@ -455,6 +455,7 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
       picked={marked?.turn === ask.turn ? marked.id : (answered?.choice ?? null)}
       answer={answered?.state ?? null}
       error={answered?.state === "failed" ? noticeText(t, answered.notice) : null}
+      moved={answered?.state === "failed" && answered.notice.key === "mobile.input.highlightMoved"}
       onPick={(id) => setMarked({ turn: ask.turn, id })}
       onAnswer={sendChoice}
       onTerminal={() => setTab("terminal")}

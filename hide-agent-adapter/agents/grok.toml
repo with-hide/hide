@@ -176,11 +176,12 @@ not = [
 ]
 
 # The keys that answer this agent's own question and approval screens from
-# the phone, each checked in a real pane (questions in Grok Build 1.0.77, plans
-# in 1.0.92; docs/ARCHITECTURE.md, The mobile companion); a kind not named here
-# is answered in the terminal. A plan's `s` (request changes) leaves the plan
-# open with the prompt focused, so the reply the phone sends next is the change;
-# `q` would quit plan mode and drop the plan.
+# the phone, checked in a real pane of Grok Build 1.0.92 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+# A plan's letters act wherever the highlight is. `s` (request changes) leaves
+# the plan open with the prompt focused, so the reply the phone sends next is
+# the change; `q` would quit plan mode and drop the plan. A question takes down
+# and enter, but its highlighted row is shown by colour alone, so it is answered
+# in the terminal.
 [answer]
-question = { down = "down", pick = "enter" }
 plan_approval = { approve = ["a"], keep_planning = ["s"] }

@@ -57,13 +57,15 @@ function headOf(ask: PhoneAsk): { word: MessageKey; about: MessageKey | null; ti
  * The card as drawn, from what is marked and where its answer stands: the phone's own card, a What's new scene and a practice
  * chapter draw this one, each holding the mark and the answer its own way.
  */
-export function AskCardView({ ask, disabled, waited, picked, answer, error, onPick, onAnswer, onTerminal }: {
+export function AskCardView({ ask, disabled, waited, picked, answer, error, moved = false, onPick, onAnswer, onTerminal }: {
   ask: PhoneAsk;
   disabled: boolean;
   /** How long the agent has waited, in the phone's words (`3분`), or null before it is known. */
   waited: string | null;
   picked: string | null;
   answer: "sending" | "sent" | "failed" | null;
+  /** The computer refused the choice because the terminal's highlight no longer stands where its keys count from. */
+  moved?: boolean;
   error: ReactNode;
   onPick: (id: string) => void;
   onAnswer: (id: string) => void;
@@ -108,7 +110,7 @@ export function AskCardView({ ask, disabled, waited, picked, answer, error, onPi
         <RadioGroup
           value={picked ?? ""}
           onValueChange={onPick}
-          disabled={disabled || !ask.answerable || sending || sent}
+          disabled={disabled || !ask.answerable || sending || sent || moved}
           className="gap-xs"
           aria-label={ask.text ?? t(head.word)}
         >
@@ -140,6 +142,13 @@ export function AskCardView({ ask, disabled, waited, picked, answer, error, onPi
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-sm">
           <span className="break-keep text-caption text-muted-foreground wrap-anywhere">{t("mobile.ask.inTerminalHint")}</span>
           <Button variant="secondary" className="min-h-(--size-touch-target)" data-phone-ask-terminal="true" onClick={onTerminal}>
+            {t("mobile.ask.inTerminal")}
+          </Button>
+        </div>
+      ) : moved ? (
+        // The keys would have picked another row than the one marked here, so the choice is made in the terminal.
+        <div className="flex min-w-0 justify-end">
+          <Button variant="default" className="min-h-(--size-touch-target)" data-phone-ask-terminal="moved" onClick={onTerminal}>
             {t("mobile.ask.inTerminal")}
           </Button>
         </div>

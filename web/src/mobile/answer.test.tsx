@@ -181,6 +181,27 @@ it("shows a permission its computer has no keys for with the command it waits on
   }
 });
 
+it("sends the operator to the terminal when the computer refuses a choice because the terminal's highlight moved", async () => {
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "지울게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "100", since_ms: 100, command: "rm -rf build", command_truncated: false, answerable: true, choices: [{ id: "allow" }, { id: "allow_always" }, { id: "deny" }] } });
+    const card = container.querySelector<HTMLElement>('[data-phone-ask="permission"]')!;
+    await act(async () => card.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+    await act(async () => card.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: false, reason: "highlight_moved" });
+    expect(card.querySelector("[data-phone-ask-error]")!.textContent).toBe("The highlighted choice was moved in the terminal. Answer in the terminal tab.");
+    // The choice cannot be sent again from here; the terminal is where it is answered.
+    expect(card.querySelector("[data-phone-ask-send]")).toBeNull();
+    expect(card.querySelector<HTMLButtonElement>('[data-phone-ask-choice="deny"]')!.disabled).toBe(true);
+    await act(async () => card.querySelector<HTMLButtonElement>('[data-phone-ask-terminal="moved"]')!.click());
+    expect(container.querySelector('[data-phone-view="terminal"]')!.getAttribute("data-state")).toBe("active");
+    expect(inputs()).toHaveLength(1);
+  } finally {
+    await unmount();
+  }
+});
+
 it("says a command runs by the clock from its start, never by what it runs", async () => {
   const { container, serve, unmount } = await openDetail({ answer: true }, agent({ status_code: "working", mark: "going", changed_at_unix_ms: Date.now() - 60_000 }));
   try {

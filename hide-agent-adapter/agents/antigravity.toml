@@ -95,6 +95,9 @@ line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']
 # The keys that answer this agent's own question and approval screens from
 # the phone, each checked in a real pane of Antigravity CLI 1.5.14 (docs/ARCHITECTURE.md,
 # The mobile companion); a kind not named here is answered in the terminal.
+# The keys other than esc and a letter count from the highlighted row, so they
+# are typed only while the screen draws `marker` before the row each `first` names.
 [answer]
-question = { down = "down", pick = "enter" }
-permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"] }
+marker = ">"
+question = { down = "down", pick = "enter", first = "1." }
+permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"], first = "1." }

@@ -94,8 +94,7 @@ region = "whole_recent"
 regex = ['┃ +\S[^\n]* · \S[^\n]*\n *╹▀']
 
 # The keys that answer this agent's own question and approval screens from
-# the phone, each checked in a real pane of OpenCode 2.0.29 (docs/ARCHITECTURE.md,
-# The mobile companion); a kind not named here is answered in the terminal.
-[answer]
-question = { down = "down", pick = "enter" }
-permission = { allow = ["enter"], allow_always = ["right", "enter"], deny = ["esc"] }
+# the phone (docs/ARCHITECTURE.md, The mobile companion). OpenCode 2.0.29 takes
+# down and enter on a question and right, enter or esc on a permission, but it
+# shows the highlighted row by colour alone, so the core cannot see where those
+# keys start: both are answered in the terminal until its screen marks the row.
