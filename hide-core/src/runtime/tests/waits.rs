@@ -791,6 +791,10 @@ fn a_rest_at_the_rate_floor_holds_a_pull_request_deadline_until_it_ends() {
     runtime.tick_waits(until + 1);
     runtime.tick_waits(until + 31 * 60_000);
     assert!(!ended(&runtime), "the rest holds the deadline");
+    // Once the rest ends the half hour still counts from its end.
+    runtime.missions.hosts_resting.clear();
+    runtime.tick_waits(rest_ends + 10 * 60_000);
+    assert!(!ended(&runtime), "the half hour counts from the rest's end");
     runtime.tick_waits(rest_ends + 30 * 60_000);
     assert!(ended(&runtime));
 }

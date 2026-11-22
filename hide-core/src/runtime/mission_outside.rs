@@ -140,6 +140,9 @@ pub(crate) struct Outside {
     /// ends.
     deadline_asked: BTreeMap<Owner, u64>,
     deadline_read: BTreeSet<Owner>,
+    /// The latest end of a host rest that held each such wait's read back,
+    /// kept after the rest ends so the half hour counts from it.
+    deadline_held: BTreeMap<Owner, u64>,
 }
 
 impl Outside {
@@ -166,7 +169,11 @@ impl Outside {
         held_until: Option<u64>,
         now: u64,
     ) -> DeadlineRead {
-        let from = until.max(held_until.unwrap_or(0));
+        if let Some(end) = held_until {
+            let held = self.deadline_held.entry(owner.clone()).or_insert(end);
+            *held = (*held).max(end);
+        }
+        let from = until.max(self.deadline_held.get(owner).copied().unwrap_or(0));
         if self.deadline_read.contains(owner) || now >= from.saturating_add(DEADLINE_READ_MS) {
             return DeadlineRead::Fail;
         }
@@ -190,6 +197,7 @@ impl Outside {
     pub(super) fn keep_deadline_reads(&mut self, due: &BTreeSet<Owner>) {
         self.deadline_asked.retain(|owner, _| due.contains(owner));
         self.deadline_read.retain(|owner| due.contains(owner));
+        self.deadline_held.retain(|owner, _| due.contains(owner));
     }
 
     /// Whether `project` on `device` has no read out, no pass left and no
