@@ -3044,6 +3044,19 @@ pub(super) mod tests {
         );
         start_promotion(&mut store, "p", &[1, 2], start(), &|| ()).unwrap();
         let failed = promotion(&store).unwrap();
+        // The batch is kept for its repository's `owner/name` in lower case;
+        // a name that is not one on github.com is refused before anything is
+        // reserved.
+        assert_eq!(failed.repository.as_deref(), Some("acme/project"));
+        for name in ["acme", "ghe.example/acme/project"] {
+            let mut unnamed = start();
+            unnamed.repository = Some(name.into());
+            assert!(
+                start_promotion(&mut store, "p", &[1, 2], unnamed, &|| ()).is_err(),
+                "{name}"
+            );
+            assert_eq!(promotion(&store).unwrap(), failed, "{name}");
+        }
         let mut wrong_target = start();
         wrong_target.repository = Some("acme/other".into());
         assert!(

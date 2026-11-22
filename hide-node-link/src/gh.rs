@@ -1269,6 +1269,7 @@ mod tests {
             ("https://github.com/acme/app", "acme/app"),
             ("https://token@github.com/acme/app.git/", "acme/app"),
             ("ssh://git@github.com:22/acme/app.git", "acme/app"),
+            ("https://github.com:443/acme/app.git", "acme/app"),
             (
                 "git@ghe.example.com:acme/app.git",
                 "ghe.example.com/acme/app",

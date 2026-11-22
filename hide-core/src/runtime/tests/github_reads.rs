@@ -2089,3 +2089,34 @@ fn a_missions_early_ask_to_read_again_is_kept_until_the_thirty_seconds_pass() {
     assert_eq!(generation_of(&runtime, "/tmp/a"), 1);
     assert!(runtime.missions.reads_due.is_empty());
 }
+
+/// The creation times the label workers judge a session's printed address
+/// against are keyed by a github.com address's `owner/name` in lower case and
+/// its number; an Enterprise server's pull request, which a printed address
+/// never names, and one GitHub gave no creation time are not among them.
+#[test]
+fn the_creation_times_a_label_worker_reads_are_keyed_by_a_github_address_in_lower_case() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let enterprise = PullRequestSnapshot {
+        url: "https://ghe.example/acme/app/pull/8".to_owned(),
+        ..pull_request(8, "main", PullRequestBadge::Open)
+    };
+    let undated = PullRequestSnapshot {
+        created_at_unix_ms: None,
+        ..pull_request_in("acme/app", 9)
+    };
+    first_read(
+        &mut runtime,
+        vec![read_ok(
+            "/tmp/a",
+            vec![pull_request_in("Acme/App", 7), enterprise, undated],
+            10,
+        )],
+        Instant::now(),
+    );
+    assert_eq!(
+        *runtime.pull_request_times(),
+        crate::labels::facts::PullRequestTimes::from([(("acme/app".to_owned(), 7), 2)])
+    );
+}
