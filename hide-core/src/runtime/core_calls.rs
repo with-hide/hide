@@ -4,7 +4,7 @@
 //! Another core's agent enters this core where an external tool does: as a
 //! code-owned identity of its own (`Actor::core`), one per sending agent,
 //! whose commands `access::core_admit` and `access::core_call_admit` judge
-//! by the tool table at Act and by how its machine stands, read from the
+//! by the bot table for the whole Hide (`Mode::All`) and by how its machine stands, read from the
 //! paired machines the daemon told the core (`crate::peer_machines`). The
 //! daemon carries the messages and decides nothing.
 //!
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::Runtime;
-use super::delivery::Observation;
+use super::delivery::{Observation, Target};
 use crate::access::{self, CoreAsk, MACHINE_NOT_PERMITTED};
 use crate::address::CoreAddress;
 use crate::coordination::AgentRecord;
@@ -358,25 +358,28 @@ impl Runtime {
     }
 
     /// Who a send that names another core's agent goes to: that agent as
-    /// this core knows it, with no pane to observe. It is named by its
-    /// address (`core:<device>:agent:<id>`), read on the one paired machine
-    /// that says the device id, or by the exact id of the registration this
-    /// ledger keeps of it, which is the agent on the connection it was
-    /// registered on whatever says its device id now. A pane of another
-    /// machine is no recipient, and neither is a sender Hide holds no
-    /// registration for and cannot make one (D-21). `None` for any other
-    /// target.
+    /// this core knows it, with no pane to observe. `named` is what the
+    /// send's key was read as (`Runtime::resolve_target`): its address
+    /// (`core:<device>:agent:<id>`), read on the one paired machine that
+    /// says the device id, or the exact id of the registration this ledger
+    /// keeps of it, which is the agent on the connection it was registered
+    /// on whatever says its device id now. A pane of another machine is no
+    /// recipient, and neither is a sender Hide holds no registration for
+    /// and cannot make one (D-21). `None` for any other target.
     pub(super) fn core_send_target(
         &self,
         sender: &Actor,
         command: &Command,
+        named: Option<&Target>,
     ) -> Result<Option<Observation>, String> {
-        let Command::Send { target, force, .. } = command else {
+        let Command::Send { force, .. } = command else {
             return Ok(None);
         };
-        let recipient = match CoreAddress::parse(target) {
-            Some(address) => {
-                let address = address.map_err(|_| "target_unavailable".to_owned())?;
+        let recipient = match named {
+            Some(Target::Core(address)) => {
+                let address = CoreAddress::parse(address)
+                    .and_then(Result::ok)
+                    .ok_or("target_unavailable")?;
                 if address.item != CoreItem::Agent {
                     return Err(RECIPIENT_NOT_AGENT.into());
                 }
@@ -389,19 +392,10 @@ impl Runtime {
                     self.node.as_str(),
                 )
             }
-            None => {
-                let kept = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
-                    ledger
-                        .agents
-                        .iter()
-                        .find(|record| record.id == *target)
-                        .filter(|record| record.actor.core_address().is_some())
-                });
-                match kept {
-                    Some(record) => record.actor.clone(),
-                    None => return Ok(None),
-                }
+            Some(Target::Agent(record)) if record.actor.core_address().is_some() => {
+                record.actor.clone()
             }
+            _ => return Ok(None),
         };
         // Its machine is read from the recipient's own connection here, so
         // a kept registration whose connection is paired no longer is
@@ -682,7 +676,7 @@ impl Runtime {
                     .map(|prepared| Call::Delivery(Box::new(prepared)))
             }
             Asked::Pane(command) => self
-                .pane_command_as(&node, "", &context, command)
+                .pane_command_as(&node, "", &context, None, command)
                 .map(|prepared| Call::Pane(Box::new(prepared))),
         }
     }
