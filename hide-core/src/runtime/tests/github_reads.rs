@@ -484,6 +484,20 @@ fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
             "{case}"
         );
         assert_ne!(project.identity_read, PartRead::Read, "{case}");
+        // The screen names and opens the repository the project keeps, and
+        // none where it keeps none.
+        let shown = kept.then(|| crate::model::RepositoryOnScreen {
+            name: "owner/a".to_owned(),
+            url: "https://github.com/owner/a".to_owned(),
+        });
+        assert_eq!(project.status.repository, shown, "{case}");
+        assert_eq!(
+            runtime.snapshot.navigator.workspaces[0].checkouts[0]
+                .github
+                .repository,
+            shown,
+            "{case}"
+        );
     }
 }
 

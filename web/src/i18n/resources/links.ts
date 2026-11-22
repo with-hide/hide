@@ -24,8 +24,8 @@ export const linksEnglish = {
   "links.answer": "Answer",
   "links.created": "Created PR",
   "links.agentReview": "Agent review · {{agent}}",
-  "links.createdNumber": "#{{number}} created",
-  "links.workedNumber": "#{{number}}",
+  "links.createdNumber": "{{label}} created",
+  "links.workedNumber": "{{label}}",
   "links.noRequest": "No request",
   "links.continued": "Continued {{count}}",
   "links.delegatedBy": "Delegated by {{name}}",
@@ -43,7 +43,7 @@ export const linksEnglish = {
   "links.why.deviceOffline": "{{device}} is not connected",
   "links.why.deviceView": "Conversations on {{device}} can't be opened here yet",
   "links.why.file": "The conversation file is gone",
-  "links.chip": "Open PR #{{number}}",
+  "links.chip": "Open {{pull}}",
 } as const;
 
 const ko = {
@@ -66,8 +66,8 @@ const ko = {
   "links.answer": "답하러 가기",
   "links.created": "PR 만듦",
   "links.agentReview": "에이전트 리뷰 · {{agent}}",
-  "links.createdNumber": "#{{number}} 만듦",
-  "links.workedNumber": "#{{number}}",
+  "links.createdNumber": "{{label}} 만듦",
+  "links.workedNumber": "{{label}}",
   "links.noRequest": "요청 없음",
   "links.continued": "이어짐 {{count}}",
   "links.delegatedBy": "맡긴 에이전트: {{name}}",
@@ -85,7 +85,7 @@ const ko = {
   "links.why.deviceOffline": "{{device}} 기기가 연결돼 있지 않아요",
   "links.why.deviceView": "{{device}}의 대화는 아직 여기서 열 수 없어요",
   "links.why.file": "대화 파일이 없어서 열 수 없어요",
-  "links.chip": "PR #{{number}} 열기",
+  "links.chip": "{{pull}} 열기",
 } satisfies Catalog<typeof linksEnglish>;
 
 const zhCN = {
@@ -108,8 +108,8 @@ const zhCN = {
   "links.answer": "去回答",
   "links.created": "创建了 PR",
   "links.agentReview": "智能体审查 · {{agent}}",
-  "links.createdNumber": "创建了 #{{number}}",
-  "links.workedNumber": "#{{number}}",
+  "links.createdNumber": "创建了 {{label}}",
+  "links.workedNumber": "{{label}}",
   "links.noRequest": "没有请求",
   "links.continued": "延续 {{count}}",
   "links.delegatedBy": "由 {{name}} 委派",
@@ -127,7 +127,7 @@ const zhCN = {
   "links.why.deviceOffline": "{{device}} 未连接",
   "links.why.deviceView": "暂时无法在这里打开 {{device}} 上的对话",
   "links.why.file": "对话文件已不存在，无法打开",
-  "links.chip": "打开 PR #{{number}}",
+  "links.chip": "打开 {{pull}}",
 } satisfies Catalog<typeof linksEnglish>;
 
 const ja = {
@@ -150,8 +150,8 @@ const ja = {
   "links.answer": "回答する",
   "links.created": "PR を作成",
   "links.agentReview": "エージェントレビュー · {{agent}}",
-  "links.createdNumber": "#{{number}} を作成",
-  "links.workedNumber": "#{{number}}",
+  "links.createdNumber": "{{label}} を作成",
+  "links.workedNumber": "{{label}}",
   "links.noRequest": "依頼なし",
   "links.continued": "継続 {{count}}",
   "links.delegatedBy": "{{name}} が依頼",
@@ -169,7 +169,7 @@ const ja = {
   "links.why.deviceOffline": "{{device}} は接続されていません",
   "links.why.deviceView": "{{device}} の会話はまだここで開けません",
   "links.why.file": "会話ファイルがないため開けません",
-  "links.chip": "PR #{{number}} を開く",
+  "links.chip": "{{pull}} を開く",
 } satisfies Catalog<typeof linksEnglish>;
 
 export const linksCatalogs = { en: linksEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof linksEnglish>;

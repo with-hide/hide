@@ -1,4 +1,5 @@
 import { CopyIcon, LoaderCircleIcon, MessageSquareIcon, PlayIcon, CircleHelpIcon, SquareTerminalIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { projectPullWords } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -17,7 +18,7 @@ import { deviceLabel, failureKey, foldTimeline, resumeProvider, resumeBlock, res
 import { allAgents } from "./navigation";
 import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
-import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
+import { catalogOf, catalogWorkspaces, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { useSessionResume } from "./useSessionResume";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -337,11 +338,12 @@ const NO_CHIPS: readonly { number: number; created: boolean }[] = [];
 export function SessionPrChips({ workspaceId, sessionId, onPr, className }: { workspaceId: string; sessionId: string; onPr: (number: number) => void; className?: string }) {
   const { t } = useInterfaceTranslation();
   const chips = useShellStore((s) => s.linkSummaries?.projects[workspaceId]?.sessions?.[sessionId] ?? NO_CHIPS);
+  const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === workspaceId) ?? null);
   if (chips.length === 0) return null;
   return (
     <span className={cn("flex flex-wrap items-center gap-xxs", className)} data-session-prs={sessionId}>
       {chips.map((chip) => (
-        <Hint key={chip.number} label={t("links.chip", { number: chip.number })} reveals>
+        <Hint key={chip.number} label={t("links.chip", projectPullWords(project, chip.number))} reveals>
           <button
             type="button"
             className={cn("inline-flex h-(--size-control-sm) items-center rounded-xs border border-border px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", chip.created ? "text-pr-merged" : "text-subtle-foreground")}
@@ -349,7 +351,7 @@ export function SessionPrChips({ workspaceId, sessionId, onPr, className }: { wo
             data-session-pr={chip.number}
             data-session-pr-created={chip.created ? "true" : undefined}
           >
-            {chip.created ? t("links.createdNumber", { number: chip.number }) : t("links.workedNumber", { number: chip.number })}
+            {chip.created ? t("links.createdNumber", projectPullWords(project, chip.number)) : t("links.workedNumber", projectPullWords(project, chip.number))}
           </button>
         </Hint>
       ))}

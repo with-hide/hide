@@ -1,5 +1,6 @@
 import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
+import { pullLabel } from "./codeHost";
 import type { MessageKey } from "./i18n/catalogs";
 import { formatDateTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -108,7 +109,7 @@ export const CLOSED_DIM = "opacity-(--opacity-dimmed)";
 const PR_RANK = Object.fromEntries(Object.keys(PR_LOOK).map((state, rank) => [state, rank])) as Record<PrState, number>;
 
 /** What a mark draws: one PR's state and number, or for several, how many of each state, worst first. */
-export type PrMarkParts = { state: PrState; number: number } | { counts: { state: PrState; count: number }[] };
+export type PrMarkParts = { state: PrState; label: string } | { counts: { state: PrState; count: number }[] };
 
 /**
  * Several PRs as one mark: the worst state among those still open and how
@@ -122,10 +123,10 @@ export function prCountsSummary(counts: readonly { state: PrState; count: number
 }
 
 /** The mark of a list of PRs; null for none. */
-export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state">[]): PrMarkParts | null {
+export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state" | "reference">[]): PrMarkParts | null {
   const [first] = pulls;
   if (!first) return null;
-  if (pulls.length === 1) return { state: first.state, number: first.number };
+  if (pulls.length === 1) return { state: first.state, label: pullLabel(first) };
   const counts = new Map<PrState, number>();
   for (const { state } of pulls) counts.set(state, (counts.get(state) ?? 0) + 1);
   return { counts: [...counts].sort(([a], [b]) => PR_RANK[a] - PR_RANK[b]).map(([state, count]) => ({ state, count })) };

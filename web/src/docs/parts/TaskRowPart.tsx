@@ -34,7 +34,7 @@ export default function TaskRowPart({ state }: PartProps) {
       <ol data-docs-state={shown}>
         {shown === "working" && <SessionRow mark={<><StatusMark mark="going" /><AgentMark kind="claude" /></>} title="api-refactor" right={time("12m")} line={{ text: "editing 3 files" }} />}
         {shown === "question" && <SessionRow mark={<><StatusMark mark="turn" /><AgentMark kind="claude" /></>} title="api-refactor" right={time("14m")} line={{ text: "asks: keep the old endpoint for one release?", className: "text-warning", wrap: true }} />}
-        {shown === "done" && <SessionRow mark={<><StatusMark mark="done" /><AgentMark kind="claude" /></>} title="api-refactor" chips={<PrMark state="mergeable" number={412} />} right={time("21m")} line={{ text: "tests pass, PR opened" }} />}
+        {shown === "done" && <SessionRow mark={<><StatusMark mark="done" /><AgentMark kind="claude" /></>} title="api-refactor" chips={<PrMark state="mergeable" label="#412" />} right={time("21m")} line={{ text: "tests pass, PR opened" }} />}
       </ol>
     </PartFrame>
   );

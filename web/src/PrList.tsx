@@ -1,4 +1,5 @@
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, PlayIcon } from "lucide-react";
+import { offers, projectHost, pullHost, pullLabel, pullWords } from "./codeHost";
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import type { PrGroupId } from "./agentScope";
@@ -162,7 +163,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
   return (
     <li className="flex flex-col" data-pr={pr.number} data-pr-project={project.id} data-pr-row-group={group}>
       <div className={cn("group/pr-row relative flex min-w-0 flex-col gap-xxs rounded-xs px-xs py-xs hover:bg-accent focus-within:bg-accent", group === "merged" && "opacity-(--opacity-secondary)")}>
-        <button type="button" data-pr-focus="row" data-pr-row={pr.number} aria-label={t("work.row.open", { number: pr.number, title: pr.title })}
+        <button type="button" data-pr-focus="row" data-pr-row={pr.number} aria-label={t("work.row.open", { ...pullWords(pr), title: pr.title })}
           className="absolute inset-0 rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={(event) => (holdsCommandKey(event) ? github() : open())}
           onKeyDown={(event) => {
@@ -172,7 +173,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
             }
           }} />
         <div className="pointer-events-none relative flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <PrMark state={pr.state} number={pr.number} />
+          <PrMark state={pr.state} label={pullLabel(pr)} />
           <Hint label={pr.title} reveals>
             <span className="pointer-events-auto min-w-0 flex-1 cursor-pointer truncate text-caption font-medium text-foreground" onClick={(event) => (holdsCommandKey(event) ? github() : open())} data-pr-title={pr.number}>{pr.title}</span>
           </Hint>
@@ -239,7 +240,10 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   const folderGone = checkout !== null && (!checkout.exists || checkout.worktree?.missing === true);
   const worktree = checkout?.is_worktree === true && checkout.is_primary !== true;
   const local = project.tasks?.source?.kind === "local";
-  const linkable = !merged && row.issue === null && (!local || (worktree && !folderGone));
+  // An action the project's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts).
+  const host = projectHost(project);
+  const linkable = !merged && row.issue === null && offers(host, "issues") && (!local || (worktree && !folderGone));
+  const handover = offers(host, "handover");
   const delegate = () => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number });
   const cleanup = merged && worktree ? () => useUiStore.getState().setWorkspaceDialog({ kind: "delete_worktree", workspaceId: project.id, checkoutId: checkout!.id }) : null;
   const rowMenu = (
@@ -252,17 +256,17 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-            {row.group !== "merged" ? <DropdownMenuItem onSelect={delegate} data-pr-menu-delegate="true">{t("prList.delegate")}</DropdownMenuItem> : null}
+            {row.group !== "merged" && handover ? <DropdownMenuItem onSelect={delegate} data-pr-menu-delegate="true">{t("prList.delegate")}</DropdownMenuItem> : null}
             {linkable ? <DropdownMenuItem onSelect={() => onLinking(true)} data-pr-menu-link="true">{t("prList.linkIssue")}</DropdownMenuItem> : null}
             {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })} data-pr-menu-new-issue="true">{t("prList.newIssue")}</DropdownMenuItem> : null}
-            <DropdownMenuItem onSelect={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-menu-github="true">{t("work.card.github")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-menu-github="true">{t("work.card.github", pullWords(pr))}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-menu-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </span>
     </IssuePicker>
   );
-  if (row.group === "blocked") {
+  if (row.group === "blocked" && handover) {
     return (
       <span className={cn(reveal, pointer)} data-pr-actions="delegate">
         <Hint label={t("prList.takeHint")}>
@@ -287,8 +291,8 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   }
   return (
     <span className={cn(reveal, pointer)} data-pr-actions="default">
-      <Hint label={t("prList.gitHubHint")}>
-        <Button variant="ghost" size="icon-sm" aria-label="GitHub" onClick={own(() => actions.openPullRequest(pr.url, project.device_id, true))} data-pr-github={pr.number}>
+      <Hint label={t("prList.gitHubHint", pullWords(pr))}>
+        <Button variant="ghost" size="icon-sm" aria-label={pullHost(pr).name} onClick={own(() => actions.openPullRequest(pr.url, project.device_id, true))} data-pr-github={pr.number}>
           <ExternalLinkIcon aria-hidden="true" />
         </Button>
       </Hint>

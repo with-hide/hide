@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -1079,11 +1079,13 @@ export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number
 
 /** The last still-open held PR and the other open PRs, from the core's
  * merge reading. Older cores omit `prs` and keep their previous PR display. */
-export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; more: number } {
+export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state" | "pr_reference"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; reference: ChangeRequestRef | null; more: number } {
   const open = node.merge?.prs;
   const number = open === undefined ? node.pr : (open.at(-1) ?? null);
-  const state = number === node.pr ? node.pr_state : (node.prs?.find((pr) => pr.number === number)?.state ?? null);
-  return { number, state, more: Math.max(0, (open?.length ?? 1) - 1) };
+  const held = node.prs?.find((pr) => pr.number === number);
+  const state = number === node.pr ? node.pr_state : (held?.state ?? null);
+  const reference = (number === node.pr ? node.pr_reference : null) ?? held?.reference ?? null;
+  return { number, state, reference, more: Math.max(0, (open?.length ?? 1) - 1) };
 }
 
 /**

@@ -1,4 +1,5 @@
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
+import { pullLabel } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -636,14 +637,14 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
   const settled = all.filter(settledOutput);
   const allMerged = all.length > 0 && all.every((pull) => pull.state === "merged");
   // Pressed inside the card, it stacks in the same slot for ← to come back from (operator decision 2026-11-09).
-  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, "here");
+  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number, reference: pull.reference }, "here");
   const rows = (items: readonly SessionPull[]) => items.map((pull) => {
     const word = t(PR_LOOK[pull.state].word);
     const stale = pull.stale ? pull.last_read_at_unix_ms ? new Date(pull.last_read_at_unix_ms).toLocaleString() : t("common.unavailable") : null;
     const dim = pull.state === "closed" && CLOSED_DIM;
     return <div key={pull.url} className="flex min-w-0 items-start gap-sm py-xs" data-record-pr-row={pull.number} data-pr-closed={pull.state === "closed" || undefined}>
       <button type="button" data-record-output="pr" data-record-output-number={pull.number} className={cn(ROW, "shrink-0 px-xxs hover:bg-accent")} aria-label={[`#${pull.number} ${word}`, pull.title, stale].filter(Boolean).join(" · ")} title={pull.title} onClick={() => open(pull)}>
-        <PrMark state={pull.state} number={pull.number} stale={pull.stale} className={dim || undefined} />
+        <PrMark state={pull.state} label={pullLabel(pull)} stale={pull.stale} className={dim || undefined} />
       </button>
       <button type="button" className={cn(ROW, "min-w-0 flex-1 truncate text-caption hover:underline", (pull.stale || dim) && "opacity-(--opacity-dimmed)")} onClick={() => open(pull)} title={[pull.title, stale].filter(Boolean).join("\n")}>{pull.title}</button>
     </div>;

@@ -547,7 +547,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
-          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number, reference: pull.reference }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
           <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
@@ -854,7 +854,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number, reference: pull.reference }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
         <ChildLine child={child} actions={actions} />

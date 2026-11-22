@@ -53,7 +53,7 @@ export const checkoutGitEnglish = {
   "checkoutGit.incoming": "Not pulled",
   "checkoutGit.incomingMore": "+{{count}} more not pulled",
   "checkoutGit.unpushed": "Not pushed",
-  "checkoutGit.openCommit": "Open commit on GitHub"
+  "checkoutGit.openCommit": "Open commit on {{host}}"
 };
 
 export const checkoutGitCatalogs = {
@@ -111,7 +111,7 @@ export const checkoutGitCatalogs = {
   "checkoutGit.incoming": "받지 않음",
   "checkoutGit.incomingMore": "받지 않은 커밋 {{count}}개 더",
   "checkoutGit.unpushed": "푸시하지 않음",
-  "checkoutGit.openCommit": "GitHub에서 커밋 열기"
+  "checkoutGit.openCommit": "{{host}}에서 커밋 열기"
 },
 "zh-CN": {
   "checkoutGit.files": "未提交文件记录 {{count}} 条",
@@ -166,7 +166,7 @@ export const checkoutGitCatalogs = {
   "checkoutGit.incoming": "未拉取",
   "checkoutGit.incomingMore": "还有 {{count}} 个未拉取",
   "checkoutGit.unpushed": "未推送",
-  "checkoutGit.openCommit": "在 GitHub 上打开提交"
+  "checkoutGit.openCommit": "在 {{host}} 上打开提交"
 },
 "ja": {
   "checkoutGit.files": "未コミットのファイル {{count}} 件",
@@ -221,6 +221,6 @@ export const checkoutGitCatalogs = {
   "checkoutGit.incoming": "未取得",
   "checkoutGit.incomingMore": "未取得があと {{count}} 件",
   "checkoutGit.unpushed": "未プッシュ",
-  "checkoutGit.openCommit": "GitHub でコミットを開く"
+  "checkoutGit.openCommit": "{{host}} でコミットを開く"
 }
 } satisfies Catalogs<typeof checkoutGitEnglish>;

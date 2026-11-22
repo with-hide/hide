@@ -1,4 +1,5 @@
 import { ArrowUpIcon, ChevronRightIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { pullLabel } from "./codeHost";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectStray } from "./agentScope";
@@ -541,12 +542,13 @@ function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: s
 export function TaskResultMark({ task, projectId, numbered = false }: { task: TaskCost; projectId: string; numbered?: boolean }) {
   const { t } = useInterfaceTranslation();
   const result = task.result;
-  // An open pull request draws the state the PR list gives it.
-  const openState = useShellStore((s) => result.kind === "pr" && result.state === "open"
-    ? catalogWorkspaces(s.rest).find((row) => row.id === projectId)?.pull_requests?.find((row) => row.number === result.number)?.state ?? null
+  // The pull request as the PR list holds it: an open one draws the state the list gives it, and every one its host's number.
+  const listed = useShellStore((s) => result.kind === "pr"
+    ? catalogWorkspaces(s.rest).find((row) => row.id === projectId)?.pull_requests?.find((row) => row.number === result.number) ?? null
     : null);
+  const openState = result.kind === "pr" && result.state === "open" ? listed?.state ?? null : null;
   if (task.kind === "mission" && task.mission) return <span className="min-w-0 truncate text-micro text-muted-foreground" data-task-result="mission">{t("projectTool.task.missionPrs", { count: task.mission.prs, merged: task.mission.merged })}</span>;
-  if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} number={result.number} compact={!numbered} className={numbered ? "text-micro" : undefined} />;
+  if (result.kind === "pr" && result.number != null) return <PrMark state={result.state === "merged" ? "merged" : result.state === "closed" ? "closed" : (openState ?? "pending")} label={pullLabel({ number: result.number, reference: listed?.reference })} compact={!numbered} className={numbered ? "text-micro" : undefined} />;
   return <span className={cn("min-w-0 truncate text-micro", result.kind === "working" ? "text-agent-working" : result.kind === "none" ? "text-warning" : "text-muted-foreground")} data-task-result={result.kind}>{t(`projectTool.task.result.${result.kind}`)}</span>;
 }
 

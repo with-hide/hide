@@ -3962,9 +3962,13 @@ impl Runtime {
             }
         }
         let mut merged = github;
-        if let Some(previous) = self.device_github.get(device_id) {
-            keep_previous_reads(&mut merged, previous, request);
-        }
+        keep_previous_reads(
+            &mut merged,
+            self.device_github
+                .get(device_id)
+                .unwrap_or(&crate::model::GithubSnapshot::default()),
+            request,
+        );
         self.note_mission_pulls(device_id, &merged);
         if self.device_github.get(device_id) == Some(&merged) {
             return false;
@@ -5919,6 +5923,9 @@ fn keep_previous_reads(
                 }
             }
         }
+        // The screen's copy of the identity, made from whatever this pass
+        // settled on, its own read's or the one kept above.
+        project.show_repository();
     }
 }
 
