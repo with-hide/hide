@@ -2,6 +2,7 @@
 // events it answers, applied here the way the core would apply them. Nothing
 // leaves the page: no daemon, no engine, no agent.
 
+import type { AccessCall } from "../accessCall";
 import type { AutomationCall, CallAnswer } from "../automationCall";
 import type { NodeUsage } from "../generated/hided-ws";
 import type { PhoneAsk } from "../mobile/protocol";
@@ -95,6 +96,12 @@ export type PracticeWorld<M> = {
    * answer refuses every call as the core does with automations unavailable.
    */
   call?: (model: M, call: AutomationCall) => { model: M | null; answer: CallAnswer<unknown> };
+  /**
+   * Settings › 봇's call (`access_call`: make a bot, give it a new code, read
+   * its code again), answered as `call` is. A world with no answer refuses
+   * every one as the core does with bots unavailable.
+   */
+  access?: (model: M, call: AccessCall) => { model: M | null; answer: CallAnswer<unknown> };
   /** The phone beside the screen, for a chapter about answering from the phone; a world without one draws none. */
   phone?: (model: M) => PracticePhoneScreen;
 };

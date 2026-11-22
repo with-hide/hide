@@ -57,7 +57,7 @@ Knowing a room hash grants no phone credential: the endpoint must still complete
 | Control message | Protocol `MAX_CONTROL`, 2,048 bytes | `frame_limit` | `control_size` |
 | Forwarded bytes per room, both directions including binary headers and handshakes | 1 GiB in a 24-hour window | `daily_limit` | `bytes_per_room_per_day` |
 | Unexpired IP / room accounting entries | 4,096 each | `rate_limit` / `connection_limit` | `ip_records` / `room_records` |
-| Data output per socket, including an in-progress write | 8 frames | `connection_limit` | `outbound_queue` |
+| Data output per socket, including an in-progress write | 8 frames (`hide_relay_protocol::frame::MAX_QUEUED_FRAMES`, which a device paces its sends to a phone by) | `connection_limit` | `outbound_queue` |
 | Data output of every socket together, including in-progress writes | 256 MiB | `connection_limit` | `queued_bytes` |
 | Control output per socket, including reserved phone departures | 16 messages | `connection_limit` | `control_queue` |
 

@@ -513,10 +513,11 @@ function failLoadingLook(): void {
 
 /**
  * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15).
+ * A file gone or outside every checkout is, like one too large: its reason is all there is to see of it, here or on the desktop.
  * Every state answers, so a new one cannot be left out by accident.
  */
 const SEEN: Record<LookContent["state"], boolean> = {
-  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, closed: false, device_unreachable: false, failed: false,
+  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, not_found: true, outside_roots: true, closed: false, device_unreachable: false, failed: false,
 };
 
 /** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */

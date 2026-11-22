@@ -19,7 +19,7 @@ pub use hide_relay_protocol::frame::MAX_FRAME;
 pub const MAX_IP_RECORDS: usize = 4096;
 pub const MAX_ROOM_RECORDS: usize = 4096;
 pub const MAX_PENDING_HTTP: usize = 32;
-pub const MAX_QUEUED_FRAMES: usize = 8;
+pub use hide_relay_protocol::frame::MAX_QUEUED_FRAMES;
 /// Data bytes queued for every socket together, each frame counted until its
 /// write ends. With this cap the relay's queued data stays at what 512
 /// sockets of eight full frames could hold, however many sockets are open; a
