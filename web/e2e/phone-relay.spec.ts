@@ -447,6 +447,7 @@ for (const [reason, words] of [["window_elsewhere", "It's on another computer's 
     await expect(body.locator("[data-phone-look-address]")).toHaveText("http://localhost:5173/");
     await expect(body.getByRole("status")).toHaveText(words);
     await expect(page.locator("[data-phone-look-refresh]")).toBeEnabled();
+    await page.screenshot({ path: test.info().outputPath(`page-${reason}.png`) });
   });
 }
 
