@@ -850,10 +850,14 @@ class NamedPaths(unittest.TestCase):
                 # the `repeat` lane repeats.
                 self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check", "repeat"})
         # Both retained jobs run both Vitest suites; a configured matrix alone
-        # would not establish that these tests are executed on Windows.
-        for lane in ("checks", "windows-check"):
+        # would not establish that these tests are executed on Windows. The
+        # Windows lane's suites are its called workflow's `web` job.
+        windows = yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"]["web"]
+        self.assertIn("uses: ./.github/workflows/windows-check.yml", pr_jobs()["windows-check"])
+        for lane, text in (("checks", pr_jobs()["checks"]), ("windows-check", yaml.safe_dump(windows, width=1000))):
             for folder in ("web", "desktop"):
-                self.assertIn(f"bash scripts/verify-web.sh {folder} test", pr_jobs()[lane])
+                with self.subTest(lane=lane, folder=folder):
+                    self.assertIn(f"bash scripts/verify-web.sh {folder} test", text)
 
     def test_configuration_names_the_lanes_that_read_it(self):
         expected = {
@@ -1016,6 +1020,9 @@ def runner_jobs(block):
         # The count, the web specs' run, the unit tests' run, the Rust modules'
         # run and the verdict.
         return 5
+    if "uses: ./.github/workflows/windows-check.yml" in block:
+        # The compile, the Rust tests and the unit suites, each on its own runner.
+        return len(yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"])
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -1179,7 +1186,11 @@ class Workflows(unittest.TestCase):
         # lint (seven with the web lane's nine shards, from 62 to 69), so the
         # two longest Linux lines end about 13 minutes into a run, not 20
         # (docs/TESTING.md, "The Rust lane's shards").
-        self.assertLessEqual(most, 69, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Windows lane's one job became its compile, its Rust tests and its
+        # unit suites on three runners (from 69 to 71), so a pull request with a
+        # Windows path ends near the Linux lines, not 27 minutes in
+        # (docs/TESTING.md, "Where the Windows runners went").
+        self.assertLessEqual(most, 71, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1257,6 +1268,57 @@ class RustLane(unittest.TestCase):
                 status, calls = self.run_step(job, name, "false", "[]")
                 self.assertNotEqual(status, 0)
                 self.assertEqual(calls, [])
+
+
+class WindowsCheckLane(unittest.TestCase):
+    """The Windows lane is one `verify` lane over `windows-check.yml`'s three jobs.
+
+    `verify` sees only the call's result, and a called workflow fails when one of
+    its jobs fails but not when one is skipped, so every job runs
+    unconditionally, waits on none of the others, and ignores no failure.
+    """
+
+    def setUp(self):
+        self.lane = yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())
+        self.jobs = self.lane["jobs"]
+
+    def commands(self, job):
+        return "\n".join(step.get("run", "") for step in self.jobs[job]["steps"])
+
+    def test_compile_rust_tests_and_unit_suites_each_start_at_once_and_run_or_fail_the_call(self):
+        self.assertEqual(set(self.jobs), {"compile", "tests", "web"})
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertEqual(job["runs-on"], "windows-latest")
+                # A job-level condition could skip it while the call passes.
+                self.assertNotIn("if", job)
+                self.assertNotIn("needs", job)
+                self.assertFalse(job.get("continue-on-error", False))
+        call = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]["windows-check"]
+        self.assertEqual(call["uses"], "./.github/workflows/windows-check.yml")
+        self.assertEqual(call["name"], "windows check")
+        self.assertFalse(call.get("continue-on-error", False))
+        self.assertEqual(call["secrets"], {"HIDE_ISSUES_APP_KEY": "${{ secrets.HIDE_ISSUES_APP_KEY }}"})
+
+    def test_each_check_runs_in_exactly_one_job(self):
+        self.assertIn("verify-cargo.sh check --workspace --all-targets", self.commands("compile"))
+        tests = self.commands("tests")
+        self.assertIn("nextest --profile ci $TEST_TARGETS --no-run", tests)
+        self.assertIn("ci-flaky-report.py --suite rust", tests)
+        self.assertIn(". scripts/prepare-ignored-tests.sh", tests)
+        for suite in ("web", "desktop"):
+            self.assertIn(f"verify-web.sh {suite} test", self.commands("web"))
+        # A cargo or vitest command a job runs, no other job runs.
+        for name in self.jobs:
+            for line in self.commands(name).splitlines():
+                line = line.strip()
+                if not line.startswith(("bash scripts/verify-cargo.sh", "bash scripts/verify-web.sh")):
+                    continue
+                with self.subTest(job=name, command=line[:80]):
+                    self.assertEqual([other for other in self.jobs if line in self.commands(other)], [name])
+        # Only the Rust tests read the selection the test binaries were built for.
+        self.assertEqual([name for name, job in self.jobs.items() if "TEST_TARGETS" in job.get("env", {})], ["tests"])
+        self.assertNotIn("$TEST_TARGETS", self.commands("compile") + self.commands("web"))
 
 
 def pr_plan(*paths, status="M"):
@@ -1699,12 +1761,12 @@ class WindowsOnPullRequests(unittest.TestCase):
 
     def test_only_the_windows_lanes_name_a_windows_runner(self):
         # Every pr.yml job that can start a Windows runner is a Windows-only lane,
-        # a lane with a Windows leg, or `package`; `windows wsl` and `package`
-        # call workflows that name their Windows runners themselves.
+        # a lane with a Windows leg, or `package`; `windows check`, `windows wsl`
+        # and `package` call workflows that name their Windows runners themselves.
         for lane, block in pr_jobs().items():
             with self.subTest(lane=lane):
                 body = "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
-                names_windows = bool(re.search(r"windows-latest|\"windows\"|include-windows:|wsl-device\.yml|package\.yml", body))
+                names_windows = bool(re.search(r"windows-latest|\"windows\"|include-windows:|wsl-device\.yml|windows-check\.yml|package\.yml", body))
                 self.assertEqual(names_windows, lane in set(ci.WINDOWS_LANES) | {"package"})
 
     def test_pr_yml_runs_the_windows_legs_the_plan_names(self):
