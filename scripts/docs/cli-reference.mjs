@@ -126,7 +126,7 @@ const SECTIONS = [
   ["Automations", ["automation"]],
   ["Panes and workspaces", ["pane", "workspace"]],
   ["The operator's screen", ["file", "diff", "browser", "view"]],
-  ["Devices", ["device"]],
+  ["Devices", ["device", "phone"]],
   ["Tools outside Hide", ["access"]],
   ["Past sessions and links", ["session", "links"]],
   ["Project Memory", ["memory"]],
