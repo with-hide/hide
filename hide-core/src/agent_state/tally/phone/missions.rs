@@ -993,7 +993,10 @@ mod tests {
                 "running",
                 vec![
                     // Back at work after a finish: its time counts from the return.
-                    node("a", json!({"started_at_unix_ms": 20, "worked_at_unix_ms": 40})),
+                    node(
+                        "a",
+                        json!({"started_at_unix_ms": 20, "worked_at_unix_ms": 40}),
+                    ),
                     // A core before the return stamp: its start.
                     node("b", json!({"started_at_unix_ms": 30})),
                     node("c", json!({"status": "planned"})),
