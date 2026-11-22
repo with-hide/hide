@@ -1114,6 +1114,7 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         release: false,
         direct: Some("127.0.0.1:0".parse().unwrap()),
         relay: None,
+        relay_only: false,
         wsl: None,
         device_connect: true,
     };
