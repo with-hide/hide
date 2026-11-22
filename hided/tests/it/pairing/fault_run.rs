@@ -688,9 +688,14 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         "fault_run: the guest core's sleep and input records:\n{}",
         core_log
             .lines()
-            .filter(|line| line.contains("agent_sleep") || line.contains("doorbell"))
+            .filter(|line| {
+                (line.contains("agent_sleep")
+                    || line.contains("doorbell")
+                    || line.contains("h1:p2"))
+                    && !line.contains("doorbell.held")
+            })
             .rev()
-            .take(12)
+            .take(25)
             .collect::<Vec<_>>()
             .join("\n")
     );
