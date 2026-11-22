@@ -44,6 +44,7 @@ pub mod find;
 pub mod fixture;
 mod fork;
 mod github;
+mod gitlab;
 mod github_poll;
 mod github_store;
 pub mod global_instruction;

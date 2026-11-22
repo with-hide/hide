@@ -108,6 +108,14 @@ impl CodeHost for Plain {
         format!("!{number}")
     }
 
+    fn access(&self) -> HostAccess {
+        HostAccess {
+            program: "plain".to_owned(),
+            minimum_version: "1.0.0".to_owned(),
+            sign_in: "plain login".to_owned(),
+        }
+    }
+
     fn reads(&self) -> Box<dyn HostReads> {
         Box::new(PlainReads)
     }

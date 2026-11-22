@@ -8,8 +8,9 @@
 //! optional operation it offers, one by one. Common code asks the registry
 //! ([`CodeHosts`]) and the unit, receives a [`Place`] and a [`HostFailure`],
 //! and never branches on a host's key or spells a host's command or address;
-//! `scripts/check-code-host-seam.py` holds that line. GitHub is the one
-//! registered host (`crate::github::host`).
+//! `scripts/check-code-host-seam.py` holds that line. GitHub
+//! (`crate::github::host`) and gitlab.com (`crate::gitlab::host`) are the
+//! registered hosts.
 //!
 //! An optional operation a host does not declare cannot be called: its
 //! accessor answers `None`, and the caller refuses the request as
@@ -63,6 +64,77 @@ pub(crate) fn change_request(
         files_url: unit.change_request_url(&repository, number, ChangeRequestPage::Files),
         repository,
         number,
+    }
+}
+
+/// What a host tells the screen and the phone about itself, beside a
+/// project's read and a change request's card: its key, the optional
+/// operations it offers, and what to do when it cannot be read. Made from
+/// the unit alone ([`declaration`]), so a button the screen draws and an
+/// event the core takes ask the same question.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
+pub struct HostDeclaration {
+    /// The unit's key ([`CodeHost::key`]): `github`, `gitlab`.
+    pub key: String,
+    /// The optional operations the host offers; one not named is refused by
+    /// the core.
+    pub operations: Vec<Operation>,
+    pub access: HostAccess,
+}
+
+/// One optional operation of the contract, named as the accessor that
+/// offers it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    Merge,
+    UpdateBranch,
+    EditBody,
+    MergeProof,
+    BasePolicy,
+    CommitChecks,
+    FailedLog,
+    ByNumber,
+    Handover,
+    Issues,
+    Search,
+    Watch,
+}
+
+/// How a host is reached, for what the screen says when it cannot be: the
+/// program it runs, the oldest release of it Hide reads with, and the
+/// command that signs it in. Words around them are the screen's.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
+pub struct HostAccess {
+    pub program: String,
+    pub minimum_version: String,
+    pub sign_in: String,
+}
+
+/// The declaration of `unit`, its optional operations read from its own
+/// accessors: nothing lists a host's operations a second time.
+pub(crate) fn declaration(unit: &dyn CodeHost) -> HostDeclaration {
+    let offered = [
+        (Operation::Merge, unit.merge().is_some()),
+        (Operation::UpdateBranch, unit.update_branch().is_some()),
+        (Operation::EditBody, unit.edit_body().is_some()),
+        (Operation::MergeProof, unit.merge_proof().is_some()),
+        (Operation::BasePolicy, unit.base_policy().is_some()),
+        (Operation::CommitChecks, unit.commit_checks().is_some()),
+        (Operation::FailedLog, unit.failed_log().is_some()),
+        (Operation::ByNumber, unit.by_number().is_some()),
+        (Operation::Handover, unit.handover().is_some()),
+        (Operation::Issues, unit.issues().is_some()),
+        (Operation::Search, unit.search().is_some()),
+        (Operation::Watch, unit.watch().is_some()),
+    ];
+    HostDeclaration {
+        key: unit.key().to_owned(),
+        operations: offered
+            .into_iter()
+            .filter_map(|(operation, offered)| offered.then_some(operation))
+            .collect(),
+        access: unit.access(),
     }
 }
 
@@ -229,6 +301,10 @@ pub(crate) trait CodeHost: Sync {
     /// How the host writes a change request's number (`#12`).
     fn number_label(&self, number: u32) -> String;
 
+    /// How the host is reached: its program, the oldest release Hide reads
+    /// with, and the command that signs it in.
+    fn access(&self) -> HostAccess;
+
     /// The host's read of its projects, made once for each reader that
     /// reads them; what it keeps between passes is its own.
     fn reads(&self) -> Box<dyn HostReads>;
@@ -336,7 +412,8 @@ impl ReadClock {
 pub(crate) struct CodeHosts(&'static [&'static dyn CodeHost]);
 
 impl CodeHosts {
-    pub(crate) const STANDARD: Self = Self(&[&crate::github::host::GITHUB]);
+    pub(crate) const STANDARD: Self =
+        Self(&[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB]);
 
     pub(crate) fn hosts(self) -> impl Iterator<Item = Host> {
         self.0.iter().map(|unit| Host(*unit))

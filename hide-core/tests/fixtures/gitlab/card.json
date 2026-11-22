@@ -1,0 +1,44 @@
+{
+ "data": {
+  "project": {
+   "mergeRequest": {
+    "diffHeadSha": "1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c",
+    "description": "",
+    "diffStatsSummary": {
+     "fileCount": 2
+    },
+    "diffStats": [
+     {
+      "path": ".gitlab-ci.yml",
+      "additions": 9,
+      "deletions": 6
+     },
+     {
+      "path": "scenes/fail.txt",
+      "additions": 1,
+      "deletions": 0
+     }
+    ],
+    "discussions": {
+     "nodes": [
+      {
+       "resolvable": false,
+       "resolved": false,
+       "notes": {
+        "nodes": [
+         {
+          "author": {
+           "username": "example-user"
+          },
+          "body": "added 1 commit\n\n<ul><li>1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c - Fix pipeline rules</li></ul>\n\n[Compare with previous version](/example-user/hide-code-host-check/-/merge_requests/2/diffs?diff_id=2229913855&start_sha=cb49d86250156aa096a407a7498a4485f679effa)",
+          "position": null
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}
