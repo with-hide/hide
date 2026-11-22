@@ -187,9 +187,9 @@ function plan(state: string, now: number): MissionNode[] {
   ];
 }
 
-/** The `waits` state: the running mission's outside node and five more waiting nodes, one per target and failure. */
+/** The `waits` state: the running mission's outside node and six more waiting nodes, one per target and failure. */
 function waits(fixture: ReturnType<typeof missionFixture>, now: number) {
-  const raise = (reason: "mission_cancelled" | "wait_expired") => ({ reason, pr: null, to: "conductor" as const, since_unix_ms: now - 4 * MINUTE, on_row: false, item: false, choices: ["leave" as const, "drop" as const] });
+  const raise = (reason: "mission_cancelled" | "wait_expired" | "pr_closed") => ({ reason, pr: null, to: "conductor" as const, since_unix_ms: now - 4 * MINUTE, on_row: false, item: false, choices: ["leave" as const, "drop" as const] });
   const waiting = (key: string, title: string, extra: Partial<MissionNode>) => node(key, title, { kind: "wait", delivery: null, status: "working", started_at_unix_ms: now - 50 * MINUTE, wait_until_unix_ms: now + 6 * 24 * 60 * MINUTE, ...extra });
   fixture.mission.nodes.push(
     waiting("release-ci", "릴리스 후보 CI 확인", { wait_target: { ci: 1232 }, wait_reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" }, wait_until_unix_ms: now + 5 * 60 * MINUTE - MINUTE }),
@@ -197,6 +197,7 @@ function waits(fixture: ReturnType<typeof missionFixture>, now: number) {
     waiting("gitlab", "GitLab 쓰기 들어오면", { wait_target: { node: { mission: "mission-91", node: "gitlab-write" } } }),
     waiting("host-cancelled", "코드 호스트 추상화 끝남", { wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 }, wait_outcome: "mission_cancelled", attention: raise("mission_cancelled") }),
     waiting("ci-expired", "릴리스 후보 CI 확인", { wait_target: { ci: 1232 }, wait_reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" }, wait_until_unix_ms: now - MINUTE, wait_outcome: "expired", attention: raise("wait_expired") }),
+    waiting("vendor-closed", "SDK 업데이트 들어오면", { wait_target: { pr: 2528 }, external: { pr: 2528 }, outside: { base: "main", state: "closed" }, wait_reference: { label: `#${2528}`, url: "https://github.com/with-hide/hide/pull/2528" }, wait_outcome: "closed_unmerged", attention: raise("pr_closed") }),
   );
   return fixture;
 }

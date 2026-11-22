@@ -19,7 +19,7 @@ import type { ReactNode } from "react";
 import { ChevronRightIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, WaypointsIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { linePrLabel, lineToLabel, lineToWords, resultLineWords, waitLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone, type WaitLine } from "../missionLine";
+import { linePrLabel, lineToLabel, lineToWords, resultLineWords, waitFailureWords, waitLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone, type WaitFailure, type WaitLine } from "../missionLine";
 import { PR_LOOK } from "../prMark";
 import type { MissionNodePreset, PrState } from "../snapshot";
 
@@ -35,6 +35,12 @@ function markLook(mark: LineMark): { icon: LucideIcon; tone: string } {
   return mark in PR_LOOK ? PR_LOOK[mark as keyof typeof PR_LOOK] : OWN_MARK[mark as keyof typeof OWN_MARK];
 }
 
+/** How a waiting node failed, in the failed tone after either line, never giving way (PRD core-wait D-17, B4). */
+function FailedWord({ failed }: { failed: WaitFailure | null }) {
+  const { t } = useInterfaceTranslation();
+  return failed ? <span className="shrink-0 whitespace-nowrap font-normal text-mission-failed" data-wait-failed-word="true">· {waitFailureWords(failed, t)}</span> : null;
+}
+
 /** The person before the destination (D-53): faint orange ahead, yellow when the merge is the operator's now, grey after. */
 const PERSON_TONE = { ahead: "text-mission-hold/70", due: "text-mission-hold", merged: "text-muted-foreground" } as const;
 
@@ -48,7 +54,7 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
   const plan = line.plan ? t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : null;
   // A direct change's `PR 없이` follows the destination's name, or the branch when there is none, and never gives way.
   const direct = (after: boolean) => (line.direct ? <span className="shrink-0 font-normal text-muted-foreground" data-line-direct="true">{after ? "· " : ""}{t("mission.foot.planDirect")}</span> : null);
-  const from = plan != null || line.branch != null || (line.direct && line.to == null);
+  const from = plan != null || line.branch != null || (line.to == null && (line.direct || line.failed != null));
   const icon = <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
   const to = (full: boolean) =>
     line.to ? (
@@ -58,6 +64,7 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
         {line.to.kind === "stack" ? <StackMark state={line.to.state} /> : null}
         <span className={cn(full ? "break-all" : "min-w-0 truncate", line.to.kind === "stack" && "font-normal tabular-nums text-muted-foreground")} title={full ? undefined : lineToWords(line.to, t)}>{lineToLabel(line.to)}</span>
         {direct(true)}
+        <FailedWord failed={line.failed} />
       </span>
     ) : null;
   // A line runs inline when its head (the number, or the icon of a line without one that has marks) holds the first row
@@ -77,12 +84,13 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
             </span>
           ) : null}
           {line.to ? null : direct(line.branch != null)}
+          {line.to ? null : <FailedWord failed={line.failed} />}
         </span>
       ) : null}
       {to(false)}
     </span>
   );
-  const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined };
+  const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined, "data-wait-failed": line.failed ?? undefined };
   const number = line.pr ? <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null;
   if (whole) {
     return (
@@ -98,7 +106,12 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
             {line.branch.name}
           </span>
         ) : null}
-        {line.to ? to(true) : direct(line.branch != null)}
+        {line.to ? to(true) : (
+          <>
+            {direct(line.branch != null)}
+            <FailedWord failed={line.failed} />
+          </>
+        )}
       </span>
     );
   }
@@ -211,7 +224,7 @@ export function WaitLineView({ line, end, className }: { line: WaitLine; end?: R
         {icon}
         <span className={cn("shrink-0 tabular-nums", line.kind === "ci" ? "text-foreground" : "text-subtle-foreground")}>{lead}</span>
         {after ? <span className={cn("min-w-0 truncate", line.kind === "node" && "text-subtle-foreground")}>· {after}</span> : null}
-        {line.failed ? <span className="shrink-0 whitespace-nowrap text-mission-failed" data-wait-failed-word="true">· {t(`mission.wait.failed.${line.failed}`)}</span> : null}
+        <FailedWord failed={line.failed} />
       </span>
       {end}
     </span>

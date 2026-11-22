@@ -13,7 +13,7 @@ function node(extra: Partial<LineNode> = {}): LineNode {
 const t = () => initializeInterfaceI18n("ko").t;
 
 it("draws a change by pull request as its PR list mark, number, branch and destination, a grey branch before the pull request (B55)", () => {
-  expect(branchLine(node(), "main")).toEqual({ mark: "branch", pr: null, branch: { name: "feat/refund-db", outside: false }, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
+  expect(branchLine(node(), "main")).toEqual({ mark: "branch", pr: null, branch: { name: "feat/refund-db", outside: false }, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null, failed: null });
   // Each state is the one the PR list draws; several pull requests show the newest and +N; one GitHub has not answered yet is a plain PR mark.
   for (const state of ["pending", "failed", "mergeable", "draft", "merged", "closed"] as const) {
     expect(branchLine(node({ pr: 3105, pr_state: state }), "main")?.mark).toBe(state);
@@ -33,14 +33,14 @@ it("ends in another base, or in the pull request it is stacked on with that pull
 });
 
 it("says the plan before a node starts: a faint mark and `PR` or `PR 없이` to the destination, the operator's merge already on it (D-55, B55, B58)", () => {
-  expect(branchLine(node({ status: "planned", branch: null, merge: { by: "operator", state: "ahead" } }), "main")).toEqual({ mark: "plan_pr", pr: null, branch: null, plan: "pr", direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: "ahead" });
+  expect(branchLine(node({ status: "planned", branch: null, merge: { by: "operator", state: "ahead" } }), "main")).toEqual({ mark: "plan_pr", pr: null, branch: null, plan: "pr", direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: "ahead", failed: null });
   expect(branchLine(node({ status: "planned", delivery: "direct", branch: null }), "main")).toMatchObject({ mark: "plan_direct", plan: "direct", direct: false });
   // A node replanned after it opened a pull request keeps the pull request it has.
   expect(branchLine(node({ status: "planned", pr: 7, pr_state: "pending" }), "main")).toMatchObject({ mark: "pending", plan: null });
 });
 
 it("draws a direct change as its branch ending in `PR 없이`, the merge mark once it is in the destination (B55)", () => {
-  expect(branchLine(node({ delivery: "direct" }), "main")).toEqual({ mark: "branch", pr: null, branch: { name: "feat/refund-db", outside: false }, plan: null, direct: true, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
+  expect(branchLine(node({ delivery: "direct" }), "main")).toEqual({ mark: "branch", pr: null, branch: { name: "feat/refund-db", outside: false }, plan: null, direct: true, to: { kind: "branch", name: "main", elsewhere: false }, person: null, failed: null });
   expect(branchLine(node({ delivery: "direct", status: "done", landing: { state: "landed", proof: { by: "in_main", commit: "abc" } } }), "main")?.mark).toBe("merged");
   expect(branchLine(node({ delivery: "direct", status: "done", landing: { state: "left", action: "join" } }), "main")?.mark).toBe("branch");
 });
@@ -53,7 +53,7 @@ it("puts the operator's merge before the destination as where it stands, and not
 
 it("draws an outside node as `↗#n` lit by GitHub's answer or `↗ <branch>`, to the base it goes to, merged once it is done (D-52, B55)", () => {
   const outside = { kind: "wait" as const, delivery: null, branch: null };
-  expect(branchLine(node({ ...outside, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }), "main")).toEqual({ mark: "pending", pr: { number: 1232, outside: true, more: 0 }, branch: null, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
+  expect(branchLine(node({ ...outside, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }), "main")).toEqual({ mark: "pending", pr: { number: 1232, outside: true, more: 0 }, branch: null, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null, failed: null });
   expect(branchLine(node({ ...outside, status: "done", external: { pr: 1232 }, outside: { base: "release/1.2" } }), "main")).toMatchObject({ mark: "merged", to: { kind: "branch", name: "release/1.2", elsewhere: true } });
   expect(branchLine(node({ ...outside, external: { branch: "vendor/sdk" }, outside: { base: "develop" } }), "main")).toMatchObject({ mark: "branch", branch: { name: "vendor/sdk", outside: true }, to: { kind: "branch", name: "develop", elsewhere: true } });
 });
@@ -111,8 +111,15 @@ it("says what a waiting node waits on, the progress of a mission and how the wai
   expect(waitLineWords(ci!, t())).toBe("↗!1232 · CI 끝나면");
   expect(waitLineWords(waitLine(waiting({ wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } }))!, t())).toBe("mission-91 · 끝 2/7");
   expect(waitLineWords(waitLine(waiting({ wait_target: { node: { mission: "mission-91", node: "gitlab-write" } }, wait_outcome: "node_dropped" }))!, t())).toBe("mission-91 · gitlab-write · 노드 빠짐");
-  // A pull request's merge and a branch keep their branch line; a node of another kind has no wait line.
+  // A pull request's merge and a branch keep their branch line, which ends in how the wait failed as the wait line does
+  // (B4, D-17; with-hide/hide#2848 verifier finding 3); a node of another kind has no wait line.
   expect(waitLine(waiting({ wait_target: { pr: 1232 }, external: { pr: 1232 } }))).toBeNull();
+  const closed = branchLine(waiting({ wait_target: { pr: 2528 }, external: { pr: 2528 }, outside: { base: "main", state: "closed" }, wait_outcome: "closed_unmerged" }), "main");
+  expect(closed).toMatchObject({ mark: "closed", pr: { number: 2528, outside: true }, to: { kind: "branch", name: "main" }, failed: "closed_unmerged" });
+  expect(branchLineWords(closed!, t())).toBe(`↗#${2528} → main · 닫힘 · 머지 없이 닫힘`);
+  expect(branchLine(waiting({ wait_target: { branch: "vendor/sdk" }, external: { branch: "vendor/sdk" }, outside: { base: "main" }, wait_outcome: "closed_unmerged" }), "main")?.failed).toBe("closed_unmerged");
+  expect(branchLine(waiting({ wait_target: { pr: 2528 }, external: { pr: 2528 }, wait_outcome: "expired" }), "main")?.failed).toBeNull();
+  expect(branchLine(node({ pr: 7 }), "main")?.failed).toBeNull();
   expect(waitLine(node({ wait_target: { ci: 1 } }))).toBeNull();
   // An expired wait says so in the head, not on the line.
   expect(waitLine(waiting({ wait_target: { ci: 1232 }, wait_outcome: "expired" }))?.failed).toBeNull();

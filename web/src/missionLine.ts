@@ -103,7 +103,22 @@ export type BranchLine = {
   to: LineTo | null;
   /** The operator's merge, a person before the destination, by where it stands (D-53). */
   person: MissionMergeStep | null;
+  /** How a waiting node failed, after the line (PRD core-wait D-17); null for any other node. */
+  failed: WaitFailure | null;
 };
+
+/** How a waiting node failed; a passed deadline is its head's `기한 지남`, not its line's (D-15, D-17). */
+export type WaitFailure = Exclude<MissionWaitOutcome, "expired">;
+
+/** How a waiting node failed, whatever it waits on (PRD core-wait D-17, B4): the one reason its line ends in, the branch line's and the wait line's alike. */
+export function waitFailure(node: Pick<LineNode, "kind" | "wait_outcome">): WaitFailure | null {
+  return node.kind === "wait" && node.wait_outcome && node.wait_outcome !== "expired" ? node.wait_outcome : null;
+}
+
+/** That reason in words, as the line draws it after `·`. */
+export function waitFailureWords(failed: WaitFailure, t: TFunction<"translation">): string {
+  return t(`mission.wait.failed.${failed}`);
+}
 
 /**
  * A code node's branch line, or null for a node that changes no code.
@@ -112,10 +127,10 @@ export type BranchLine = {
  */
 export function branchLine(node: LineNode, destination: string | null): BranchLine | null {
   if (!changesCode(node) || waitLine(node)) return null;
-  return node.kind === "wait" ? outsideLine(node, destination) : ownLine(node, destination);
+  return { ...(node.kind === "wait" ? outsideLine(node, destination) : ownLine(node, destination)), failed: waitFailure(node) };
 }
 
-function ownLine(node: LineNode, destination: string | null): BranchLine {
+function ownLine(node: LineNode, destination: string | null): Omit<BranchLine, "failed"> {
   const byPr = node.delivery !== "direct" || node.pr != null;
   const person = node.merge?.by === "operator" ? node.merge.state : null;
   const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
@@ -130,7 +145,7 @@ function ownLine(node: LineNode, destination: string | null): BranchLine {
 }
 
 /** An outside node (D-07, D-52): `↗#n → <its base>` lit by the state GitHub last answered, or `↗ <branch> → <the default branch>`; done is the result in, whatever else was read. */
-function outsideLine(node: LineNode, destination: string | null): BranchLine {
+function outsideLine(node: LineNode, destination: string | null): Omit<BranchLine, "failed"> {
   const done = node.status === "done";
   const to = branchTo(node.outside?.base ?? null, destination);
   const external = node.external;
@@ -147,7 +162,7 @@ function outsideLine(node: LineNode, destination: string | null): BranchLine {
  * whose branch line speaks. The pull request is named as its code host writes
  * it (`#12`, `!12`).
  */
-export type WaitLine = { failed: Exclude<MissionWaitOutcome, "expired"> | null } & (
+export type WaitLine = { failed: WaitFailure | null } & (
   | { kind: "ci"; pr: string; mark: LineMark }
   | { kind: "mission"; mission: string; progress: { done: number; total: number } | null }
   | { kind: "node"; mission: string; node: string }
@@ -156,7 +171,7 @@ export type WaitLine = { failed: Exclude<MissionWaitOutcome, "expired"> | null }
 export function waitLine(node: LineNode): WaitLine | null {
   const target = node.kind === "wait" ? node.wait_target : null;
   if (!target) return null;
-  const failed = node.wait_outcome && node.wait_outcome !== "expired" ? node.wait_outcome : null;
+  const failed = waitFailure(node);
   if ("ci" in target) {
     const mark: LineMark = node.status === "done" ? "merged" : (node.outside?.state ?? "pull");
     return { kind: "ci", pr: node.wait_label ?? `#${target.ci}`, mark, failed };
@@ -169,7 +184,7 @@ export function waitLine(node: LineNode): WaitLine | null {
 /** The wait line in words, for the card's name and its hover. */
 export function waitLineWords(line: WaitLine, t: TFunction<"translation">): string {
   const head = line.kind === "ci" ? [`↗${line.pr}`, t("mission.wait.ci")] : line.kind === "mission" ? [line.mission, line.progress ? t("mission.wait.progress", { done: String(line.progress.done), total: String(line.progress.total) }) : null] : [line.mission, line.node];
-  return [...head, line.failed ? t(`mission.wait.failed.${line.failed}`) : null].filter(Boolean).join(" · ");
+  return [...head, line.failed ? waitFailureWords(line.failed, t) : null].filter(Boolean).join(" · ");
 }
 
 /** The day a waiting node's deadline shows from (D-15): under it the head says the hours left. */
@@ -240,7 +255,7 @@ export function branchLineWords(line: BranchLine, t: TFunction<"translation">): 
   const path = [...head, line.to ? `→ ${lineToWords(line.to, t)}` : null].filter(Boolean).join(" ");
   const state = line.mark in PR_LOOK ? t(PR_LOOK[line.mark as PrState].word) : null;
   const person = line.person ? [t("mission.merge.mine"), line.person === "due" ? t("mission.merge.turn") : line.person === "merged" ? t("mission.merge.merged") : null] : [];
-  return [path, line.direct ? t("mission.foot.planDirect") : null, state, ...person].filter(Boolean).join(" · ");
+  return [path, line.direct ? t("mission.foot.planDirect") : null, state, ...person, line.failed ? waitFailureWords(line.failed, t) : null].filter(Boolean).join(" · ");
 }
 
 /** The result line in words, as the card draws it. */
