@@ -187,7 +187,7 @@
     "example": "hide device list"
   },
   "device add": {
-    "line": "Registers a computer you reach over SSH, by its Host name in ~/.ssh/config, as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
+    "line": "Connects another computer: a link that computer's hide device share printed pairs the two Hides once both screens show the same words, and an SSH Host name from ~/.ssh/config registers a device whose folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
     "example": "hide device add mini --name 'Mac mini'"
   },
   "device remove": {
@@ -547,5 +547,49 @@
   "memory recheck": {
     "line": "Asks for a Project Memory card to be checked again, and keeps it out of agents' prompts until that check ends; it needs Hide AI on, and an agent may ask only for a card its prompt gave it (the starting list counts, memory show alone does not).",
     "example": "hide memory recheck m508"
+  },
+  "device share": {
+    "line": "Prints a link another computer that runs Hide pastes to connect to this one, then waits until that computer is let in or the link ends; the link works once, lasts nine minutes and ends with this command. Run it in a terminal outside Hide's panes.",
+    "example": "hide device share"
+  },
+  "device allow": {
+    "line": "Answers the computers waiting for this computer's operator to let them in, on a computer with no window to answer in. Run it in a terminal outside Hide's panes.",
+    "example": "hide device allow"
+  },
+  "device pause": {
+    "line": "Pauses the connection with a paired computer without forgetting it: --outgoing stops this computer opening that one, --incoming stops that one opening this one, and --both stops both.",
+    "example": "hide device pause mac-mini --both"
+  },
+  "device resume": {
+    "line": "Resumes a paused connection with a paired computer, in the direction --outgoing, --incoming or --both names. Run it in a terminal outside Hide's panes.",
+    "example": "hide device resume mac-mini --both"
+  },
+  "device request": {
+    "line": "Asks a paired computer that opens this one to let this computer open it too; that computer's operator answers. Run it in a terminal outside Hide's panes.",
+    "example": "hide device request mac-mini"
+  },
+  "device update": {
+    "line": "Asks a paired computer whose Hide is too old to connect to update itself; its app updates to the official release and connects again.",
+    "example": "hide device update mac-mini"
+  },
+  "device address": {
+    "line": "Saves an address to try first for a paired computer and dials again; it does not say whether the address is reachable, the path in hide device list does.",
+    "example": "hide device address mac-mini 192.168.1.20:50569"
+  },
+  "device switch": {
+    "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals: --install starts a Hide there when that machine runs none, and --own-folder goes on after another computer switched the device first.",
+    "example": "hide device switch mini --install"
+  },
+  "phone pair": {
+    "line": "Draws the pairing QR in this terminal, turning Mobile on when it is off, and waits until a phone scans it; for a computer with no window. Run it in a terminal outside Hide's panes.",
+    "example": "hide phone pair"
+  },
+  "phone list": {
+    "line": "Lists the phones paired with this computer, with each one's name and id.",
+    "example": "hide phone list"
+  },
+  "phone remove": {
+    "line": "Disconnects a paired phone, by its name or the id hide phone list shows.",
+    "example": "hide phone remove 'My iPhone'"
   }
 }

@@ -1,10 +1,8 @@
-import { CrownIcon, MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon } from "lucide-react";
 import type { Actions } from "../actions";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Note, Row, Status } from "../components/settings-rows";
-import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -12,7 +10,7 @@ import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { switchOffered } from "../deviceSwitch";
-import { deviceConnectOffered, ownWindow } from "../pairing";
+import { ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
 import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
@@ -37,7 +35,7 @@ export type DeviceRowHandlers = {
  * window's own machine, whether that machine is a node, whether the core
  * reads it now, and the core machine's name for the node's menu.
  */
-export type DeviceRowPlace = { name: string; core: boolean; own: boolean; windowIsNode: boolean; coreName: string };
+export type DeviceRowPlace = { name: string; own: boolean; windowIsNode: boolean; coreName: string };
 
 /**
  * One device (PRD settings-cleanup B54, B55): its name, alias, platform
@@ -56,8 +54,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
   // A helper device says it is on the old connection and offers the switch
   // (B35), from this computer's own window only (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
-  const switchable = ownScreen && switchOffered(device, deviceConnect);
+  const switchable = ownScreen && switchOffered(device);
   return (
     <Row
       data-device-row={device.id}
@@ -65,14 +62,6 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
         <span className="flex min-w-0 flex-col">
           <span className="flex min-w-0 flex-wrap items-center gap-xs">
             <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
-            {place.core ? (
-              <Hint label={t("coreLink.runs")}>
-                <Badge variant="outline" data-device-core={device.id}>
-                  <CrownIcon aria-hidden="true" />
-                  {t("coreLink.badge")}
-                </Badge>
-              </Hint>
-            ) : null}
           </span>
           {subtitle ? (
             <span className="break-all font-mono text-caption text-muted-foreground" data-device-subtitle={device.id}>

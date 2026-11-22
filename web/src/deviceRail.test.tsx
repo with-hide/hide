@@ -46,15 +46,9 @@ describe("which list fills the sidebar (quick device-rail-badges B3)", () => {
 });
 
 describe("a rail tile (quick device-rail-slack)", () => {
-  const local: Tile = { id: "local", label: "This Mac", icon: "local", core: false };
-  const mini: Tile = { id: "mini", label: "Mac mini", icon: "remote", core: false };
-  const off: Tile = { id: "build-box", label: OFF.label, icon: "remote", core: false };
-
-  it("draws no crown on any tile, the core's machine included (PRD device-connect-iroh D-80)", () => {
-    const html = view({ tile: { ...mini, core: true }, counts: { needs_you: 3, done: 0 } });
-    expect(html).not.toContain("data-rail-crown");
-    expect(marks(html)).toEqual([["needs_you", "3"]]);
-  });
+  const local: Tile = { id: "local", label: "This Mac", icon: "local" };
+  const mini: Tile = { id: "mini", label: "Mac mini", icon: "remote" };
+  const off: Tile = { id: "build-box", label: OFF.label, icon: "remote" };
 
   it("is a focusable button whose name carries the device and each count it marks (B4)", () => {
     const html = view({ tile: mini, counts: { needs_you: 2, done: 1 } });
@@ -65,7 +59,7 @@ describe("a rail tile (quick device-rail-slack)", () => {
 
   // PRD wsl-device B5, D-20: a WSL distribution's tile draws its name's letters and says where it is.
   it("letters a WSL distribution's tile from its name and names it with where it is, never Remote", () => {
-    const wsl: Tile = { id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", icon: "remote", core: false, place: "This PC" };
+    const wsl: Tile = { id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", icon: "remote", place: "This PC" };
     const html = view({ tile: wsl, counts: { needs_you: 1, done: 0 } });
     expect(html).toMatch(/data-rail-glyph="true"[^>]*>WU</);
     expect(tile(html)).toContain('aria-label="WSL Ubuntu · This PC, Needs You 1"');

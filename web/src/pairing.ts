@@ -126,16 +126,6 @@ export function ownWindow(pairing: PairingView | null | undefined): boolean {
   return pairing != null;
 }
 
-/**
- * Whether this build offers connections between two Hides, as hided's
- * hello (`daemon` frame) says: off in every build until that feature
- * ships, and then Settings > Devices shows no pairing and adds a machine
- * the way it did before pairing. The one place the window reads it.
- */
-export function deviceConnectOffered(daemon: { device_connect?: boolean } | null | undefined): boolean {
-  return daemon?.device_connect === true;
-}
-
 /** Every machine this one is paired with, in either direction. */
 export function pairedMachines(rest: SnapshotRest | null | undefined): readonly Peer[] {
   return rest?.navigator?.peers ?? NONE;
