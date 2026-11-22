@@ -167,7 +167,7 @@ impl Fixture {
 
     /// Bot `name` with `key` asks under request id `id`, and the operator
     /// approves it in `mode`; its connection's id.
-    fn connect_as(&self, name: &str, key: &str, id: &str, mode: Mode) -> String {
+    pub(super) fn connect_as(&self, name: &str, key: &str, id: &str, mode: Mode) -> String {
         let mut guard = self.runtime.lock().unwrap();
         let (answer, _) = guard.access_call(Call::Request {
             name: name.into(),
@@ -204,7 +204,7 @@ impl Fixture {
         )
     }
 
-    fn tool(&self, connection: &str, command: Command) -> Result<Value, String> {
+    pub(super) fn tool(&self, connection: &str, command: Command) -> Result<Value, String> {
         self.prepare_tool(connection, None, command)?
             .run(Duration::from_secs(5))
     }
