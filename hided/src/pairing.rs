@@ -2124,7 +2124,7 @@ mod tests {
             ..machine(false, false)
         };
         assert!(pairing_finished(&[], &[machine(false, true)]));
-        assert!(!pairing_finished(&[], &[confirming.clone()]));
+        assert!(!pairing_finished(&[], std::slice::from_ref(&confirming)));
         assert!(pairing_finished(&[confirming], &[machine(true, false)]));
         let paused = PeerMachine {
             opens: Some(PeerOpens::Paused),

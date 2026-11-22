@@ -105,7 +105,7 @@ fn put_in(
         .filter(crate::state_file::DaemonState::is_proven_running);
     match put {
         Put::Replace => agents.install(&agent, &marker(state_dir), home, &stop),
-        Put::Adopt { .. } => agents.adopt(&agent, &marker(state_dir), home, &stop),
+        Put::Adopt => agents.adopt(&agent, &marker(state_dir), home, &stop),
     }
     .map_err(|error| format!("the login item {label}: {error}"))?;
     if let Some(previous) = previous
