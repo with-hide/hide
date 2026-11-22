@@ -1320,6 +1320,26 @@ class WindowsCheckLane(unittest.TestCase):
         self.assertEqual([name for name, job in self.jobs.items() if "TEST_TARGETS" in job.get("env", {})], ["tests"])
         self.assertNotIn("$TEST_TARGETS", self.commands("compile") + self.commands("web"))
 
+    def test_a_failed_setup_step_stops_no_check_the_one_job_ran_after_it(self):
+        # A failed setup step stops no check the one job would have run after it:
+        # the test build, the web setup and the install run unless cancelled,
+        # and every check runs on what it needs (the build, the install).
+        conditions = {(name, step.get("name") or step.get("uses")): step.get("if")
+                      for name, job in self.jobs.items() for step in job["steps"]}
+        for key in (("tests", "Build the Windows test binaries"), ("web", "pnpm/action-setup@v6"),
+                    ("web", "actions/setup-node@v4"), ("web", "Install dependencies")):
+            with self.subTest(step=key):
+                self.assertEqual(conditions[key], "${{ !cancelled() }}")
+        test_steps = [step for step in self.jobs["tests"]["steps"] if "$TEST_TARGETS -E" in step.get("run", "")]
+        self.assertEqual(len(test_steps), 28)
+        for step in test_steps:
+            with self.subTest(step=step["name"][:60]):
+                self.assertEqual(step.get("if"), "${{ !cancelled() && steps.tests.outcome == 'success' }}")
+        for step in self.jobs["web"]["steps"]:
+            if "verify-web.sh" in step.get("run", "") and " test" in step["run"]:
+                with self.subTest(step=step["name"]):
+                    self.assertEqual(step.get("if"), "${{ !cancelled() && steps.web-deps.outcome == 'success' }}")
+
 
 def pr_plan(*paths, status="M"):
     """A pull request's plan, with its macOS and Windows jobs decided as `plan` decides them."""

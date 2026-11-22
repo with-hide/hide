@@ -111,6 +111,8 @@ jobs:
         run: bash scripts/install-nextest.sh
       - name: Build the Windows test binaries
         id: tests
+        # Built whatever a setup step before it answered, as the one job did.
+        if: ${{ !cancelled() }}
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
       - name: hided's pane bootstrap, external tools, file opener, root identity, its roles, a paired machine's login item, the device node's pane service, the CLI's daemon start, the core update journey and end-to-end tests
@@ -395,16 +397,21 @@ jobs:
       - name: Reuse Windows fixture programs
         uses: ./.github/actions/fixture-shims
         timeout-minutes: 5
+      # Each runs whatever the fixture programs' step answered, as in the one job:
+      # only a failed install keeps the suites from running.
       - uses: pnpm/action-setup@v6
+        if: ${{ !cancelled() }}
         with:
           version: 10
       - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         id: web-deps
+        if: ${{ !cancelled() }}
         run: bash scripts/verify-web.sh install --ignore-scripts
       # The relay WebAssembly's binding tool, which the web scripts build with.
       - uses: ./.github/actions/relay-tools
