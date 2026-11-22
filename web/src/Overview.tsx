@@ -4,6 +4,7 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
+import { BotFace } from "./components/bot-mark";
 import { deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram } from "./devices";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -85,11 +86,11 @@ export function useOverviewTool(): ToolCell | null {
   return picked === null ? tool : null;
 }
 
-/** A tool's cell in place of the device switch: its letters, its name and that it is an external tool. */
+/** A bot's cell in place of the device switch: its owl, its name and that it is a bot. */
 function ToolLabelChip({ name }: { name: string }) {
   const { t } = useInterfaceTranslation();
   return <span className="flex min-w-0 items-center gap-xs text-caption" data-overview-tool-name="true">
-    <span aria-hidden="true" className="flex size-(--size-icon) shrink-0 items-center justify-center rounded-full border border-border text-micro font-semibold text-muted-foreground">{tileMonogram(name)}</span>
+    <BotFace name={name} size="line" />
     <span className="truncate font-medium">{name}</span>
     <span className="shrink-0 text-micro text-muted-foreground">{t("devices.rail.tool")}</span>
   </span>;

@@ -100,7 +100,7 @@ describe("the table (B2-B5)", () => {
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
     expect(q("[data-mission-screen-device-name]")?.textContent).toBe("· nightly");
     // Its turn waits on the tool, so the group is named for the tool and nothing takes the decision colour.
-    expect(q('[data-mission-group="turn"]')?.getAttribute("aria-label")).toBe("Tool's turn 1");
+    expect(q('[data-mission-group="turn"]')?.getAttribute("aria-label")).toBe("Bot's turn 1");
     expect(q('[data-mission-group="turn"] h2')?.className).not.toContain("text-mission-hold");
     // Inside the tool's cell every mission is the tool's, so neither the row nor the opened mission names it again.
     expect(q("[data-mission-row] [data-tool-mark]")).toBeNull();

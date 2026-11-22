@@ -1168,8 +1168,10 @@ pub const UNBOUND: &[&str] = &[
     "core-move.json",
     "core-move-abandoned.json",
     "core-handover.json",
-    "core-handover.lock",
     "core-placement.json",
+    // The lock an update of the core holds
+    // (`hide_kit::layout::core_update_lock`).
+    "core-handover.lock",
 ];
 
 /// `node.json`: the node that owns every unqualified key in this folder,

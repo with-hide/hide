@@ -489,6 +489,14 @@ pub fn keep_alive(state_dir: &Path) -> PathBuf {
     state_dir.join("keep-alive")
 }
 
+/// The note that a desktop app opened the core on `state_dir`, with the
+/// package it ran from: from then on the app updates that core, and a
+/// paired machine's raise leaves it alone (`crate::app`, PRD
+/// device-connect-iroh B23).
+pub fn app_note(state_dir: &Path) -> PathBuf {
+    state_dir.join("app.json")
+}
+
 /// The install root of the builds a paired machine's login item runs its
 /// core from, one version folder each (`<root>/<version>/hided`), so an app
 /// update never replaces the program under a running core
@@ -503,6 +511,15 @@ pub fn core_root(home: &Path) -> PathBuf {
 /// (`hided::moved_core`).
 pub fn core_handover(state_dir: &Path) -> PathBuf {
     state_dir.join("core-handover.json")
+}
+
+/// The lock one update of the folder's core holds for its whole length
+/// (`hided::core_update`), so two updates never overlap. It is named for
+/// the record above, whose lock it was while a core could be moved: the
+/// name stays, so an update by a build that still has the move and one by
+/// a build that does not wait for each other.
+pub fn core_update_lock(state_dir: &Path) -> PathBuf {
+    state_dir.join("core-handover.lock")
 }
 
 /// The login item that runs the core on `state_dir` (`hided::login_item`),

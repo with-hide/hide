@@ -29,15 +29,15 @@ use std::time::{Duration, Instant};
 
 /// The verbs every build offers, which the agent guide lists. The verbs
 /// that pair with another Hide (`share`, `allow`, `pause`, `resume`,
-/// `request`, `address`, `switch`, `add <link>` and a direction of
-/// `remove`) are
+/// `request`, `update`, `address`, `switch`, `add <link>` and a direction
+/// of `remove`) are
 /// listed only where the build offers connections between two Hides
 /// ([`usage`]), and their contract marks them hidden
 /// (`cli_contract::PAIRING_ONLY`), until that feature ships.
 pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id or ssh alias> [--json]\nhide device retry <device id or ssh alias> [--wait] [--json]";
 
 /// Every verb, for a build that offers connections between two Hides.
-const PAIRING_USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
+const PAIRING_USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
 
 /// What `hide --help` and a wrong `hide device` print: the pairing verbs
 /// only where `device_connect` (`env::Env::device_connect`) is on.
@@ -120,6 +120,10 @@ pub enum Verb {
     Request {
         device: String,
     },
+    /// Asks a paired machine whose Hide is too old to connect to update.
+    Update {
+        device: String,
+    },
     Address {
         device: String,
         address: String,
@@ -164,6 +168,11 @@ pub enum Verb {
     ProjectsSsh {
         projects: Vec<String>,
     },
+    /// What the PC of a WSL distribution runs in it through `wsl.exe` to
+    /// reach its core (D-27): this command's input and output become the
+    /// carrier of the connection between the two; not a command a person
+    /// types.
+    Carry,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -281,6 +290,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("request"), [device]) => Verb::Request {
             device: named(device)?,
         },
+        (Some("update"), [device]) => Verb::Update {
+            device: named(device)?,
+        },
         (Some("address"), [device, address]) => {
             if address.parse::<std::net::SocketAddr>().is_err() {
                 return Err(USAGE.to_owned());
@@ -299,6 +311,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             own_folder,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
+        (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
         (Some("accept-ssh"), []) => match (request, key, device, name) {
             (Some(request), Some(key), Some(device), Some(name)) => Verb::AcceptSsh {
                 request,
@@ -325,6 +338,16 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 }
 
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
+    // A carrier's output is the connection's bytes: nothing else is ever
+    // printed there, and a refusal is the code this command ends with.
+    if cli.verb == Verb::Carry {
+        // A build that does not offer connections between two Hides
+        // carries none (`env::Env::device_connect`).
+        if !env.device_connect {
+            return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
+        }
+        return carry(env);
+    }
     let (code, message, device) = match answer(env, cli) {
         Ok(Printed::Done) => return Ok(()),
         Ok(Printed::Value(value, lines)) => {
@@ -448,6 +471,16 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 ),
             ))
         }
+        Verb::Update { device } => {
+            operators(env)?;
+            let value = pairing(env, json!({"verb":"update","device":device}))?;
+            Ok(Printed::Value(
+                value,
+                format!(
+                    "Asked {device} to update its Hide. It installs the official release and connects again; hide device list shows when it has.\n"
+                ),
+            ))
+        }
         Verb::Address { device, address } => {
             operators(env)?;
             let value = pairing(
@@ -509,6 +542,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             };
             Ok(Printed::Value(answer, lines))
         }
+        Verb::Carry => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
             let look = |core: bool| {
@@ -651,6 +685,60 @@ fn add_projects(env: &Env, projects: &[String], over: Instant) -> usize {
         }
     }
     added
+}
+
+/// Joins this command's input and output to this account's core, as the
+/// carrier of the connection the caller's core makes to it (D-27). It ends
+/// when either end closes.
+///
+/// A core this account ran before and that is not running is started
+/// first, as a login starts it: a distribution with no systemd has nothing
+/// else that does, so its core lives while the distribution runs. An
+/// account that never ran a core is left as it is.
+fn carry(env: &Env) -> Result<(), String> {
+    use std::io::Read as _;
+    if env.pane_id.is_some() || env.access.is_some() {
+        return Err("device_from_pane".to_owned());
+    }
+    use crate::workspace_cli::NoCarrier;
+    let stream = match crate::workspace_cli::carrier(env) {
+        Ok(stream) => stream,
+        Err(NoCarrier::NoDaemon(_))
+            if hide_kit::layout::daemon_lock(&env.state_dir).exists()
+                && crate::cli::core_started(env) =>
+        {
+            crate::workspace_cli::carrier(env).map_err(NoCarrier::code)?
+        }
+        Err(refused) => return Err(refused.code()),
+    };
+    let mut to_core = stream.duplicate();
+    let end = stream.shutdown_handle();
+    // The caller's bytes to the core. When the caller's end closes the
+    // core's is ended, which ends the other direction below.
+    std::thread::Builder::new()
+        .name("carry-in".to_owned())
+        .spawn(move || {
+            let _ = std::io::copy(&mut std::io::stdin().lock(), &mut to_core);
+            end.shutdown();
+        })
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    let mut from_core = stream;
+    let mut output = std::io::stdout().lock();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        match from_core.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let written = output.write_all(&buffer[..read]);
+                if written.and_then(|()| output.flush()).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    // The thread that still waits for the caller's input ends with this
+    // process.
+    Ok(())
 }
 
 enum Refused {
@@ -1165,15 +1253,30 @@ fn peer_line(peer: &Value) -> String {
     if let Some(reason) = peer["reason"].as_str() {
         line.push_str(&format!("  reason: {}\n", reason.replace('_', " ")));
     }
-    if let Some(update) = peer["update"].as_str() {
-        line.push_str(&format!(
-            "  update needed: {}\n",
-            if update == "here" {
-                "this machine"
-            } else {
-                "that machine"
+    match peer["update"].as_str() {
+        Some("here") => line.push_str("  update needed: this machine\n"),
+        Some("here_asked") => line.push_str(
+            "  update needed: this machine, and that machine asked for it; open Hide here to update\n",
+        ),
+        Some("there") => line.push_str(
+            "  update needed: that machine; hide device update asks it to update when this machine opens it\n",
+        ),
+        Some("there_asked") => {
+            line.push_str("  update needed: that machine, which this machine asked to update\n")
+        }
+        // The Hide this machine started there, kept at this machine's
+        // build (B23).
+        Some("updating") => line.push_str("  its Hide is being updated to this machine's build\n"),
+        Some(failed) if failed.starts_with("update_") => line.push_str(&format!(
+            "  its Hide was not updated to this machine's build ({}); hide device retry asks again\n",
+            match failed {
+                "update_not_reached" => "this machine's login did not reach it",
+                "update_rolled_back" => "the new build did not start there, and the one before runs",
+                "update_busy" => "another update runs there now",
+                _ => "the diagnostic log says why",
             }
-        ));
+        )),
+        _ => {}
     }
     line
 }
@@ -1237,7 +1340,7 @@ mod tests {
     #[test]
     fn the_usage_lists_the_pairing_verbs_only_with_the_switch() {
         for verb in [
-            "share", "allow", "pause", "resume", "request", "address", "switch",
+            "share", "allow", "pause", "resume", "request", "update", "address", "switch",
         ] {
             let line = format!("hide device {verb} ");
             assert!(usage(true).contains(&line), "{verb}");
@@ -1266,6 +1369,7 @@ mod tests {
             &["resume", "studio"],
             &["remove", "studio", "--outgoing"],
             &["request", "studio"],
+            &["update", "studio"],
             &["address", "studio", "192.0.2.7:7842"],
             &["switch", "studio"],
             &["projects-ssh", "--project", "/home/me/app"],
@@ -1291,6 +1395,12 @@ mod tests {
                 _ => panic!("{words:?} was not refused"),
             }
         }
+        // The carrier of a connection to this account's core is refused
+        // with the code alone: its output is the connection's bytes.
+        assert_eq!(
+            run(&env, &parse_words(&["carry"]).unwrap()),
+            Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned())
+        );
     }
 
     /// `projects-ssh` takes each folder the asking machine had registered
@@ -1335,6 +1445,16 @@ mod tests {
             many.extend(["--project", "/home/me/app"]);
         }
         assert!(parse_words(&many).is_err());
+    }
+
+    /// `carry` is run by a machine and writes a connection's bytes: it
+    /// takes no word, and no `--json` that would promise an answer line.
+    #[test]
+    fn carry_takes_nothing_and_answers_no_json() {
+        assert_eq!(parse_words(&["carry"]).unwrap().verb, Verb::Carry);
+        assert!(parse_words(&["carry", "Ubuntu"]).is_err());
+        assert!(parse_words(&["carry", "--json"]).is_err());
+        assert!(parse_words(&["carry", "--wait"]).is_err());
     }
 
     #[test]

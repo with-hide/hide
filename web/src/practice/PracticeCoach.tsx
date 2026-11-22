@@ -12,7 +12,7 @@ import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import { pasteText, terminalFor } from "../terminals";
-import { useUiStore } from "../ui";
+import { useUiStore, type Overlay } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { FIRST_CHAPTER } from "./channel";
 import { COACH_CSS } from "./coachStyle";
@@ -300,7 +300,9 @@ const KEYS_MARK = "\u0001";
 const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
 /** The shell's right-click menus while one is open: the bubble moves beside one it would cover. */
 const OPEN_MENUS = '[role="menu"]';
-const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
+/** Whether a palette the shell opened is up; Settings is a page the guide walks through, so it keeps its bubble, button and keys there. */
+const paletteOpen = (overlay: Overlay) => overlay !== "none" && overlay !== "settings";
+const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => paletteOpen(state.overlay) || state.cycle !== null;
 
 /** The palette field a step types into, or null for a step that types nowhere or into a terminal. */
 function fieldOfStep(step: PracticeStep): string | null {
@@ -558,7 +560,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, o
       // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);
-      const open = useUiStore.getState().overlay !== "none";
+      const open = paletteOpen(useUiStore.getState().overlay);
       // While the coach is still typing into the field, it holds only part of the words: ⏎ there would open the wrong row, so it waits.
       const typing = playing.current && playing.current !== step ? fieldOfStep(playing.current) : null;
       if (open && event.key === "Enter" && typing && !wordsIn(typing, playing.current!)) {

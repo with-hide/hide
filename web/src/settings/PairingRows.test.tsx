@@ -88,6 +88,20 @@ it("lists a paired machine with its state, its direction and the one action its 
   await unmount();
 });
 
+it("offers to update a machine too old to connect only from the computer that opens it (B22)", async () => {
+  const older = peer({ connected: false, path: null, update: "there" });
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active", connected: false, path: null, update: "there" });
+  const { q, press, events, unmount } = await mount({ ...idle, requests: [] }, [older, guest]);
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Update needed on that computer");
+  expect(q('[data-peer-update="windows-pc"]')?.textContent).toBe("Update Windows PC");
+  // The computer that only opens this one is told, and asks for nothing.
+  expect(q('[data-peer-row="macbook"]')?.textContent).toContain("Update needed on that computer");
+  expect(q('[data-peer-update="macbook"]')).toBeNull();
+  await press('[data-peer-update="windows-pc"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_update", payload: { device: older.key } });
+  await unmount();
+});
+
 it("acts on the row that was pressed when two machines say one device id", async () => {
   const first = peer({ key: "11".repeat(32), name: "Office", connected: false, path: null });
   const second = peer({ key: "22".repeat(32), name: "Imposter", connected: false, path: null });
@@ -281,17 +295,20 @@ it("shows no firewall line where the host keeps no rules", async () => {
 });
 
 it("says under a machine's row what the Hide started there over SSH still needs, with its command (B30)", async () => {
-  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
+  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" }), peer({ key: "12".repeat(32), device_id: "wsl-ubuntu", name: "WSL Ubuntu" })];
   const devices: Partial<Device>[] = [
     { id: "build-box", kind: "remote", needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } },
     { id: "mac-mini", kind: "remote", needs: { kind: "auto_login" } },
     { id: "laptop", kind: "remote" },
+    { id: "wsl-ubuntu", kind: "remote", needs: { kind: "open_distribution" } },
   ];
   const { q, unmount } = await mount(idle, peers, [], devices);
   const linger = q('[data-peer-row="build-box"] [data-device-needs="build-box:linger"]');
   expect(linger?.textContent).toContain("Needs sudo");
   expect(linger?.querySelector("code")?.textContent).toBe("sudo loginctl enable-linger hy");
   expect(q('[data-peer-row="mac-mini"] [data-device-needs="mac-mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
+  // A WSL distribution with no systemd says when it has to be opened again (B43).
+  expect(q('[data-peer-row="wsl-ubuntu"] [data-device-needs="wsl-ubuntu:open_distribution"]')?.textContent).toBe("After Windows restarts, open this distribution again");
   // A machine whose Hide needs nothing has no line.
   expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
   await unmount();

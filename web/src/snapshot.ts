@@ -2222,17 +2222,18 @@ export type Device = {
   switchable?: boolean;
   /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
   not_carried?: number | null;
-  /** Added over SSH to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
+  /** Added over SSH or as a WSL distribution to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
   switch_first?: boolean;
 };
 
 /**
- * What a machine's Hide, started over SSH, needs from the operator to stay
- * reachable with no one at it (`contracts/snapshot-wire-enums.json`:
- * `device_needs`): automatic login on a Mac, or on Linux the `command` an
- * administrator runs there.
+ * What a machine's Hide, reached over SSH or `wsl.exe`, needs from the
+ * operator to stay reachable with no one at it
+ * (`contracts/snapshot-wire-enums.json`: `device_needs`): automatic login on
+ * a Mac, on Linux the `command` an administrator runs there, or a WSL
+ * distribution with no systemd being opened again after Windows restarts.
  */
-export type DeviceNeeds = { kind: "auto_login" | "linger"; command?: string | null };
+export type DeviceNeeds = { kind: "auto_login" | "linger" | "open_distribution"; command?: string | null };
 
 /**
  * A helper device's switch to the connection of the Hide on its machine
@@ -3900,7 +3901,7 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
-    /** The device the last Add over SSH did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
+    /** The device the last Add over SSH or of a WSL distribution did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
     device_not_added?: { label: string; reason: string } | null;
     /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
     peers?: import("./pairing").Peer[];

@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh" | "switch";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
@@ -86,9 +86,28 @@ export type Peer = {
   connected: boolean;
   path?: "direct" | "relay" | "local" | null;
   reason?: "relay_unreachable" | "relay_monthly_limit" | null;
-  /** Which side must update before the two connect. */
-  update?: "here" | "there" | null;
+  /**
+   * Which side must update before the two connect, or where this machine's
+   * update of the Hide it started there stands (B23).
+   */
+  update?: "here" | "there" | "here_asked" | "there_asked" | "updating" | "update_not_reached" | "update_rolled_back" | "update_busy" | "update_failed" | null;
 };
+
+/** Why this machine's update of the Hide it started on `peer` did not happen; none when it did not fail. */
+function updateFailure(update: Peer["update"]): MessageKey | null {
+  switch (update) {
+    case "update_not_reached":
+      return "pairing.update.notReached";
+    case "update_rolled_back":
+      return "pairing.update.rolledBack";
+    case "update_busy":
+      return "pairing.update.busy";
+    case "update_failed":
+      return "pairing.update.failed";
+    default:
+      return null;
+  }
+}
 
 export type Direction = "outgoing" | "incoming";
 
@@ -167,7 +186,7 @@ export function directionKey(peer: Peer): MessageKey {
 }
 
 /** What the row can do about its state: nothing, or the one action its line offers. */
-export type PeerAction = "retry" | "resume_outgoing" | "resume_incoming" | "remove_outgoing" | null;
+export type PeerAction = "retry" | "resume_outgoing" | "resume_incoming" | "remove_outgoing" | "update_there" | null;
 
 /**
  * A paired machine's one state line (B21, B25, B27): the state the operator
@@ -175,8 +194,19 @@ export type PeerAction = "retry" | "resume_outgoing" | "resume_incoming" | "remo
  */
 export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" | "warn"; action: PeerAction; reason: MessageKey | null } {
   const line = (key: MessageKey, tone: "ok" | "muted" | "warn", action: PeerAction = null, reason: MessageKey | null = null) => ({ key, tone, action, reason });
+  // Two Hides too far apart to connect (B22): the older one updates. This
+  // computer's own app does it here, from its notice (`PeerUpdateNotice`)
+  // or because the other computer, which opens this one, asked; the other
+  // computer is asked from here only by a computer that opens it.
   if (peer.update === "here") return line("pairing.state.updateHere", "warn");
-  if (peer.update === "there") return line("pairing.state.updateThere", "warn");
+  if (peer.update === "here_asked") return line("pairing.state.updateHereAsked", "warn");
+  if (peer.update === "there") return line("pairing.state.updateThere", "warn", peer.opens === "active" ? "update_there" : null);
+  if (peer.update === "there_asked") return line("pairing.state.updateThereAsked", "muted");
+  // The Hide this machine started there is this machine's to update: the
+  // row says it is doing so, or why it did not and offers it again (B23).
+  if (peer.update === "updating") return line("pairing.state.updating", "muted");
+  const failed = updateFailure(peer.update);
+  if (failed) return line("pairing.state.updateFailed", "warn", "retry", failed);
   if (peer.opens === "unpaired") return line("pairing.state.unpaired", "warn", "remove_outgoing");
   if (peer.opens === "removing") return line("pairing.state.removing", "warn");
   // A pair with two directions says which one is paused: "paused" beside
@@ -274,6 +304,8 @@ export function refusalKey(reason: string | null | undefined): MessageKey | null
       return "pairing.ssh.notRunning";
     case "ssh_not_reached":
       return "pairing.ssh.notReached";
+    case "wsl_not_reached":
+      return "devices.switch.failed.wslNotReached";
     default:
       return null;
   }

@@ -30,11 +30,13 @@ pub const PAIRING_ONLY: &[&str] = &[
     "pause",
     "resume",
     "request",
+    "update",
     "address",
     "switch",
     "look-ssh",
     "accept-ssh",
     "projects-ssh",
+    "carry",
 ];
 
 /// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
@@ -1271,6 +1273,28 @@ pub const COMMANDS: &[Spec] = &[
             "request_waiting",
         ],
     },
+    // Asks a machine this one opens, whose Hide is too old to connect, to
+    // update itself to the official release.
+    Spec {
+        words: &["device", "update"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "device_ambiguous",
+            "update_not_asked",
+        ],
+    },
     // Names an address a paired machine is tried at first.
     Spec {
         words: &["device", "address"],
@@ -1356,6 +1380,8 @@ pub const COMMANDS: &[Spec] = &[
             "ssh_mac_signed_out",
             "ssh_update_there",
             "ssh_hide_not_running",
+            "wsl_not_reached",
+            "wsl_unavailable",
             "device_already_connected",
         ],
     },
@@ -1372,6 +1398,25 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["device_looked"],
         refusals: &["hide_unavailable", "request_timeout"],
+    },
+    // What the PC of a WSL distribution runs in it through wsl.exe: this
+    // command's input and output become the carrier of the connection to
+    // this account's core. It answers nothing: what it writes is the
+    // connection's bytes, and a refusal is the code it ends with.
+    Spec {
+        words: &["device", "carry"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &[],
+        refusals: &[
+            "device_from_pane",
+            "hide_unavailable",
+            "request_timeout",
+            "peer_unavailable",
+        ],
     },
     // What a machine pairing over SSH or wsl.exe runs on its target, with
     // the request it made: the target saves a grant that opens nothing

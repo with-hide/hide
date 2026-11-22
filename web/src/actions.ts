@@ -1495,19 +1495,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
     },
     /**
-     * Settings (PRD hide-external-control B3, B4, B12, B13; mission-87):
-     * the operator's answer to a bot's request and the mode or disconnect of
-     * a connected one, each one core event; the `access` section shows the
-     * outcome.
+     * Settings › 봇 (PRD hide-external-control B3, B4, B12, B13;
+     * mission-87): the operator's answer to a bot's request, with the mode it
+     * is approved in (its own space or all of Hide), and the mode or
+     * disconnect of a connected one, each one core event; the `access`
+     * section shows the outcome.
      */
-    approveAccess(id: string, mode: import("./snapshot").AccessMode) {
-      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode } });
+    approveAccess(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode: { kind: mode } } });
     },
     refuseAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
     },
-    setAccessMode(id: string, mode: import("./snapshot").AccessMode) {
-      dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode } });
+    setAccessMode(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode: { kind: mode } } });
     },
     revokeAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });
@@ -1718,8 +1719,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Adds this PC's WSL distribution as a device with the same install consent (PRD wsl-device B4); the core names it `WSL <distro>`. */
-    registerWslDevice(distro: string) {
-      dispatch({ schema_version: 2, kind: "register_device", payload: { wsl_distro: distro, host_consent: true } });
+    registerWslDevice(distro: string, options: { switchFirst?: boolean } = {}) {
+      dispatch({ schema_version: 2, kind: "register_device", payload: { wsl_distro: distro, host_consent: true, ...(options.switchFirst ? { switch_first: true } : {}) } });
     },
 
     /** Gives or withdraws the one consent for Hide's helper on a device (PRD S5.5 B50-B52). */

@@ -861,6 +861,31 @@ fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
     );
 }
 
+/// A command runs without the ssh session's variables, as the helper starts
+/// without them: the core a pairing starts with one (`hide connect`) runs on
+/// with what it started with, and a pane of it is on the machine, not in an
+/// ssh session (with-hide/hide#2776).
+#[test]
+fn a_command_runs_without_the_ssh_sessions_variables() {
+    let device = Device::new();
+    let mut pipe = device.connect();
+    device.probe(&mut pipe);
+    for name in SSH_SESSION_VARIABLES {
+        let ran = run(
+            &mut pipe,
+            &words(&["cmd.exe", "/c", &format!("if defined {name} echo {name}")]),
+            1024,
+            soon(),
+        )
+        .unwrap();
+        assert_eq!(
+            (ran.status, String::from_utf8(ran.stdout).unwrap()),
+            (0, String::new()),
+            "{name}"
+        );
+    }
+}
+
 /// A command that exits while a program it started keeps its outputs and
 /// writes past the cap is ended with that program too, so nothing it
 /// started outlives the refusal, and the connection stays in step.

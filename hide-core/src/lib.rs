@@ -123,6 +123,6 @@ pub use model::{
 };
 pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;
-pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS};
+pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS, SwitchVia};
 pub use runtime::serialize_snapshot_delta;
 pub use view_layout::DisplayKind;

@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, PlugIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -52,7 +52,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   hideAi: SparklesIcon,
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
-  externalTools: PlugIcon,
+  externalTools: BirdIcon,
   github: GithubIcon,
   labs: FlaskConicalIcon,
   about: InfoIcon,

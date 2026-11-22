@@ -148,7 +148,9 @@ async function render(rest: SnapshotRest, tool: string | null, screen: Screen = 
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
-  useShellStore.setState({ rest, agents: rest.navigator?.agents ?? AGENTS, connection: "live", focusedPaneId: null });
+  // The rail draws a bot's tile from the core's access section; this one works in its own space.
+  const access = { machine: "local", limit: 16, pending: [], connections: [{ id: TOOL.connection, name: TOOL.name, mode: { kind: "own" as const }, program: "/bin/hoyeon", created_ms: 0, last_used_ms: 0, agent_count: 2, mission_count: 0 }] };
+  useShellStore.setState({ rest, agents: rest.navigator?.agents ?? AGENTS, access, connection: "live", focusedPaneId: null });
   useUiStore.setState({ screen, overviewOpen: false });
   sent = [];
   const actions = createActions((event) => { sent.push(event as { kind: string; payload: unknown }); return true; });
@@ -232,7 +234,7 @@ it("lists in a tool's project chip the projects the tool works in, counted from 
   expect(all(menu as HTMLElement, "[data-sidebar-project-option]", "data-sidebar-project-option")).toEqual(["", "alpha", "beta"]);
   const option = (id: string) => menu.querySelector(`[data-sidebar-project-option="${id}"]`)!;
   expect(option("alpha").textContent).toBe("alpha2");
-  expect(option("beta").textContent).toBe("beta도구가 답할 차례 12");
+  expect(option("beta").textContent).toBe("beta봇이 답할 차례 12");
   const turn = option("beta").querySelector("[data-sidebar-project-turn]")!;
   expect(turn.getAttribute("data-sidebar-project-turn")).toBe("tool");
   expect(turn.className).not.toContain("warning");

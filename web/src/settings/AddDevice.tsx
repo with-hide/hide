@@ -8,10 +8,12 @@
 // (`status.ssh_hosts`), asked for when the dialog opens.
 //
 // A chosen Host is asked, over an ssh that asks nobody, whether a Hide of
-// its own runs there (PRD device-connect-iroh B7). One that does is
-// connected to as a Hide, which installs nothing there, and the form says
-// so before the press; one whose Hide is too old or not running says what
-// to do on that machine; any other Host is added as before.
+// its own runs there (PRD device-connect-iroh B7), and a chosen distribution
+// through wsl.exe (D-27), which starts it when it is off (B43). One that
+// does is connected to as a Hide, which installs nothing there, and the
+// form says so before the press; one whose Hide is too old or not running
+// says what to do on that machine; any other is added as before, and goes
+// on to the new connection once its helper is connected (B41).
 
 import { useEffect, useId, useState } from "react";
 import type { Actions } from "../actions";
@@ -82,7 +84,8 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
   const answered = useShellStore((s) => s.pairingResult);
   // A build that does not offer connections between two Hides asks no Host
-  // whether its own Hide runs: every Host is added as before pairing.
+  // and no distribution whether its own Hide runs: each is added as before
+  // pairing.
   const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
   // What the chosen Host's own Hide answered (nothing, when the look was
   // refused), and the pairing a press started.
@@ -90,10 +93,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const [pairing, setPairing] = useState<{ request: string; refused: string | null } | null>(null);
   useEffect(() => {
     if (!answered?.request_id) return;
-    if (answered.verb === "look_ssh" && answered.request_id === look?.request && !look.answered) {
+    if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answered) {
       setLook({ ...look, answered: true, looked: answered.ok ? (answered.looked ?? null) : null });
     }
-    if (answered.verb === "pair_ssh" && answered.request_id === pairing?.request && pairing.refused === null) {
+    if ((answered.verb === "pair_ssh" || answered.verb === "pair_wsl") && answered.request_id === pairing?.request && pairing.refused === null) {
       if (answered.ok) onPaired();
       else setPairing({ ...pairing, refused: answered.reason ?? "" });
     }
@@ -130,13 +133,15 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const choose = (next: string) => {
     setAlias(next);
     setPairing(null);
-    if (chosenDistro(next) !== null) return;
-    // The name follows the Host until the person writes their own.
-    if (!nameEdited) setName(defaultDeviceName(next));
+    const picked = chosenDistro(next);
+    // The name follows the Host until the person writes their own; a
+    // distribution's is the core's.
+    if (picked === null && !nameEdited) setName(defaultDeviceName(next));
     if (!pairs) return;
     const request = `look-${Date.now()}`;
     setLook({ alias: next, request, answered: false, looked: null });
-    actions.pairing("look_ssh", { alias: next, request_id: request });
+    if (picked === null) actions.pairing("look_ssh", { alias: next, request_id: request });
+    else actions.pairing("look_wsl", { distro: picked, request_id: request });
   };
   // Adding is where the whole kit is agreed to, once (PRD device-parity
   // D-12): what Hide installs is under Advanced and the description above
@@ -146,21 +151,22 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
     if (connects) {
       const request = `pair-${Date.now()}`;
       setPairing({ request, refused: null });
-      actions.pairing("pair_ssh", { alias: chosen, request_id: request });
+      if (distro !== null) actions.pairing("pair_wsl", { distro, request_id: request });
+      else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
+    // A device added over SSH or wsl.exe goes on to the new connection once
+    // it connects (B41): the core keeps that it was added for its switch,
+    // which is asked then and says what would be installed there before
+    // anything is. A build that does not offer connections between two
+    // Hides adds it as before (`pairs`).
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
-      actions.registerWslDevice(distro);
-      return;
+      actions.registerWslDevice(distro, { switchFirst: pairs });
+    } else {
+      setSubmitted({ alias: chosen, distro: null, at: Date.now() });
+      actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: pairs });
     }
-    setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-    // A device added over SSH goes on to the new connection once it
-    // connects (B41): the core keeps that it was added for its switch, which
-    // is asked then and says what would be installed there before anything
-    // is. A build that does not offer connections between two Hides adds it
-    // as before (`pairs`).
-    actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: pairs });
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);

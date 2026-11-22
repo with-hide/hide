@@ -94,6 +94,19 @@ impl CoreStarter {
         }
         self.start(state_dir, program)
     }
+
+    /// Whether this starter starts `state_dir`'s core again once it ends:
+    /// the account holds the folder's login item. A core nothing keeps is
+    /// never replaced through a starter, since a start that fails would
+    /// leave none.
+    pub fn keeps(&self, state_dir: &Path) -> Result<bool, String> {
+        match self {
+            Self::LoginItem { home, agents } => {
+                crate::login_item::installed(agents, home, state_dir)
+            }
+            Self::Fixture => Ok(crate::login_item::marker(state_dir).exists()),
+        }
+    }
 }
 
 /// Says why the core a start runs ended before it took links, once it has.
@@ -146,7 +159,7 @@ fn fixture_core(state_dir: &Path, program: &Path) -> Result<Exited, String> {
 
 /// Stops the core `state_dir`'s state names, when its pid is proven still
 /// that core: a pid another process reused since is never signalled.
-fn stop_running(state_dir: &Path) -> Result<(), String> {
+pub(crate) fn stop_running(state_dir: &Path) -> Result<(), String> {
     match crate::state_file::read_state(state_dir)
         .map_err(|error| format!("the core's state could not be read: {error}"))?
     {

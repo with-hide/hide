@@ -1269,17 +1269,16 @@ fn split_from_core(
             "there": match &there {
                 Ok(Some(core)) => json!({"node": core.node, "release": core.release}),
                 Ok(None) => json!(null),
-                Err(error) => json!(error.to_string()),
+                Err(error) => json!(error),
             },
         }));
         return false;
     }
     let ask = |request: &str, key: &hide_peer::protocol::PeerKey, grant: Option<&str>| {
         crate::pairing_ssh::accept_on(
-            upstream,
+            &crate::pairing_ssh::Ssh(upstream),
             &reach,
             &crate::pairing_ssh::Accept {
-                alias: &placement.alias,
                 request,
                 me: &me,
                 key,
@@ -1896,6 +1895,7 @@ mod tests {
                 device: "macbook".to_owned(),
                 release: false,
                 direct: None,
+                wsl: None,
                 device_connect,
             },
         };

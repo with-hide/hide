@@ -303,6 +303,9 @@ fn save_host(state: &Path, accepted: &Accepted) -> Result<(), SplitFailure> {
             grant: accepted.grant.clone(),
             state: KnownState::Confirming,
             candidates: accepted.candidates.clone(),
+            // The core there was put by the move, not started by a switch
+            // of this machine's: nothing here raises it with this build.
+            started: None,
         })
         .map_err(|error| SplitFailure::not_saved("the core's machine", error))
 }

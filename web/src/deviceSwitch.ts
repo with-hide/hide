@@ -11,14 +11,26 @@ import { catalogWorkspaces, type Device, type DeviceSwitch, type SnapshotRest } 
 /**
  * Whether the switch is offered on a device: the core's one rule
  * (`Device.switchable`), a helper device it dials over SSH that has
- * connected (B35). A paired machine's device is switched already, a node
- * that dials in was never a helper, a WSL distribution is reached another
- * way, and a device that never connected is switched once it has. A build
- * that does not offer connections between two Hides (`deviceConnect`, the
- * daemon's hello) offers it on no device.
+ * connected, or a WSL distribution of this PC (B35, D-27). A paired
+ * machine's device is switched already, a node that dials in was never a
+ * helper, and an SSH device that never connected is switched once it has. A
+ * build that does not offer connections between two Hides (`deviceConnect`,
+ * the daemon's hello) offers it on no device.
  */
 export function switchOffered(device: Device, deviceConnect: boolean): boolean {
   return deviceConnect && device.switchable === true;
+}
+
+/** What is put on a machine that runs no Hide of its own. */
+export type InstallPart = "core" | "autostart" | "linger";
+
+/**
+ * What a switch says it installs: linger is what keeps a Linux account's
+ * programs running after its SSH login ends, so a WSL distribution, which
+ * no SSH login reaches, is told of none.
+ */
+export function installParts(system: string | null | undefined, wsl: boolean): InstallPart[] {
+  return system === "linux" && !wsl ? ["core", "autostart", "linger"] : ["core", "autostart"];
 }
 
 /** The steps a switch shows, in order; the last is where the device's row becomes its machine's. */
@@ -43,6 +55,8 @@ export function switchFailureKey(reason: string | null | undefined): MessageKey 
   switch (reason) {
     case "ssh_not_reached":
       return "devices.switch.failed.notReached";
+    case "wsl_not_reached":
+      return "devices.switch.failed.wslNotReached";
     case "ssh_update_there":
       return "pairing.ssh.updateThere";
     case "ssh_hide_not_running":
