@@ -591,15 +591,12 @@ fn raised_before(
 
 fn held_by_any(mission: &Mission, number: u32) -> bool {
     mission.nodes.iter().any(|node| node.prs.contains(&number))
-        || mission
-            .nodes
-            .iter()
-            .any(|node| {
-                node.wait_target
-                    .as_ref()
-                    .and_then(crate::waits::WaitTarget::change_request)
-                    == Some(number)
-            })
+        || mission.nodes.iter().any(|node| {
+            node.wait_target
+                .as_ref()
+                .and_then(crate::waits::WaitTarget::change_request)
+                == Some(number)
+        })
 }
 
 fn find(pulls: &GithubProjectSnapshot, number: u32) -> Option<&PullRequestSnapshot> {

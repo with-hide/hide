@@ -67,7 +67,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<WaitCli, 
     if let Some(span) = &for_span
         && hide_core::waits::span_minutes(span).is_none()
     {
-        return Err("--for is minutes, hours or days between 1h and 30d, such as 2h or 3d".to_owned());
+        return Err(
+            "--for is minutes, hours or days between 1h and 30d, such as 2h or 3d".to_owned(),
+        );
     }
     let one = |positional: &[String]| match positional {
         [value] => Ok(value.clone()),

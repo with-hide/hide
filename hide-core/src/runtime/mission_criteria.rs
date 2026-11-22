@@ -926,10 +926,7 @@ impl Runtime {
             .ok_or("mission_node_unknown")?;
         let row = &mission.nodes[index];
         if row.kind == NodeKind::Wait {
-            return Err(crate::coordination::refusal(
-                "mission_wait_invalid",
-                node,
-            ));
+            return Err(crate::coordination::refusal("mission_wait_invalid", node));
         }
         // The same defect from the same node while it is still open is the
         // same command again.

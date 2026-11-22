@@ -154,7 +154,9 @@ fn valid_branch(branch: &str) -> bool {
     !branch.is_empty()
         && !branch.starts_with('-')
         && branch.len() <= 256
-        && !branch.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        && !branch
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
 }
 
 fn valid_node_key(key: &str) -> bool {
@@ -341,9 +343,7 @@ pub(crate) fn judge_book(book: &MissionBook, target: &WaitTarget) -> Option<Wait
                 Some(kept) => match kept.status {
                     NodeStatus::Done => Some(WaitOutcome::NodeDone),
                     NodeStatus::Dropped => Some(WaitOutcome::NodeDropped),
-                    _ if status == MissionStatus::Cancelled => {
-                        Some(WaitOutcome::MissionCancelled)
-                    }
+                    _ if status == MissionStatus::Cancelled => Some(WaitOutcome::MissionCancelled),
                     _ => None,
                 },
             }
@@ -599,7 +599,10 @@ mod tests {
         // A wait node's target is stored as an outside node's was.
         let pr: WaitTarget = serde_json::from_str(r#"{"pr":1232}"#).unwrap();
         let branch: WaitTarget = serde_json::from_str(r#"{"branch":"feat/x"}"#).unwrap();
-        assert_eq!((pr, branch), (WaitTarget::Pr(1232), WaitTarget::Branch("feat/x".into())));
+        assert_eq!(
+            (pr, branch),
+            (WaitTarget::Pr(1232), WaitTarget::Branch("feat/x".into()))
+        );
         let node = WaitTarget::Node {
             mission: "mission-1".into(),
             node: "a".into(),
@@ -638,7 +641,12 @@ mod tests {
         }
         let dropped = store.bound_ended();
         assert_eq!(dropped, vec!["wait-2".to_owned()]);
-        assert!(store.waits.iter().any(|wait| wait.id == "wait-1" && wait.open()));
+        assert!(
+            store
+                .waits
+                .iter()
+                .any(|wait| wait.id == "wait-1" && wait.open())
+        );
         assert_eq!(
             store.waits.iter().filter(|wait| !wait.open()).count(),
             MACHINE_WAIT_LIMIT

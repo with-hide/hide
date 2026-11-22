@@ -878,9 +878,7 @@ impl PendingWake {
     pub(crate) fn standing(&self) -> bool {
         self.to.is_none()
             && match self.event {
-                WakeEvent::Attention
-                | WakeEvent::Warning
-                | WakeEvent::ChangesRequested => true,
+                WakeEvent::Attention | WakeEvent::Warning | WakeEvent::ChangesRequested => true,
                 WakeEvent::Ci => self
                     .ci
                     .as_ref()
@@ -3028,11 +3026,15 @@ pub enum MissionCommand {
     /// waits on `wait`'s target, or is given the open wait it already holds
     /// on it. It rides the mission command's pane capability, which names
     /// the caller, and changes no mission.
-    Wait { wait: crate::waits::WaitInput },
+    Wait {
+        wait: crate::waits::WaitInput,
+    },
     /// `hide wait list` (B15): the calling agent's open waits.
     WaitList,
     /// `hide wait cancel <id>` (B15): ends one of the calling agent's waits.
-    WaitCancel { id: String },
+    WaitCancel {
+        id: String,
+    },
 }
 
 impl MissionCommand {
@@ -3173,7 +3175,9 @@ impl MissionCommand {
             Self::List | Self::Settings | Self::WaitList => true,
             // The target's and deadline's own refusals are the core's.
             Self::Wait { wait } => {
-                wait.branch.as_deref().is_none_or(|b| b.len() <= TITLE_LIMIT)
+                wait.branch
+                    .as_deref()
+                    .is_none_or(|b| b.len() <= TITLE_LIMIT)
                     && wait.mission.as_deref().is_none_or(valid_key)
                     && wait.node.as_deref().is_none_or(valid_key)
                     && wait.for_span.as_deref().is_none_or(|span| span.len() <= 16)
@@ -4068,7 +4072,11 @@ fn check_node_kind(node: &NodeInput) -> Result<(), String> {
             &node.key,
         ));
     }
-    if node.wait.as_ref().is_some_and(|wait| wait.minutes().is_err()) {
+    if node
+        .wait
+        .as_ref()
+        .is_some_and(|wait| wait.minutes().is_err())
+    {
         return Err(crate::coordination::refusal(
             "mission_wait_deadline_invalid",
             &node.key,

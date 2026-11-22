@@ -15,7 +15,12 @@ const HOUR_MS: u64 = 60 * 60 * 1000;
 /// `sender` conducts mission-1, which waits on `wait` before `fix`.
 fn waiting_on(runtime: &mut Runtime, wait: Value) {
     if runtime.missions.book.missions.is_empty() {
-        command(runtime, "sender", json!({"op": "create", "title": "Fix the bug"})).unwrap();
+        command(
+            runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
     }
     command(
         runtime,
@@ -33,7 +38,12 @@ fn waiting_on(runtime: &mut Runtime, wait: Value) {
 /// `sender` creates mission-1 with one general node, so a second mission
 /// can be copied from a whole record.
 fn created(runtime: &mut Runtime) {
-    command(runtime, "sender", json!({"op": "create", "title": "Fix the bug"})).unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
     command(
         runtime,
         "sender",
@@ -73,7 +83,14 @@ fn reason(runtime: &Runtime, key: &str) -> Option<AttentionReason> {
 }
 
 fn last_wake(runtime: &Runtime) -> Option<WakeEvent> {
-    runtime.missions.book.get("mission-1").unwrap().wakes.last().map(|wake| wake.event)
+    runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .last()
+        .map(|wake| wake.event)
 }
 
 /// B6 (D-03): a mission target is met only by a `done` close; `merge_wait`
@@ -98,7 +115,8 @@ fn a_mission_target_is_met_by_done_kept_by_merge_wait_and_failed_by_cancel() {
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
     assert_eq!(
-        view.wait_progress.map(|progress| (progress.done, progress.total)),
+        view.wait_progress
+            .map(|progress| (progress.done, progress.total)),
         Some((0, 1))
     );
 
@@ -109,7 +127,8 @@ fn a_mission_target_is_met_by_done_kept_by_merge_wait_and_failed_by_cancel() {
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working, "merge_wait keeps waiting");
     assert_eq!(
-        view.wait_progress.map(|progress| (progress.done, progress.total)),
+        view.wait_progress
+            .map(|progress| (progress.done, progress.total)),
         Some((1, 1))
     );
 
@@ -119,7 +138,10 @@ fn a_mission_target_is_met_by_done_kept_by_merge_wait_and_failed_by_cancel() {
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
     assert_eq!(view.wait_outcome, Some("mission_cancelled"));
-    assert_eq!(reason(&runtime, "wait"), Some(AttentionReason::MissionCancelled));
+    assert_eq!(
+        reason(&runtime, "wait"),
+        Some(AttentionReason::MissionCancelled)
+    );
 
     // Planned again on a mission that then closes done, it is met.
     other_mission(&mut runtime, "mission-8");
@@ -205,11 +227,19 @@ fn a_ci_target_follows_the_checks_on_the_newest_commit() {
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
     assert_eq!(view.wait_outcome, Some("ci_failed"));
-    assert!(view.line.as_deref().unwrap_or("").contains("lint"), "{:?}", view.line);
+    assert!(
+        view.line.as_deref().unwrap_or("").contains("lint"),
+        "{:?}",
+        view.line
+    );
     assert_eq!(reason(&runtime, "wait"), Some(AttentionReason::CiFailed));
 
     runtime.note_mission_pulls(node, &checked(1232, "b2", PullRequestChecks::Pending, &[]));
-    assert_eq!(node_view(&runtime, "wait").wait_outcome, None, "a new push waits again");
+    assert_eq!(
+        node_view(&runtime, "wait").wait_outcome,
+        None,
+        "a new push waits again"
+    );
     runtime.drive_mission_health(crate::runtime::unix_milliseconds());
     assert_eq!(reason(&runtime, "wait"), None);
 
@@ -227,7 +257,10 @@ fn a_pull_request_closed_without_a_merge_is_raised_with_its_reason() {
     waiting_on(&mut runtime, json!({"pr": 1232}));
     runtime.note_mission_pulls(
         crate::node::TEST_NODE,
-        &github(vec![pull(1232, "a1", PullRequestBadge::Closed, None)], false),
+        &github(
+            vec![pull(1232, "a1", PullRequestBadge::Closed, None)],
+            false,
+        ),
     );
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
@@ -242,7 +275,12 @@ fn a_pull_request_closed_without_a_merge_is_raised_with_its_reason() {
 fn a_waiting_node_past_its_deadline_is_raised_until_planned_again() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    command(&mut runtime, "sender", json!({"op": "create", "title": "Fix the bug"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
     for span in ["5m", "31d", "3x"] {
         let refused = command(
             &mut runtime,
@@ -252,12 +290,18 @@ fn a_waiting_node_past_its_deadline_is_raised_until_planned_again() {
             ]}}),
         )
         .unwrap_err();
-        assert!(refused.contains("mission_wait_deadline_invalid"), "{span}: {refused}");
+        assert!(
+            refused.contains("mission_wait_deadline_invalid"),
+            "{span}: {refused}"
+        );
     }
     waiting_on(&mut runtime, json!({"branch": "feat/x", "for": "2h"}));
     let until = node_view(&runtime, "wait").wait_until_unix_ms.unwrap();
     let now = crate::runtime::unix_milliseconds();
-    assert!(until > now + HOUR_MS && until <= now + 2 * HOUR_MS + 1000, "{until}");
+    assert!(
+        until > now + HOUR_MS && until <= now + 2 * HOUR_MS + 1000,
+        "{until}"
+    );
 
     assert!(runtime.tick_waits(until + 1));
     let view = node_view(&runtime, "wait");
@@ -298,7 +342,10 @@ fn a_plan_that_waits_on_itself_a_loop_or_nothing_is_refused() {
     for (wait, code) in [
         (json!({"mission": "mission-1"}), "mission_wait_self"),
         (json!({"mission": "mission-99"}), "mission_wait_unknown"),
-        (json!({"mission": "mission-7", "node": "nope"}), "mission_wait_unknown"),
+        (
+            json!({"mission": "mission-7", "node": "nope"}),
+            "mission_wait_unknown",
+        ),
     ] {
         let refused = command(&mut runtime, "sender", plan(wait.clone())).unwrap_err();
         assert!(refused.contains(code), "{wait}: {refused}");
@@ -310,7 +357,12 @@ fn a_plan_that_waits_on_itself_a_loop_or_nothing_is_refused() {
         node.wait_target = Some(WaitTarget::Mission("mission-1".into()));
         node.wait_until_unix_ms = Some(u64::MAX);
     });
-    let refused = command(&mut runtime, "sender", plan(json!({"mission": "mission-7"}))).unwrap_err();
+    let refused = command(
+        &mut runtime,
+        "sender",
+        plan(json!({"mission": "mission-7"})),
+    )
+    .unwrap_err();
     assert!(refused.contains("mission_wait_self"), "{refused}");
 }
 
@@ -389,31 +441,56 @@ fn an_agents_wait_is_made_once_listed_cancelled_and_capped() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     registered(&mut runtime);
-    let (first, changed) = wait(&mut runtime, "sender", json!({"branch": "feat/a", "for": "3d"})).unwrap();
+    let (first, changed) = wait(
+        &mut runtime,
+        "sender",
+        json!({"branch": "feat/a", "for": "3d"}),
+    )
+    .unwrap();
     assert!(changed);
     assert_eq!(first["id"], "wait-1");
     assert_eq!(first["target"], json!({"branch": "feat/a"}));
     let (again, changed) = wait(&mut runtime, "sender", json!({"branch": "feat/a"})).unwrap();
     assert!(!changed);
-    assert_eq!((again["id"].clone(), again["existing"].clone()), (json!("wait-1"), json!(true)));
+    assert_eq!(
+        (again["id"].clone(), again["existing"].clone()),
+        (json!("wait-1"), json!(true))
+    );
 
-    let refused = command(&mut runtime, "recipient", json!({"op": "wait_cancel", "id": "wait-1"}))
-        .unwrap_err();
+    let refused = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "wait_cancel", "id": "wait-1"}),
+    )
+    .unwrap_err();
     assert!(refused.contains("wait_not_yours"), "{refused}");
 
     for index in 2..=8 {
-        wait(&mut runtime, "sender", json!({"branch": format!("feat/{index}")})).unwrap();
+        wait(
+            &mut runtime,
+            "sender",
+            json!({"branch": format!("feat/{index}")}),
+        )
+        .unwrap();
     }
     let refused = wait(&mut runtime, "sender", json!({"branch": "feat/9"})).unwrap_err();
     assert!(refused.contains("wait_agent_full"), "{refused}");
     let (listed, _) = command(&mut runtime, "sender", json!({"op": "wait_list"})).unwrap();
     assert_eq!(listed["waits"].as_array().unwrap().len(), 8);
 
-    command(&mut runtime, "sender", json!({"op": "wait_cancel", "id": "wait-1"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "wait_cancel", "id": "wait-1"}),
+    )
+    .unwrap();
     wait(&mut runtime, "sender", json!({"branch": "feat/9"})).unwrap();
     for (target, code) in [
         (json!({"pr": 1, "branch": "x"}), "wait_target_invalid"),
-        (json!({"branch": "x", "for": "40d"}), "wait_deadline_invalid"),
+        (
+            json!({"branch": "x", "for": "40d"}),
+            "wait_deadline_invalid",
+        ),
         (json!({"mission": "mission-99"}), "wait_mission_unknown"),
     ] {
         let refused = wait(&mut runtime, "recipient", target.clone()).unwrap_err();
@@ -436,22 +513,34 @@ fn an_agents_wait_ends_with_one_notice_when_its_target_is_met() {
     let marked = |runtime: &Runtime| {
         runtime.missions.sleep_marks.iter().any(|mark| {
             mark.agent_id == agent
-                && matches!(&mark.origin, crate::runtime::agent_sleep::missions::Origin::Wait { .. })
+                && matches!(
+                    &mark.origin,
+                    crate::runtime::agent_sleep::missions::Origin::Wait { .. }
+                )
         })
     };
     assert!(marked(&runtime));
     let ledger = runtime.delivery_ledger.as_ref().ok().cloned();
     assert!(runtime.wait_cells(ledger.as_deref()).is_empty());
 
-    set_other(&mut runtime, "mission-7", |mission| mission.status = MissionStatus::Done);
-    let ended = runtime.snapshot.ui_state.waits.waits[0].ended.clone().unwrap();
+    set_other(&mut runtime, "mission-7", |mission| {
+        mission.status = MissionStatus::Done
+    });
+    let ended = runtime.snapshot.ui_state.waits.waits[0]
+        .ended
+        .clone()
+        .unwrap();
     assert_eq!(ended.outcome, WaitOutcome::MissionDone);
     assert!(!marked(&runtime));
     let cells = runtime.wait_cells(ledger.as_deref());
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].recipient, agent);
     assert!(cells[0].cell.news);
-    assert!(cells[0].cell.line.contains("closed as done"), "{}", cells[0].cell.line);
+    assert!(
+        cells[0].cell.line.contains("closed as done"),
+        "{}",
+        cells[0].cell.line
+    );
     // Ended, it no longer counts: the agent may wait on the same again.
     let (open, _) = command(&mut runtime, "recipient", json!({"op": "wait_list"})).unwrap();
     assert_eq!(open["waits"], json!([]));
@@ -464,7 +553,12 @@ fn an_agents_wait_outlives_a_restart_and_expires_at_the_first_tick() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     registered(&mut runtime);
-    let (made, _) = wait(&mut runtime, "sender", json!({"branch": "feat/a", "for": "1h"})).unwrap();
+    let (made, _) = wait(
+        &mut runtime,
+        "sender",
+        json!({"branch": "feat/a", "for": "1h"}),
+    )
+    .unwrap();
     let until = made["until_unix_ms"].as_u64().unwrap();
     let (stored, _, _) = crate::persistence::load(&runtime.state_path);
     assert_eq!(stored.waits, runtime.snapshot.ui_state.waits);
@@ -475,7 +569,10 @@ fn an_agents_wait_outlives_a_restart_and_expires_at_the_first_tick() {
     runtime.snapshot.ui_state.waits = stored.waits;
     runtime.missions.waits_next_tick_unix_ms = 0;
     assert!(runtime.tick_waits(until + 1));
-    let ended = runtime.snapshot.ui_state.waits.waits[0].ended.clone().unwrap();
+    let ended = runtime.snapshot.ui_state.waits.waits[0]
+        .ended
+        .clone()
+        .unwrap();
     assert_eq!(ended.outcome, WaitOutcome::Expired);
     let (stored, _, _) = crate::persistence::load(&runtime.state_path);
     assert!(stored.waits.open().next().is_none());

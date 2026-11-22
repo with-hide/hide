@@ -350,19 +350,12 @@ fn landing(mission: &Mission) -> impl Iterator<Item = &MissionNode> {
 fn followed(mission: &Mission) -> bool {
     mission.status.open()
         && (mission.nodes.iter().any(|node| {
-            judged(node)
-                && node
-                    .wait_target
-                    .as_ref()
-                    .is_some_and(WaitTarget::code_host)
+            judged(node) && node.wait_target.as_ref().is_some_and(WaitTarget::code_host)
         }) || landing(mission).next().is_some())
 }
 
 /// How a listed change request answers `target`, when the list holds it.
-fn listed_found(
-    target: &WaitTarget,
-    listed: Option<&GithubProjectSnapshot>,
-) -> Option<Found> {
+fn listed_found(target: &WaitTarget, listed: Option<&GithubProjectSnapshot>) -> Option<Found> {
     let number = target.change_request()?;
     let pull = listed?
         .pull_requests
@@ -386,7 +379,11 @@ fn outside_asks(
     let listed = listed.filter(|listed| listed.pulls_current());
     let mut found = Vec::new();
     let mut asks = Vec::new();
-    let mut place = |ask: Ask| match ask.watch.target().and_then(|target| listed_found(target, listed)) {
+    let mut place = |ask: Ask| match ask
+        .watch
+        .target()
+        .and_then(|target| listed_found(target, listed))
+    {
         Some(answer) => found.push((ask, answer)),
         None => asks.push(ask),
     };
@@ -1188,9 +1185,9 @@ fn read_one(
         })?;
         // An open change request's CI is judged on the project's list, which
         // the next read brings.
-        return by_number
-            .standing(node, place, number)
-            .map(|standing| crate::waits::judge_standing(standing).map_or(Found::Open, Found::Ended));
+        return by_number.standing(node, place, number).map(|standing| {
+            crate::waits::judge_standing(standing).map_or(Found::Open, Found::Ended)
+        });
     }
     let head = head.ok_or("The node names no branch")??;
     let against = against.ok_or("The project's default branch is not known yet")?;

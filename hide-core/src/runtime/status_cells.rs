@@ -718,7 +718,13 @@ impl Runtime {
                 .missions
                 .iter()
                 .all(|mission| mission.wakes.is_empty())
-            && self.snapshot.ui_state.waits.waits.iter().all(|wait| wait.open())
+            && self
+                .snapshot
+                .ui_state
+                .waits
+                .waits
+                .iter()
+                .all(|wait| wait.open())
             && self.delivery_ledger.as_ref().map_or(true, |ledger| {
                 ledger.watches.iter().all(|watch| watch.warning_count == 0)
             })

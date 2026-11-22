@@ -5786,8 +5786,8 @@ fn in_main(view: &crate::runtime::missions::NodeView) -> Option<String> {
 #[test]
 fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     use crate::missions::WakeEvent;
-    use crate::waits::WaitTarget;
     use crate::runtime::mission_outside::{Ask, Found, Owner, Watch};
+    use crate::waits::WaitTarget;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -7325,10 +7325,8 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
                        "kind": "wait", "wait": {"branch": format!("absent-{index}")}})
             })
             .collect();
-        nodes.push(
-            json!({"key": "last", "title": "In main", "kind": "wait",
-                          "wait": {"branch": "landed"}}),
-        );
+        nodes.push(json!({"key": "last", "title": "In main", "kind": "wait",
+                          "wait": {"branch": "landed"}}));
         command(
             &mut runtime,
             "sender",
@@ -15174,12 +15172,16 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
             .mission_intent_refusal("mission-1", "mission-1:fix")
             .is_none()
     );
-    command(&mut runtime, "sender", json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
-        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
-         "criteria": ["the parser keeps v1 files"],
-         "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
-        {"key": "docs", "title": "Docs", "kind": "wait", "wait": {"branch": "feat/docs"}},
-    ]}}))
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+             "criteria": ["the parser keeps v1 files"],
+             "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
+            {"key": "docs", "title": "Docs", "kind": "wait", "wait": {"branch": "feat/docs"}},
+        ]}}),
+    )
     .unwrap();
     let docs = runtime.missions.book.get("mission-1").unwrap().nodes[1].clone();
     assert_eq!((docs.key.as_str(), docs.hold), ("docs", None));

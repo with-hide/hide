@@ -22,8 +22,8 @@ use crate::mission_events::History;
 use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Candidate, Checks, CiNews, CiResult,
-    Conductor, ConductorSettings, Delivery, Mission, MissionBook, MissionCommand,
-    MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
+    Conductor, ConductorSettings, Delivery, Mission, MissionBook, MissionCommand, MissionEnd,
+    MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{PrState, PullRequestBadge, ReviewDecision};
@@ -428,10 +428,7 @@ fn node_work(
             since_unix_ms: gone_since,
         });
     }
-    if !mission.status.open()
-        || view.status != NodeStatus::Working
-        || view.kind == NodeKind::Wait
-    {
+    if !mission.status.open() || view.status != NodeStatus::Working || view.kind == NodeKind::Wait {
         return None;
     }
     let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
@@ -3365,7 +3362,9 @@ impl Runtime {
             }
             // A wait is an agent's: a bot has no turn to wake (PRD core-wait
             // D-21).
-            MissionCommand::Wait { .. } | MissionCommand::WaitList | MissionCommand::WaitCancel { .. }
+            MissionCommand::Wait { .. }
+            | MissionCommand::WaitList
+            | MissionCommand::WaitCancel { .. }
                 if every_project =>
             {
                 Err("agent_pane_required".into())
@@ -5371,9 +5370,13 @@ impl Runtime {
                     wait_reference: node.wait_target.as_ref().and_then(|target| {
                         self.wait_reference(&mission.device_id, &mission.project, target)
                     }),
-                    wait_outcome: node.wait_outcome.as_ref().map(crate::waits::WaitOutcome::key),
+                    wait_outcome: node
+                        .wait_outcome
+                        .as_ref()
+                        .map(crate::waits::WaitOutcome::key),
                     outside: node.wait_target.as_ref().and_then(|target| match target {
-                        crate::waits::WaitTarget::Pr(number) | crate::waits::WaitTarget::Ci(number) => {
+                        crate::waits::WaitTarget::Pr(number)
+                        | crate::waits::WaitTarget::Ci(number) => {
                             let pull = pull_of(*number);
                             Some(OutsideView {
                                 base: pull.map(|pull| pull.base_branch.clone()),

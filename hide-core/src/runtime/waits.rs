@@ -346,9 +346,11 @@ impl Runtime {
     /// (D-13): the watch's floor, which its answer says
     /// (`code_host::WatchAnswer::resting`).
     pub(super) fn code_host_resting(&self, project: &str) -> bool {
-        self.github_place(None, project)
-            .ok()
-            .is_some_and(|place| self.missions.hosts_resting.contains(place.host().unit().key()))
+        self.github_place(None, project).ok().is_some_and(|place| {
+            self.missions
+                .hosts_resting
+                .contains(place.host().unit().key())
+        })
     }
 
     /// The change request a pull request or CI target names, as `project`'s
@@ -437,8 +439,7 @@ impl Runtime {
                 return Some("wait_mission_unknown");
             }
             if let Some(from) = from
-                && (id == from
-                    || crate::waits::waits_on(book, id, extra).contains(from))
+                && (id == from || crate::waits::waits_on(book, id, extra).contains(from))
             {
                 return Some("wait_self");
             }
@@ -506,7 +507,11 @@ impl Runtime {
                 if wait.agent_id != agent {
                     return Err("wait_not_yours".into());
                 }
-                self.snapshot.ui_state.waits.waits.retain(|wait| wait.id != id);
+                self.snapshot
+                    .ui_state
+                    .waits
+                    .waits
+                    .retain(|wait| wait.id != id);
                 self.missions.outside.forget_agent(&id);
                 self.unmark_wait_sleep(&agent, &id);
                 crate::diagnostic!(json!({
@@ -517,7 +522,9 @@ impl Runtime {
                 self.wait_rows_moved();
                 Ok((json!({"cancelled": id}), true))
             }
-            MissionCommand::Wait { wait } => self.start_agent_wait(device, &agent, actor, project, &wait, now),
+            MissionCommand::Wait { wait } => {
+                self.start_agent_wait(device, &agent, actor, project, &wait, now)
+            }
             _ => Err("mission_text_invalid".into()),
         }
     }
@@ -589,7 +596,10 @@ impl Runtime {
             agent_id: agent.to_owned(),
             actor: actor.clone(),
             device: device.to_owned(),
-            project: target.code_host().then(|| project.map(str::to_owned)).flatten(),
+            project: target
+                .code_host()
+                .then(|| project.map(str::to_owned))
+                .flatten(),
             target: target.clone(),
             created_at_unix_ms: now,
             until_unix_ms: crate::waits::deadline(now, minutes),
@@ -659,9 +669,7 @@ impl Runtime {
                 .agents
                 .iter()
                 .rev()
-                .find(|record| {
-                    !record.ended && record.actor.pane_id == agent.pane_id
-                })
+                .find(|record| !record.ended && record.actor.pane_id == agent.pane_id)
                 .and_then(|record| self.wait_line_of(&record.id));
         }
     }
@@ -800,9 +808,7 @@ impl Runtime {
             }) else {
                 continue;
             };
-            let entry = newest
-                .entry(wait.agent_id.clone())
-                .or_insert((actor, 0));
+            let entry = newest.entry(wait.agent_id.clone()).or_insert((actor, 0));
             entry.1 = entry.1.max(ended.seq);
         }
         newest

@@ -126,7 +126,6 @@ mod mission_worker_item;
 mod mission_worker_sleep;
 #[path = "tests/missions.rs"]
 mod missions;
-mod waits;
 #[path = "tests/named_tab.rs"]
 mod named_tab;
 #[path = "tests/node_agent_areas.rs"]
@@ -202,6 +201,7 @@ mod unseen_views;
 mod usage_limit;
 #[path = "tests/view_areas.rs"]
 mod view_areas;
+mod waits;
 #[path = "tests/workspace_control.rs"]
 mod workspace_control;
 #[path = "tests/workspace_view.rs"]

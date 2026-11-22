@@ -56,10 +56,10 @@ pub mod pane_cli;
 pub mod pane_install;
 pub mod phone_cli;
 pub mod plan_cli;
-pub mod wait_cli;
 pub mod profile_cli;
 mod project_open;
 pub mod started_cores;
+pub mod wait_cli;
 // The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
 // the deadlines those tests run them under.
 #[cfg(all(test, unix))]
