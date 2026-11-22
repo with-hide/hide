@@ -154,11 +154,20 @@ impl Outside {
     /// Where the wait `owner`, past its deadline since `until`, stands on
     /// its last read at `now` (PRD core-wait D-07): a read answered it since
     /// Hide asked, so it may fail; or it waits for that read, asked now when
-    /// none was or the last ask is a look's period old. A deadline
-    /// `DEADLINE_READ_MS` past fails without one, so a read that cannot
-    /// start (a device away) never keeps a wait open for good.
-    pub(super) fn deadline_read(&mut self, owner: &Owner, until: u64, now: u64) -> DeadlineRead {
-        if self.deadline_read.contains(owner) || now >= until.saturating_add(DEADLINE_READ_MS) {
+    /// none was or the last ask is a look's period old. `DEADLINE_READ_MS`
+    /// past the deadline, or past the end of the host's rest at its rate
+    /// floor (`held_until`, which holds the read back), it fails without
+    /// one, so a read that cannot start (a device away) never keeps a wait
+    /// open for good and a rest never fails one unread.
+    pub(super) fn deadline_read(
+        &mut self,
+        owner: &Owner,
+        until: u64,
+        held_until: Option<u64>,
+        now: u64,
+    ) -> DeadlineRead {
+        let from = until.max(held_until.unwrap_or(0));
+        if self.deadline_read.contains(owner) || now >= from.saturating_add(DEADLINE_READ_MS) {
             return DeadlineRead::Fail;
         }
         match self.deadline_asked.get(owner) {

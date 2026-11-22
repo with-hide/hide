@@ -766,3 +766,31 @@ fn a_new_wait_after_a_restart_never_takes_an_ended_waits_id() {
     let (made, _) = wait(&mut runtime, "sender", json!({"branch": "feat/b"})).unwrap();
     assert_eq!(made["id"], "wait-2");
 }
+
+/// R1 of the review (D-07, D-13): a host resting at its rate floor holds a
+/// pull request wait's last read back, and its deadline with it, until half
+/// an hour after the rest ends.
+#[test]
+fn a_rest_at_the_rate_floor_holds_a_pull_request_deadline_until_it_ends() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    registered(&mut runtime);
+    let (made, _) = wait(&mut runtime, "sender", json!({"pr": 1232, "for": "1h"})).unwrap();
+    let until = made["until_unix_ms"].as_u64().unwrap();
+    let key = runtime
+        .github_place(None, PROJECT)
+        .unwrap()
+        .host()
+        .unit()
+        .key()
+        .to_owned();
+    let rest_ends = until + 2 * HOUR_MS;
+    runtime.missions.hosts_resting.insert(key, rest_ends / 1000);
+    let ended = |runtime: &Runtime| runtime.snapshot.ui_state.waits.waits[0].ended.is_some();
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(until + 1);
+    runtime.tick_waits(until + 31 * 60_000);
+    assert!(!ended(&runtime), "the rest holds the deadline");
+    runtime.tick_waits(rest_ends + 30 * 60_000);
+    assert!(ended(&runtime));
+}

@@ -104,6 +104,19 @@ impl Runtime {
         let mut book_moved = false;
         let mut look = BTreeSet::new();
         let mut due = BTreeSet::new();
+        // When each project's host rest ends, for the nodes' deadlines read
+        // while the book is borrowed.
+        let rests: std::collections::BTreeMap<(String, String), u64> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|_| !self.missions.hosts_resting.is_empty())
+            .filter_map(|mission| {
+                let end = self.code_host_rest_end(&mission.device_id, &mission.project, now)?;
+                Some(((mission.device_id.clone(), mission.project.clone()), end))
+            })
+            .collect();
         if self.missions.unreadable.is_none() {
             book_moved |= settle_wait_deadlines(&mut self.missions.book, now);
             let mut events = Vec::new();
@@ -119,10 +132,20 @@ impl Runtime {
                     if !super::mission_outside::judged(node) {
                         continue;
                     }
-                    if node.wait_target.as_ref().is_some_and(WaitTarget::code_host) {
+                    if let Some(target) = node.wait_target.as_ref().filter(|t| t.code_host()) {
                         let owner = Owner::node(&mission.id, &node.key);
                         due.insert(owner.clone());
-                        match self.missions.outside.deadline_read(&owner, until, now) {
+                        let held = target
+                            .change_request()
+                            .and_then(|_| {
+                                rests.get(&(mission.device_id.clone(), mission.project.clone()))
+                            })
+                            .copied();
+                        match self
+                            .missions
+                            .outside
+                            .deadline_read(&owner, until, held, now)
+                        {
                             DeadlineRead::Fail => {}
                             DeadlineRead::Wait => continue,
                             DeadlineRead::Ask => {
@@ -173,7 +196,14 @@ impl Runtime {
             {
                 let owner = Owner::Agent(id.clone());
                 due.insert(owner.clone());
-                match self.missions.outside.deadline_read(&owner, until, now) {
+                let held = target
+                    .change_request()
+                    .and_then(|_| self.code_host_rest_end(&device, &project, now));
+                match self
+                    .missions
+                    .outside
+                    .deadline_read(&owner, until, held, now)
+                {
                     DeadlineRead::Fail => {}
                     DeadlineRead::Wait => continue,
                     DeadlineRead::Ask => {
@@ -406,15 +436,16 @@ impl Runtime {
     /// (D-13): the watch's floor, which its answer says
     /// (`code_host::WatchAnswer::resting`).
     pub(super) fn code_host_resting(&self, device: &str, project: &str, now: u64) -> bool {
+        self.code_host_rest_end(device, project, now).is_some()
+    }
+
+    /// When the rest of `project`'s code host at its rate floor ends, in
+    /// unix ms, while it rests at `now`.
+    pub(super) fn code_host_rest_end(&self, device: &str, project: &str, now: u64) -> Option<u64> {
         let device = (device != self.node.as_str()).then_some(device);
-        self.github_place(device, project)
-            .ok()
-            .is_some_and(|place| {
-                self.missions
-                    .hosts_resting
-                    .get(place.host().unit().key())
-                    .is_some_and(|until| now / 1000 < *until)
-            })
+        let place = self.github_place(device, project).ok()?;
+        let until = *self.missions.hosts_resting.get(place.host().unit().key())?;
+        (now / 1000 < until).then(|| until.saturating_mul(1000))
     }
 
     /// The change request a pull request or CI target names, as `project`'s
