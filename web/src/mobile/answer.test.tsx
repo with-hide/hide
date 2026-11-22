@@ -69,7 +69,14 @@ async function openDetail(hello: Partial<Extract<ServerFrame, { type: "hello" }>
   const submit = () => act(async () => field().form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   const inputs = () => socket.sent.filter((message) => message.type === "input");
   const send = () => container.querySelector<HTMLButtonElement>("[data-phone-send]")!;
-  return { container, socket, serve, field, type, submit, inputs, send, unmount: () => act(async () => root.unmount()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    });
+  return { container, socket, serve, field, type, submit, inputs, send, unmount };
 }
 
 afterEach(() => {
