@@ -1957,7 +1957,7 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
 }
 
 /// A core on `state`, whose own node's agent files live in an empty `home`,
-/// with panes `p-a`, `p-b` and `p-c` carrying the given sessions.
+/// with panes `p-a` to `p-d` carrying the given sessions.
 fn statistics_runtime(
     state: &Path,
     home: &Path,
@@ -1991,7 +1991,7 @@ fn statistics_runtime(
     runtime.snapshot.navigator.workspaces = vec![record_workspace(
         crate::node::TEST_NODE,
         "w",
-        &["p-a", "p-b", "p-c", "p-shell"],
+        &["p-a", "p-b", "p-c", "p-d", "p-shell"],
     )];
     runtime.snapshot.navigator.agents = sessions
         .iter()
