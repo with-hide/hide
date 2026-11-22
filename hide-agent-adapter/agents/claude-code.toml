@@ -288,10 +288,10 @@ regex = ['^4;0']
 # The keys that answer this agent's own question and approval screens from
 # the phone, each checked in a real pane of Claude Code 2.1.330 (docs/ARCHITECTURE.md,
 # The mobile companion); a kind not named here is answered in the terminal.
-# The keys other than esc and a letter count from the highlighted row, so they
-# are typed only while the screen draws `marker` before the row each `first` names.
+# The keys other than esc and a letter count from the highlighted row, so each
+# is typed only while the screen draws `marker` before the row `row` names there.
 [answer]
 marker = "❯"
-question = { down = "down", pick = "enter", first = "1." }
-plan_approval = { approve = ["enter"], keep_planning = ["esc"], first = "1." }
-permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], first = "1." }
+question = { down = "down", pick = "enter", row = "{n}." }
+plan_approval = { approve = ["enter"], keep_planning = ["esc"], row = "{n}." }
+permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}." }
