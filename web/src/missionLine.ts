@@ -91,7 +91,8 @@ export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { ki
 export type BranchLine = {
   mark: LineMark;
   /** `#n`, `↗#n` for an outside one, and `+N` for the others the node holds. */
-  pr: { number: number; outside: boolean; more: number } | null;
+  /** `label` is the code host's own name for an outside pull request (`#12`, `!12`), the core's `wait_reference`. */
+  pr: { number: number; outside: boolean; more: number; label?: string } | null;
   /** The branch, `↗` before an outside one; null when not known. */
   branch: { name: string; outside: boolean } | null;
   /** A planned node says how it will go in its branch's place: `PR` or `PR 없이`. */
@@ -134,7 +135,7 @@ function outsideLine(node: LineNode, destination: string | null): BranchLine {
   const to = branchTo(node.outside?.base ?? null, destination);
   const external = node.external;
   if (external && "pr" in external) {
-    return { mark: done ? "merged" : (node.outside?.state ?? "pull"), pr: { number: external.pr, outside: true, more: 0 }, branch: null, plan: null, direct: false, to, person: null };
+    return { mark: done ? "merged" : (node.outside?.state ?? "pull"), pr: { number: external.pr, outside: true, more: 0, ...(node.wait_label ? { label: node.wait_label } : {}) }, branch: null, plan: null, direct: false, to, person: null };
   }
   return { mark: done ? "merged" : "branch", pr: null, branch: external ? { name: external.branch, outside: true } : null, plan: null, direct: false, to, person: null };
 }
@@ -226,7 +227,7 @@ export function lineToWords(to: LineTo, t: TFunction<"translation">): string {
 
 /** The pull request's words as the line draws them: `#n`, `↗#n`, `+N`. */
 export function linePrLabel(pr: NonNullable<BranchLine["pr"]>): string {
-  return `${pr.outside ? "↗" : ""}#${pr.number}${pr.more > 0 ? ` +${pr.more}` : ""}`;
+  return `${pr.outside ? "↗" : ""}${pr.label ?? `#${pr.number}`}${pr.more > 0 ? ` +${pr.more}` : ""}`;
 }
 
 /**

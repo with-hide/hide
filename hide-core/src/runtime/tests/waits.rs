@@ -11,6 +11,8 @@ use crate::waits::{WaitOutcome, WaitTarget};
 use serde_json::{Value, json};
 
 const HOUR_MS: u64 = 60 * 60 * 1000;
+/// Longer than the wait clock's period, so the next tick runs.
+const TICK_MS: u64 = 60 * 1000;
 
 /// `sender` conducts mission-1, which waits on `wait` before `fix`.
 fn waiting_on(runtime: &mut Runtime, wait: Value) {
@@ -303,7 +305,11 @@ fn a_waiting_node_past_its_deadline_is_raised_until_planned_again() {
         "{until}"
     );
 
-    assert!(runtime.tick_waits(until + 1));
+    // The deadline asks one last look first, and fails the wait only once
+    // that read came back with it still open.
+    runtime.tick_waits(until + 1);
+    assert_eq!(node_view(&runtime, "wait").wait_outcome, None);
+    assert!(runtime.tick_waits(until + 1 + TICK_MS));
     let view = node_view(&runtime, "wait");
     assert_eq!(view.status, NodeStatus::Working);
     assert_eq!(view.wait_outcome, Some("expired"));
@@ -568,7 +574,9 @@ fn an_agents_wait_outlives_a_restart_and_expires_at_the_first_tick() {
     runtime.snapshot.ui_state.waits = Default::default();
     runtime.snapshot.ui_state.waits = stored.waits;
     runtime.missions.waits_next_tick_unix_ms = 0;
-    assert!(runtime.tick_waits(until + 1));
+    runtime.tick_waits(until + 1);
+    assert!(runtime.snapshot.ui_state.waits.waits[0].ended.is_none());
+    assert!(runtime.tick_waits(until + 1 + TICK_MS));
     let ended = runtime.snapshot.ui_state.waits.waits[0]
         .ended
         .clone()
@@ -576,4 +584,93 @@ fn an_agents_wait_outlives_a_restart_and_expires_at_the_first_tick() {
     assert_eq!(ended.outcome, WaitOutcome::Expired);
     let (stored, _, _) = crate::persistence::load(&runtime.state_path);
     assert!(stored.waits.open().next().is_none());
+}
+
+/// O2 of the review (D-09): an agent holding two waits sleeps for the second
+/// after the first ended, so the wait clock marks it again; one asleep is
+/// left alone.
+#[test]
+fn an_agent_with_another_open_wait_is_marked_again_once_one_ends() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    registered(&mut runtime);
+    created(&mut runtime);
+    other_mission(&mut runtime, "mission-7");
+    other_mission(&mut runtime, "mission-8");
+    wait(&mut runtime, "recipient", json!({"mission": "mission-7"})).unwrap();
+    wait(&mut runtime, "recipient", json!({"mission": "mission-8"})).unwrap();
+    let agent = runtime.snapshot.ui_state.waits.waits[0].agent_id.clone();
+    let marked_for = |runtime: &Runtime| {
+        runtime
+            .missions
+            .sleep_marks
+            .iter()
+            .filter(|mark| mark.agent_id == agent)
+            .find_map(|mark| match &mark.origin {
+                crate::runtime::agent_sleep::missions::Origin::Wait { wait } => Some(wait.clone()),
+                _ => None,
+            })
+    };
+    assert_eq!(marked_for(&runtime).as_deref(), Some("wait-1"));
+
+    set_other(&mut runtime, "mission-7", |mission| {
+        mission.status = MissionStatus::Done
+    });
+    assert_eq!(marked_for(&runtime), None);
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(crate::runtime::unix_milliseconds());
+    assert_eq!(marked_for(&runtime).as_deref(), Some("wait-2"));
+}
+
+/// O1 of the review (D-07): an agent's wait on a branch past its deadline
+/// is read once more before it fails, so a target met in the last look's
+/// gap is not lost.
+#[test]
+fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_look() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    registered(&mut runtime);
+    let (made, _) = wait(
+        &mut runtime,
+        "sender",
+        json!({"branch": "feat/a", "for": "1h"}),
+    )
+    .unwrap();
+    let until = made["until_unix_ms"].as_u64().unwrap();
+    assert!(runtime.snapshot.ui_state.waits.waits[0].project.is_some());
+
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(until + 1);
+    assert!(runtime.snapshot.ui_state.waits.waits[0].ended.is_none());
+    assert!(runtime.tick_waits(until + 1 + TICK_MS));
+    assert_eq!(
+        runtime.snapshot.ui_state.waits.waits[0]
+            .ended
+            .as_ref()
+            .map(|ended| ended.outcome.clone()),
+        Some(WaitOutcome::Expired)
+    );
+}
+
+/// M2 of the review: a store whose waits all went is still kept, so the
+/// next wait after a restart takes a new id and its notice a new revision,
+/// which a seen record of the earlier one cannot hide.
+#[test]
+fn a_new_wait_after_a_restart_never_takes_an_ended_waits_id() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    registered(&mut runtime);
+    wait(&mut runtime, "sender", json!({"branch": "feat/a"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "wait_cancel", "id": "wait-1"}),
+    )
+    .unwrap();
+    let (stored, _, _) = crate::persistence::load(&runtime.state_path);
+    assert!(stored.waits.open().next().is_none());
+
+    runtime.snapshot.ui_state.waits = stored.waits;
+    let (made, _) = wait(&mut runtime, "sender", json!({"branch": "feat/b"})).unwrap();
+    assert_eq!(made["id"], "wait-2");
 }

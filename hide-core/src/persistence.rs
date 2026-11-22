@@ -279,8 +279,8 @@ struct StoredUiState {
     /// The archived sessions; absent loads as none.
     #[serde(default)]
     session_archive: crate::session_archive::SessionArchive,
-    /// The agents' waits (PRD core-wait B26); absent loads as none, and an
-    /// empty store is not written.
+    /// The agents' waits (PRD core-wait B26); absent loads as none, and a
+    /// store no wait was ever made in is not written.
     #[serde(default, skip_serializing_if = "crate::waits::WaitStore::is_empty")]
     waits: crate::waits::WaitStore,
     /// Absent in a store written before the recent list existed, which loads

@@ -2,13 +2,13 @@
 Leave "carry on once this is done" to Hide and rest: Hide checks the target again on its own, and when it is met, fails or passes its deadline you get one Hide notice that tells you which, and wakes you if you were asleep. A Conductor waits inside its plan with a waiting node (`kind: wait`, `hide mission help`); every other agent waits with this command.
 
 ```
-hide wait pr <number> [--ci] [--for <30m|2h|3d>]
-hide wait branch <name> [--for <30m|2h|3d>]
-hide wait mission <id> [--node <key>] [--for <30m|2h|3d>]
+hide wait pr <number> [--ci] [--for <2h|3d>]
+hide wait branch <name> [--for <2h|3d>]
+hide wait mission <id> [--node <key>] [--for <2h|3d>]
 hide wait list        hide wait cancel <wait-id>        hide wait help
 ```
 
-- `pr <number>` waits until the pull request merges (met) or closes without a merge (failed). With `--ci` it waits until every check on its newest commit has ended: all passed is met, any failed is failed and the notice names the checks that failed; a new push waits for the new commit's checks, and a merge before then is met.
+- `pr <number>` waits until the pull request merges (met) or closes without a merge (failed). With `--ci` it waits until every check on its newest commit has ended: all passed is met, any failed is failed and the notice names the checks that failed; a new push waits for the new commit's checks, and a merge before then is met; a pull request with no checks at all has none to end, so `--ci` there only ends at its deadline.
 - `branch <name>` waits until the branch's own commits are in the project's default branch; a branch just cut from it waits for its first commit of its own.
 - `mission <id>` waits until that mission closes as `done` (met) or `cancelled` (failed); one closed as `merge_wait` is still waited on. With `--node <key>` it waits until that node is done (a code node counts once its pull request is ready, not when it reaches main) or is dropped (failed).
 - Run it from a checkout of the project the pull request or branch is in. A mission or node must be on this machine; your own mission, or one that waits on it, is refused (`wait_self`).

@@ -1502,7 +1502,7 @@ fn ingest_github_poll(
         return false;
     };
     guard.note_polled_changes(poll.changed);
-    guard.note_host_resting(host, poll.resting);
+    guard.note_host_resting(host, poll.resting_until);
     let held = guard.note_poll_held(poll.held);
     drop(guard);
     drop(runtime);

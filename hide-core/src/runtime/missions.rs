@@ -931,11 +931,12 @@ pub(crate) struct MissionRuntime {
     pub(super) outside: super::mission_outside::Outside,
     /// When the wait clock next runs (`Runtime::tick_waits`). Memory only.
     pub(super) waits_next_tick_unix_ms: u64,
-    /// The code hosts whose watch rests at its rate limit's floor now, by
-    /// key, as its last answer said (`code_host::WatchAnswer::resting`): a
-    /// wait reads no change request by number there until it answers
-    /// otherwise (PRD core-wait D-13). Memory only, one entry per host.
-    pub(super) hosts_resting: std::collections::BTreeSet<String>,
+    /// The code hosts whose watch rests at its rate limit's floor, by key,
+    /// with the unix second the rest ends, as its last answer said
+    /// (`code_host::WatchAnswer::resting_until`): a wait reads no change
+    /// request by number there before then (PRD core-wait D-13). Memory
+    /// only, one entry per host.
+    pub(super) hosts_resting: std::collections::BTreeMap<String, u64>,
     /// The nodes finished as the book last read, by mission and node, so a
     /// save tells a node that has just finished (PRD mission-worker-sleep
     /// D-17). Set from the book read at start, so a restart sleeps nothing
@@ -1527,7 +1528,7 @@ fn attention_words(
         Some(Reason::NotStarted) => stall(
             "it could start and was not started".to_owned(),
             &format!(
-                "{start}; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`"
+                "{start}; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on it with a waiting (`wait`) node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`"
             ),
         ),
         Some(Reason::WaitStood) => stall(

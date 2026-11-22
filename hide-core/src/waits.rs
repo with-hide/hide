@@ -480,8 +480,11 @@ pub struct WaitStore {
 }
 
 impl WaitStore {
+    /// Whether no wait was ever made: a store whose waits all ended and went
+    /// is still written, so its ids and notice revisions never start again
+    /// at one, which a seen record of an earlier `wait-1` would hide.
     pub fn is_empty(&self) -> bool {
-        self.waits.is_empty()
+        self.waits.is_empty() && self.next == 0 && self.seq == 0
     }
 
     /// The open waits of every agent.

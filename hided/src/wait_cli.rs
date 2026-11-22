@@ -12,7 +12,7 @@ use serde_json::json;
 /// The guide `hide wait help` prints.
 pub const HELP: &str = include_str!("../assets/wait/help.md");
 
-pub const USAGE: &str = "hide wait help\nhide wait pr <number> [--ci] [--for <30m|2h|3d>]\nhide wait branch <name> [--for <30m|2h|3d>]\nhide wait mission <id> [--node <key>] [--for <30m|2h|3d>]\nhide wait list\nhide wait cancel <wait-id>";
+pub const USAGE: &str = "hide wait help\nhide wait pr <number> [--ci] [--for <2h|3d>]\nhide wait branch <name> [--for <2h|3d>]\nhide wait mission <id> [--node <key>] [--for <2h|3d>]\nhide wait list\nhide wait cancel <wait-id>";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WaitCli {

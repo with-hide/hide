@@ -15,6 +15,8 @@
 //! nodes too. The core's tick (`tick_waits`) passes deadlines, ends the waits
 //! of agents that ended (D-22) and looks again at every followed project.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Value, json};
 
 use super::Runtime;
@@ -53,14 +55,19 @@ pub(super) fn settle_wait_deadlines(book: &mut crate::missions::MissionBook, now
     changed
 }
 
-/// What `hide wait list` and an answer say of one wait.
+/// What `hide wait list` and an answer say of one wait, with how it ended
+/// when it already did (a mission closed before the wait was made).
 fn wait_json(wait: &AgentWait) -> Value {
-    json!({
+    let mut answer = json!({
         "id": wait.id,
         "target": wait.target,
         "words": wait.target.words(),
         "until_unix_ms": wait.until_unix_ms,
-    })
+    });
+    if let (Some(ended), Some(fields)) = (&wait.ended, answer.as_object_mut()) {
+        fields.insert("ended".into(), json!(ended.outcome.key()));
+    }
+    answer
 }
 
 impl Runtime {
@@ -73,20 +80,28 @@ impl Runtime {
             return false;
         }
         self.missions.waits_next_tick_unix_ms = now.saturating_add(TICK_EVERY_MS);
+        // Every agent wait's end counts one more in the store's sequence,
+        // whichever pass below ended it.
+        let ends_before = self.snapshot.ui_state.waits.seq;
         let mut changed = self.end_waits_of_ended_agents(now);
         changed |= self.pass_wait_deadlines(now);
         if self.missions.unreadable.is_none() && self.judge_book_waits(now) {
             self.save_missions();
             changed = true;
         }
-        changed | self.look_at_followed(now)
+        changed |= self.look_at_followed(now);
+        self.mark_waiting_agents();
+        changed | (self.snapshot.ui_state.waits.seq != ends_before)
     }
 
     /// Ends every wait whose deadline passed (D-07): a waiting node is held
     /// with its raise, an agent's wait ends with its notice. A deadline that
-    /// passed while Hide was off ends at its first tick (B26).
+    /// passed while Hide was off ends at its first tick (B26), after one read
+    /// of a target on the code host (`Outside::read_after`), which this asks
+    /// for when none came since.
     fn pass_wait_deadlines(&mut self, now: u64) -> bool {
         let mut book_moved = false;
+        let mut look = BTreeSet::new();
         if self.missions.unreadable.is_none() {
             book_moved |= settle_wait_deadlines(&mut self.missions.book, now);
             let mut events = Vec::new();
@@ -96,9 +111,20 @@ impl Runtime {
                 }
                 for at in 0..mission.nodes.len() {
                     let node = &mission.nodes[at];
-                    if !super::mission_outside::judged(node)
-                        || node.wait_until_unix_ms.is_none_or(|until| until > now)
+                    let Some(until) = node.wait_until_unix_ms.filter(|until| *until <= now) else {
+                        continue;
+                    };
+                    if !super::mission_outside::judged(node) {
+                        continue;
+                    }
+                    if node.wait_target.as_ref().is_some_and(WaitTarget::code_host)
+                        && !self.missions.outside.read_after(
+                            &mission.device_id,
+                            &mission.project,
+                            until,
+                        )
                     {
+                        look.insert((mission.device_id.clone(), mission.project.clone()));
                         continue;
                     }
                     let (made, moved) = super::mission_outside::settle_wait_node(
@@ -120,17 +146,33 @@ impl Runtime {
                 self.save_missions();
             }
         }
-        let expired: Vec<String> = self
+        let mut expired = Vec::new();
+        for wait in self
             .snapshot
             .ui_state
             .waits
             .open()
             .filter(|wait| wait.until_unix_ms <= now)
-            .map(|wait| wait.id.clone())
-            .collect();
+        {
+            if wait.target.code_host()
+                && let Some(project) = &wait.project
+                && !self
+                    .missions
+                    .outside
+                    .read_after(&wait.device, project, wait.until_unix_ms)
+            {
+                look.insert((wait.device.clone(), project.clone()));
+                continue;
+            }
+            expired.push(wait.id.clone());
+        }
         let mut ended = false;
         for id in expired {
             ended |= self.end_agent_wait(&id, WaitOutcome::Expired, now);
+        }
+        for (device, project) in look {
+            self.missions.outside.deadline_look(&device, &project, now);
+            ended |= self.follow_outside_stored(&device, &project);
         }
         book_moved | ended
     }
@@ -345,12 +387,16 @@ impl Runtime {
     /// a change request is not read by its number until the next look
     /// (D-13): the watch's floor, which its answer says
     /// (`code_host::WatchAnswer::resting`).
-    pub(super) fn code_host_resting(&self, project: &str) -> bool {
-        self.github_place(None, project).ok().is_some_and(|place| {
-            self.missions
-                .hosts_resting
-                .contains(place.host().unit().key())
-        })
+    pub(super) fn code_host_resting(&self, device: &str, project: &str, now: u64) -> bool {
+        let device = (device != self.node.as_str()).then_some(device);
+        self.github_place(device, project)
+            .ok()
+            .is_some_and(|place| {
+                self.missions
+                    .hosts_resting
+                    .get(place.host().unit().key())
+                    .is_some_and(|until| now / 1000 < *until)
+            })
     }
 
     /// The change request a pull request or CI target names, as `project`'s
@@ -381,19 +427,18 @@ impl Runtime {
         ))
     }
 
-    /// Keeps whether `host`'s watch rests at its rate limit's floor, as its
-    /// last answer said (D-13).
-    pub(crate) fn note_host_resting(&mut self, host: crate::code_host::Host, resting: bool) {
+    /// Keeps until when `host`'s watch rests at its rate limit's floor, as
+    /// its last answer said (D-13).
+    pub(crate) fn note_host_resting(&mut self, host: crate::code_host::Host, until: Option<u64>) {
         let key = host.unit().key();
-        let moved = if resting {
-            self.missions.hosts_resting.insert(key.to_owned())
-        } else {
-            self.missions.hosts_resting.remove(key)
+        let moved = match until {
+            Some(until) => self.missions.hosts_resting.insert(key.to_owned(), until) != Some(until),
+            None => self.missions.hosts_resting.remove(key).is_some(),
         };
         if moved {
             crate::diagnostic!(json!({
                 "component": "waits", "kind": "wait.host_resting", "host": key,
-                "resting": resting,
+                "until_unix": until,
             }));
         }
     }
@@ -433,8 +478,11 @@ impl Runtime {
             if loaded.is_none() && !book.shelved.iter().any(|line| line.id == id) {
                 return Some("wait_mission_unknown");
             }
-            if let (WaitTarget::Node { node, .. }, Some(mission)) = (target, loaded)
-                && mission.node(node).is_none()
+            // A node is read from a mission the book holds: a closed mission
+            // filed out of it keeps no nodes to judge, so its node would wait
+            // until the deadline for nothing.
+            if let WaitTarget::Node { node, .. } = target
+                && loaded.is_none_or(|mission| mission.node(node).is_none())
             {
                 return Some("wait_mission_unknown");
             }
@@ -624,6 +672,15 @@ impl Runtime {
         } else if let Some(project) = project {
             self.follow_outside_stored(device, project);
         }
+        // The answer says how the wait stands now, ended at once included.
+        let answer = self
+            .snapshot
+            .ui_state
+            .waits
+            .waits
+            .iter()
+            .find(|wait| wait.id == id)
+            .map_or(answer, wait_json);
         Ok((answer, true))
     }
 
@@ -708,18 +765,41 @@ impl Runtime {
         });
     }
 
-    /// Marks again, after a restart, each agent with an open wait (the marks
-    /// are memory only).
+    /// Marks each awake agent with an open wait and no mark (D-09): after a
+    /// restart, since the marks are memory only, and on the wait clock, since
+    /// a mark is spent once its agent slept and one wait's end drops the
+    /// mark another open wait of the same agent still needs.
     pub(super) fn mark_waiting_agents(&mut self) {
+        let ledger = self
+            .delivery_ledger
+            .as_ref()
+            .ok()
+            .map(std::sync::Arc::clone);
         let open: Vec<(String, String)> = self
             .snapshot
             .ui_state
             .waits
             .open()
+            .filter(|wait| {
+                !self
+                    .missions
+                    .sleep_marks
+                    .iter()
+                    .any(|mark| mark.agent_id == wait.agent_id)
+            })
             .map(|wait| (wait.agent_id.clone(), wait.id.clone()))
             .collect();
         for (agent, id) in open {
-            self.mark_wait_sleep(&agent, &id);
+            let asleep = ledger.as_ref().is_some_and(|ledger| {
+                ledger
+                    .agents
+                    .iter()
+                    .find(|record| record.id == agent && !record.ended)
+                    .is_some_and(|record| self.asleep_route(&record.actor).is_some())
+            });
+            if !asleep {
+                self.mark_wait_sleep(&agent, &id);
+            }
         }
     }
 

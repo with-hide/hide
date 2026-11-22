@@ -69,9 +69,9 @@ hide agent end <id> [--actor <id>] [--keep-pane]
 ## Waiting
 
 ```
-hide wait pr <number> [--ci] [--for <30m|2h|3d>]
-hide wait branch <name> [--for <30m|2h|3d>]
-hide wait mission <id> [--node <key>] [--for <30m|2h|3d>]
+hide wait pr <number> [--ci] [--for <2h|3d>]
+hide wait branch <name> [--for <2h|3d>]
+hide wait mission <id> [--node <key>] [--for <2h|3d>]
 hide wait list        hide wait cancel <wait-id>        hide wait help
 ```
 

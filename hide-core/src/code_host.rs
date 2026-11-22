@@ -928,10 +928,12 @@ pub(crate) struct WatchAnswer {
     /// Paused after a failure, or every project at the host's rate floor:
     /// their marks are stale until a read answers (PRD git-freshness B23).
     pub(crate) held: Vec<String>,
-    /// The host's rate limit is near its floor, so nothing reads it by
-    /// number until a later answer says otherwise: a wait's read of a
-    /// change request waits for the next look (PRD core-wait D-13, B25).
-    pub(crate) resting: bool,
+    /// The host's rate limit is near its floor until this unix second, so
+    /// nothing reads it by number before then: a wait's read of a change
+    /// request waits for the next look (PRD core-wait D-13, B25). The time
+    /// ends the rest by itself, so a watch that stops answering (no window)
+    /// leaves no host resting for good.
+    pub(crate) resting_until: Option<u64>,
 }
 
 pub(crate) trait Watch: Sync {

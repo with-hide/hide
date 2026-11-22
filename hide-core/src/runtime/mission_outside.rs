@@ -59,6 +59,11 @@ const READ_LIMIT: usize = 32;
 /// in front within a minute, every other within five (D-11, D-12).
 pub(super) const LOOK_FRONT_MS: u64 = 60_000;
 pub(super) const LOOK_BEHIND_MS: u64 = 5 * 60_000;
+/// How old a stored pull request list may be and still answer a look: two
+/// of the slower look's periods, so a list a live read keeps replacing always
+/// answers and one nothing reads any more (another machine's, with no window)
+/// soon does not.
+const STORED_LIST_FRESH_MS: u64 = 2 * LOOK_BEHIND_MS;
 
 /// One project on one machine.
 pub(crate) type Place = (String, String);
@@ -114,6 +119,10 @@ pub(crate) struct Outside {
     /// the tick's level look counts from; one entry per followed project,
     /// the rest let go each tick.
     looked: BTreeMap<Place, u64>,
+    /// When a passed deadline last asked each project for its final look,
+    /// on the wait clock (PRD core-wait D-07); one entry per followed
+    /// project, let go with `looked`.
+    deadline_looked: BTreeMap<Place, u64>,
 }
 
 impl Outside {
@@ -127,6 +136,28 @@ impl Outside {
 
     /// Whether `project` on `device` has no read out, no pass left and no
     /// look waiting.
+    /// Whether a passed deadline asked `project` on `device` for its look
+    /// at or after `since`, and that look's read has come back: a deadline
+    /// fails a wait on the code host only once a read after it found it
+    /// still open (PRD core-wait D-07), so a merge just before the deadline
+    /// is not lost to the look's clock.
+    pub(super) fn read_after(&self, device: &str, project: &str, since: u64) -> bool {
+        let place = (device.to_owned(), project.to_owned());
+        self.deadline_looked
+            .get(&place)
+            .is_some_and(|at| *at >= since)
+            && !self.reading.contains(&place)
+            && !self.pass.contains_key(&place)
+            && !self.pending.contains(&place)
+    }
+
+    /// Records the look a passed deadline asked of `project` on `device` at
+    /// `now`, on the wait clock.
+    pub(super) fn deadline_look(&mut self, device: &str, project: &str, now: u64) {
+        self.deadline_looked
+            .insert((device.to_owned(), project.to_owned()), now);
+    }
+
     #[cfg(test)]
     pub(crate) fn idle_for_test(&self, device: &str, project: &str) -> bool {
         let place = (device.to_owned(), project.to_owned());
@@ -483,8 +514,10 @@ pub(super) fn settle_wait_node(
     match &outcome {
         None => {
             next.status = NodeStatus::Working;
-            if next.wait_outcome.is_some() {
-                next.wait_outcome = None;
+            // Open again, as CI on a new push: the failed checks' line this
+            // wrote no longer stands.
+            if let Some(WaitOutcome::CiFailed { .. }) = next.wait_outcome.take() {
+                next.line = None;
             }
         }
         Some(met) if met.met() => {
@@ -575,6 +608,10 @@ impl Runtime {
             .outside
             .looked
             .retain(|place, _| places.contains(place));
+        self.missions
+            .outside
+            .deadline_looked
+            .retain(|place, _| places.contains(place));
         let front = self
             .focused_local_checkout()
             .map(|(workspace, _)| workspace.path.clone());
@@ -604,13 +641,23 @@ impl Runtime {
     /// `project`, with the stored pull request list. Returns whether
     /// anything changed.
     pub(crate) fn follow_outside_stored(&mut self, device: &str, project: &str) -> bool {
+        // A list no read has replaced for a while answers nothing: with no
+        // window another machine's list is not read again, and what it says
+        // of a change request is asked by its number instead.
+        let now = super::memory::now_ms();
+        let listed = self.github_project_on(device, project).filter(|listed| {
+            listed
+                .status
+                .last_success_at_unix_ms
+                .is_some_and(|at| now.saturating_sub(at) <= STORED_LIST_FRESH_MS)
+        });
         let (found, asks) = outside_asks(
             &self.missions.book,
             &self.snapshot.ui_state.waits,
             &self.missions.outside,
             device,
             project,
-            self.github_project_on(device, project),
+            listed,
         );
         self.follow_outside(device, project, found, asks)
     }
@@ -750,8 +797,8 @@ impl Runtime {
     /// The asks of `asks` read by a change request's number that wait for
     /// the next look while `project`'s host is near its rate limit's floor
     /// (D-13, B25): they stay open, each told once in the log.
-    fn defer_at_floor(&self, project: &str, asks: Vec<Ask>) -> Vec<Ask> {
-        if !self.code_host_resting(project) {
+    fn defer_at_floor(&self, device: &str, project: &str, asks: Vec<Ask>) -> Vec<Ask> {
+        if !self.code_host_resting(device, project, super::memory::now_ms()) {
             return asks;
         }
         let (deferred, kept): (Vec<Ask>, Vec<Ask>) = asks.into_iter().partition(|ask| {
@@ -782,7 +829,7 @@ impl Runtime {
             self.missions.outside.pending.insert(place);
             return false;
         }
-        let asks = self.defer_at_floor(project, asks);
+        let asks = self.defer_at_floor(device, project, asks);
         if asks.is_empty() {
             return false;
         }

@@ -927,7 +927,10 @@ pub enum WakeEvent {
     /// the Conductor asks about its open pull requests and cancels it.
     EndAsked,
     /// A node waits on the Conductor to look (PRD mission-node-simple
-    /// D-05); `reason` says why.
+    /// D-05); `reason` says why. A book from before 1.1.0 may still hold an
+    /// outside node's failure waiting as `outside_failed`, which reads as
+    /// this, so the book stays readable.
+    #[serde(alias = "outside_failed")]
     Attention,
     /// The operator settled what waited on a node; `action` says how (B17).
     Resolved,
@@ -4583,7 +4586,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A wait cannot name its own mission, or a mission that waits on it; wait on a node of another mission, or order the work with depends_on"
         }
         "mission_wait_unknown" => {
-            "The mission or node is not on this machine: run hide mission list; a mission on another machine cannot be waited on"
+            "The mission or node is not on this machine, or the node's mission is already closed: run hide mission list, and wait on a closed mission itself; a mission on another machine cannot be waited on"
         }
         "wait_target_invalid" => {
             "Name one target: hide wait pr <n> [--ci], hide wait branch <name>, or hide wait mission <id> [--node <key>]"
@@ -4604,7 +4607,7 @@ pub fn next_action(code: &str) -> &'static str {
             "You cannot wait on your own mission, or on one that waits on it; wait on a node of another mission, or ask your Conductor"
         }
         "wait_mission_unknown" => {
-            "The mission or node is not on this machine: run hide mission list; a mission on another machine cannot be waited on"
+            "The mission or node is not on this machine, or the node's mission is already closed: run hide mission list, and wait on a closed mission itself; a mission on another machine cannot be waited on"
         }
         "wait_project_unknown" => {
             "Run hide wait from a checkout of the project the pull request or branch is in"

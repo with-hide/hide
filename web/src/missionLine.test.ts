@@ -3,7 +3,7 @@
 // line of one that does not, as the desktop and the phone both read them.
 import { expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords, waitLeft, waitLine, waitLineWords, type LineNode } from "./missionLine";
+import { branchLine, branchLineWords, lineNode, linePrLabel, resultLine, resultLineWords, waitLeft, waitLine, waitLineWords, type LineNode } from "./missionLine";
 import type { MissionNode } from "./snapshot";
 
 function node(extra: Partial<LineNode> = {}): LineNode {
@@ -128,4 +128,11 @@ it("shows a waiting node's time left only under a day, and past its deadline say
   expect(waitLeft(waiting(now - hour, { wait_outcome: "expired" }), now)).toEqual({ expired: true });
   expect(waitLeft(waiting(now + hour, { status: "done" }), now)).toBeNull();
   expect(waitLeft(node({ wait_until_unix_ms: now + hour }), now)).toBeNull();
+});
+
+it("names a waiting pull request as its code host writes it, the core's reference, on the branch line", () => {
+  const waiting = node({ kind: "wait", delivery: null, branch: null, external: { pr: 12 }, wait_target: { pr: 12 }, wait_label: "!12" });
+  const line = branchLine(waiting, "main");
+  expect(line?.pr).toMatchObject({ number: 12, outside: true, label: "!12" });
+  expect(linePrLabel(line!.pr!)).toBe("↗!12");
 });

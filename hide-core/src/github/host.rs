@@ -505,7 +505,7 @@ impl WatchReader for crate::github_poll::GithubPollReader {
             |answer| WatchAnswer {
                 changed: answer.changed,
                 held: answer.held,
-                resting: answer.resting,
+                resting_until: answer.resting_until,
             },
         )
     }
