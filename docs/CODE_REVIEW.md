@@ -88,6 +88,7 @@ A reviewer asks these four questions of every cap the change adds or changes; a 
 - In a mission, after the last review round its verification strength allows (`hide mission help`, Verification strength), the Conductor owns that decision for ordinary findings: it may accept them as follow-up issues, named on the pull request, and go on without asking the operator.
   Serious findings still block until fixed in the node.
 - A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed; it raises a new finding only when it is serious.
+- In a mission, a commit that only merges the destination into the branch is not a round: its CI proves the merge and the review that passed before it stands, unless resolving a conflict changed the node's own code (`hide mission help`, While it runs).
 - The first round gives every finding at once, each with its grade, so the author fixes them in one pass rather than one round per finding.
 - The author fixes a finding together with every other place the same kind of problem appears, not only the line it was found on.
 - In a mission, the worker confirms its plan for each serious finding with the checker that raised it before fixing it; the checker answers only OK or what to change, and the worker goes on with its plan when no answer comes in 10 minutes, or with the changes the checker named, without asking again. Ordinary and minor findings are fixed at once.
