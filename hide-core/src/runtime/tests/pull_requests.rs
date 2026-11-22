@@ -1163,35 +1163,51 @@ fn an_operation_gitlab_com_does_not_offer_is_refused_at_its_event() {
     let place = runtime.github_place(None, "/repo").unwrap();
     assert_eq!(place.host().key(), "gitlab");
     // The new repository's read lists the merge request.
-    runtime.github.projects.retain(|project| project.root_path != "/repo");
-    runtime.github.projects.push(crate::model::GithubProjectSnapshot {
-        root_path: "/repo".into(),
-        status: crate::model::GithubStatusSnapshot {
-            available: true,
-            last_success_at_unix_ms: Some(1),
+    runtime
+        .github
+        .projects
+        .retain(|project| project.root_path != "/repo");
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: "/repo".into(),
+            status: crate::model::GithubStatusSnapshot {
+                available: true,
+                last_success_at_unix_ms: Some(1),
+                ..Default::default()
+            },
+            pull_requests: vec![PullRequestSnapshot {
+                url: "https://gitlab.com/acme/sub/project/-/merge_requests/2".into(),
+                ..pull_request(2, "open-work", PullRequestBadge::Open, None)
+            }],
+            pull_requests_read: true,
+            issues_read: crate::model::PartRead::Unsupported,
+            identity_read: crate::model::PartRead::Read,
             ..Default::default()
-        },
-        pull_requests: vec![PullRequestSnapshot {
-            url: "https://gitlab.com/acme/sub/project/-/merge_requests/2".into(),
-            ..pull_request(2, "open-work", PullRequestBadge::Open, None)
-        }],
-        pull_requests_read: true,
-        issues_read: crate::model::PartRead::Unsupported,
-        identity_read: crate::model::PartRead::Read,
-        ..Default::default()
-    });
+        });
     runtime.apply_pull_requests();
 
     for (kind, payload) in [
-        ("pr_merge", serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"})),
-        ("pr_update_branch", serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD})),
+        (
+            "pr_merge",
+            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
+        ),
+        (
+            "pr_update_branch",
+            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD}),
+        ),
     ] {
         runtime.pr_card_slot("w", 2).write = None;
         assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
         let write = card(&runtime, 2)
             .write
             .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
-        assert_eq!((write.phase, write.reason), ("failed", Some("unsupported")), "{kind}");
+        assert_eq!(
+            (write.phase, write.reason),
+            ("failed", Some("unsupported")),
+            "{kind}"
+        );
     }
 
     assert!(runtime.dispatch_json(&event(

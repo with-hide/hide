@@ -12,10 +12,9 @@ use super::Where;
 use crate::code_host::{
     BasePolicy, ByNumber, CardRead, ChangeHead, ChangeHeadFailure, ChangeRequestPage, CodeHost,
     CommitChecks, CreateFailure, EditBody, FailedLog, Feedback, Handover, HeadMerge, HostAccess,
-    HostFailure,
-    HostReads, Issues, JobLog, MergeProof, MergedHead, Place, ReadClock, RepositoryRef, Search,
-    SearchTarget, Standing, UpdateBranch, Watch, WatchAnswer, WatchReader, WatchRequest,
-    WriteFailure,
+    HostFailure, HostReads, Issues, JobLog, MergeProof, MergedHead, Place, ReadClock,
+    RepositoryRef, Search, SearchTarget, Standing, UpdateBranch, Watch, WatchAnswer, WatchReader,
+    WatchRequest, WriteFailure,
 };
 use crate::node_access::NodeLink;
 

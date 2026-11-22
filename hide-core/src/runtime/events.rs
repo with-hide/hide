@@ -4189,7 +4189,7 @@ impl Runtime {
                             == super::projects::LookRead::Asked
                     {
                         crate::diagnostic!(serde_json::json!({
-                            "component": "github",
+                            "component": self.read_component(None, &project),
                             "kind": "read.looked_at",
                             "project": project,
                         }));

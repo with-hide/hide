@@ -175,12 +175,14 @@ fn run_glab_for(
     if !status.success() && !answered_with_errors(arguments, &printed.stdout) {
         let reason = String::from_utf8_lossy(&stderr.stdout).trim().to_owned();
         let stdout = String::from_utf8_lossy(&printed.stdout).trim().to_owned();
-        return Err(classify_failure(match (reason.is_empty(), stdout.is_empty()) {
-            (false, _) => reason,
-            // `glab api` prints GitLab's error answer on stdout.
-            (true, false) => stdout,
-            (true, true) => format!("glab exited with {status}"),
-        }));
+        return Err(classify_failure(
+            match (reason.is_empty(), stdout.is_empty()) {
+                (false, _) => reason,
+                // `glab api` prints GitLab's error answer on stdout.
+                (true, false) => stdout,
+                (true, true) => format!("glab exited with {status}"),
+            },
+        ));
     }
     Ok(printed)
 }
@@ -267,9 +269,19 @@ esac"#,
             &["mr", "merge", "12", "--yes"][..],
             &["api", "user"],
             &["auth", "login"],
-            &["api", "--hostname", "gitlab.com", "-X", "PUT", "projects/1/merge_requests/2/merge"],
+            &[
+                "api",
+                "--hostname",
+                "gitlab.com",
+                "-X",
+                "PUT",
+                "projects/1/merge_requests/2/merge",
+            ],
         ] {
-            assert!(fixture.run(refused, ANSWER_BYTE_LIMIT).is_err(), "{refused:?}");
+            assert!(
+                fixture.run(refused, ANSWER_BYTE_LIMIT).is_err(),
+                "{refused:?}"
+            );
         }
         assert!(!fixture.root.join("forbidden").exists());
     }
@@ -383,7 +395,12 @@ esac"#,
             ] {
                 command.env_remove(name);
             }
-            run_glab_for(command, arguments, Duration::from_secs(30), ANSWER_BYTE_LIMIT)
+            run_glab_for(
+                command,
+                arguments,
+                Duration::from_secs(30),
+                ANSWER_BYTE_LIMIT,
+            )
         };
         let version = run(&VERSION).expect("glab --version runs");
         let version = String::from_utf8(version.stdout).unwrap();

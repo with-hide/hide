@@ -172,18 +172,33 @@ pub(super) fn read(
     if !due.is_empty() {
         // One line per pass naming each project read and why, with the
         // generation that asked for it.
-        crate::diagnostic!(serde_json::json!({
-            "component": "github",
-            "kind": "pull_requests.read",
-            "projects": due
-                .iter()
-                .map(|(project, reason)| serde_json::json!({
-                    "project": project.root.to_string_lossy(),
-                    "generation": project.generation,
-                    "reason": reason.as_str(),
-                }))
-                .collect::<Vec<_>>(),
-        }));
+        // One line per host, named by its key.
+        let mut by_host: std::collections::BTreeMap<
+            &str,
+            Vec<&(&GithubProjectRequest, ReadReason)>,
+        > = std::collections::BTreeMap::new();
+        for due in &due {
+            let component = due
+                .0
+                .place
+                .as_ref()
+                .map_or(super::COMPONENT, |place| place.host().key());
+            by_host.entry(component).or_default().push(due);
+        }
+        for (component, due) in by_host {
+            crate::diagnostic!(serde_json::json!({
+                "component": component,
+                "kind": "pull_requests.read",
+                "projects": due
+                    .iter()
+                    .map(|(project, reason)| serde_json::json!({
+                        "project": project.root.to_string_lossy(),
+                        "generation": project.generation,
+                        "reason": reason.as_str(),
+                    }))
+                    .collect::<Vec<_>>(),
+            }));
+        }
         let mut placed: Vec<Placed> = Vec::new();
         for (project, _) in due {
             let started = Instant::now();
@@ -225,7 +240,7 @@ pub(super) fn read(
                 }
                 Some((None, root_path)) => {
                     let answer = no_remote(root_path);
-                    log_answer(project.generation, &answer, started, None);
+                    log_answer(super::COMPONENT, project.generation, &answer, started, None);
                     answer
                 }
             };
@@ -332,13 +347,14 @@ pub(crate) fn no_remote(root_path: String) -> GithubProjectSnapshot {
 /// requests. A read that answered without an optional part is a success,
 /// with the reason as its warning.
 pub(crate) fn log_answer(
+    component: &str,
     generation: u64,
     project: &GithubProjectSnapshot,
     started: Instant,
     warning: Option<String>,
 ) {
     crate::diagnostic!(serde_json::json!({
-        "component": "github",
+        "component": component,
         "kind": if project.read_outcome() == GithubReadOutcome::NoRemote {
             "pull_requests.no_remote"
         } else if project.status.unavailable_reason.is_some() {

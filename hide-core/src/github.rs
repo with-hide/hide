@@ -246,7 +246,13 @@ fn read_root(
             unresolved,
         ),
     };
-    crate::code_host::read::log_answer(due.generation, &project, started, warning);
+    crate::code_host::read::log_answer(
+        crate::code_host::CodeHost::key(&host::GITHUB),
+        due.generation,
+        &project,
+        started,
+        warning,
+    );
     project
 }
 

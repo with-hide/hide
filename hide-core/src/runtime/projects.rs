@@ -1347,6 +1347,14 @@ impl Runtime {
 
     /// The read clock of a local project's host; a project no host reads has
     /// the slowest registered one.
+    /// The diagnostic component of a line about the project at `path` on
+    /// `node` (this machine when `None`): its host's key, or
+    /// [`crate::code_host::COMPONENT`] while no host places it.
+    pub(super) fn read_component(&self, node: Option<&str>, path: &str) -> &'static str {
+        self.github_place(node, path)
+            .map_or(crate::code_host::COMPONENT, |place| place.host().key())
+    }
+
     fn read_clock_of(&self, path: &str) -> crate::code_host::ReadClock {
         self.github_place(None, path).map_or_else(
             |_| self.code_hosts.unplaced_clock(),
@@ -1409,7 +1417,7 @@ impl Runtime {
             self.github_over_limit = over_limit;
             if over_limit > 0 {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "projects.over_limit",
                     "read": paths.len(),
                     "local_git_projects": total,
@@ -1445,7 +1453,7 @@ impl Runtime {
             let before = self.github_clock.get(&path).copied();
             if self.github_remotes_moved(&path) {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": self.read_component(None, &path),
                     "kind": "read.remotes_changed",
                     "project": path,
                 }));
@@ -1490,7 +1498,7 @@ impl Runtime {
                 {
                     if failures > 0 {
                         crate::diagnostic!(serde_json::json!({
-                            "component": "github",
+                            "component": self.read_component(None, &path),
                             "kind": "read.retry",
                             "project": path,
                             "attempt": failures,
@@ -1546,7 +1554,7 @@ impl Runtime {
                 // Not remembered: an address no read project owns must not
                 // take a place a project's own pull request needs.
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "read.sighted_unowned",
                     "repository": sighting.repository,
                     "number": sighting.number,
@@ -1556,7 +1564,7 @@ impl Runtime {
             }
             if self.github_sighted.len() >= SIGHTED_ASKED_LIMIT {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "read.sighted_over_limit",
                     "limit": SIGHTED_ASKED_LIMIT,
                     "repository": sighting.repository,
@@ -1584,7 +1592,7 @@ impl Runtime {
                 }
             }
             crate::diagnostic!(serde_json::json!({
-                "component": "github",
+                "component": crate::code_host::COMPONENT,
                 "kind": "read.sighted",
                 "repository": sighting.repository,
                 "number": sighting.number,
@@ -3648,7 +3656,7 @@ impl Runtime {
             .insert(device_id.to_owned(), over_limit);
         if over_limit > 0 && logged != Some(over_limit) {
             crate::diagnostic!(serde_json::json!({
-                "component": "github",
+                "component": crate::code_host::COMPONENT,
                 "kind": "projects.over_limit",
                 "target": device_id,
                 "read": repositories.len(),

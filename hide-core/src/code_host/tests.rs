@@ -1001,9 +1001,18 @@ fn a_hosts_declaration_travels_by_these_names_and_an_old_payload_carries_none() 
     assert_eq!(
         serde_json::to_value(&github.operations).unwrap(),
         serde_json::json!([
-            "merge", "update_branch", "edit_body", "merge_proof", "base_policy",
-            "commit_checks", "failed_log", "by_number", "handover", "issues",
-            "search", "watch",
+            "merge",
+            "update_branch",
+            "edit_body",
+            "merge_proof",
+            "base_policy",
+            "commit_checks",
+            "failed_log",
+            "by_number",
+            "handover",
+            "issues",
+            "search",
+            "watch",
         ])
     );
     let old: crate::model::GithubStatusSnapshot = serde_json::from_value(serde_json::json!({

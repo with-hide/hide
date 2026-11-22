@@ -67,7 +67,10 @@ impl CodeHost for Gitlab {
     }
 
     fn change_request_at(&self, url: &str) -> Option<(RepositoryRef, u32)> {
-        let rest = url.strip_prefix("https://")?.strip_prefix(HOST)?.strip_prefix('/')?;
+        let rest = url
+            .strip_prefix("https://")?
+            .strip_prefix(HOST)?
+            .strip_prefix('/')?;
         let (path, number) = rest.split_once("/-/merge_requests/")?;
         let number = number.split(['/', '?', '#']).next()?;
         let number = number.parse::<u32>().ok().filter(|number| *number > 0)?;

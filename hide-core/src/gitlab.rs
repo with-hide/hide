@@ -31,9 +31,9 @@ use crate::code_host::{CardRead, DueRead, HostFailure, HostReads, Place, Reposit
 use crate::model::{
     GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, MergeQueuePlace,
     MergeState, PR_REVIEWER_LIMIT, PartRead, PrCardFile, PrCardThread, PrCheckCounts,
-    PrFailedCheck, PrReviewer, PrReviewerState, PullRequestChecks,
-    PullRequestSnapshot, PullRequestWork, RepositoryIdentity, ReviewAsk, ReviewDecision,
-    ReviewRequest, ReviewRequestKind,
+    PrFailedCheck, PrReviewer, PrReviewerState, PullRequestChecks, PullRequestSnapshot,
+    PullRequestWork, RepositoryIdentity, ReviewAsk, ReviewDecision, ReviewRequest,
+    ReviewRequestKind,
 };
 use crate::node_access::{NodeLink, call_as};
 use crate::observed::{Observation, now_unix_ms};
@@ -131,7 +131,13 @@ impl HostReads for GitlabReads {
                     Err(failure) => signed_out(due.root_path, failure),
                     Ok(()) => read_project(node, due, &known),
                 };
-                crate::code_host::read::log_answer(due.generation, &answer, started, None);
+                crate::code_host::read::log_answer(
+                    crate::code_host::CodeHost::key(&host::GITLAB),
+                    due.generation,
+                    &answer,
+                    started,
+                    None,
+                );
                 let known = if answer.pull_requests_read {
                     remembered_checks(&answer.pull_requests)
                 } else {
@@ -211,7 +217,10 @@ fn read_project(
     let answer = merge_requests_arguments(&repository.path)
         .ok_or_else(|| HostFailure {
             category: GithubFailureCategory::NetworkOrRateLimit,
-            reason: format!("{} is not a project path glab may be asked about", repository.path),
+            reason: format!(
+                "{} is not a project path glab may be asked about",
+                repository.path
+            ),
         })
         .and_then(|arguments| glab(node, arguments))
         .and_then(|output| parse_list(&output, known));
@@ -379,10 +388,14 @@ fn unreadable(reason: String) -> HostFailure {
 /// Reads one list answer. The project's identity is named from the answer
 /// itself (`fullPath`), never guessed, so its server is always known.
 fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> {
-    let answer: ListAnswer = serde_json::from_str(output)
-        .map_err(|error| unreadable(format!("glab returned a list Hide could not read: {error}")))?;
+    let answer: ListAnswer = serde_json::from_str(output).map_err(|error| {
+        unreadable(format!("glab returned a list Hide could not read: {error}"))
+    })?;
     if let Some(error) = answer.errors.first() {
-        return Err(unreadable(format!("gitlab.com answered with an error: {}", error.message)));
+        return Err(unreadable(format!(
+            "gitlab.com answered with an error: {}",
+            error.message
+        )));
     }
     let data = answer
         .data
@@ -396,15 +409,29 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
     })?;
     let unit: &dyn crate::code_host::CodeHost = &host::GITLAB;
     let repository = unit
-        .repository(&format!("{}/{}", hide_node_link::glab::HOST, project.full_path))
-        .ok_or_else(|| unreadable(format!("gitlab.com named a project path Hide cannot read: {}", project.full_path)))?;
+        .repository(&format!(
+            "{}/{}",
+            hide_node_link::glab::HOST,
+            project.full_path
+        ))
+        .ok_or_else(|| {
+            unreadable(format!(
+                "gitlab.com named a project path Hide cannot read: {}",
+                project.full_path
+            ))
+        })?;
     let identity = RepositoryIdentity {
         name: project.full_path.clone(),
         url: Some(unit.repository_url(&repository)),
         repository: Some(repository.clone()),
         id: Some(project.id),
-        public: project.visibility.as_deref().map(|visibility| visibility == "public"),
-        default_branch: project.repository.and_then(|repository| repository.root_ref),
+        public: project
+            .visibility
+            .as_deref()
+            .map(|visibility| visibility == "public"),
+        default_branch: project
+            .repository
+            .and_then(|repository| repository.root_ref),
     };
     let open_total = project.open.count.unwrap_or(0) as usize;
     if open_total > project.open.nodes.len() {
@@ -420,7 +447,12 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
     let viewer_name = viewer.username;
     let mut pull_requests = Vec::new();
     for listed in project.open.nodes {
-        pull_requests.push(pull_request(&repository, listed, Some(&viewer_name), known)?);
+        pull_requests.push(pull_request(
+            &repository,
+            listed,
+            Some(&viewer_name),
+            known,
+        )?);
     }
     for listed in project.settled.nodes {
         let settled = matches!(listed.state.as_str(), "merged" | "closed");
@@ -430,7 +462,12 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
                 .iter()
                 .any(|known| known.number.to_string() == iid)
         {
-            pull_requests.push(pull_request(&repository, listed, Some(&viewer_name), known)?);
+            pull_requests.push(pull_request(
+                &repository,
+                listed,
+                Some(&viewer_name),
+                known,
+            )?);
         }
     }
     Ok(Listed {
@@ -482,10 +519,16 @@ fn pull_request(
     };
     let mut work = PullRequestWork {
         author_is_bot: listed.author.as_ref().is_some_and(|author| author.bot),
-        mine: viewer.zip(author.as_deref()).map(|(viewer, author)| viewer == author),
+        mine: viewer
+            .zip(author.as_deref())
+            .map(|(viewer, author)| viewer == author),
         author,
         merge_state: if open {
-            merge_state(listed.detailed_merge_status.as_deref(), listed.draft, checks.verdict)
+            merge_state(
+                listed.detailed_merge_status.as_deref(),
+                listed.draft,
+                checks.verdict,
+            )
         } else {
             MergeState::Unknown
         },
@@ -512,10 +555,22 @@ fn pull_request(
         badge: crate::github::badge(state, listed.draft, review),
         review: review.filter(|_| !listed.draft),
         is_draft: listed.draft,
-        merged_at_unix_ms: listed.merged_at.as_deref().and_then(crate::github::parse_rfc3339_ms),
-        updated_at_unix_ms: listed.updated_at.as_deref().and_then(crate::github::parse_rfc3339_ms),
-        created_at_unix_ms: listed.created_at.as_deref().and_then(crate::github::parse_rfc3339_ms),
-        closed_at_unix_ms: listed.closed_at.as_deref().and_then(crate::github::parse_rfc3339_ms),
+        merged_at_unix_ms: listed
+            .merged_at
+            .as_deref()
+            .and_then(crate::github::parse_rfc3339_ms),
+        updated_at_unix_ms: listed
+            .updated_at
+            .as_deref()
+            .and_then(crate::github::parse_rfc3339_ms),
+        created_at_unix_ms: listed
+            .created_at
+            .as_deref()
+            .and_then(crate::github::parse_rfc3339_ms),
+        closed_at_unix_ms: listed
+            .closed_at
+            .as_deref()
+            .and_then(crate::github::parse_rfc3339_ms),
         head_oid,
         cross_repository: listed
             .source_project_id
@@ -671,7 +726,10 @@ fn review_decision(listed: &MergeRequest) -> Option<ReviewDecision> {
         Some(ReviewDecision::ChangesRequested)
     } else if listed.approved == Some(true) {
         Some(ReviewDecision::Approved)
-    } else if listed.approvals_required.is_some_and(|required| required > 0) {
+    } else if listed
+        .approvals_required
+        .is_some_and(|required| required > 0)
+    {
         Some(ReviewDecision::ReviewRequired)
     } else {
         None
@@ -688,7 +746,10 @@ fn review_state(reviewer: &Reviewer) -> Option<&str> {
 /// Whether a reviewer is still asked: not yet reviewed, or a review begun
 /// and not submitted.
 fn still_asked(reviewer: &Reviewer) -> bool {
-    matches!(review_state(reviewer), None | Some("UNREVIEWED" | "REVIEW_STARTED"))
+    matches!(
+        review_state(reviewer),
+        None | Some("UNREVIEWED" | "REVIEW_STARTED")
+    )
 }
 
 /// Each reviewer and approver and where they stand, approvals and change
@@ -718,8 +779,15 @@ fn reviewers(listed: &MergeRequest) -> (Vec<PrReviewer>, u32) {
         }
     }
     // An approver need not be a reviewer: anyone allowed may approve.
-    for approver in listed.approved_by.iter().flat_map(|approved| &approved.nodes) {
-        if !reviewers.iter().any(|known| known.login == approver.username) {
+    for approver in listed
+        .approved_by
+        .iter()
+        .flat_map(|approved| &approved.nodes)
+    {
+        if !reviewers
+            .iter()
+            .any(|known| known.login == approver.username)
+        {
             reviewers.push(PrReviewer {
                 login: approver.username.clone(),
                 team: false,
@@ -920,7 +988,10 @@ fn parse_commit_checks(
 ) -> Result<Vec<Ci>, String> {
     let value: serde_json::Value =
         serde_json::from_str(output).map_err(|error| error.to_string())?;
-    if value["errors"].as_array().is_some_and(|errors| !errors.is_empty()) {
+    if value["errors"]
+        .as_array()
+        .is_some_and(|errors| !errors.is_empty())
+    {
         return Err("Provider returned check errors".into());
     }
     let project = &value["data"]["project"];

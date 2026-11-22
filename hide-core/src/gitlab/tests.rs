@@ -69,34 +69,116 @@ fn every_scene_of_the_test_project_reads_as_its_scene() {
     use PullRequestChecks as C;
     let scenes = [
         // Passed and approved by its author, with no approval required.
-        Scene { number: 1, what: "pass", checks: C::Passing, state: PrState::Mergeable, merge: Clean, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 1,
+            what: "pass",
+            checks: C::Passing,
+            state: PrState::Mergeable,
+            merge: Clean,
+            place: Some(("needs_you", "merge")),
+        },
         // Failed, in a project that does not require the pipeline to pass:
         // gitlab.com says MERGEABLE, which is not a pass.
-        Scene { number: 2, what: "fail", checks: C::Failed, state: PrState::Failed, merge: Unstable, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 2,
+            what: "fail",
+            checks: C::Failed,
+            state: PrState::Failed,
+            merge: Unstable,
+            place: Some(("needs_you", "merge")),
+        },
         // A job allowed to fail: the pipeline passed with warnings.
-        Scene { number: 3, what: "allowed failure", checks: C::Passing, state: PrState::Mergeable, merge: Clean, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 3,
+            what: "allowed failure",
+            checks: C::Passing,
+            state: PrState::Mergeable,
+            merge: Clean,
+            place: Some(("needs_you", "merge")),
+        },
         // A manual job the pipeline waits on: nothing runs, nothing passed.
-        Scene { number: 4, what: "manual", checks: C::Pending, state: PrState::Pending, merge: Unstable, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 4,
+            what: "manual",
+            checks: C::Pending,
+            state: PrState::Pending,
+            merge: Unstable,
+            place: Some(("needs_you", "merge")),
+        },
         // Cancelled, in a project that does not require the pipeline to pass.
-        Scene { number: 5, what: "cancelled", checks: C::Failed, state: PrState::Failed, merge: Unstable, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 5,
+            what: "cancelled",
+            checks: C::Failed,
+            state: PrState::Failed,
+            merge: Unstable,
+            place: Some(("needs_you", "merge")),
+        },
         // No pipeline at all.
-        Scene { number: 6, what: "no pipeline", checks: C::None, state: PrState::Pending, merge: Clean, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 6,
+            what: "no pipeline",
+            checks: C::None,
+            state: PrState::Pending,
+            merge: Clean,
+            place: Some(("needs_you", "merge")),
+        },
         // `[skip ci]`: a pipeline that ran nothing.
-        Scene { number: 7, what: "skipped", checks: C::None, state: PrState::Pending, merge: Clean, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 7,
+            what: "skipped",
+            checks: C::None,
+            state: PrState::Pending,
+            merge: Clean,
+            place: Some(("needs_you", "merge")),
+        },
         // Closed: never listed.
-        Scene { number: 8, what: "closed", checks: C::Unknown, state: PrState::Closed, merge: Unknown, place: None },
+        Scene {
+            number: 8,
+            what: "closed",
+            checks: C::Unknown,
+            state: PrState::Closed,
+            merge: Unknown,
+            place: None,
+        },
         // Merged.
-        Scene { number: 9, what: "merged", checks: C::Unknown, state: PrState::Merged, merge: Unknown, place: Some(("merged", "merged")) },
+        Scene {
+            number: 9,
+            what: "merged",
+            checks: C::Unknown,
+            state: PrState::Merged,
+            merge: Unknown,
+            place: Some(("merged", "merged")),
+        },
         // A draft, whatever its pipeline says.
-        Scene { number: 10, what: "draft", checks: C::Passing, state: PrState::Draft, merge: Draft, place: Some(("drafts", "draft")) },
+        Scene {
+            number: 10,
+            what: "draft",
+            checks: C::Passing,
+            state: PrState::Draft,
+            merge: Draft,
+            place: Some(("drafts", "draft")),
+        },
         // Passed, with no approval and none required.
-        Scene { number: 11, what: "zero approvals required", checks: C::Passing, state: PrState::Mergeable, merge: Clean, place: Some(("needs_you", "merge")) },
+        Scene {
+            number: 11,
+            what: "zero approvals required",
+            checks: C::Passing,
+            state: PrState::Mergeable,
+            merge: Clean,
+            place: Some(("needs_you", "merge")),
+        },
     ];
     let listed = listed(SCENES);
     let placed = places(&listed.pull_requests);
     for scene in &scenes {
         let pull = pull(&listed, scene.number);
-        let read = (pull.checks, pull.state(), pull.work.merge_state, placed.get(&scene.number).copied());
+        let read = (
+            pull.checks,
+            pull.state(),
+            pull.work.merge_state,
+            placed.get(&scene.number).copied(),
+        );
         assert_eq!(
             read,
             (scene.checks, scene.state, scene.merge, scene.place),
@@ -139,7 +221,10 @@ fn the_cancelled_scene_ends_as_cancelled_and_the_failed_one_names_its_job() {
         crate::model::CiEnd::Ended(crate::missions::CiResult::Cancelled)
     );
     let failed = pull(&listed, 2);
-    assert_eq!(failed.ci_end(), crate::model::CiEnd::Ended(crate::missions::CiResult::Failed));
+    assert_eq!(
+        failed.ci_end(),
+        crate::model::CiEnd::Ended(crate::missions::CiResult::Failed)
+    );
     let names: Vec<_> = failed
         .work
         .failed_checks
@@ -151,7 +236,8 @@ fn the_cancelled_scene_ends_as_cancelled_and_the_failed_one_names_its_job() {
         failed.work.failed_checks[0]
             .url
             .as_deref()
-            .is_some_and(|url| url.starts_with("https://gitlab.com/example-user/hide-code-host-check/-/jobs/"))
+            .is_some_and(|url| url
+                .starts_with("https://gitlab.com/example-user/hide-code-host-check/-/jobs/"))
     );
     // The allowed failure is no failure of the pipeline.
     assert!(pull(&listed, 3).work.failed_checks.is_empty());
@@ -163,7 +249,12 @@ fn the_cancelled_scene_ends_as_cancelled_and_the_failed_one_names_its_job() {
 fn the_merge_queue_is_unsupported_not_unknown_on_every_merge_request() {
     for fixture in [SCENES, RUNNING, FORKS] {
         for pull in &listed(fixture).pull_requests {
-            assert_eq!(pull.work.queue, MergeQueuePlace::Unsupported, "!{}", pull.number);
+            assert_eq!(
+                pull.work.queue,
+                MergeQueuePlace::Unsupported,
+                "!{}",
+                pull.number
+            );
         }
     }
 }
@@ -172,9 +263,18 @@ fn the_merge_queue_is_unsupported_not_unknown_on_every_merge_request() {
 fn the_signed_in_account_decides_mine_and_review_asks() {
     let scenes = listed(SCENES);
     assert_eq!(scenes.viewer, "example-user");
-    assert!(scenes.pull_requests.iter().all(|pull| pull.work.mine == Some(true)));
+    assert!(
+        scenes
+            .pull_requests
+            .iter()
+            .all(|pull| pull.work.mine == Some(true))
+    );
     let forks = listed(FORKS);
-    for pull in forks.pull_requests.iter().filter(|pull| !pull.badge.is_settled()) {
+    for pull in forks
+        .pull_requests
+        .iter()
+        .filter(|pull| !pull.badge.is_settled())
+    {
         assert_eq!(pull.work.mine, Some(false), "!{}", pull.number);
         assert_eq!(pull.work.asked_of_me, ReviewAsk::None, "!{}", pull.number);
         // Someone else's merge request that asks nothing of the account is
@@ -200,23 +300,62 @@ fn forks_change_requests_and_required_approvals_read_as_their_scenes() {
         )
     };
     // Two reviewers asked for changes.
-    assert_eq!(read(4226), (false, Some(ReviewDecision::ChangesRequested), PrState::Failed, Blocked, Some(2)));
+    assert_eq!(
+        read(4226),
+        (
+            false,
+            Some(ReviewDecision::ChangesRequested),
+            PrState::Failed,
+            Blocked,
+            Some(2)
+        )
+    );
     // From a fork; gitlab.com's merge status says changes were asked for.
-    assert_eq!(read(4429), (true, Some(ReviewDecision::ChangesRequested), PrState::Failed, Blocked, Some(3)));
+    assert_eq!(
+        read(4429),
+        (
+            true,
+            Some(ReviewDecision::ChangesRequested),
+            PrState::Failed,
+            Blocked,
+            Some(3)
+        )
+    );
     // From a fork, two approvals required and none given.
-    assert_eq!(read(4526), (true, Some(ReviewDecision::ReviewRequired), PrState::Pending, Blocked, Some(2)));
+    assert_eq!(
+        read(4526),
+        (
+            true,
+            Some(ReviewDecision::ReviewRequired),
+            PrState::Pending,
+            Blocked,
+            Some(2)
+        )
+    );
     // A draft whose pipeline was skipped.
     assert_eq!(read(4518), (false, None, PrState::Draft, Draft, Some(3)));
     assert_eq!(pull(&listed, 4518).checks, PullRequestChecks::None);
     // One of three required approvals given.
-    assert_eq!(read(4505), (false, Some(ReviewDecision::ReviewRequired), PrState::Pending, Blocked, Some(3)));
+    assert_eq!(
+        read(4505),
+        (
+            false,
+            Some(ReviewDecision::ReviewRequired),
+            PrState::Pending,
+            Blocked,
+            Some(3)
+        )
+    );
     // An optional manual job is no check the pipeline waits on.
     assert_eq!(pull(&listed, 4226).checks, PullRequestChecks::Passing);
     assert_eq!(pull(&listed, 4226).work.pending_checks, 0);
     // Reviewers: approvals first, and the one still asked is a request.
     let reviewers = pull(&listed, 4429).work.reviewers.clone().unwrap();
     let states: Vec<_> = reviewers.iter().map(|reviewer| reviewer.state).collect();
-    assert_eq!(states, [PrReviewerState::Approved, PrReviewerState::Requested]);
+    assert_eq!(
+        states,
+        [PrReviewerState::Approved, PrReviewerState::Requested]
+    );
     let requests: Vec<_> = pull(&listed, 4429)
         .work
         .review_requests
@@ -225,8 +364,14 @@ fn forks_change_requests_and_required_approvals_read_as_their_scenes() {
         .collect();
     assert_eq!(requests, ["member-6"]);
     // The merged and closed ones are listed beside the open ones.
-    assert_eq!(pull(&listed, 4489).badge, crate::model::PullRequestBadge::Merged);
-    assert_eq!(pull(&listed, 4524).badge, crate::model::PullRequestBadge::Closed);
+    assert_eq!(
+        pull(&listed, 4489).badge,
+        crate::model::PullRequestBadge::Merged
+    );
+    assert_eq!(
+        pull(&listed, 4524).badge,
+        crate::model::PullRequestBadge::Closed
+    );
 }
 
 /// A fork's merge request of the account itself is placed by its review.
@@ -243,12 +388,23 @@ fn a_change_request_on_my_own_merge_request_blocks_it() {
 #[test]
 fn the_identity_and_references_come_from_the_answer_with_their_server() {
     let listed = listed(SCENES);
-    let repository = listed.identity.repository.clone().expect("the server is known");
+    let repository = listed
+        .identity
+        .repository
+        .clone()
+        .expect("the server is known");
     assert_eq!(
-        (repository.host.as_str(), repository.authority.as_str(), repository.path.as_str()),
+        (
+            repository.host.as_str(),
+            repository.authority.as_str(),
+            repository.path.as_str()
+        ),
         ("gitlab", "gitlab.com", "example-user/hide-code-host-check")
     );
-    assert_eq!(listed.identity.id.as_deref(), Some("gid://gitlab/Project/89295207"));
+    assert_eq!(
+        listed.identity.id.as_deref(),
+        Some("gid://gitlab/Project/89295207")
+    );
     assert_eq!(listed.identity.public, Some(false));
     assert_eq!(listed.identity.default_branch.as_deref(), Some("main"));
     let reference = pull(&listed, 2).reference.clone().unwrap();
@@ -261,12 +417,18 @@ fn the_identity_and_references_come_from_the_answer_with_their_server() {
         reference.files_url,
         "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/2/diffs"
     );
-    assert_eq!(pull(&listed, 2).url, "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/2");
+    assert_eq!(
+        pull(&listed, 2).url,
+        "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/2"
+    );
     // The snapshot names its parts as gitlab.com reads them.
     let snapshot = listed.into_snapshot("/fixture/app");
     assert_eq!(snapshot.issues_read, PartRead::Unsupported);
     assert_eq!(snapshot.identity_read, PartRead::Read);
-    assert_eq!(snapshot.read_outcome(), crate::model::GithubReadOutcome::Read);
+    assert_eq!(
+        snapshot.read_outcome(),
+        crate::model::GithubReadOutcome::Read
+    );
 }
 
 #[test]
@@ -286,7 +448,10 @@ fn an_answer_without_the_account_or_the_project_is_a_failure() {
 #[test]
 fn a_cut_job_set_gives_no_counts_and_keeps_the_pipeline_verdict() {
     let mut value: serde_json::Value = serde_json::from_str(SCENES).unwrap();
-    for node in value["data"]["project"]["open"]["nodes"].as_array_mut().unwrap() {
+    for node in value["data"]["project"]["open"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+    {
         if node["iid"] == "1" {
             node["headPipeline"]["jobs"]["count"] = 80.into();
         }
@@ -343,7 +508,11 @@ fn the_merge_status_never_stands_in_for_the_checks() {
         (Some("DRAFT_STATUS"), C::Passing, Draft),
         (None, C::Passing, Unknown),
     ] {
-        assert_eq!(merge_state(status, false, checks), merge, "{status:?} {checks:?}");
+        assert_eq!(
+            merge_state(status, false, checks),
+            merge,
+            "{status:?} {checks:?}"
+        );
     }
     assert_eq!(merge_state(Some("MERGEABLE"), true, C::Passing), Draft);
 }
@@ -351,10 +520,18 @@ fn the_merge_status_never_stands_in_for_the_checks() {
 #[test]
 fn a_card_reads_its_head_files_and_open_discussions() {
     let card = parse_card(CARD).unwrap();
-    assert_eq!(card.head.as_deref(), Some("1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c"));
+    assert_eq!(
+        card.head.as_deref(),
+        Some("1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c")
+    );
     assert_eq!(card.body.as_deref(), Some(""));
     assert_eq!(card.files_total, 2);
-    let paths: Vec<_> = card.files.unwrap().into_iter().map(|file| file.path).collect();
+    let paths: Vec<_> = card
+        .files
+        .unwrap()
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
     assert_eq!(paths, [".gitlab-ci.yml", "scenes/fail.txt"]);
     // The only discussion is a system note, which cannot be resolved.
     assert_eq!(card.threads, Some(Vec::new()));
@@ -366,7 +543,10 @@ fn a_card_reads_its_head_files_and_open_discussions() {
 fn commit_checks_name_each_commit_and_refuse_another_commit() {
     let value: serde_json::Value = serde_json::from_str(COMMITS).unwrap();
     let asked = [
-        value["data"]["project"]["c0"]["nodes"][0]["sha"].as_str().unwrap().to_owned(),
+        value["data"]["project"]["c0"]["nodes"][0]["sha"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
         "0000000000000000000000000000000000000000".to_owned(),
     ];
     let url = |sha: &str| format!("https://gitlab.com/x/y/-/commit/{sha}");
@@ -382,7 +562,10 @@ fn commit_checks_name_each_commit_and_refuse_another_commit() {
 fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
     let unit: &dyn CodeHost = &host::GITLAB;
     let repository = unit.repository("gitlab.com/group/sub/project").unwrap();
-    assert_eq!(unit.stored_name(&repository), "gitlab.com/group/sub/project");
+    assert_eq!(
+        unit.stored_name(&repository),
+        "gitlab.com/group/sub/project"
+    );
     for remote in [
         "https://gitlab.com/group/sub/project.git",
         "https://oauth2:glpat-secret@gitlab.com/group/sub/project.git",
@@ -391,7 +574,9 @@ fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
         "ssh://git@gitlab.com:22/group/sub/project.git",
         "ssh://git@GitLab.com/group/sub/project/",
     ] {
-        let read = unit.remote_repository(remote).unwrap_or_else(|| panic!("{remote}"));
+        let read = unit
+            .remote_repository(remote)
+            .unwrap_or_else(|| panic!("{remote}"));
         assert_eq!(read, repository, "{remote}");
         assert!(!format!("{read:?}").contains("secret"));
     }
@@ -407,7 +592,10 @@ fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
         unit.change_request_at("https://gitlab.com/group/sub/project/-/merge_requests/12/diffs"),
         Some((repository.clone(), 12))
     );
-    assert_eq!(unit.change_request_at("https://github.com/acme/app/pull/12"), None);
+    assert_eq!(
+        unit.change_request_at("https://github.com/acme/app/pull/12"),
+        None
+    );
     assert_eq!(unit.number_label(12), "!12");
     assert_eq!(
         unit.commit_url(&repository, "abc"),
@@ -423,14 +611,25 @@ fn gitlab_com_names_and_addresses_round_trip_and_keep_no_credential() {
 fn the_registry_places_gitlab_com_remotes_with_gitlab() {
     let hosts = crate::code_host::CodeHosts::STANDARD;
     let (host, repository) = hosts.remote("git@gitlab.com:acme/app.git").unwrap();
-    assert_eq!((host.key(), repository.authority.as_str()), ("gitlab", "gitlab.com"));
+    assert_eq!(
+        (host.key(), repository.authority.as_str()),
+        ("gitlab", "gitlab.com")
+    );
     let root = std::path::Path::new("/fixture/app");
     let only_gitlab = ["https://gitlab.com/acme/sub/app.git".to_owned()];
     let place = hosts
-        .place_of_checkout(root, crate::code_host::CheckoutRemotes::Addresses(&only_gitlab))
+        .place_of_checkout(
+            root,
+            crate::code_host::CheckoutRemotes::Addresses(&only_gitlab),
+        )
         .unwrap();
     assert_eq!(place.host().key(), "gitlab");
-    assert_eq!(place.repository().map(|repository| repository.path.as_str()), Some("acme/sub/app"));
+    assert_eq!(
+        place
+            .repository()
+            .map(|repository| repository.path.as_str()),
+        Some("acme/sub/app")
+    );
     let both = [
         "https://gitlab.com/acme/app.git".to_owned(),
         "https://github.com/acme/app.git".to_owned(),
@@ -448,7 +647,10 @@ fn the_registry_places_gitlab_com_remotes_with_gitlab() {
 fn gitlab_com_declares_only_the_operations_it_offers() {
     let declaration = crate::code_host::declaration(&host::GITLAB);
     assert_eq!(declaration.key, "gitlab");
-    assert_eq!(declaration.operations, [crate::code_host::Operation::CommitChecks]);
+    assert_eq!(
+        declaration.operations,
+        [crate::code_host::Operation::CommitChecks]
+    );
     assert_eq!(declaration.access.program, "glab");
     assert_eq!(declaration.access.minimum_version, "1.78.0");
     let github = crate::code_host::declaration(&crate::github::host::GITHUB);

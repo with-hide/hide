@@ -100,6 +100,12 @@ pub struct HostDeclaration {
     pub access: HostAccess,
 }
 
+/// The diagnostic component of a read's line that names no one host's
+/// project: a pass's projects no host places, a count over every host's
+/// projects, an address a session printed. A line about one placed
+/// project names its host's key instead.
+pub(crate) const COMPONENT: &str = "code_host";
+
 /// One optional operation of the contract, named as the accessor that
 /// offers it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Deserialize, Serialize)]

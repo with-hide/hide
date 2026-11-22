@@ -88,7 +88,9 @@ pub fn card_query() -> String {
 /// The latest pipeline of each of `count` exact commits, `c0` to `cN`, each
 /// commit a variable of its own so the query text is fixed for its count.
 pub fn commit_checks_query(count: usize) -> String {
-    let variables: String = (0..count).map(|index| format!(",$c{index}:String!")).collect();
+    let variables: String = (0..count)
+        .map(|index| format!(",$c{index}:String!"))
+        .collect();
     let reads: String = (0..count)
         .map(|index| format!(" c{index}:pipelines(sha:$c{index},first:1){{nodes{{sha status}}}}"))
         .collect();
@@ -142,7 +144,9 @@ pub fn commit_checks_arguments(project: &str, commits: &[String]) -> Option<Vec<
     {
         return None;
     }
-    let names: Vec<String> = (0..commits.len()).map(|index| format!("c{index}")).collect();
+    let names: Vec<String> = (0..commits.len())
+        .map(|index| format!("c{index}"))
+        .collect();
     let mut variables = vec![("project", project)];
     variables.extend(
         names
@@ -184,9 +188,15 @@ pub fn allowed(arguments: &[&str]) -> bool {
     match arguments {
         ["--version"] => true,
         ["auth", "status", "--hostname", HOST] => true,
-        ["api", "--hostname", HOST, "-X", method, endpoint, fields @ ..] => {
-            api_allowed(method, endpoint, fields, arguments)
-        }
+        [
+            "api",
+            "--hostname",
+            HOST,
+            "-X",
+            method,
+            endpoint,
+            fields @ ..,
+        ] => api_allowed(method, endpoint, fields, arguments),
         _ => false,
     }
 }
@@ -314,7 +324,10 @@ mod tests {
         for line in &lines {
             let words = words(line);
             assert!(allowed(&words), "{words:?}");
-            assert_eq!(words[..6], ["api", "--hostname", "gitlab.com", "-X", "POST", "graphql"]);
+            assert_eq!(
+                words[..6],
+                ["api", "--hostname", "gitlab.com", "-X", "POST", "graphql"]
+            );
             assert!(words.contains(&"project=group/sub/project"), "{words:?}");
         }
         assert!(allowed(&VERSION));
@@ -352,25 +365,44 @@ mod tests {
             line.drain(1..3);
         }));
         // A query of another text.
-        assert!(!mutate(&|line| line[7] = "query=query{currentUser{username}}".to_owned()));
+        assert!(!mutate(
+            &|line| line[7] = "query=query{currentUser{username}}".to_owned()
+        ));
         assert!(!mutate(&|line| line[7].push(' ')));
         // A project path that is no project, a placeholder or a file field.
-        for project in [":fullpath", "@/etc/passwd", "one", "a/../b", "-x/y", "a/b c", "a/b.git"] {
+        for project in [
+            ":fullpath",
+            "@/etc/passwd",
+            "one",
+            "a/../b",
+            "-x/y",
+            "a/b c",
+            "a/b.git",
+        ] {
             assert!(
                 !mutate(&|line| line[9] = format!("project={project}")),
                 "{project}"
             );
         }
         // An extra variable, an extra flag, a typed field in place of a raw one.
-        assert!(!mutate(&|line| line.extend(["-f".to_owned(), "x=y".to_owned()])));
+        assert!(!mutate(
+            &|line| line.extend(["-f".to_owned(), "x=y".to_owned()])
+        ));
         assert!(!mutate(&|line| line.push("--paginate".to_owned())));
         assert!(!mutate(&|line| line[6] = "-F".to_owned()));
         assert!(!mutate(&|line| line[8] = "-F".to_owned()));
         // The project named twice.
-        assert!(!mutate(&|line| line.extend(["-f".to_owned(), "project=a/b".to_owned()])));
+        assert!(!mutate(
+            &|line| line.extend(["-f".to_owned(), "project=a/b".to_owned()])
+        ));
         // Other commands.
         assert!(!allowed(&["auth", "status"]));
-        assert!(!allowed(&["auth", "status", "--hostname", "gitlab.example.com"]));
+        assert!(!allowed(&[
+            "auth",
+            "status",
+            "--hostname",
+            "gitlab.example.com"
+        ]));
         assert!(!allowed(&["mr", "list"]));
         assert!(!allowed(&["api", "user"]));
     }
@@ -410,11 +442,26 @@ mod tests {
 
     #[test]
     fn subgroup_paths_are_projects_and_other_shapes_are_not() {
-        for path in ["a/b", "group/sub/sub2/project", "a.b/c_d-e", "acme/.dotfiles"] {
+        for path in [
+            "a/b",
+            "group/sub/sub2/project",
+            "a.b/c_d-e",
+            "acme/.dotfiles",
+        ] {
             assert!(is_project_path(path), "{path}");
         }
         let deep = vec!["g"; 21].join("/");
-        for path in ["", "a", "a/", "/a/b", "a//b", "a/-b", "a/..", deep.as_str(), "a/b:1"] {
+        for path in [
+            "",
+            "a",
+            "a/",
+            "/a/b",
+            "a//b",
+            "a/-b",
+            "a/..",
+            deep.as_str(),
+            "a/b:1",
+        ] {
             assert!(!is_project_path(path), "{path}");
         }
     }
@@ -429,7 +476,10 @@ mod tests {
             GlabVersion::of_output("glab version 1.36.0 (2024-01-18)"),
             Some(GlabVersion(1, 36, 0))
         );
-        assert_eq!(GlabVersion::of_output("glab 1.80.2-rc1 (x)"), Some(GlabVersion(1, 80, 2)));
+        assert_eq!(
+            GlabVersion::of_output("glab 1.80.2-rc1 (x)"),
+            Some(GlabVersion(1, 80, 2))
+        );
         assert_eq!(GlabVersion::of_output("glab DEV"), None);
         assert_eq!(GlabVersion::of_output("gh version 2.72.0"), None);
         assert!(GlabVersion(1, 77, 9) < MINIMUM_VERSION);
