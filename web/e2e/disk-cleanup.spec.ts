@@ -159,7 +159,7 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
     // The sheet below needs prd/shipped's merged pull request, which the first read brings after the page opens; until
     // then the project rests in the quiet group, and moving out of it remounts the row under the hover. A row with a
     // merged checkout is never quiet, so waiting for its mark leaves the row where it stays.
-    await expect((await projectRow(page, "repo")).locator("[data-projects-merged]")).toHaveAttribute("data-projects-merged", "1", { timeout: 30_000 });
+    await expect((await projectRow(page, "repo")).locator("[data-projects-merged]")).toHaveAttribute("data-projects-merged", "1", { timeout: 30_000 }); // wait-ok: the first pull request read brings prd/shipped's merged mark
     // B1 (PRD overview-device-tasks B51): the Projects tab's size lists the layers on hover and opens the sheet.
     const entrance = (await projectRow(page, "repo")).locator("[data-projects-disk-open]");
     await expect(entrance).toBeEnabled({ timeout: 30_000 });

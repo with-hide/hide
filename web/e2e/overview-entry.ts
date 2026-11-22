@@ -30,7 +30,7 @@ export async function projectRow(page: Page, label: string) {
     // only open a quiet fold, which hides no row, and its end is not awaited.
     const opened = quiet.click();
     opened.catch(() => undefined);
-    await Promise.race([opened, row.waitFor({ state: "visible", timeout: 20_000 })]);
+    await Promise.race([opened, row.waitFor({ state: "visible", timeout: 20_000 })]); // wait-ok: the row shows, in the opened fold or by itself
   }
   await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
