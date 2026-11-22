@@ -1555,7 +1555,7 @@ mod tests {
     /// visible viewport as a bounded JPEG through the CLI's own capture, and
     /// nothing at all of a display that is not in front.
     #[tokio::test]
-    async fn a_still_is_a_bounded_jpeg_of_the_visible_page_and_a_hidden_display_gives_none() {
+    async fn a_still_is_a_bounded_jpeg_of_the_page_shown_or_behind_and_a_never_drawn_page_gives_none() {
         let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
         let log = Arc::clone(&asked);
         let script = move |request: &Value| match request["method"].as_str().unwrap() {
@@ -1588,19 +1588,36 @@ mod tests {
         assert_eq!(params["clip"]["x"], 10.0);
         assert_eq!(params["clip"]["y"], 300.0);
 
-        // Behind another tab of its area it answers `display_hidden` before
-        // any picture is asked for, the way `hide browser screenshot` does.
-        let asked_again = Arc::new(Mutex::new(false));
-        let flag = Arc::clone(&asked_again);
-        let mut hidden = super::super::fake_gateway::page(move |request: &Value| {
-            *flag.lock().unwrap() |= request["method"] == "Page.captureScreenshot";
-            vec![reply(request, json!({"result": {"value": {}}}))]
+        // A still is a read: behind another tab of its area the page is taken
+        // as Chromium keeps drawing it, attached as not selected.
+        let hidden_probe = json!({"result": {"value": {
+            "visibility": "hidden",
+            "vv": {"left": 0, "top": 0, "width": 800, "height": 600},
+            "scroll": {"x": 0, "y": 0},
+        }}});
+        let answer = hidden_probe.clone();
+        let mut behind = super::super::fake_gateway::page(move |request: &Value| {
+            match request["method"].as_str().unwrap() {
+                "Page.captureScreenshot" => vec![reply(request, json!({"data": "/9j/4A=="}))],
+                _ => vec![reply(request, answer.clone())],
+            }
         })
         .await
         .behind_another_tab();
-        let failure = still(&mut hidden).await.unwrap_err();
+        assert_eq!(still(&mut behind).await.unwrap(), [0xff, 0xd8, 0xff, 0xe0]);
+
+        // A page Chromium never drew does not answer the capture, and the
+        // probe after it finds the page hidden: `display_hidden`.
+        let mut never_drawn = super::super::fake_gateway::page(move |request: &Value| {
+            match request["method"].as_str().unwrap() {
+                "Page.captureScreenshot" => Vec::new(),
+                _ => vec![reply(request, hidden_probe.clone())],
+            }
+        })
+        .await
+        .behind_another_tab();
+        let failure = still(&mut never_drawn).await.unwrap_err();
         assert_eq!(failure.reason, "display_hidden");
-        assert!(!*asked_again.lock().unwrap());
     }
 
     #[tokio::test]

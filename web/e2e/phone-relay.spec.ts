@@ -419,7 +419,12 @@ test("a large image arrives in many chunks, each confirmed in order, and draws w
   expect(relay.received.filter((frame) => frame.type === "look_ack").map((frame) => frame.seq)).toEqual([...Array(chunks).keys()]);
 });
 
-for (const [state, title] of [["not_found", "This file isn't here now"], ["outside_roots", "This file can't be shown on the phone"]] as const) {
+for (const [state, title] of [
+  ["not_found", "This file isn't here now"],
+  ["outside_roots", "This file can't be shown on the phone"],
+  ["grant_expired", "Hide can't open this file anymore"],
+  ["file_replaced", "This file was replaced"],
+] as const) {
   test(`a file the computer answers ${state} shows its reason and nothing to retry`, async ({ page, relay }) => {
     relay.state.look = { id: "v-doc", kind: "doc", name: "release-notes-draft.md", result: state };
     await pair(page, relay);
@@ -428,6 +433,20 @@ for (const [state, title] of [["not_found", "This file isn't here now"], ["outsi
     await page.locator('[data-phone-look="v-doc"]').click();
     await expect(page.locator(`[data-phone-look-state="${state}"]`)).toContainText(title);
     await expect(page.locator("[data-phone-look-retry]")).toHaveCount(0);
+  });
+}
+
+for (const [reason, words] of [["window_elsewhere", "It's on another computer's screen"], ["not_drawn", "This page hasn't been on the Mac's screen yet"]] as const) {
+  test(`a page the computer cannot take a picture of, ${reason}, shows its address and why`, async ({ page, relay }) => {
+    relay.state.look = { id: "v-page", kind: "page", name: "landing", result: "page", url: "http://localhost:5173/", reason };
+    await pair(page, relay);
+    await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+    await page.locator('[data-phone-view="looks"]').click();
+    await page.locator('[data-phone-look="v-page"]').click();
+    const body = page.locator('[data-phone-look-state="page"]');
+    await expect(body.locator("[data-phone-look-address]")).toHaveText("http://localhost:5173/");
+    await expect(body.getByRole("status")).toHaveText(words);
+    await expect(page.locator("[data-phone-look-refresh]")).toBeEnabled();
   });
 }
 
