@@ -392,7 +392,6 @@ OpenCode, Pi and omp take the same refusal through the plugin helper: their plug
 It reads a shell call in the [syntax of the shell that runs it](#which-shell-reads-a-call), so in a PowerShell call `state\global-instruction.md` run in `~/.hide` names the file, as PowerShell runs it, where Git Bash would run `stateglobal-instruction.md`.
 Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
 The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
-A move of the core carries the text the core reads through such a link as a regular file, since the link would point nowhere on the receiving machine, and leaves a link whose file the core reads as too large or unreadable behind with a `global_instruction.link_left` diagnostic and its reason.
 
 ### Where the hooks keep their records
 
@@ -1337,7 +1336,7 @@ A device where Hide may not install, or whose platform this build does not carry
 
 ## Installing
 
-Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device; after a core move it does so on the core's machine at every start of its core and on the machine the core moved off at every link.
+Hide's hooks are one part of its install kit (`hide-kit`; [ARCHITECTURE.md, The install kit](ARCHITECTURE.md#the-install-kit)), which installs the same set on this machine at every launch of the packaged app and on every device at every helper connection, without asking: the operator agreed to it once, by installing the app or by adding the device; a core moved to another machine before 1.2.0 installs it on its machine at every start, and the machine it was moved off at every link until the two are split ([ARCHITECTURE.md, A core on another machine](ARCHITECTURE.md#a-core-on-another-machine)).
 Every entry's command is guarded, so a session whose app or helper was moved or deleted carries on without a hook error (PRD device-parity B3), and it is written in the form its runtime runs a hook on that system:
 
 | System | Runtime | Entry |
@@ -1373,7 +1372,7 @@ Version 6 is the first guarded command, so an older entry reads outdated and the
 The kit folder is a path that survives a rebuild: the installed app bundle's `Contents/Resources` on macOS, the unpacked package's `resources` on Windows/Linux, and the helper root's `current` on a device (a link to the build on macOS and Linux, a folder of the build's two programs on Windows; [ARCHITECTURE.md](ARCHITECTURE.md#the-install-kit)), which each new build of the helper points at itself, as a moved core does at the build it runs.
 
 A `hided` outside a desktop package and outside a build Hide placed in the account's helper root installs nothing, and This machine's row in Settings says the packaged app is where the kit comes from.
-`hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `~/.hide/host-helper/<16 hex>/` in the account's own home, holding `hide` and `hide-agent-hooks` beside `hided`, the folder a core move and a core update make (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_another_copy`).
+`hide_kit::bundled_kit_dir` decides the package from the layout: macOS `*.app/Contents/Resources`, or Windows/Linux `resources` with `app.asar` inside and Electron `hide[.exe]` in its parent folder; a build is `~/.hide/host-helper/<16 hex>/` in the account's own home, holding `hide` and `hide-agent-hooks` beside `hided`, the folder a core update makes, as a core move before 1.2.0 did (`KitPlace::of_program`, held by `a_core_installs_from_its_package_or_a_placed_build_and_never_from_another_copy`).
 A folder merely named `resources` grants no install authority.
 The rule exists because a hook command outlives the process that wrote it.
 It is a path stored in the operator's own configuration file and run by every future session of that agent, so the only path worth writing is one that survives a rebuild.

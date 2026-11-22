@@ -393,8 +393,7 @@ fn run_coordinator(
                 let Some(request) = read_github_request(&context) else {
                     return;
                 };
-                if let Some(request) = request
-                    && let Some(github) = reader.read_if_due(request)
+                if let Some(github) = reader.read_if_due(request)
                     && !publish_github(&context, github)
                 {
                     return;
@@ -1106,7 +1105,7 @@ fn take_label_switch(context: &SessionSyncContext, worker: &mut LabelWorker) -> 
     let taken = context.runtime.upgrade().and_then(|runtime| {
         runtime.lock().ok().map(|guard| {
             (
-                guard.labels_asked(),
+                guard.agent_summary(),
                 guard.output_language(),
                 guard.account_launches(device, edit),
             )
@@ -1378,17 +1377,11 @@ fn read_worktrees_request(
     Some(request)
 }
 
-/// The GitHub read due now; `Some(None)` while the core waits for its move's
-/// link, which reads nothing from GitHub until then.
-fn read_github_request(
-    context: &SessionSyncContext,
-) -> Option<Option<crate::github::GithubRequest>> {
+/// The GitHub read due now.
+fn read_github_request(context: &SessionSyncContext) -> Option<crate::github::GithubRequest> {
     let runtime = context.runtime.upgrade()?;
     let request = {
         let mut guard = runtime.lock().ok()?;
-        if guard.effects_held() {
-            return Some(None);
-        }
         let now = Instant::now();
         match &context.target {
             SessionSyncTarget::Local { .. } => {
@@ -1403,23 +1396,19 @@ fn read_github_request(
         }
     };
     drop(runtime);
-    Some(Some(request))
+    Some(request)
 }
 
 /// What the advisory poll reads now: this machine's projects with open pull
 /// requests, built from the last answers under the lock and read after it is
-/// released. Empty while the core waits for its move's link.
+/// released.
 fn read_github_poll_request(
     context: &SessionSyncContext,
 ) -> Option<crate::github_poll::PollRequest> {
     let runtime = context.runtime.upgrade()?;
     let request = {
         let mut guard = runtime.lock().ok()?;
-        if guard.effects_held() {
-            crate::github_poll::PollRequest::default()
-        } else {
-            guard.github_poll_request()
-        }
+        guard.github_poll_request()
     };
     drop(runtime);
     Some(request)
@@ -2112,35 +2101,6 @@ mod worktree_observer_tests {
             before["rest"]["git_worktrees"]
         );
         assert_eq!(after["rest"]["git_worktrees_loading"], true);
-    }
-}
-
-#[cfg(test)]
-mod pending_core_tests {
-    use super::*;
-    use crate::engine::fake::FakeEngine;
-
-    /// PRD core-host-node-move amendment 3: a core waiting for its move's
-    /// link asks GitHub nothing; the read is asked once the hold is released.
-    #[test]
-    fn a_pending_core_reads_nothing_from_github_until_its_link_commits() {
-        let root = tempfile::tempdir().unwrap();
-        let (runtime, ..) = crate::runtime::delivery::tests::fixture(root.path());
-        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
-        let context = SessionSyncContext::local(
-            &LiveContext {
-                socket_path: fake.scope(),
-                runtime: Arc::downgrade(&runtime),
-                notifier: ChangeNotifier::noop(),
-                engine: fake.engine(),
-                node: Arc::new(hide_node::Local::of_process()),
-            },
-            Arc::new(hide_node::Local::of_process()),
-        );
-        runtime.lock().unwrap().hold_effects();
-        assert!(matches!(read_github_request(&context), Some(None)));
-        assert!(runtime.lock().unwrap().release_effects());
-        assert!(matches!(read_github_request(&context), Some(Some(_))));
     }
 }
 

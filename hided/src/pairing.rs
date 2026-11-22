@@ -29,7 +29,7 @@ use std::time::Duration;
 use hide_core::peer_machines::{
     PeerMachine, PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate,
 };
-use hide_peer::pairing::{AcceptError, JoinError, Me, Pairings, RequestError, View};
+use hide_peer::pairing::{AcceptError, Accepted, JoinError, Me, Pairings, RequestError, View};
 use hide_peer::protocol::hello::{Behind, GrantState};
 use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Host, KnownState, Login, StoreError, Via};
@@ -222,6 +222,12 @@ pub enum Ask {
         /// (D-75).
         #[serde(default)]
         helper: Option<String>,
+        /// The asking machine gives this one a grant too, and this machine
+        /// becomes its guest without a question: only a machine this core
+        /// was moved off before 1.2.0, which dials it as a node, is taken
+        /// so, since the move was the consent (D-46).
+        #[serde(default)]
+        grant: Option<String>,
     },
 }
 
@@ -446,6 +452,9 @@ struct Relay {
 pub struct Pairing {
     host: Arc<PeerHost>,
     core: Arc<CoreHandle>,
+    /// The build this daemon's environment pins (`Env::build`), as its
+    /// node link's hello reads it.
+    build: Option<String>,
     /// What keeps this machine's core on once it is paired.
     always_on: crate::always_on::Follower,
     me: Me,
@@ -603,6 +612,7 @@ impl Pairing {
     pub fn new(
         host: Arc<PeerHost>,
         core: Arc<CoreHandle>,
+        build: Option<String>,
         always_on: crate::always_on::Follower,
         me: Me,
         ssh: pairing_ssh::Reach,
@@ -611,6 +621,7 @@ impl Pairing {
         let pairing = Arc::new(Self {
             host: Arc::clone(&host),
             core,
+            build,
             always_on,
             me,
             service: OnceCell::new(),
@@ -1036,6 +1047,24 @@ impl Pairing {
         }
     }
 
+    /// What this core says of itself to a machine that reads it before it
+    /// asks anything (`hide device look-ssh`): its node, and its build and
+    /// release as its node link's hello names them (`attach::CoreHello`).
+    async fn itself(&self) -> Value {
+        let pinned = self.build.clone();
+        // The hash of the executable, read once: never on a runtime thread.
+        let build =
+            tokio::task::spawn_blocking(move || crate::build_id::of_daemon(pinned.as_deref()))
+                .await
+                .ok()
+                .and_then(Result::ok);
+        json!({
+            "node": self.core.node().as_str(),
+            "build": build,
+            "release": crate::build_order::Release::of_this_build(),
+        })
+    }
+
     async fn run(self: &Arc<Self>, ask: Ask, caller: Caller) -> Result<Value, &'static str> {
         // Reading opens nothing: a machine paired with nothing has nothing
         // to say and no endpoint to open for it.
@@ -1047,9 +1076,12 @@ impl Pairing {
                     .map(|paired| hide_core::peer_machines::answer(&paired.machine))
                     .collect()
             };
+            let core = self.itself().await;
             let Some(service) = self.service.get() else {
                 let machines = answers(self.recorded().await);
-                return Ok(json!({ "pairing": View::default(), "machines": machines }));
+                return Ok(json!({
+                    "pairing": View::default(), "machines": machines, "core": core,
+                }));
             };
             // The pairings under way, with their link and words, are the
             // operator's: an agent in a pane reads the machines and holds
@@ -1067,7 +1099,7 @@ impl Pairing {
                 true => json!(*service.view().borrow()),
                 false => json!(View::default()),
             };
-            return Ok(json!({ "pairing": pairing, "machines": machines }));
+            return Ok(json!({ "pairing": pairing, "machines": machines, "core": core }));
         }
         // Looking at a machine over SSH opens nothing here and changes
         // nothing there.
@@ -1393,8 +1425,31 @@ impl Pairing {
                 name,
                 wsl,
                 helper,
+                grant,
             } => {
                 let guest = PeerKey::from_hex(&key).map_err(|_| "invalid_request")?;
+                // A machine that gives its grant in the same breath is
+                // taken as a host only when this core already runs its
+                // work: it dials this core as a node, or was taken before.
+                if grant.is_some() {
+                    let state = self
+                        .core
+                        .state_dir()
+                        .join(hide_core::node_migration::CORE_STATE);
+                    let dials =
+                        tokio::task::spawn_blocking(move || hide_core::dialing_nodes(&state))
+                            .await
+                            .map_err(|_| "hide_unavailable")?
+                            .map_err(|_| "hide_unavailable")?
+                            .contains(&device);
+                    let taken = self
+                        .paired(&peers)
+                        .iter()
+                        .any(|paired| paired.key == guest && paired.machine.opens.is_some());
+                    if !dials && !taken {
+                        return Err("device_unknown");
+                    }
+                }
                 self.relay_named(&peers).await;
                 let via = if wsl { Via::Wsl } else { Via::Ssh };
                 let _one = match helper {
@@ -1417,14 +1472,37 @@ impl Pairing {
                     return Ok(json!({ "helper": "held", "by": by }));
                 }
                 let accepted = match service.accept_ssh(&request, guest, &device, &name, via) {
-                    Ok(accepted) => json!(accepted),
+                    Ok(accepted) => Some(accepted),
                     // A machine that is paired already asks for the folder
                     // alone.
-                    Err(AcceptError::Already) if helper.is_some() => Value::Null,
+                    Err(AcceptError::Already) if helper.is_some() => None,
                     Err(AcceptError::Invalid) => return Err("invalid_request"),
                     Err(AcceptError::Already) => return Err("device_already_connected"),
                     Err(AcceptError::Store(error)) => return Err(store(error)),
                 };
+                if let Some(grant) = grant {
+                    // The move was the consent both ways: this machine's
+                    // grant for the asker is settled here, not at a confirm
+                    // over a connection the two may not make before a
+                    // pending grant runs out.
+                    let given = accepted.as_ref().ok_or("device_already_connected")?;
+                    peers.confirm(&guest, &given.grant).map_err(store)?;
+                    let host = Accepted {
+                        key: guest,
+                        device: device.clone(),
+                        name: name.clone(),
+                        grant,
+                        candidates: Vec::new(),
+                    };
+                    match service.adopt(host, Vec::new()) {
+                        Ok(()) => {}
+                        Err(AcceptError::Invalid) => return Err("invalid_request"),
+                        Err(AcceptError::Already) => return Err("device_already_connected"),
+                        Err(AcceptError::Store(error)) => return Err(store(error)),
+                    }
+                    return Ok(json!({ "accepted": accepted, "adopted": true }));
+                }
+                let accepted = accepted.map_or(Value::Null, |accepted| json!(accepted));
                 let Some(root) = helper else {
                     return Ok(json!({ "accepted": accepted }));
                 };

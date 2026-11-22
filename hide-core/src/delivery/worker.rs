@@ -2356,32 +2356,6 @@ mod tests {
         }
     }
 
-    /// PRD core-host-node-move amendment 3: a core waiting for its move's
-    /// link reads no watched pane, so it raises no warning, and claims no
-    /// human notice; both run once the hold is released.
-    #[test]
-    fn a_pending_core_reads_no_watch_and_claims_no_notice_until_its_link_commits() {
-        let root = tempfile::tempdir().unwrap();
-        let (runtime, parent, observed, _) = fixture(root.path());
-        let mut ledger = Ledger::default();
-        watch::start(&mut ledger, &parent, &observed.actor, 1).unwrap();
-        let mut guard = runtime.lock().unwrap();
-        guard.publish_delivery(Arc::new(ledger), false);
-        guard.hold_effects();
-        assert!(guard.delivery_watch_work().is_empty());
-        assert_eq!(
-            guard.prepare_delivery_human().err().as_deref(),
-            Some("core_pending")
-        );
-        assert!(guard.release_effects());
-        assert_eq!(guard.delivery_watch_work().len(), 1);
-        // This fixture runs no ledger worker; the hold no longer refuses.
-        assert_eq!(
-            guard.prepare_delivery_human().err().as_deref(),
-            Some("delivery_unavailable")
-        );
-    }
-
     #[test]
     fn unavailable_store_refuses_all_intake_and_effects_until_validated_restart() {
         let root = tempfile::tempdir().unwrap();

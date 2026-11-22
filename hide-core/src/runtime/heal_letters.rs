@@ -619,9 +619,7 @@ impl Runtime {
     pub(crate) fn drive_heal_letters(&mut self, now_unix_ms: u64) {
         self.give_up_healing(now_unix_ms);
         let letters = &self.heal_letters;
-        if (letters.owed.is_empty() && letters.pending.is_empty() && letters.resumed.is_empty())
-            || self.effects_held()
-        {
+        if letters.owed.is_empty() && letters.pending.is_empty() && letters.resumed.is_empty() {
             return;
         }
         // Each line is a news cell of the agent it goes to (PRD

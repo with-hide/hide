@@ -503,8 +503,7 @@ mod tests {
         runtime.block_on(async {
             let directory = tempfile::tempdir().unwrap();
             let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
-            let (_open, opened) = tokio::sync::watch::channel(true);
-            let mobile = super::super::test_mobile_opened(directory.path(), &gate, opened);
+            let mobile = super::super::test_mobile_on_network(directory.path(), &gate);
             let (code, _) = exposed_code(&mobile);
             let (phone, _) = mobile.pair(&code, "Pixel").unwrap();
             mobile.owe_paired_notice(phone);

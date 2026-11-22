@@ -1942,9 +1942,9 @@ fn reports_reach_the_core_in_the_order_the_service_made_them() {
 }
 
 /// A closed service lets every pane it held go, while something else still
-/// holds the service, and attaches none after: a core that stops for a move
-/// leaves this machine's panes to the node its process becomes, which would
-/// otherwise find each one held and draw it read-only.
+/// holds the service, and attaches none after: a node that splits from its
+/// core leaves this machine's panes to the core its process becomes, which
+/// would otherwise find each one held and draw it read-only.
 #[test]
 fn a_closed_service_lets_its_panes_go_and_attaches_none_again() {
     let harness = harness(RetryPolicy::Automatic);

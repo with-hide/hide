@@ -1,10 +1,9 @@
 import type { TFunction } from "i18next";
-import { giveUpOffered, movingStripText, type CoreLink, type MoveMachines, type MoveView } from "./coreMove";
+import type { CoreLink } from "./coreLink";
 import { deviceProblemLine, retryCanHelp, retrySignsIn } from "./settings";
 import type { DeviceSignIn } from "./snapshot";
 
-/** `moving`: a move holds the window until the machine that takes the core draws it; input is refused meanwhile. */
-export type ConnectionState = "connecting" | "live" | "reconnecting" | "gone" | "moving";
+export type ConnectionState = "connecting" | "live" | "reconnecting" | "gone";
 
 export const BACKOFF_START_MS = 500;
 export const BACKOFF_MAX_MS = 30_000;
@@ -23,7 +22,6 @@ export function badgeText(state: ConnectionState, refused: boolean, t: TFunction
     case "connecting":
       return t("shell.connection.connecting");
     case "live":
-    case "moving":
       return "";
     case "reconnecting":
       return t("shell.connection.reconnecting");
@@ -35,8 +33,7 @@ export function badgeText(state: ConnectionState, refused: boolean, t: TFunction
 /**
  * The strip above the window, in the place and size the connection badge always had (D-08); `reconnect` offers the
  * operator's way back after they ended the link (B16), `retry` the dial a link that stopped on what only they can fix
- * waits for, `sign_in` the same dial where the link stopped on a sign-in, and `give_up` the move's wait on its other
- * machine where the move offers it (amendment 4), which only opens the move dialog at its confirm. A link that stopped
+ * waits for, and `sign_in` the same dial where the link stopped on a sign-in. A link that stopped
  * on a changed server key carries the terminal `command` that checks it and no retry, as the device row does; `signIn` is what ssh
  * asks the dial the operator started, which the strip shows below its line (PRD system-ssh-device-link B33).
  */
@@ -44,7 +41,7 @@ export type WindowStrip = {
   kind: ConnectionState | "updating" | "unreachable" | "stopped" | "disconnected" | "sign_in";
   text: string;
   mark: "pending" | "warn" | null;
-  action?: "reconnect" | "retry" | "sign_in" | "give_up";
+  action?: "reconnect" | "retry" | "sign_in";
   command?: string;
   signIn?: DeviceSignIn;
 };
@@ -57,47 +54,43 @@ export type WindowStrip = {
 function stoppedText(link: CoreLink, machine: string, t: TFunction<"translation">): string {
   switch (link.problem) {
     case "sign_in_needed":
-      return t("coreMove.strip.signIn", { machine });
+      return t("coreLink.strip.signIn", { machine });
     case "sign_in_refused":
-      return t("coreMove.strip.signInRefused", { machine });
+      return t("coreLink.strip.signInRefused", { machine });
     case "host_key_changed":
-      return t("coreMove.strip.hostKeyChanged", { machine });
+      return t("coreLink.strip.hostKeyChanged", { machine });
     case "hide_updated":
-      return t("coreMove.strip.hideUpdated", { machine });
+      return t("coreLink.strip.hideUpdated", { machine });
     default:
-      return t("coreMove.strip.stopped", { machine, alias: link.alias });
+      return t("coreLink.strip.stopped", { machine, alias: link.alias });
   }
 }
 
 /**
- * What the strip says (PRD core-host-node-move W1 to W3, B16): the move's
- * step while it holds the window, the node's update of its core, its failed
- * link or the link the operator ended while its screen waits for the core,
- * else the connection badge.
+ * What the strip says (PRD core-host-node-move B16): the node's update of its
+ * core, its failed link or the link the operator ended while its screen waits
+ * for the core, else the connection badge.
  * `coreMachine` is the core's machine as the window last knew it, for a
  * node whose link has not named it yet.
  */
 export function windowStrip(
-  input: { connection: ConnectionState; refused: boolean; move: MoveView | null; link: CoreLink | null; machines: MoveMachines | null; coreMachine: string },
+  input: { connection: ConnectionState; refused: boolean; link: CoreLink | null; coreMachine: string },
   t: TFunction<"translation">,
 ): WindowStrip | null {
-  const { connection, move, link } = input;
-  if (connection === "moving" && move && input.machines) {
-    const strip: WindowStrip = { kind: "moving", text: movingStripText(move, input.machines, t), mark: "pending" };
-    return giveUpOffered(move) ? { ...strip, action: "give_up" } : strip;
-  }
+  const { connection, link } = input;
   if (connection !== "live" && link) {
     // The core's machine as the window's rows name it once it drew the core; before that by the name the
     // core's hello gave, which is its host name, or the alias it is dialed by.
     const machine = input.coreMachine || link.machine || link.alias;
-    if (link.sign_in) return { kind: "sign_in", text: t("coreMove.strip.signingIn", { machine }), mark: "pending", signIn: link.sign_in };
+    if (link.sign_in) return { kind: "sign_in", text: t("coreLink.strip.signingIn", { machine }), mark: "pending", signIn: link.sign_in };
     switch (link.phase) {
       case "updating":
-        return { kind: "updating", text: t("coreMove.strip.updating", { machine }), mark: "pending" };
+        return { kind: "updating", text: t("coreLink.strip.updating", { machine }), mark: "pending" };
       case "disconnected":
-        return { kind: "disconnected", text: t("coreMove.strip.disconnected", { machine }), mark: "warn", action: "reconnect" };
+        return { kind: "disconnected", text: t("coreLink.strip.disconnected", { machine }), mark: "warn", action: "reconnect" };
       case "waiting":
-        return { kind: "unreachable", text: t("coreMove.strip.unreachable", { machine }), mark: "warn" };
+        // A machine that is split from its core once it reaches it waits for that; any other only reconnects.
+        return { kind: "unreachable", text: t(link.splits ? "coreLink.strip.splitWaits" : "coreLink.strip.unreachable", { machine }), mark: "warn" };
       case "stopped": {
         // A changed server key is checked in a terminal and a Hide an update replaced is opened again; neither offers
         // a Retry, as on the device row: a retry would meet the same key, or start the same replaced program.

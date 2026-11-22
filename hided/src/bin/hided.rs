@@ -88,8 +88,6 @@ fn run(role: Role<'_>) -> Result<(), String> {
         // pipes the node's channel to the core already running on this
         // machine and starts none.
         Role::Attach(words) => return hided::attach::run(words),
-        // A step of a core move run here over SSH by the machine driving it.
-        Role::CoreMove(words) => return hided::core_move::target::run(words),
         // The update of the core here to this build, run over SSH by a node
         // of this build.
         Role::CoreUpdate(words) => return hided::core_update::run(words),

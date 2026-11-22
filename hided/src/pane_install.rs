@@ -182,6 +182,7 @@ mod tests {
             serde_json::to_vec(&layout::HelperGuest {
                 key: key.to_hex(),
                 root: helper.clone(),
+                panes: None,
             })
             .unwrap(),
         )

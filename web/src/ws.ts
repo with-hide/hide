@@ -2,7 +2,6 @@ import { receiveAgentNotice } from "./agentNotices";
 import { configureAttachments, receiveAttachmentRefusal } from "./attachments";
 import type { AgentNotice } from "./generated/hided-ws";
 import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./connection";
-import { moveUnderWay, type MoveView } from "./coreMove";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
 import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
 import { movesOperatorFocus, numbered } from "./operatorFocus";
@@ -31,29 +30,36 @@ function tokenFromLocation(): string | null {
   return hash.get("token");
 }
 
+/** What the daemon's `/health` says of the role it runs: `core`, or `node` while this machine's core is on another one. */
+type Health = { role?: string };
+
 /**
- * A move that finished names the node this window became, or none after a
- * move back (PRD core-host-node-move, Window handoff): the page writes it
- * into its own address, so a reload or the host's next attach opens the
- * screen of the machine it is on.
+ * The page's address once its daemon answers as `health`: the address names
+ * this machine as a node only while the daemon runs the node role, so a
+ * daemon that became its machine's own core (a core moved before 1.2.0 whose
+ * machines were split, PRD device-connect-iroh B45) drops the name, and a
+ * reload or the host's next attach opens the machine's own screen. Null when
+ * the address stays: only a daemon that says it runs the core changes it.
  */
-export function addressAfterMove(hash: string, view: MoveView): string | null {
-  if (view.state !== "done") return null;
+export function addressForRole(hash: string, health: Health): string | null {
   const params = new URLSearchParams(hash.replace(/^#/, ""));
-  const before = params.get("node");
-  const node = view.direction === "back" ? null : view.node;
-  if (before === node) return null;
-  if (node) params.set("node", node);
-  else params.delete("node");
+  if (health.role !== "core" || !params.has("node")) return null;
+  params.delete("node");
   return `#${params.toString()}`;
 }
 
-async function healthOk(): Promise<boolean> {
+/** The daemon's health, or null when it does not answer; a health that cannot be read as one says nothing of its role. */
+async function readHealth(): Promise<Health | null> {
   try {
     const response = await fetch("/health", { cache: "no-store" });
-    return response.ok;
+    if (!response.ok) return null;
+    try {
+      return ((await response.json()) ?? {}) as Health;
+    } catch {
+      return {};
+    }
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -81,13 +87,6 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   const probing = probeEnabled();
 
   const dispatch: DispatchFn = (event) => {
-    // A move holds the window until the machine that takes the core draws
-    // it; its screen takes only the move's own event (giving up a wait) and
-    // refuses the rest, so nothing else is sent (W1).
-    if (useShellStore.getState().connection === "moving" && event.kind !== "core_move") {
-      useShellStore.getState().noteDiagnostic(`dispatch dropped: ${event.kind} while the core moves`);
-      return false;
-    }
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       // A key typed while reconnecting is lost, not queued; the badge shows
       // the state and the log keeps the fact.
@@ -124,15 +123,6 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     socket.send(bytes);
   };
 
-  // A window a move holds stays held through the close of the role the
-  // move ends (1012 `role_ended`, `core_moved`) and the reconnect after it,
-  // until the role after the move draws it, so the strip names the move's
-  // step rather than a reconnect (W1).
-  const held = () => {
-    const { connection, coreMove } = useShellStore.getState();
-    return connection === "moving" || (coreMove !== null && moveUnderWay(coreMove.state));
-  };
-
   const clearSocketState = () => {
     clearPending("socket_closed");
     refuseWaitingAutomationCalls();
@@ -146,15 +136,15 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       useShellStore.getState().setConnection("gone");
       return;
     }
-    useShellStore.getState().setConnection(socket ? (held() ? "moving" : "reconnecting") : "connecting");
+    useShellStore.getState().setConnection(socket ? "reconnecting" : "connecting");
     openedToken = token;
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
     // File bytes arrive as binary frames on this same socket; the header and
     // payload are split by the file-bytes reader, not by the snapshot store.
     ws.binaryType = "arraybuffer";
     socket = ws;
-    // Whether this socket has drawn the core's state: a move's screen sends
-    // only the move, and a node's held screen only where its link stands.
+    // Whether this socket has drawn the core's state: a node's held screen
+    // sends only where its link stands.
     let drawn = false;
     ws.addEventListener("open", () => {
       useShellStore.getState().releaseOperatorFocus();
@@ -192,22 +182,6 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       }
       if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link") {
         useShellStore.getState().applyFrame(frame);
-        return;
-      }
-      if (frame.type === "core_move") {
-        useShellStore.getState().applyFrame(frame);
-        const view = frame.payload as unknown as MoveView;
-        const address = addressAfterMove(window.location.hash, view);
-        if (address !== null) history.replaceState(history.state, "", address);
-        // A window is held from the moment the move is under way: the role it
-        // draws from is about to stop. One not drawn yet is also held while
-        // the node holds its screens (`core_link`); an idle move frame, which
-        // every role sends first, holds nothing. A held window not drawn yet
-        // stays held until the role after the move draws it.
-        const nodeHolds = !drawn && useShellStore.getState().coreLink !== null;
-        if (moveUnderWay(view.state) || nodeHolds) useShellStore.getState().setConnection("moving");
-        else if (drawn && useShellStore.getState().connection === "moving") useShellStore.getState().setConnection("live");
-        reportAccess(drawn);
         return;
       }
       // `hide <path>` brought a project in front: the core already moved
@@ -271,14 +245,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "snapshot" || frame.type === "delta") {
         drawn = true;
       }
-      // A refusal before anything was drawn (a move's screen refusing an
-      // event) leaves the window where it is.
+      // A refusal before anything was drawn (a node's held screen refusing
+      // an event) leaves the window where it is.
       if (frame.type === "error" && !drawn) return;
-      // What a role still sends while a move is under way (the core before it
-      // stops, the node before the move is done) leaves the window held; only
-      // the move's own frame releases it (W1).
-      const { coreMove } = useShellStore.getState();
-      if (coreMove === null || !moveUnderWay(coreMove.state)) useShellStore.getState().setConnection("live");
+      useShellStore.getState().setConnection("live");
       if (frame.type === "snapshot" || frame.type === "delta") reportAccess(drawn);
       backoff = 500;
       healthFails = 0;
@@ -304,11 +274,15 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   };
 
   const scheduleReconnect = async (ended: WebSocket) => {
-    useShellStore.getState().setConnection(held() ? "moving" : "reconnecting");
-    const ok = await healthOk();
+    useShellStore.getState().setConnection("reconnecting");
+    const health = await readHealth();
     // A new token in the address opened a connection while the health read
     // was out: that one is the window's now, and a second would race it.
     if (closed || socket !== ended) return;
+    const ok = health !== null;
+    // The daemon may have changed its role while the socket was away.
+    const address = health ? addressForRole(window.location.hash, health) : null;
+    if (address !== null) history.replaceState(history.state, "", address);
     healthFails = ok ? 0 : healthFails + 1;
     const next = connectionAfterHealthFails(healthFails);
     if (next === "gone") {

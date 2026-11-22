@@ -18,7 +18,7 @@ import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
 import { OnboardingScene, onboardingSceneParams } from "./OnboardingScene";
 import { SessionWorkflowScene } from "./SessionWorkflowScene";
-import { CoreMoveScene, coreMoveSceneParams } from "./CoreMoveScene";
+import { CoreLinkScene, coreLinkSceneParams } from "./CoreLinkScene";
 import { NodeProjectScene, nodeProjectSceneParams } from "./NodeProjectScene";
 import { LandingScene, landingSceneParams } from "./LandingScene";
 import { HideAiScene, hideAiSceneParams } from "./HideAiScene";
@@ -247,9 +247,9 @@ export function mountGallery(root: Root) {
       root.render(<OverviewScene {...overviewSceneParams(params)} />);
       return;
     }
-    if (scene === "core-move" || scene === "core-move-window") {
-      document.title = "hide · Core move scene";
-      root.render(<StrictMode><CoreMoveScene {...coreMoveSceneParams(scene, params)} /></StrictMode>);
+    if (scene === "core-link" || scene === "core-link-window") {
+      document.title = "hide · Core link scene";
+      root.render(<StrictMode><CoreLinkScene {...coreLinkSceneParams(scene, params)} /></StrictMode>);
       return;
     }
     if (scene === "node-project") {

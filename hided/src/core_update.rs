@@ -15,10 +15,9 @@
 //! starts, so a retry starts it again (B40). All three ends leave `current`
 //! at the build that runs or is to run and keep the other build of
 //! the update, so a later connection reuses its files and no more than two
-//! builds are kept. A move holds this machine's handover record while it
-//! runs, and the update holds that record's lock for its whole length, so
-//! the two never overlap: an update finds a move's record and is refused as
-//! `move_running`.
+//! builds are kept. An update holds the folder's lock
+//! (`hide_kit::layout::core_update_lock`) for its whole length, so two never
+//! overlap.
 //!
 //! Run with no `--previous` it raises the core this account already runs
 //! (PRD device-connect-iroh B23): a paired machine that started this
@@ -33,13 +32,14 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use hide_platform::fs::lock::{Lock, Mode, Waited};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::build_order::{Release, Standing};
 use crate::core_install::starter::CoreStarter;
-use crate::core_move::handover;
 
 const USAGE: &str =
     "usage: hided core-update [--state-dir <dir>] [--previous <hided>] --intent <id>";
@@ -84,8 +84,7 @@ pub enum Outcome {
 }
 
 /// A raise's refusals a caller tells apart from every other reason.
-pub const MOVE_RUNNING: &str = "move_running";
-/// Another update or a move holds the folder now.
+/// Another update holds the folder now.
 pub const BUSY: &str = "busy";
 /// No core runs on the folder.
 pub const NOT_RUNNING: &str = "core_not_running";
@@ -184,6 +183,52 @@ fn build_of(program: &Path) -> Result<Build, String> {
     })
 }
 
+/// How long an update waits for the folder's lock.
+const LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// The folder's lock, held for one update's whole length.
+struct Held {
+    _lock: Lock,
+}
+
+/// Why the folder's lock was not taken.
+#[derive(Debug)]
+enum HoldError {
+    /// Another update held it past the wait: a later try may take it.
+    Busy(String),
+    Failed(String),
+}
+
+impl From<HoldError> for String {
+    fn from(error: HoldError) -> Self {
+        match error {
+            HoldError::Busy(reason) | HoldError::Failed(reason) => reason,
+        }
+    }
+}
+
+/// Takes the folder's lock, waiting a few seconds for another update to
+/// finish.
+fn hold(state_dir: &Path) -> Result<Held, HoldError> {
+    hold_within(state_dir, LOCK_WAIT)
+}
+
+fn hold_within(state_dir: &Path, wait: Duration) -> Result<Held, HoldError> {
+    let lock_path = hide_kit::layout::core_update_lock(state_dir);
+    let failed =
+        |error: std::io::Error| HoldError::Failed(format!("{}: {error}", lock_path.display()));
+    let file = hide_platform::fs::private::open_or_create_file(&lock_path).map_err(failed)?;
+    match hide_platform::fs::lock::lock_file(file, Mode::Exclusive, wait, &|| false)
+        .map_err(failed)?
+    {
+        Waited::Locked(lock) => Ok(Held { _lock: lock }),
+        Waited::TimedOut | Waited::Cancelled => Err(HoldError::Busy(format!(
+            "{} is held by another update",
+            lock_path.display()
+        ))),
+    }
+}
+
 /// What starts a build's core and answers its pid once it takes links.
 trait Starter {
     fn replace(&self, state_dir: &Path, program: &Path) -> Result<u32, String>;
@@ -212,31 +257,15 @@ fn update_with<S: Starter>(
     program: &Path,
     starter: impl FnOnce() -> Result<S, String>,
 ) -> Result<Outcome, String> {
-    let held = handover::hold(&args.state_dir)?;
-    replace_held(args, &held, previous, program, &starter()?)
-}
-
-/// [`update_with`], under the folder's lock.
-fn replace_held<S: Starter>(
-    args: &Args,
-    held: &handover::Held,
-    previous_program: &Path,
-    program: &Path,
-    starter: &S,
-) -> Result<Outcome, String> {
-    let builds = replaceable(args, held, previous_program, program)?;
-    replace(args, &builds, previous_program, program, starter)
+    let _held = hold(&args.state_dir)?;
+    let builds = replaceable(previous, program)?;
+    replace(args, &builds, previous, program, &starter()?)
 }
 
 /// What stands in the way of replacing the core, read before anything is
-/// stopped or started: the two programs are builds of one install, and no
-/// move holds the folder. The two builds when nothing does.
-fn replaceable(
-    args: &Args,
-    held: &handover::Held,
-    previous_program: &Path,
-    program: &Path,
-) -> Result<(Build, Build), String> {
+/// stopped or started: the two programs are builds of one install. The two
+/// builds when nothing does.
+fn replaceable(previous_program: &Path, program: &Path) -> Result<(Build, Build), String> {
     let new = build_of(program)?;
     let previous = build_of(previous_program)?;
     if new.root != previous.root {
@@ -245,14 +274,6 @@ fn replaceable(
             program.display(),
             previous_program.display()
         ));
-    }
-    if let Some(record) = held.read()? {
-        log(
-            &args.intent,
-            "update.refused",
-            json!({"move": record.intent}),
-        );
-        return Err(MOVE_RUNNING.to_owned());
     }
     Ok((new, previous))
 }
@@ -403,9 +424,9 @@ fn raise_with<S: Starter>(
     account: &dyn Account,
     starter: &S,
 ) -> Result<Outcome, String> {
-    let held = match handover::hold(&args.state_dir) {
+    let _held = match hold(&args.state_dir) {
         Ok(held) => held,
-        Err(handover::HoldError::Busy(_)) => return Err(BUSY.to_owned()),
+        Err(HoldError::Busy(_)) => return Err(BUSY.to_owned()),
         Err(error) => return Err(error.into()),
     };
     let Some(core) = account.running()? else {
@@ -451,7 +472,7 @@ fn raise_with<S: Starter>(
     let new = account.place(program, &build_of(&previous)?.root)?;
     // Every refusal comes before the stop: a raise that ends refused
     // leaves the core that ran.
-    let builds = replaceable(args, &held, &previous, &new)?;
+    let builds = replaceable(&previous, &new)?;
     if core.started.is_none() {
         // Its starter never started it, so replacing the starter's run
         // would not end it, and the new core would wait on its lock.
@@ -780,35 +801,20 @@ mod tests {
         assert!(starts.started.borrow().is_empty());
     }
 
-    // A raise that is refused leaves the core that ran: a core no starter
-    // started is stopped by hand before the new one starts, and a move that
-    // holds the folder is found before that stop, not after it.
+    // B23: two updates of one folder never overlap, so the raises of two
+    // machines happen one after the other. While one holds the folder's
+    // lock a second is told it is busy, and takes it once the first ended.
     #[test]
-    fn a_raise_a_move_refuses_stops_no_core() {
-        use crate::core_move::handover::{Handover, HandoverState};
+    fn a_second_update_of_a_folder_is_busy_until_the_first_ends() {
         let root = tempfile::tempdir().unwrap();
-        let (args, mut machine, _, uploaded) = raise_fixture(root.path());
-        let own = root
-            .path()
-            .join("helper")
-            .join("aaaaaaaaaaaaaaaa")
-            .join("hided");
-        machine.core = Some(Running {
-            started: None,
-            program: Some(own),
-            ..machine.core.clone().unwrap()
-        });
-        handover::hold(&args.state_dir)
-            .unwrap_or_else(|_| panic!("the folder's lock"))
-            .write(&Handover::new("move-1", "a", "b", HandoverState::Active))
-            .unwrap();
-        let starts = Starts::default();
-        assert_eq!(
-            raise_with(&args, &uploaded, ("new", &release(6)), &machine, &&starts),
-            Err(MOVE_RUNNING.to_owned())
-        );
-        assert_eq!(machine.stopped.get(), 0);
-        assert!(starts.started.borrow().is_empty());
+        let wait = Duration::from_millis(50);
+        let first = hold_within(root.path(), wait).unwrap_or_else(|_| panic!("the folder's lock"));
+        assert!(matches!(
+            hold_within(root.path(), wait),
+            Err(HoldError::Busy(_))
+        ));
+        drop(first);
+        assert!(hold_within(root.path(), wait).is_ok());
     }
 
     /// The node reads only an outcome: a line of any other shape is named

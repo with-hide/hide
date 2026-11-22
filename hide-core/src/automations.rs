@@ -91,7 +91,8 @@ pub enum PauseReason {
     /// has no branch to work on there (D-08).
     FolderDetached,
     /// The book was read by the core of another machine than the one the
-    /// automation was made on (a core move): it runs there only once a
+    /// automation was made on (an earlier build moved the core): it runs
+    /// there only once a
     /// person resumes it.
     MachineChanged,
     /// Its own folder lies inside a Git repository (a home folder that is
@@ -621,7 +622,8 @@ pub fn open_intent(automation: &str, run: u64, number: u32) -> String {
     format!("automation-{automation}-r{run}-o{number}")
 }
 
-/// The code of a run that went while the core moved to another machine,
+/// The code of a run that went while an earlier build moved the core to
+/// another machine,
 /// and of the pause it leaves (`PauseReason::MachineChanged`).
 pub const MACHINE_CHANGED: &str = "automation_machine_changed";
 
@@ -821,7 +823,8 @@ pub struct Cleanup {
     pub run: u64,
     /// The node id of the machine whose engine holds the terminals and the
     /// worktree. Only that machine's core closes it: one the book brought
-    /// from another machine (a core move) stays, named, for that machine.
+    /// from another machine (an earlier build's core move) stays, named,
+    /// for that machine.
     #[serde(default)]
     pub machine: String,
     pub intents: Vec<String>,

@@ -4,7 +4,7 @@ use hide_platform::user_agents::{LoginAgent, NOT_THE_ACCOUNT_HOME, UserAgents, a
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 #[test]
@@ -35,15 +35,10 @@ fn has_no_login_agents(agents: &UserAgents, reason: &str) {
     unsupported(agents.supported(), reason);
     unsupported(agents.login(home, &stop).map(drop), reason);
     unsupported(
-        agents.sleeps_on_power(home, &stop).map(drop),
-        "this system has no power settings to read",
-    );
-    unsupported(
         agents.install(&agent, &home.join("marker"), home, &stop),
         reason,
     );
     unsupported(agents.linger(home, &stop).map(drop), reason);
-    unsupported(agents.start_once(&agent, home, home, &stop), reason);
     unsupported(agents.start("example.agent", home, &stop), reason);
     assert_eq!(
         agents.last_exit("example.agent", home, &stop).unwrap(),
@@ -132,49 +127,6 @@ fn the_login_is_what_the_session_answers() {
     assert!(
         error.to_string().starts_with("launchctl did not answer: "),
         "{error}"
-    );
-}
-
-/// The machine sleeps on its own on power after the power section's
-/// `sleep` minutes, never at 0; a sleep setting only on battery, one that
-/// is not a number, or a program that fails answers no sleep at all.
-#[cfg(unix)]
-#[test]
-fn only_the_power_section_s_sleep_counts() {
-    let directory = tempfile::tempdir().unwrap();
-    let home = directory.path();
-    let stop = AtomicBool::new(false);
-    crate::stand_ins::program(
-        &home.join("pmset"),
-        "#!/bin/sh\n[ \"$*\" = '-g custom' ] || exit 2\ncat \"$HOME/settings\"\n",
-    );
-    let boundary = UserAgents::fixture(home);
-    let sleeps = |settings: &str| {
-        std::fs::write(home.join("settings"), settings).unwrap();
-        boundary
-            .sleeps_on_power(home, &stop)
-            .map_err(|error| error.to_string())
-    };
-    assert_eq!(
-        sleeps(
-            "Battery Power:\n lidwake              1\n sleep                1\n displaysleep         2\nAC Power:\n lidwake              1\n sleep                0 (sleep prevented by sharingd)\n displaysleep         10\n"
-        ),
-        Ok(None)
-    );
-    assert_eq!(
-        sleeps("AC Power:\n displaysleep         10\n sleep                10\n"),
-        Ok(Some(Duration::from_secs(600)))
-    );
-    let none = Err("pmset reports no sleep setting on power".to_owned());
-    assert_eq!(sleeps("Battery Power:\n sleep                0\n"), none);
-    assert_eq!(sleeps("AC Power:\n sleep                never\n"), none);
-    std::fs::remove_file(home.join("settings")).unwrap();
-    assert_eq!(
-        boundary
-            .sleeps_on_power(home, &stop)
-            .unwrap_err()
-            .to_string(),
-        "pmset exited Some(1)"
     );
 }
 
@@ -739,105 +691,4 @@ fn a_job_s_exit_is_read_only_once_it_ran_and_stopped() {
         boundary.last_exit("example.job", home, &stop).unwrap(),
         None
     );
-}
-
-/// A one-shot job is loaded from the caller's folder, never installed, so
-/// no later login starts it, and launchd never restarts it.
-#[cfg(unix)]
-#[test]
-fn a_one_shot_job_is_loaded_from_the_caller_s_folder_and_never_restarted() {
-    let directory = tempfile::tempdir().unwrap();
-    crate::stand_ins::program(&directory.path().join("launchctl"), RECORDING_LAUNCHCTL);
-    let boundary = UserAgents::fixture(directory.path());
-    let home = directory.path();
-    let stop = AtomicBool::new(false);
-    let folder = home.join("job");
-    std::fs::create_dir(&folder).unwrap();
-    let agent = LoginAgent {
-        label: "example.job",
-        program: Path::new("/usr/bin/true"),
-        arguments: &[],
-        environment: &[],
-        log: &home.join("job.log"),
-    };
-    boundary.start_once(&agent, &folder, home, &stop).unwrap();
-    let written = std::fs::read_to_string(home.join("list")).unwrap();
-    assert!(
-        written.contains("<key>KeepAlive</key><false/>"),
-        "{written}"
-    );
-    assert!(!written.contains("ThrottleInterval"), "{written}");
-    #[cfg(target_os = "macos")]
-    lint(&home.join("list"));
-    assert!(!boundary.is_installed("example.job", home).unwrap());
-    let calls = std::fs::read_to_string(home.join("calls")).unwrap();
-    assert!(
-        calls.contains(&format!("bootstrap fixture {}/", folder.display())),
-        "{calls}"
-    );
-    boundary.unload("example.job", home, &stop).unwrap();
-    assert_eq!(
-        changes(home),
-        ["bootstrap fixture", "bootout fixture/example.job"]
-    );
-}
-
-/// The real launchd of a disposable macOS runner (PRD core-host-node-move
-/// B3): a one-shot job runs once in the GUI session, is not started again
-/// after it fails, and is gone when unloaded. It refuses to run anywhere
-/// but a hosted CI runner, like the login agent's test.
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "real launchd: only on a disposable macOS CI runner"]
-fn a_one_shot_job_runs_once_in_the_gui_session_even_when_it_fails() {
-    use std::time::Instant;
-    assert!(
-        std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-            && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
-        "this test reaches the account's real launchd; it runs only on a hosted CI runner"
-    );
-    let directory = tempfile::tempdir().unwrap();
-    let home = directory.path();
-    let program = home.join("job");
-    // Records each start and fails, which a login agent would restart.
-    crate::stand_ins::program(&program, "#!/bin/sh\necho $$ >> \"$HOME/starts\"\nexit 3\n");
-    let label = format!("dev.withhide.contract.once.{}", std::process::id());
-    let home_value = home.to_string_lossy().into_owned();
-    let environment = [("HOME", home_value.as_str())];
-    let agent = LoginAgent {
-        label: &label,
-        program: &program,
-        arguments: &[],
-        environment: &environment,
-        log: &home.join("job.log"),
-    };
-    let agents = UserAgents::current();
-    let stop = AtomicBool::new(false);
-    let starts = || {
-        std::fs::read_to_string(home.join("starts"))
-            .unwrap_or_default()
-            .lines()
-            .count()
-    };
-    agents.start_once(&agent, home, home, &stop).unwrap();
-    let ran = std::panic::catch_unwind(|| {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while starts() == 0 {
-            assert!(Instant::now() < deadline, "the job never ran");
-            #[allow(clippy::disallowed_methods)] // a bounded poll of another process
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        #[allow(clippy::disallowed_methods)] // past launchd's ten-second throttle
-        std::thread::sleep(Duration::from_secs(15));
-        assert_eq!(starts(), 1, "launchd started a one-shot job again");
-        assert_eq!(
-            agents.last_exit(&label, home, &stop).unwrap().as_deref(),
-            Some("3")
-        );
-    });
-    let unloaded = agents.unload(&label, home, &stop);
-    ran.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-    unloaded.unwrap();
-    assert!(!agents.is_loaded(&label, home, &stop).unwrap());
-    assert!(!agents.is_installed(&label, home).unwrap());
 }

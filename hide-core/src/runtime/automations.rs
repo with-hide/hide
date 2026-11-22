@@ -490,12 +490,10 @@ impl Runtime {
 
     /// The clock (D-15, B12): run on the local coordinator's tick. A time
     /// that came is taken once; the runs and the closes they left are
-    /// followed at most once a second. A core waiting for its move's link
-    /// starts nothing.
+    /// followed at most once a second.
     pub(crate) fn tick_automations(&mut self, now: u64) -> bool {
         if self.automations.store.is_none()
             || self.live.is_none()
-            || self.effects_held()
             || (self.automations.book.automations.is_empty()
                 && self.automations.book.cleanups.is_empty())
         {

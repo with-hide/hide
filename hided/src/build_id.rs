@@ -28,6 +28,16 @@ pub fn of_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode(context.finish()))
 }
 
+/// The running daemon's build, as its node link's hello names it: the one
+/// its environment pins, else the hash of its own executable, read once.
+pub fn of_daemon(pinned: Option<&str>) -> Result<String, String> {
+    static OWN: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    match pinned {
+        Some(build) => Ok(build.to_owned()),
+        None => OWN.get_or_init(of_current_exe).clone(),
+    }
+}
+
 /// This process's build.
 pub fn of_current_exe() -> Result<String, String> {
     let exe = std::env::current_exe()

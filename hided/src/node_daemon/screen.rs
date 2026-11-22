@@ -4,7 +4,6 @@
 
 use super::terminals::{InputNotices, take_terminal_key};
 use super::*;
-use crate::core_move::control::MoveScreen;
 
 /// Core frames one screen may leave untaken before its backlog is dropped
 /// and it is drawn again from a fresh snapshot (D-20).
@@ -54,8 +53,6 @@ pub(super) async fn screen(
         state.desktop_screens.fetch_add(1, Ordering::SeqCst);
     }
     let mut local_reads = 0_u64;
-    // This screen's hold on a move it asks for, which its end lets go of.
-    let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
     // B8: the dial this screen's Retry started ends with the screen,
     // whether or not it asked anything yet.
     let _press = Press {
@@ -65,7 +62,6 @@ pub(super) async fn screen(
     let ended = attached(
         &mut socket,
         &state,
-        &mover,
         handshake,
         &forwarded_handshake(&handshake_text),
         connection,
@@ -98,26 +94,16 @@ pub(super) async fn screen(
 }
 
 /// Waits for a live link, holding the screen: it is told where the link
-/// stands each time that changes (`core_link` frame), and where a move of
-/// the core stands from the moment one is under way (`core_move` frame), a
-/// window shown nothing of a move until then; what it sends meanwhile is
-/// dropped and counted, but for the operator's reconnect (B16), an answer to
-/// what the dial their Retry started asks (`core_link` {action: `sign_in`},
-/// PRD system-ssh-device-link B33) and a move's asks, such as giving up a
-/// move whose peer never answers. `None` when the screen left first.
-async fn hold(
-    socket: &mut WebSocket,
-    state: &NodeState,
-    mover: &MoveScreen,
-    connection: u64,
-) -> Option<Arc<LiveLink>> {
+/// stands each time that changes (`core_link` frame); what it sends
+/// meanwhile is dropped and counted, but for the operator's reconnect (B16)
+/// and an answer to what the dial their Retry started asks (`core_link`
+/// {action: `sign_in`}, PRD system-ssh-device-link B33). `None` when the
+/// screen left first.
+async fn hold(socket: &mut WebSocket, state: &NodeState, connection: u64) -> Option<Arc<LiveLink>> {
     let mut live = state.live.clone();
     let mut phases = state.phases.clone();
     let mut sign_ins = state.sign_ins.clone();
     let mut told: Option<Value> = None;
-    let mut move_frames = state.seat.moves.subscribe();
-    move_frames.mark_changed();
-    let mut move_told = false;
     loop {
         if let Some(link) = live.borrow_and_update().clone() {
             return Some(link);
@@ -129,9 +115,11 @@ async fn hold(
             .clone()
             .filter(|shown| shown.owner == connection)
             .map(|shown| shown.sign_in);
-        let frame = phases
-            .borrow_and_update()
-            .link_frame(&state.core_alias, sign_in.as_ref());
+        let frame = phases.borrow_and_update().link_frame(
+            &state.core_alias,
+            sign_in.as_ref(),
+            state.splits,
+        );
         if let Some(frame) = frame
             && told.as_ref() != Some(&frame)
         {
@@ -160,37 +148,16 @@ async fn hold(
                     return None;
                 }
             }
-            changed = move_frames.changed() => {
-                if changed.is_err() {
-                    return None;
-                }
-                let view = move_frames.borrow_and_update().clone();
-                move_told |= view.state.busy();
-                if move_told {
-                    let frame = mover.frame(&view);
-                    if socket.send(Message::Text(frame.into())).await.is_err() {
-                        return None;
-                    }
-                }
-            }
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
                 Some(Ok(Message::Text(text))) => {
-                    match screen_event::read(&text, &[Kind::CoreLink, Kind::CoreMove]) {
-                        Some(routed) if routed.kind == Kind::CoreLink => {
+                    match screen_event::read(&text, &[Kind::CoreLink]) {
+                        Some(routed) => {
                             if control_link(socket, state, &routed.event, connection)
                                 .await
                                 .is_err()
                             {
                                 return None;
-                            }
-                        }
-                        Some(routed) => {
-                            if let Err(reason) = mover.request_event(&routed.event) {
-                                let frame = crate::core_move::control::refusal_frame(reason);
-                                if socket.send(Message::Text(frame.into())).await.is_err() {
-                                    return None;
-                                }
                             }
                         }
                         None => {
@@ -274,13 +241,12 @@ async fn control_link(
 async fn attached(
     socket: &mut WebSocket,
     state: &NodeState,
-    mover: &MoveScreen,
     handshake: Handshake,
     handshake_text: &str,
     connection: u64,
     local_reads: &mut u64,
 ) -> ScreenEnd {
-    let Some(link) = hold(socket, state, mover, connection).await else {
+    let Some(link) = hold(socket, state, connection).await else {
         return ScreenEnd::Left;
     };
     let relay = tokio::select! {
@@ -301,6 +267,21 @@ async fn attached(
             return ScreenEnd::LinkLost;
         }
     };
+    // The core draws this screen from here on; what only this machine's
+    // node knows of its link, why it was not split from its core on this
+    // connection, is told once, since a retry ends the link and the screen
+    // with it (PRD device-connect-iroh B45).
+    let frame = json!({
+        "type": "core_link",
+        "payload": {"phase": "live", "split_failed": (state.split_failed)()},
+    });
+    if socket
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .is_err()
+    {
+        return ScreenEnd::Left;
+    }
     let mut live = state.live.clone();
     let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let mut terminals: Option<HubClient> = None;
@@ -311,25 +292,9 @@ async fn attached(
         connection,
         state.boundary.node().as_str(),
     );
-    // A move of the core is this machine's hided's, beside the core's
-    // traffic.
-    let mut move_frames = state.seat.moves.subscribe();
-    let frame = mover.frame(&move_frames.borrow_and_update());
-    if socket.send(Message::Text(frame.into())).await.is_err() {
-        return ScreenEnd::Left;
-    }
     loop {
         let shared = Arc::clone(&relay.shared);
         tokio::select! {
-            changed = move_frames.changed() => {
-                if changed.is_err() {
-                    return ScreenEnd::Left;
-                }
-                let frame = mover.frame(&move_frames.borrow_and_update());
-                if socket.send(Message::Text(frame.into())).await.is_err() {
-                    return ScreenEnd::Left;
-                }
-            }
             changed = live.changed() => {
                 let same = changed.is_ok()
                     && live
@@ -421,15 +386,6 @@ async fn attached(
                         if let Some((Kind::CoreLink, event)) = routed {
                             if control_link(socket, state, event, connection).await.is_err() {
                                 return ScreenEnd::Left;
-                            }
-                            continue;
-                        }
-                        if let Some((Kind::CoreMove, event)) = routed {
-                            if let Err(reason) = mover.request_event(event) {
-                                let frame = crate::core_move::control::refusal_frame(reason);
-                                if socket.send(Message::Text(frame.into())).await.is_err() {
-                                    return ScreenEnd::Left;
-                                }
                             }
                             continue;
                         }
@@ -769,16 +725,14 @@ fn resume(first: FrameStart, handshake: &Handshake) -> Resume {
 }
 
 /// The kinds of a screen's events this daemon takes before the core: a read
-/// of a file here, an upload, a key, a move of the core, which this
-/// machine's own hided drives (PRD core-host-node-move amendment 2), and
-/// the operator ending or restoring the link (B16).
+/// of a file here, an upload, a key, and the operator ending or restoring
+/// the link (B16).
 const TAKEN_HERE: &[Kind] = &[
     Kind::FileBytes,
     Kind::AttachmentStage,
     Kind::AttachmentCancel,
     Kind::AttachmentCommit,
     Kind::Key,
-    Kind::CoreMove,
     Kind::CoreLink,
 ];
 

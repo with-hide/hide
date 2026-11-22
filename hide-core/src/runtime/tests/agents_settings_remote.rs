@@ -969,22 +969,6 @@ fn profile_items_are_chosen_listed_and_marked_when_their_profile_is_gone() {
     );
 }
 
-/// PRD core-host-node-move amendment 3: a core waiting for its move's link
-/// asks no provider for labels, though the operator's switch stays on; the
-/// labels are asked for once the hold is released.
-#[test]
-fn a_pending_core_asks_no_provider_for_labels_until_its_link_commits() {
-    let mut runtime = runtime();
-    runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
-    runtime.ingest_background_ai(ready_read(&["claude"]));
-    assert!(runtime.dispatch_json(&ai_event(serde_json::json!({"provider": "claude"}))));
-    runtime.hold_effects();
-    assert!(runtime.agent_summary());
-    assert!(!runtime.labels_asked());
-    assert!(runtime.release_effects());
-    assert!(runtime.labels_asked());
-}
-
 /// PRD overview-request-view D-11, B21: the agent-summary switch moves the
 /// snapshot at once, keeps the provider choice, and is queued to be kept.
 #[test]

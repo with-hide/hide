@@ -327,6 +327,7 @@ exec "$@"
         let reach = Reach {
             home: PathBuf::from("/unused"),
             command_folder: None,
+            hide: None,
         };
         Pc { dir, access, reach }
     }

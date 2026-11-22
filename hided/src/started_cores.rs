@@ -50,7 +50,7 @@ pub enum Failure {
     NotReached,
     /// This build did not start there, and the core runs the build it ran.
     RolledBack,
-    /// Another machine's update, or a move, runs there now.
+    /// Another update runs there now.
     Busy,
     /// Anything else: the build did not go in, or it answered nothing this
     /// build reads.
@@ -121,9 +121,7 @@ pub(crate) fn raise_on(login: &dyn Login, packages: &HelperPackages) -> Result<R
         Some(Outcome::RolledBack { reason, .. }) => {
             return Err(failed(Failure::RolledBack, reason));
         }
-        Some(Outcome::Refused { reason })
-            if reason == core_update::BUSY || reason == core_update::MOVE_RUNNING =>
-        {
+        Some(Outcome::Refused { reason }) if reason == core_update::BUSY => {
             return Err(failed(Failure::Busy, reason));
         }
         Some(Outcome::Refused { reason }) => return Err(failed(Failure::Failed, reason)),
@@ -260,10 +258,6 @@ mod tests {
                 Err(Failure::RolledBack),
             ),
             (r#"{"kind":"refused","reason":"busy"}"#, Err(Failure::Busy)),
-            (
-                r#"{"kind":"refused","reason":"move_running"}"#,
-                Err(Failure::Busy),
-            ),
             // Neither is a failure: an app there updates its own core, and
             // a core nothing starts again stays on the build it runs.
             (r#"{"kind":"left_to_app"}"#, Ok(Raised::LeftToApp)),

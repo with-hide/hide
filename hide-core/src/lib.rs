@@ -31,7 +31,6 @@ pub mod diagnostics;
 mod disk;
 mod display_text;
 pub mod domain;
-mod effects;
 pub mod engine;
 mod environment;
 mod fetch;
@@ -116,10 +115,6 @@ mod worktree_control;
 mod worktrees;
 mod zoneinfo;
 
-pub use ai::{
-    hide_ai_asks, hide_ai_asks_of_stored, hide_ai_ready_here, hide_ai_settings_path,
-    stored_hide_ai_settings,
-};
 pub use handle::{Core, ExecAsk, PreparedChanges};
 pub use model::{
     ChangedFileStatus, LookChange, LookView, LookViews, RemoteFileListSnapshot,
@@ -130,8 +125,8 @@ pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
     SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
+pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;
-pub use runtime::core_move::{MoveProject, MoveSource, MoveSourceRefusal, ReleaseSource};
 pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS, SwitchVia};
 pub use runtime::serialize_snapshot_delta;
 pub use view_layout::DisplayKind;

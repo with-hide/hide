@@ -1296,27 +1296,6 @@ impl Core {
         lock_recover(&self.runtime).prepare_delivery_human()
     }
 
-    /// The move's link committed this core: what it held while pending
-    /// runs now (`effects.rs`). Returns whether this released the hold.
-    pub fn release_effects(&self) -> bool {
-        if !check_owner_thread(self, "effects.release") {
-            return false;
-        }
-        let released = {
-            let mut runtime = lock_recover(&self.runtime);
-            let released = runtime.release_effects();
-            if released {
-                // A held core wrote no policy at its start.
-                runtime.publish_own_guardrail_policy();
-            }
-            released
-        };
-        if released {
-            notify_change(self);
-        }
-        released
-    }
-
     /// What moves this machine's Herdr save into the core's own engine
     /// (PRD engine-bundle-4-herdr-removal D-6 to D-8); `hided` installs one
     /// only on a core that runs its own engine. Looks at the save at once.
@@ -1417,49 +1396,6 @@ impl Core {
             return Err("hide_unavailable");
         }
         lock_recover(&self.runtime).device_switch_source(device)
-    }
-
-    /// What a move of the core to `device` is made from (PRD
-    /// core-host-node-move B4), with the device's label records, which memory
-    /// holds (bar their marks), in the form `labels.json` stores them.
-    pub fn move_source(
-        &self,
-        device: &str,
-    ) -> Result<(crate::MoveSource, serde_json::Value), crate::MoveSourceRefusal> {
-        if !check_owner_thread(self, "move_source") {
-            return Err(crate::MoveSourceRefusal::NotReady);
-        }
-        let source = lock_recover(&self.runtime).move_source(device)?;
-        // A core whose label services never started holds no records.
-        let labels = match &self.labels {
-            Some(labels) => labels
-                .store
-                .export(&crate::labels::device_target(device))
-                .map_err(crate::MoveSourceRefusal::Unstorable)?,
-            None => serde_json::Value::Object(serde_json::Map::new()),
-        };
-        Ok((source, labels))
-    }
-
-    /// What a move of the core back to the node that dialed it is made
-    /// from (PRD core-host-node-move B6), with that node's label records,
-    /// which memory holds (bar their marks), in the form `labels.json` stores them.
-    pub fn release_source(
-        &self,
-        node: &str,
-    ) -> Result<(crate::ReleaseSource, serde_json::Value), crate::MoveSourceRefusal> {
-        if !check_owner_thread(self, "release_source") {
-            return Err(crate::MoveSourceRefusal::NotReady);
-        }
-        let source = lock_recover(&self.runtime).release_source(node)?;
-        let labels = match &self.labels {
-            Some(labels) => labels
-                .store
-                .export(&crate::labels::device_target(node))
-                .map_err(crate::MoveSourceRefusal::Unstorable)?,
-            None => serde_json::Value::Object(serde_json::Map::new()),
-        };
-        Ok((source, labels))
     }
 
     /// Takes the link a node that dialed this core brought (PRD
@@ -1911,7 +1847,6 @@ mod tests {
                     workspace_views_path: None,
                     shortcut_import_path: None,
                     local_issues_path: None,
-                    effects_held: false,
                     machine_name: None,
                     windows_drives: None,
                     account_state_folder: false,

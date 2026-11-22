@@ -16,7 +16,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 mod launchd;
 mod systemd;
@@ -26,8 +25,6 @@ const NO_LOGIN_AGENTS: &str = "this system has no login agents";
 /// Why [`UserAgents::of_home`] keeps a HOME from the account's login agents.
 pub const NOT_THE_ACCOUNT_HOME: &str =
     "HOME is not the account's own home, so the account's login agents are left alone";
-const NO_POWER_SETTINGS: &str = "this system has no power settings to read";
-const NO_ONE_SHOT_JOBS: &str = "this system starts no one-shot job in the login session";
 const NO_LINGER: &str = "this system's agents run only while the account is logged in";
 
 #[derive(Clone, Debug)]
@@ -48,7 +45,7 @@ enum System {
 /// Which system's agents a fixture stands in for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
-    /// macOS: the stand-ins are `launchctl` and `pmset`.
+    /// macOS: the stand-in is `launchctl`.
     Launchd,
     /// Linux: the stand-ins are `systemctl` and `loginctl`.
     Systemd,
@@ -166,17 +163,6 @@ impl UserAgents {
         }
     }
 
-    /// How long the machine waits on power before it sleeps on its own,
-    /// which stops every agent; `None` when it never does.
-    pub fn sleeps_on_power(&self, home: &Path, stop: &AtomicBool) -> io::Result<Option<Duration>> {
-        match &self.system {
-            System::Launchd(launchd) => launchd.sleeps_on_power(home, stop),
-            System::Systemd(_) | System::TaskScheduler(_) | System::None(_) => {
-                Err(unsupported(NO_POWER_SETTINGS))
-            }
-        }
-    }
-
     /// Installs `agent` for `home`'s account, which starts it now and at
     /// each login, and starts it again after any exit while `marker`
     /// exists; one installed already under its label is replaced, which
@@ -234,27 +220,6 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.load(label, home, stop),
             System::Systemd(systemd) => systemd.load(label, home, stop),
             System::TaskScheduler(tasks) => tasks.load(label, home, stop),
-            System::None(reason) => Err(unsupported(reason)),
-        }
-    }
-
-    /// Starts `agent` once where an installed agent runs, never again at a
-    /// login and never after it exits, until [`unload`] ends it. What the
-    /// system needs to run it is kept in `folder`, a private folder the
-    /// caller made and keeps until then. One loaded already under its label
-    /// is replaced. launchd's alone.
-    ///
-    /// [`unload`]: Self::unload
-    pub fn start_once(
-        &self,
-        agent: &LoginAgent<'_>,
-        folder: &Path,
-        home: &Path,
-        stop: &AtomicBool,
-    ) -> io::Result<()> {
-        match &self.system {
-            System::Launchd(launchd) => launchd.start_once(agent, folder, home, stop),
-            System::Systemd(_) | System::TaskScheduler(_) => Err(unsupported(NO_ONE_SHOT_JOBS)),
             System::None(reason) => Err(unsupported(reason)),
         }
     }

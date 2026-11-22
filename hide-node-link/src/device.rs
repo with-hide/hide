@@ -526,8 +526,8 @@ pub trait SignIn: Send + Sync {
 }
 
 /// What an attempt waits on as a screen shows it: the device row
-/// (`DeviceSnapshot.sign_in`), a node window's strip (`core_link`) and the
-/// core move dialog (`core_move`) read the same shape (PRD
+/// (`DeviceSnapshot.sign_in`) and a node window's strip (`core_link`) read
+/// the same shape (PRD
 /// system-ssh-device-link B6-B12, B33).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShownSignIn {

@@ -545,13 +545,8 @@ pub fn load(home: &Path) -> Result<AiSettings, AiError> {
 
 /// [`load`], with `None` when nobody has chosen yet.
 pub fn load_choice(home: &Path) -> Result<Option<AiSettings>, AiError> {
-    load_choice_at(&settings_path(home))
-}
-
-/// [`load_choice`] of the settings file at `path`, wherever it is kept (a
-/// core move carries it in its copy).
-pub fn load_choice_at(path: &Path) -> Result<Option<AiSettings>, AiError> {
-    let bytes = match std::fs::read(path) {
+    let path = settings_path(home);
+    let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(None);
