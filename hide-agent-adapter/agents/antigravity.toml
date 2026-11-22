@@ -100,4 +100,4 @@ line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']
 [answer]
 marker = ">"
 question = { down = "down", pick = "enter", row = "{n}." }
-permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"], row = "{n}." }
+permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"], row = "{n}.", command = { title = "Requesting permission for:" } }

@@ -310,11 +310,16 @@ mod tests {
         let (typed, screen) =
             keys(agent(&claude), Some(&shown), "100", "permission", "deny").unwrap();
         assert_eq!(typed, ["esc"]);
+        let dialog = |command: &str| {
+            format!(
+                " Bash command\n Run the tests\n╌╌╌╌\n {command}\n╌╌╌╌\n Do you want to proceed?\n ❯ 1. Yes"
+            )
+        };
         assert!(!screen.shows(" Do you want to proceed?\n ❯ 1. Yes", None));
-        assert!(screen.shows("   cargo test\n Do you want to proceed?\n ❯ 1. Yes", None));
+        assert!(screen.shows(&dialog("cargo test"), None));
         let (_, screen) = keys(agent(&claude), Some(&shown), "100", "permission", "allow").unwrap();
-        assert!(screen.shows("   cargo test\n ❯ 1. Yes", Some(0)));
-        assert!(!screen.shows("   ls -la\n ❯ 1. Yes", Some(0)));
+        assert!(screen.shows(&dialog("cargo test"), Some(0)));
+        assert!(!screen.shows(&dialog("ls -la"), Some(0)));
 
         let plan = open("toolu_2", None, true);
         let shown = of(agent(&claude), Some(&Pending::One(&plan))).unwrap();
