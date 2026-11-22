@@ -3,8 +3,10 @@
 //! Pairing, grants and delivery are tested on it, with no network and no
 //! timing of one. A [`Net`] is the wire; each machine joins it with its key.
 //! Nothing below a loopback connection authenticates, so the first exchange
-//! is a challenge each way signed with the machine key ([`crate::key`]), the
-//! same proof a `wsl.exe` carrier uses.
+//! is a challenge each way signed with the machine key ([`crate::proof`]),
+//! the same proof a `wsl.exe` carrier uses, admitted under the same caps as
+//! any transport's: [`limits::MAX_ADMITTING`] proofs at once, each for
+//! [`limits::HELLO_WITHIN`] at most.
 
 use std::collections::HashMap;
 use std::io;
@@ -12,12 +14,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use hide_peer_protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
-use tokio::sync::{mpsc, watch};
+use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
+use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::gate::{Gate, Guarded};
-use crate::key::{self, CHALLENGE_BYTES, MachineKey, PROOF_BYTES};
+use crate::key::MachineKey;
 use crate::transport::{PeerConn, PeerTransport, RelayState, TransportError};
+use crate::{limits, proof};
 
 /// The bytes a loopback stream holds before its writer waits.
 const STREAM_BUFFER: usize = 64 * 1024;
@@ -62,6 +65,7 @@ impl Net {
             key: Arc::new(key),
             incoming: tokio::sync::Mutex::new((incoming, proving)),
             proved,
+            admitting: Arc::new(Semaphore::new(limits::MAX_ADMITTING)),
             conns: Mutex::new(Vec::new()),
         }
     }
@@ -79,6 +83,9 @@ pub struct Loopback {
     /// key, each proof in a task of its own.
     incoming: tokio::sync::Mutex<(mpsc::Receiver<Dialing>, mpsc::Receiver<LoopConn>)>,
     proved: mpsc::Sender<LoopConn>,
+    /// The proofs that run. At the cap the next dial is dropped before any
+    /// of its bytes are read.
+    admitting: Arc<Semaphore>,
     conns: Mutex<Vec<Weak<Shared>>>,
 }
 
@@ -186,7 +193,7 @@ impl PeerTransport for Loopback {
             opened: to_us,
             accepting: Arc::new(tokio::sync::Mutex::new(from_us)),
         };
-        let (mut proof, their_proof) = tokio::io::duplex(256);
+        let (proof, their_proof) = tokio::io::duplex(256);
         machine
             .send(Dialing {
                 proof: their_proof,
@@ -195,45 +202,15 @@ impl PeerTransport for Loopback {
             .await
             .map_err(|_| unreachable("that machine left the wire"))?;
         self.net.dials.fetch_add(1, Ordering::AcqRel);
-
-        // The dialer's half of the proof: its key and a challenge, then the
-        // acceptor's key, challenge and proof, then its own proof.
-        let asked = key::challenge().map_err(proof_failed)?;
-        proof
-            .write_all(self.key().as_bytes())
+        let (mut recv, mut send) = tokio::io::split(proof);
+        if !proof::dialer(&self.key, &to.key, &mut send, &mut recv)
             .await
-            .map_err(proof_failed)?;
-        proof.write_all(&asked).await.map_err(proof_failed)?;
-        let mut their_key = [0u8; 32];
-        let mut their_challenge = [0u8; CHALLENGE_BYTES];
-        let mut their_proof = [0u8; PROOF_BYTES];
-        proof
-            .read_exact(&mut their_key)
-            .await
-            .map_err(proof_failed)?;
-        proof
-            .read_exact(&mut their_challenge)
-            .await
-            .map_err(proof_failed)?;
-        proof
-            .read_exact(&mut their_proof)
-            .await
-            .map_err(proof_failed)?;
-        let their_key = PeerKey::from_bytes(their_key);
-        if their_key != to.key || !key::verify(&their_key, &asked, &self.key(), &their_proof) {
+            .map_err(proof_failed)?
+        {
             return Err(unreachable(
                 "the machine did not prove the key that was dialed",
             ));
         }
-        proof
-            .write_all(&key::prove(&self.key, &their_challenge, &their_key))
-            .await
-            .map_err(proof_failed)?;
-        // The acceptor's verdict: one byte once it verified ours.
-        proof
-            .read_exact(&mut [0u8; 1])
-            .await
-            .map_err(proof_failed)?;
         self.track(&ours);
         Ok(ours)
     }
@@ -252,12 +229,20 @@ impl PeerTransport for Loopback {
                 dialing = dials.recv() => dialing.ok_or(TransportError::Closed)?,
             };
             // Each dialer proves its key in a task of its own, so one that
-            // never finishes holds up no other. One that fails its proof is
-            // dropped; it never reaches the caller.
+            // never finishes holds up no other, and is given up after
+            // `HELLO_WITHIN`. One that fails its proof, or arrives while as
+            // many run as may, is dropped; it never reaches the caller.
+            let Ok(admitted) = Arc::clone(&self.admitting).try_acquire_owned() else {
+                continue;
+            };
             let key = Arc::clone(&self.key);
             let proved = self.proved.clone();
             tokio::spawn(async move {
-                if let Ok(Some(conn)) = prove_dialer(&key, dialing).await {
+                let _admitted = admitted;
+                let proving = prove_dialer(&key, dialing);
+                if let Ok(Ok(Some(conn))) =
+                    tokio::time::timeout(limits::HELLO_WITHIN, proving).await
+                {
                     let _ = proved.send(conn).await;
                 }
             });
@@ -282,31 +267,14 @@ impl PeerTransport for Loopback {
     }
 }
 
-/// The acceptor's half of the proof: the dialer's key and challenge, then
-/// this machine's key, challenge and proof, then the dialer's proof. `None`
-/// when the dialer did not prove the key it sent.
+/// The acceptor's half of the proof. `None` when the dialer did not prove
+/// the key it sent.
 async fn prove_dialer(key: &MachineKey, dialing: Dialing) -> io::Result<Option<LoopConn>> {
-    let Dialing {
-        mut proof,
-        mut conn,
-    } = dialing;
-    let mut their_key = [0u8; 32];
-    let mut their_challenge = [0u8; CHALLENGE_BYTES];
-    proof.read_exact(&mut their_key).await?;
-    proof.read_exact(&mut their_challenge).await?;
-    let their_key = PeerKey::from_bytes(their_key);
-    let asked = key::challenge()?;
-    proof.write_all(key.public().as_bytes()).await?;
-    proof.write_all(&asked).await?;
-    proof
-        .write_all(&key::prove(key, &their_challenge, &their_key))
-        .await?;
-    let mut their_proof = [0u8; PROOF_BYTES];
-    proof.read_exact(&mut their_proof).await?;
-    if !key::verify(&their_key, &asked, &key.public(), &their_proof) {
+    let Dialing { proof, mut conn } = dialing;
+    let (mut recv, mut send) = tokio::io::split(proof);
+    let Some(their_key) = proof::acceptor(key, &mut send, &mut recv).await? else {
         return Ok(None);
-    }
-    proof.write_all(&[1]).await?;
+    };
     // The key the dialer proved, not the one it was built with.
     conn.peer = their_key;
     Ok(Some(conn))
@@ -408,15 +376,10 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn a_dialer_that_never_finishes_its_proof_holds_up_no_other() {
-        let net = Net::new();
-        let host = net.join(MachineKey::generate().unwrap());
-        let guest = net.join(MachineKey::generate().unwrap());
-
-        // A dial whose dialer sends nothing of its proof, and keeps its end
-        // open.
-        let (_silent, their_proof) = tokio::io::duplex(256);
+    /// A dial whose dialer sends nothing of its proof; the end it keeps
+    /// open is answered with it.
+    async fn silent_dial(net: &Arc<Net>, host: &Loopback, as_key: PeerKey) -> DuplexStream {
+        let (silent, their_proof) = tokio::io::duplex(256);
         let (opened, _never_accepted) = mpsc::channel(BACKLOG);
         let (_never_opened, accepting) = mpsc::channel(BACKLOG);
         let stuck = LoopConn {
@@ -426,7 +389,7 @@ mod tests {
                 closed: watch::channel(None).0,
                 path: watch::channel(PathKind::Local).0,
             }),
-            peer: guest.key(),
+            peer: as_key,
             dialed: false,
             opened,
             accepting: Arc::new(tokio::sync::Mutex::new(accepting)),
@@ -439,6 +402,15 @@ mod tests {
             })
             .await
             .expect("the host is on the wire");
+        silent
+    }
+
+    #[tokio::test]
+    async fn a_dialer_that_never_finishes_its_proof_holds_up_no_other() {
+        let net = Net::new();
+        let host = net.join(MachineKey::generate().unwrap());
+        let guest = net.join(MachineKey::generate().unwrap());
+        let _silent = silent_dial(&net, &host, guest.key()).await;
 
         let to = PeerAddr::new(host.key(), Vec::new());
         let (dialed, accepted) = tokio::time::timeout(Duration::from_secs(20), async {
@@ -448,5 +420,41 @@ mod tests {
         .expect("the second dialer connected beside the unfinished proof");
         assert_eq!(accepted.unwrap().peer(), guest.key());
         dialed.unwrap();
+    }
+
+    /// As many proofs run at once as may and no more: the dial past the cap
+    /// is dropped unread, and each silent one is given up after
+    /// `HELLO_WITHIN`, which frees its place.
+    #[tokio::test(start_paused = true)]
+    async fn proofs_are_admitted_under_a_count_and_a_time() {
+        let net = Net::new();
+        let host = Arc::new(net.join(MachineKey::generate().unwrap()));
+        let guest = net.join(MachineKey::generate().unwrap());
+        let accepting = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move { host.accept().await })
+        };
+        let mut silent = Vec::new();
+        for _ in 0..limits::MAX_ADMITTING {
+            silent.push(silent_dial(&net, &host, guest.key()).await);
+        }
+        // Every place is taken: an honest dialer is dropped, not queued.
+        let to = PeerAddr::new(host.key(), Vec::new());
+        while host.admitting.available_permits() > 0 {
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            guest.dial(&to).await,
+            Err(TransportError::Unreachable(_))
+        ));
+        // The silent ones are given up in time, and the next dial is taken:
+        // the test's clock is moved past the bound, and every place comes
+        // back.
+        tokio::time::advance(limits::HELLO_WITHIN + Duration::from_secs(1)).await;
+        while host.admitting.available_permits() < limits::MAX_ADMITTING {
+            tokio::task::yield_now().await;
+        }
+        guest.dial(&to).await.unwrap();
+        assert_eq!(accepting.await.unwrap().unwrap().peer(), guest.key());
     }
 }

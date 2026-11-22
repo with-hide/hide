@@ -262,6 +262,13 @@ fn to_endpoint_addr(to: &PeerAddr) -> Result<EndpointAddr, TransportError> {
                 url.parse()
                     .map_err(|error| unreachable(format!("not a relay address: {error}")))?,
             ),
+            // A distribution is its PC's to reach, through `wsl.exe`
+            // (`hide_peer::pipe`); it has no address here.
+            Candidate::Wsl(_) => {
+                return Err(unreachable(
+                    "a WSL distribution is reached through wsl.exe".to_owned(),
+                ));
+            }
         });
     }
     Ok(EndpointAddr::from_parts(id, addrs))

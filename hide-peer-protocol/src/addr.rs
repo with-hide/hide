@@ -17,6 +17,10 @@ pub enum Candidate {
     Ip(SocketAddr),
     /// The URL of the relay the machine is attached to.
     Relay(String),
+    /// The name of a WSL distribution of the PC that holds this address: the
+    /// machine is reached through `wsl.exe`, by that PC and by no other
+    /// machine (D-27). It is saved on that PC and never told to a peer.
+    Wsl(String),
 }
 
 impl Candidate {

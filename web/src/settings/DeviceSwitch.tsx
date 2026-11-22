@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Note, Status } from "../components/settings-rows";
-import { deviceTerminalCount, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep } from "../deviceSwitch";
+import { deviceTerminalCount, installParts, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep, type InstallPart } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -79,9 +79,10 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
 }
 
 /**
- * What the Hide that a switch started on a machine still needs to stay
- * reachable with no one there (B30), under that machine's row: automatic
- * login on a Mac, or on Linux the command an administrator runs, with Copy.
+ * What the Hide on a switched machine still needs to stay reachable with
+ * no one there (B30, B43), under that machine's row: automatic login on a
+ * Mac, on Linux the command an administrator runs, with Copy, or a WSL
+ * distribution with no systemd being opened again after Windows restarts.
  * Nothing for a machine that needs nothing.
  */
 export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actions: Actions }) {
@@ -89,6 +90,7 @@ export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actio
   const needs = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === deviceId)?.needs ?? null);
   if (needs === null) return null;
   if (needs.kind === "auto_login") return <Note tone="warn" data-device-needs={`${deviceId}:auto_login`}>{t("devices.needs.autoLogin")}</Note>;
+  if (needs.kind === "open_distribution") return <Note tone="warn" data-device-needs={`${deviceId}:open_distribution`}>{t("devices.needs.openDistribution")}</Note>;
   return (
     <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-needs={`${deviceId}:linger`}>
       <Note tone="warn">{t("devices.needs.linger")}</Note>
@@ -185,7 +187,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   };
   const name = machineName(devices, deviceId, t);
   if (answer.switch === "install_needed") {
-    const parts: InstallPart[] = answer.system === "linux" ? ["core", "autostart", "linger"] : ["core", "autostart"];
+    const parts = installParts(answer.system, devices?.find((row) => row.id === deviceId)?.wsl_distro != null);
     return (
       <Dialog open onOpenChange={(next) => { if (!next) cancel(); }}>
         <DialogContent data-device-switch-install={deviceId}>
@@ -261,11 +263,12 @@ function useSwitchLanded() {
 }
 
 /**
- * A device added over SSH goes on to the new connection (B41): the core
- * keeps that it was added for its switch (`Device.switch_first`), and once
- * its helper is connected this window asks that switch, once. A machine
- * whose own Hide runs is then connected as a Hide; one with none answers
- * with what would be installed there, which the operator allows or leaves.
+ * A device added over SSH or as a WSL distribution goes on to the new
+ * connection (B41): the core keeps that it was added for its switch
+ * (`Device.switch_first`), and once its helper is connected this window
+ * asks that switch, once. A machine whose own Hide runs is then connected
+ * as a Hide; one with none answers with what would be installed there,
+ * which the operator allows or leaves.
  */
 function useSwitchAfterAdd(actions: Actions) {
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
@@ -284,9 +287,6 @@ function useSwitchAfterAdd(actions: Actions) {
     askSwitch(actions, ready);
   }, [actions, ready, ownScreen]);
 }
-
-/** What is put on a machine that runs no Hide of its own; linger is Linux's alone. */
-type InstallPart = "core" | "autostart" | "linger";
 
 const INSTALL_PART_KEY = {
   core: "devices.switch.install.core",

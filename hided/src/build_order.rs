@@ -101,9 +101,34 @@ fn release_numbers(version: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(numbers)
 }
 
+/// Whether a build that names itself `theirs` may be older than the one
+/// that names itself `ours`: another build whose release is not a later
+/// one. A version alone does not order two builds of one release, so this
+/// only rules out a build that is certainly newer, for a caller that asks
+/// the build itself before it acts (PRD device-connect-iroh B23).
+pub fn may_be_older(ours: &str, theirs: &str) -> bool {
+    match (release_numbers(ours), release_numbers(theirs)) {
+        (Some(ours_release), Some(theirs_release)) => {
+            ours != theirs && theirs_release <= ours_release
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_later_release_or_the_same_version_is_known_not_to_be_older() {
+        assert!(may_be_older("1.3.0", "1.2.10"));
+        assert!(may_be_older("1.3.0-main.aaaa", "1.3.0-main.bbbb"));
+        assert!(may_be_older("1.3.0", "1.3.0-main.bbbb"));
+        assert!(!may_be_older("1.3.0", "1.3.0"));
+        assert!(!may_be_older("1.3.0", "1.3.1"));
+        assert!(!may_be_older("1.3.0", "local"));
+        assert!(!may_be_older("local", "1.3.0"));
+    }
 
     fn release(version: &str, order: u64) -> Release {
         Release {

@@ -37,7 +37,8 @@ pub struct PeerMachine {
     /// Why it is not connected, when the transport can say more than that
     /// the machine did not answer.
     pub reason: Option<PeerReason>,
-    /// Which of the two has to update before they connect again.
+    /// Which of the two has to update before they connect again, or where
+    /// this machine's update of the Hide it started there stands.
     pub update: Option<PeerUpdate>,
 }
 
@@ -92,6 +93,25 @@ pub enum PeerUpdate {
     /// This machine's Hide is the older one.
     Here,
     There,
+    /// This machine's Hide is the older one, and that machine, which
+    /// holds an active grant here, asked it to update (PRD
+    /// device-connect-iroh B22): the app here updates itself.
+    HereAsked,
+    /// That machine's Hide is the older one, and this machine asked it to
+    /// update.
+    ThereAsked,
+    /// This machine is bringing the Hide it started there to its own build
+    /// (PRD device-connect-iroh B23).
+    Updating,
+    /// That update did not happen and the Hide there runs the build it
+    /// ran: this machine's login did not reach it,
+    UpdateNotReached,
+    /// the new build did not start there,
+    UpdateRolledBack,
+    /// another machine's update or a move runs there now,
+    UpdateBusy,
+    /// or it stopped for a reason the diagnostic log holds.
+    UpdateFailed,
 }
 
 fn shown(text: &str, most: usize) -> bool {
