@@ -29,9 +29,9 @@ DEPLOY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DEPLOY)
 # The upstream release archive of the version deploy/relay/iroh-relay.version
 # names; bump both together.
-IROH_RELAY = ("1.4.1", "https://github.com/n0-computer/iroh/releases/download/v1.4.1/"
-              "iroh-relay-v1.4.1-x86_64-unknown-linux-musl.tar.gz",
-              "75254641e3fad7fcbac6dee4d485556fbe06ef708340a9d8810469270ba626b8")
+IROH_RELAY = ("1.5.0", "https://github.com/n0-computer/iroh/releases/download/v1.5.0/"
+              "iroh-relay-v1.5.0-x86_64-unknown-linux-musl.tar.gz",
+              "935892e4ad570d694f7ad2780f800077b99fd72d9a56ac982792fdd04ef631b4")
 DEVICE = "device-relay.withhide.dev"
 METER_STATE = Path("/var/lib/hide-iroh-relay-meter")
 

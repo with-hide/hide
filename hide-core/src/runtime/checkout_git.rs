@@ -17,7 +17,9 @@ pub(super) struct State {
     pub(super) target: Option<GitRequest>,
     generation: u64,
     pub(super) header: Option<Header>,
-    repository: Option<String>,
+    /// The repository the checkout's `origin` names, on a host that reads
+    /// its commits' checks; the URL itself is never kept.
+    repository: Option<(crate::code_host::Host, crate::code_host::RepositoryRef)>,
     last_git: Option<Instant>,
     /// When the Git read last succeeded, published only once the read fails
     /// or ages, so an unchanged read every two seconds publishes nothing.
@@ -131,9 +133,10 @@ impl Runtime {
             return None;
         }
         let facts = header.facts.as_ref()?;
-        let repository = self.checkout_header.repository.clone()?;
+        let (host, repository) = self.checkout_header.repository.clone()?;
         Some(CiRequest {
             git: git.clone(),
+            host,
             repository,
             sha: facts.head_sha.clone()?,
             commits: if facts.recent_commits.is_empty() {
@@ -192,8 +195,11 @@ impl Runtime {
                     .origin_url
                     .take()
                     .as_deref()
-                    .and_then(hide_node_link::gh::repository_of_remote)
-                    .filter(|repository| hide_node_link::gh::is_repository(repository));
+                    .and_then(|url| self.code_hosts.remote(url))
+                    .filter(|(host, repository)| {
+                        host.commit_checks()
+                            .is_some_and(|checks| checks.covers(repository))
+                    });
                 if self.checkout_header.repository != repository
                     || header.facts.as_ref().is_none_or(|previous| {
                         previous.head_sha != facts.head_sha
@@ -401,7 +407,7 @@ impl Runtime {
         header.commit_links = if self.checkout_header.commits_unread {
             Vec::new()
         } else {
-            commit_links(self.checkout_header.repository.as_deref(), &header)
+            commit_links(self.checkout_header.repository.as_ref(), &header)
         };
         header.commit_pages = self.checkout_header.repository.is_some();
         header.catch_up = self
@@ -596,11 +602,14 @@ fn offers_catch_up(facts: &hide_node_link::worktrees::CheckoutGit, head: &str) -
         && facts.head_sha.as_deref() == Some(head)
 }
 
-/// The GitHub commit page of each recent commit some remote holds and of
-/// each incoming one, for a checkout whose origin is a validated GitHub
-/// repository; a commit no remote holds has no page to open (D-05).
-fn commit_links(repository: Option<&str>, header: &Header) -> Vec<CommitLink> {
-    let (Some(repository), Some(facts)) = (repository, header.facts.as_ref()) else {
+/// The host's page of each recent commit some remote holds and of each
+/// incoming one, for a checkout whose origin is a repository its host reads
+/// commits of; a commit no remote holds has no page to open (D-05).
+fn commit_links(
+    repository: Option<&(crate::code_host::Host, crate::code_host::RepositoryRef)>,
+    header: &Header,
+) -> Vec<CommitLink> {
+    let (Some((host, repository)), Some(facts)) = (repository, header.facts.as_ref()) else {
         return Vec::new();
     };
     facts
@@ -611,7 +620,7 @@ fn commit_links(repository: Option<&str>, header: &Header) -> Vec<CommitLink> {
         .filter(|commit| hide_node_link::gh::is_commit(&commit.sha))
         .map(|commit| CommitLink {
             sha: commit.sha.clone(),
-            url: format!("https://github.com/{repository}/commit/{}", commit.sha),
+            url: host.commit_url(repository, &commit.sha),
         })
         .collect()
 }

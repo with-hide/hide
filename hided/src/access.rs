@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use crate::core::CoreHandle;
 use crate::pane_auth::Registry;
 
+mod origin;
+
 /// What a command refused because the connection is gone says to do.
 pub const REVOKED_NEXT_ACTION: &str =
     "The operator disconnected this tool; run hide access request --name <name> to ask again";
@@ -46,6 +48,7 @@ pub const REFUSALS: &[&str] = &[
     SPAWN_PARENT,
     "access_core_only",
     "access_unavailable",
+    origin::UNAVAILABLE,
 ];
 
 /// What each tool refusal says to do, in the words the CLI, `hide guide`
@@ -102,6 +105,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
         }
         "access_core_only" => "Run the tool on the machine where Hide's core runs",
         "access_unavailable" => "Start Hide on this machine, then run the same command again",
+        origin::UNAVAILABLE => "Reconnect Hide, then retry from a terminal outside Hide's panes",
         _ => return None,
     })
 }
@@ -162,7 +166,11 @@ pub(crate) fn answer_bootstrap(
     // An agent in a pane is never a tool, whatever its environment says
     // (D-08, B8): a peer that descends from a pane's program, of this
     // core's engine, is refused before any key is looked at.
-    if in_a_pane(peer, request, engine, core) {
+    let in_pane = match in_a_pane(peer, request, engine, core) {
+        Ok(in_pane) => in_pane,
+        Err(reason) => return (refused(reason), None),
+    };
+    if in_pane {
         note("access.from_pane", None, "access_from_pane");
         return (refused("access_from_pane"), None);
     }
@@ -245,7 +253,7 @@ pub(crate) fn pairing_caller(
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
 ) -> Result<crate::pairing::Caller, Value> {
-    let in_pane = in_a_pane(peer, request, engine, core);
+    let in_pane = in_a_pane(peer, request, engine, core).map_err(refused)?;
     let key = match &request.access {
         None if in_pane => return Ok(crate::pairing::Caller::Pane),
         None => return Ok(crate::pairing::Caller::Operator),
@@ -266,37 +274,67 @@ pub(crate) fn pairing_caller(
     Ok(crate::pairing::Caller::Bot(mode))
 }
 
-/// Whether `peer` runs in a Hide pane of this machine: the pane its request
-/// names proves it, or it descends from the program of a pane the core's
-/// engine keeps a record of, which a pane agent that cleared its
-/// environment still does.
+/// Whether `peer` runs in a Hide pane of this machine. Kernel ancestry
+/// covers every holder owned by this home or placed for this core's
+/// guests; a hinted pane or the host's own retained program records also
+/// prove it. No unreadable proof becomes an outside-terminal answer.
 pub(crate) fn in_a_pane(
     peer: i32,
     request: &PaneRequest,
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
-) -> bool {
+) -> Result<bool, &'static str> {
+    if origin::in_holder(peer, core.home(), core.state_dir())? {
+        return Ok(true);
+    }
     if !request.pane_id.is_empty()
         && let Some(engine) = engine
         && crate::pane_auth::attest_local(peer, &request.pane_id, engine, core).is_ok()
     {
-        return true;
+        return Ok(true);
     }
-    let Ok(entries) = std::fs::read_dir(hide_kit::layout::pane_records(core.state_dir())) else {
-        return false;
+    let entries = match std::fs::read_dir(hide_kit::layout::pane_records(core.state_dir())) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(origin::UNAVAILABLE),
     };
     let Ok(peer) = u32::try_from(peer) else {
-        return false;
+        return Err(origin::UNAVAILABLE);
     };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            hide_holder_protocol::record::read(&entry.path())
-                .ok()
-                .flatten()
-        })
-        .filter_map(|record| record.program)
-        .any(|program| program.runs() && hide_platform::process::descends_from(peer, program.pid))
+    let mut count = 0;
+    for entry in entries {
+        let entry = entry.map_err(|_| origin::UNAVAILABLE)?;
+        if entry
+            .path()
+            .extension()
+            .is_none_or(|extension| extension != "json")
+        {
+            continue;
+        }
+        count += 1;
+        // The holder-record owner already caps this retained set. A
+        // truncated authorization proof cannot establish "outside", and
+        // this reader must not delete another owner's live evidence.
+        if count > hide_kit::panes::MAX_RECORD_FILES {
+            return Err(origin::UNAVAILABLE);
+        }
+        let record =
+            hide_holder_protocol::record::read(&entry.path()).map_err(|_| origin::UNAVAILABLE)?;
+        if let Some(program) = record.and_then(|record| record.program) {
+            match hide_platform::process::start_time(program.pid) {
+                Ok(started)
+                    if started == program.started
+                        && hide_platform::process::descends_from(peer, program.pid) =>
+                {
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(origin::UNAVAILABLE),
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// A request's or a made bot's id, random so that nothing of the key or the

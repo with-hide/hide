@@ -28,6 +28,7 @@ pub(crate) fn linked_pull_requests<'a>(
     row: &SidebarAgentSnapshot,
     place: Option<RowPlace<'_>>,
     github: &'a GithubSnapshot,
+    hosts: crate::code_host::CodeHosts,
 ) -> Vec<Linked<'a>> {
     let Some(place) = place else {
         return Vec::new();
@@ -71,10 +72,9 @@ pub(crate) fn linked_pull_requests<'a>(
             .iter()
             .flat_map(|project| project.pull_requests.iter())
             .find(|pull_request| {
-                u64::from(pull_request.number) == *number
-                    && hide_session::pull_request_addresses(&pull_request.url)
-                        .first()
-                        .is_some_and(|(repo, _)| repo.eq_ignore_ascii_case(repository))
+                pull_request.sighting_key(hosts).is_some_and(|(repo, at)| {
+                    at == *number && repo.eq_ignore_ascii_case(repository)
+                })
             });
         let Some(pull_request) = found else {
             continue;

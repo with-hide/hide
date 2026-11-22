@@ -242,6 +242,11 @@ export function menuEdge(id: ViewMenuId): Edge | null {
 }
 
 /** What a display is, for its tooltip and accessible name (B21): kind, full path and state. */
+/** A View's name on its tab and its path line: an image pasted into a terminal by what it is, never by its request's file name; every other by its label. */
+export function displayName(display: Pick<ViewDisplaySnapshot, "label" | "pasted">, t: TFunction<"translation">): string {
+  return display.pasted ? t("documents.pastedImage") : display.label;
+}
+
 export function displayIdentity(display: ViewDisplaySnapshot, t: TFunction<"translation">): string {
   if (display.kind === "external") {
     const held = display.external ? useExternalStore.getState().described[display.external.grant] : null;

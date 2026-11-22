@@ -229,6 +229,7 @@ fn no_worktrees() -> crate::model::WorktreeCatalogSnapshot {
 /// button's rules to be applied to it.
 fn settled_worktree(badge: crate::model::PullRequestBadge) -> CheckoutSnapshot {
     let pull_request = crate::model::PullRequestSnapshot {
+        reference: None,
         closing_issues: Default::default(),
         title: "Fixture pull request".into(),
         checks: crate::model::PullRequestChecks::Unknown,

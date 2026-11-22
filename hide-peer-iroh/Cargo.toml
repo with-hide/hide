@@ -19,9 +19,9 @@ publish = false
 futures-util = "=0.3.34"
 hide-peer = { path = "../hide-peer" }
 hide-peer-protocol = { path = "../hide-peer-protocol" }
-iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring"] }
+iroh = { version = "=1.5.0", default-features = false, features = ["tls-ring"] }
 iroh-mdns-address-lookup = "=0.6.1"
-noq = { version = "=1.4.0", default-features = false }
+noq = { version = "=1.5.0", default-features = false }
 # iroh's own HTTP client, with the features iroh asks of it: one request to
 # the relay's host, for the reason this machine is not attached (B34).
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }

@@ -642,6 +642,7 @@ impl Runtime {
                 rows.iter(),
                 &sessions,
                 std::iter::once(&self.github).chain(self.device_github.values()),
+                self.code_hosts,
             );
             (0..rows.len())
                 .map(|index| {
@@ -688,6 +689,7 @@ impl Runtime {
             self.session_rows(),
             &sessions,
             std::iter::once(&self.github).chain(self.device_github.values()),
+            self.code_hosts,
         );
         if sources.groups_match(record, &recorded) {
             return;
@@ -714,6 +716,7 @@ impl Runtime {
             self.session_rows(),
             &sessions,
             std::iter::once(&self.github).chain(self.device_github.values()),
+            self.code_hosts,
         );
         lay_record_pulls(&sources, &mut record, &recorded);
         record

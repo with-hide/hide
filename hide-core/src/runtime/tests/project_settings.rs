@@ -251,7 +251,7 @@ fn unacknowledged_save_keeps_consumers_on_confirmed_repository() {
         runtime.snapshot.ui_state.project_settings_writes[&id].state,
         WriteState::Pending
     );
-    assert_eq!(runtime.github_request().projects[0].repository, None);
+    assert_eq!(asked_repository(&runtime), None);
     let saved = runtime.ui_state_to_save();
     assert!(
         !runtime.acknowledge_project_settings_save(&UiStateSnapshot::default(), true),
@@ -263,13 +263,22 @@ fn unacknowledged_save_keeps_consumers_on_confirmed_repository() {
     );
     assert!(runtime.acknowledge_project_settings_save(&saved, true));
     assert_eq!(
-        runtime.github_request().projects[0].repository.as_deref(),
+        asked_repository(&runtime).as_deref(),
         Some("example/second")
     );
     assert_eq!(
         runtime.snapshot.ui_state.project_settings_writes[&id].state,
         WriteState::Saved
     );
+}
+
+/// The repository the first project's read names, when it names one rather
+/// than the checkout.
+fn asked_repository(runtime: &Runtime) -> Option<String> {
+    runtime.github_request().projects[0]
+        .place
+        .as_ref()
+        .and_then(crate::code_host::Place::stored_name)
 }
 
 #[test]
@@ -286,7 +295,7 @@ fn repository_change_clears_old_success_and_rejects_old_generation() {
                 available: true,
                 ..Default::default()
             },
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
             pull_requests_read: true,
             ..Default::default()
         }],
@@ -370,6 +379,7 @@ fn old_pr_body_answer_cannot_link_same_number_in_new_repository() {
                 ..Default::default()
             },
             pull_requests: vec![crate::model::PullRequestSnapshot {
+                reference: None,
                 number: 3,
                 url: "https://github.com/example/second/pull/3".into(),
                 head_branch: "7-task".into(),
@@ -876,6 +886,17 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
         ..Default::default()
     };
     github.issues.repository = Some("acme/original".into());
+    github.repository = Some(crate::model::RepositoryIdentity {
+        id: None,
+        public: None,
+        default_branch: None,
+        ..crate::code_host::CodeHosts::STANDARD
+            .repository("acme/original")
+            .map(|(host, repository)| {
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            })
+            .unwrap()
+    });
     runtime.device_github.insert(
         "mini".into(),
         crate::model::GithubSnapshot {
@@ -1018,4 +1039,143 @@ fn a_project_name_past_its_length_or_with_a_control_character_is_refused() {
             "{request} keeps the last confirmed name"
         );
     }
+}
+
+/// A saved answer is reused under an explicit repository setting when its
+/// own identity names that repository, whatever became of its issues (they
+/// failed, or its host keeps none); another setting drops it; a file from
+/// before the identity was kept is matched by the repository its issues
+/// named, as before.
+/// A pass that did not read the repository's identity keeps the one read
+/// before where the connected repository is that repository, and never where
+/// it names another, after a failed pass too: GitHub answered a renamed
+/// repository under its new name, and nothing this pass read names it.
+#[test]
+fn an_unread_identity_is_kept_only_where_the_connected_repository_is_its_own() {
+    use crate::model::{GithubProjectSnapshot, GithubStatusSnapshot, PartRead};
+    let identity = |name: &str| crate::model::RepositoryIdentity {
+        id: Some("R1".into()),
+        public: Some(true),
+        default_branch: Some("trunk".into()),
+        ..crate::code_host::CodeHosts::STANDARD
+            .repository(name)
+            .map(|(host, repository)| {
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            })
+            .unwrap()
+    };
+    let read = || GithubProjectSnapshot {
+        root_path: "/fixture/project".into(),
+        pull_requests_read: true,
+        issues_read: PartRead::Read,
+        identity_read: PartRead::Read,
+        status: GithubStatusSnapshot {
+            available: true,
+            last_success_at_unix_ms: Some(1),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let unread = GithubProjectSnapshot {
+        identity_read: PartRead::Failed,
+        ..read()
+    };
+    let failed = GithubProjectSnapshot {
+        root_path: "/fixture/project".into(),
+        status: GithubStatusSnapshot {
+            available: true,
+            stale: true,
+            unavailable_reason: Some("gh pr list: network unreachable".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let kept = |setting: &str, named: &str, pass: &GithubProjectSnapshot| {
+        let mut runtime = fixture();
+        assert!(change(
+            &mut runtime,
+            "repository",
+            serde_json::json!({"repository": {"mode": "repository", "repository": setting}})
+        ));
+        let first = GithubProjectSnapshot {
+            repository: Some(identity(named)),
+            ..read()
+        };
+        runtime.ingest_github(crate::model::GithubSnapshot {
+            projects: vec![first],
+        });
+        runtime.ingest_github(crate::model::GithubSnapshot {
+            projects: vec![pass.clone()],
+        });
+        runtime
+            .github
+            .project("/fixture/project")
+            .and_then(|project| project.repository.clone())
+    };
+    assert_eq!(
+        kept("acme/app", "acme/app", &unread),
+        Some(identity("acme/app"))
+    );
+    assert_eq!(
+        kept("acme/app", "acme/app", &failed),
+        Some(identity("acme/app"))
+    );
+    assert_eq!(kept("acme/old", "acme/new", &unread), None);
+    assert_eq!(kept("acme/old", "acme/new", &failed), None);
+}
+
+#[test]
+fn a_saved_answer_is_reused_under_a_setting_its_identity_names() {
+    let restored = |setting: &str, project: crate::model::GithubProjectSnapshot| {
+        let mut runtime = fixture();
+        assert!(change(
+            &mut runtime,
+            "repository",
+            serde_json::json!({"repository": {"mode": "repository", "repository": setting}})
+        ));
+        let folder = tempfile::tempdir().unwrap();
+        let store = crate::github_store::GithubStore::new(folder.path().join("github.json"));
+        runtime.install_github_store(
+            store,
+            Some(crate::model::GithubSnapshot {
+                projects: vec![project],
+            }),
+        );
+        runtime.github.project("/fixture/project").is_some()
+    };
+    let answer = |issues_read: crate::model::PartRead, identity: Option<&str>| {
+        crate::model::GithubProjectSnapshot {
+            root_path: "/fixture/project".to_owned(),
+            pull_requests_read: true,
+            issues_read,
+            repository: identity.map(|name| {
+                let (host, repository) = crate::code_host::CodeHosts::STANDARD
+                    .repository(name)
+                    .unwrap();
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            }),
+            status: crate::model::GithubStatusSnapshot {
+                last_success_at_unix_ms: Some(1),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    };
+    use crate::model::PartRead::{Failed, Read, Unsupported};
+    assert!(restored(
+        "example/override",
+        answer(Failed, Some("example/override"))
+    ));
+    assert!(restored(
+        "example/override",
+        answer(Unsupported, Some("Example/Override"))
+    ));
+    assert!(!restored(
+        "example/other",
+        answer(Read, Some("example/override"))
+    ));
+    let mut before_identity = answer(Read, None);
+    before_identity.issues.repository = Some("example/override".to_owned());
+    assert!(restored("example/override", before_identity.clone()));
+    assert!(!restored("example/other", before_identity));
 }

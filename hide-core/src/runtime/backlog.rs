@@ -60,7 +60,7 @@ struct Job {
 
 #[derive(Clone, PartialEq)]
 struct Pin {
-    target: crate::github::Where,
+    target: crate::code_host::Place,
     epoch: u64,
 }
 
@@ -70,7 +70,7 @@ struct Pin {
 struct Admission {
     device: String,
     project: String,
-    target: crate::github::Where,
+    target: crate::code_host::Place,
     epoch: u64,
     cancel: CancelToken,
 }
@@ -450,7 +450,10 @@ impl Runtime {
                     "backlog.repository_unknown",
                 );
             };
-            if !matches!(&pin.target, crate::github::Where::Repository(known) if known.eq_ignore_ascii_case(repository))
+            if !pin
+                .target
+                .stored_name()
+                .is_some_and(|known| known.eq_ignore_ascii_case(repository))
             {
                 return self.refuse_add(
                     payload,
@@ -607,10 +610,8 @@ impl Runtime {
     /// would be made under now, when its repository is known.
     fn current_pin(&self, node: Option<&str>, device: &str, project: &str) -> Option<Pin> {
         let target = match self.github_place(node, project).ok()? {
-            crate::github::Where::Repository(repository) => {
-                crate::github::Where::Repository(repository)
-            }
-            crate::github::Where::Checkout(_) => {
+            place @ crate::code_host::Place::Repository { .. } => place,
+            crate::code_host::Place::Checkout { host, .. } => {
                 let repository = self
                     .snapshot
                     .navigator
@@ -620,7 +621,7 @@ impl Runtime {
                     .home_issues
                     .repository
                     .clone()?;
-                crate::github::Where::Repository(repository)
+                host.place_named(&repository)?
             }
         };
         Some(Pin {
@@ -1064,8 +1065,9 @@ impl Runtime {
                     crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.undo_not_made"}));
                     return Err(BacklogFailure::Refused);
                 }
+                let issues = place.host().issues().ok_or(BacklogFailure::NoGithubRemote)?;
                 // Only an issue of the project's own repository is closed.
-                let repository = crate::github::issue_repository(own.as_ref(), &place).map_err(|code| {
+                let repository = issues.issues_repository(own.as_ref(), &place).map_err(|code| {
                     crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.repository_unread","code":code}));
                     BacklogFailure::NetworkOrRateLimit
                 })?;
@@ -1073,7 +1075,8 @@ impl Runtime {
                     crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.undo_other_repository"}));
                     return Err(BacklogFailure::Refused);
                 }
-                crate::github::close_issue(own.as_ref(), &place, &reference.repository, reference.number)
+                issues
+                    .close(own.as_ref(), &place, &reference)
                     .map(|()| reference)
                     .map_err(|failure| BacklogFailure::from(failure.category))
             },
@@ -1355,10 +1358,10 @@ impl Runtime {
     }
 }
 
-fn failure_of(failure: crate::github::CreateFailure) -> BacklogFailure {
+fn failure_of(failure: crate::code_host::CreateFailure) -> BacklogFailure {
     match failure {
-        crate::github::CreateFailure::Gh(failure) => failure.category.into(),
-        crate::github::CreateFailure::Unreadable(_) => BacklogFailure::Unconfirmed,
+        crate::code_host::CreateFailure::Host(failure) => failure.category.into(),
+        crate::code_host::CreateFailure::Unreadable(_) => BacklogFailure::Unconfirmed,
     }
 }
 
@@ -1372,7 +1375,7 @@ fn create_once(
     client: &LinkClient,
     key: &AttemptKey,
     node: &dyn NodeLink,
-    place: &crate::github::Where,
+    place: &crate::code_host::Place,
     title: &str,
     cancel: &CancelToken,
 ) -> Result<crate::issues::IssueSnapshot, BacklogFailure> {
@@ -1383,7 +1386,11 @@ fn create_once(
             .map_or(Ok(()), Err)
     };
     changed()?;
-    let repository = crate::github::issue_repository(node, place).map_err(|code| {
+    let issues = place
+        .host()
+        .issues()
+        .ok_or(BacklogFailure::NoGithubRemote)?;
+    let repository = issues.issues_repository(node, place).map_err(|code| {
         crate::diagnostic!(serde_json::json!({"component":"backlog","kind":"backlog.repository_unread","code":code}));
         BacklogFailure::NetworkOrRateLimit
     })?;
@@ -1436,7 +1443,7 @@ fn create_once(
     }
     let made = (|| {
         if attempt.reconcile {
-            match crate::github::reconcile_issue_attempt(
+            match issues.reconcile(
                 node,
                 place,
                 &attempt.repository,
@@ -1462,9 +1469,14 @@ fn create_once(
         }
         // The create names the reserved repository outright, so a remote
         // changed since the reserve cannot send the issue elsewhere.
-        let reserved = crate::github::Where::Repository(attempt.repository.clone());
+        let reserved = place
+            .host()
+            .place_named(&attempt.repository)
+            .ok_or(BacklogFailure::RepositoryChanged)?;
         changed()?;
-        crate::github::create_issue_failing(node, &reserved, title, "").map_err(failure_of)
+        issues
+            .create(node, &reserved, title, "")
+            .map_err(failure_of)
     })();
     let issue = match made {
         Ok(issue) => issue,
@@ -1598,4 +1610,50 @@ fn read_origin(
         }
     }
     Ok(slot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node that must not be asked anything.
+    struct NoCall;
+
+    impl NodeLink for NoCall {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            panic!("a host without issues was asked: {call:?}");
+        }
+    }
+
+    /// An issue is made only where the project's host keeps issues; another
+    /// host's project is refused before anything is sent.
+    #[test]
+    fn an_issue_for_a_host_without_issues_is_refused_with_nothing_sent() {
+        let place = crate::code_host::tests::BOTH
+            .place_of("code.example/acme/app")
+            .unwrap();
+        let key = AttemptKey::Intent(BacklogIntent {
+            intent: "i-1".into(),
+            device: "local".into(),
+            project: "/repo".into(),
+            workspace_id: "w".into(),
+        });
+        let made = create_once(
+            &LinkClient::full_mailbox_for_test(),
+            &key,
+            &NoCall,
+            &place,
+            "Title",
+            &CancelToken::new(),
+        );
+        assert!(
+            matches!(made, Err(BacklogFailure::NoGithubRemote)),
+            "{:?}",
+            made.err()
+        );
+    }
 }

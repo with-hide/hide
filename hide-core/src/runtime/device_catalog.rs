@@ -737,7 +737,7 @@ impl Runtime {
                         self.device_github
                             .get(target)
                             .and_then(|github| github.project(root))
-                            .and_then(|project| project.issues.default_branch.clone()),
+                            .and_then(|project| project.default_branch().map(str::to_owned)),
                     ),
                 )
             })
@@ -797,10 +797,20 @@ impl Runtime {
         answer: WorktreesAnswer,
     ) -> bool {
         let WorktreesAnswer {
-            answers,
+            mut answers,
             notes,
             failure,
         } = answer;
+        // A device's origin is named by this core's registered hosts.
+        for project in answers
+            .iter_mut()
+            .filter_map(|(_, project)| project.as_mut())
+        {
+            project.repository = project
+                .origin_url
+                .as_deref()
+                .and_then(|origin| crate::worktrees::origin_repository(self.code_hosts, origin));
+        }
         let Some(entry) = self.device_worktrees.get_mut(target) else {
             return false;
         };

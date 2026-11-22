@@ -1220,6 +1220,7 @@ mod tests {
                 ..Default::default()
             },
             pull_request: Some(PullRequestSnapshot {
+                reference: None,
                 closing_issues: Default::default(),
                 number: 18,
                 title: "Pull request fallback".into(),

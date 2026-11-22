@@ -18,7 +18,9 @@
 //! recorded and not applied. Each run is kept to
 //! [`limits::MAX_UNAPPLIED_BYTES`], so the file, and the read of it at the
 //! next start, stay under twice that however long a host keeps one event
-//! waiting behind the ones it lets through.
+//! waiting behind the ones it lets through. Recovery reads one bounded
+//! line at a time, reclaims old applied history and refuses an oversized
+//! live tail without discarding events already acknowledged.
 //!
 //! The owner applies events through [`Apply`], which the daemon implements,
 //! so this crate does not link the core. Nothing here runs under the core's
@@ -26,7 +28,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use hide_peer_protocol::event::Event;
@@ -131,37 +133,59 @@ impl Inbox {
             Err(error) => return Err(error),
         };
         let mut events = private::open_own_file(&dir.join(EVENTS_FILE), true)?;
-        let mut text = String::new();
-        events.read_to_string(&mut text)?;
+        let file_bytes = events.metadata()?.len();
         let mut waiting = VecDeque::new();
         let mut waiting_bytes = 0u64;
-        let mut kept = 0usize;
-        for line in text.split_inclusive('\n') {
+        let mut kept = 0u64;
+        let mut reader = BufReader::new(&mut events);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            (&mut reader)
+                .take(max_bytes + 1)
+                .read_until(b'\n', &mut line)?;
+            if line.len() as u64 > max_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "an inbox record exceeds its byte limit",
+                ));
+            }
             // A last line a crash cut short was never synced whole, so it
             // was never acknowledged: it is dropped and the host sends it
             // again.
-            let Some(event) = line
+            let text = std::str::from_utf8(&line)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let Some(event) = text
                 .strip_suffix('\n')
                 .and_then(|line| serde_json::from_str::<Event>(line).ok())
             else {
                 break;
             };
-            kept += line.len();
+            kept += line.len() as u64;
             if event.outbox == cursor.outbox && event.seq > cursor.applied {
                 let bytes = line.len() as u64;
+                if waiting.len() >= limits::MAX_UNAPPLIED || waiting_bytes + bytes > max_bytes {
+                    // These events were acknowledged: never truncate them
+                    // to make recovery fit. Leave the journal untouched.
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the inbox's unapplied events exceed its limit",
+                    ));
+                }
                 waiting_bytes += bytes;
                 waiting.push_back(Waiting { event, bytes });
             }
         }
-        if kept != text.len() {
-            events.set_len(kept as u64)?;
+        drop(reader);
+        if kept != file_bytes {
+            events.set_len(kept)?;
             events.sync_all()?;
         }
         events.seek(SeekFrom::End(0))?;
         let recorded = waiting
             .back()
             .map_or(cursor.applied, |waiting| waiting.event.seq);
-        Ok(Self {
+        let mut inbox = Self {
             dir: dir.to_owned(),
             cursor,
             recorded,
@@ -169,9 +193,13 @@ impl Inbox {
             waiting_bytes,
             max_bytes,
             events,
-            len: kept as u64,
+            len: kept,
             torn: false,
-        })
+        };
+        // Older builds could keep unlimited applied history behind a
+        // waiting event. Reclaim it before this inbox accepts new events.
+        inbox.drop_applied()?;
+        Ok(inbox)
     }
 
     /// Cuts the file back to its last whole line.
@@ -251,6 +279,11 @@ impl Inbox {
             || self.waiting_bytes + bytes > self.max_bytes
         {
             return Ok(Recorded::Full);
+        }
+        if self.len.saturating_sub(self.waiting_bytes) > self.max_bytes {
+            // A previous compaction may have failed. Do not keep appending
+            // past the file bound while that failure persists.
+            self.drop_applied()?;
         }
         self.append(&line)?;
         self.recorded = event.seq;
@@ -595,6 +628,130 @@ mod tests {
             inbox.record(event("box", 61)).unwrap(),
             Recorded::New { seq: 61 }
         );
+    }
+
+    #[test]
+    fn a_failed_history_compaction_blocks_further_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EVENTS_FILE);
+        let cap = 3 * line_bytes(1);
+        let mut inbox = Inbox::open_capped(dir.path(), cap).unwrap();
+        let mut target = Target {
+            waits_from: 3,
+            applied: Vec::new(),
+        };
+        for seq in 1..=3 {
+            assert_eq!(
+                inbox.record(event("box", seq)).unwrap(),
+                Recorded::New { seq }
+            );
+        }
+        assert_eq!(inbox.apply_recorded(&mut target).unwrap(), 2);
+        for seq in 4..=5 {
+            assert_eq!(
+                inbox.record(event("box", seq)).unwrap(),
+                Recorded::New { seq }
+            );
+        }
+        // Keep the open journal writable, but make its atomic replacement
+        // fail. An append through the old descriptor must not bypass it.
+        let saved = dir.path().join("saved.jsonl");
+        std::fs::rename(&path, &saved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        target.waits_from = 5;
+        assert!(inbox.apply_recorded(&mut target).is_err());
+        let before = std::fs::read(&saved).unwrap();
+        assert!(inbox.record(event("box", 6)).is_err());
+        assert_eq!(std::fs::read(&saved).unwrap(), before);
+        assert_eq!(inbox.position(), ("box", 5));
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&saved, &path).unwrap();
+        assert_eq!(
+            inbox.record(event("box", 6)).unwrap(),
+            Recorded::New { seq: 6 }
+        );
+    }
+
+    #[test]
+    fn reopening_reclaims_legacy_history_without_losing_the_waiting_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EVENTS_FILE);
+        let cap = 4 * line_bytes(60);
+        let mut target = Target {
+            waits_from: 60,
+            applied: Vec::new(),
+        };
+        // An earlier build retained applied history while its newest event
+        // waited. Its saved cursor covers 1..60, but 60 was acknowledged.
+        let mut history = Vec::new();
+        for seq in 1..=60 {
+            serde_json::to_writer(&mut history, &event("box", seq)).unwrap();
+            history.push(b'\n');
+        }
+        std::fs::write(&path, &history).unwrap();
+        std::fs::write(
+            dir.path().join(CURSOR_FILE),
+            br#"{"outbox":"box","applied":59}"#,
+        )
+        .unwrap();
+        assert!(history.len() as u64 > 2 * cap);
+        let mut inbox = Inbox::open_capped(dir.path(), cap).unwrap();
+        assert_eq!(inbox.position(), ("box", 60));
+        assert_eq!(inbox.unapplied(), 1);
+        assert!(std::fs::metadata(&path).unwrap().len() <= 2 * cap);
+        assert_eq!(inbox.apply_recorded(&mut target).unwrap(), 0);
+        target.waits_from = u64::MAX;
+        assert_eq!(inbox.apply_recorded(&mut target).unwrap(), 1);
+        assert_eq!(target.applied, [60]);
+        assert_eq!(
+            inbox.record(event("box", 60)).unwrap(),
+            Recorded::Again { seq: 60 }
+        );
+    }
+
+    #[test]
+    fn reopening_refuses_oversized_live_records_without_changing_the_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EVENTS_FILE);
+        let cap = 3 * line_bytes(1);
+        let mut history = Vec::new();
+        for seq in 1..=4 {
+            serde_json::to_writer(&mut history, &event("box", seq)).unwrap();
+            history.push(b'\n');
+        }
+        std::fs::write(&path, &history).unwrap();
+        std::fs::write(
+            dir.path().join(CURSOR_FILE),
+            br#"{"outbox":"box","applied":0}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(Inbox::open_capped(dir.path(), cap), Err(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            history,
+            "acknowledged events cannot be dropped"
+        );
+        // A single line is bounded too, including a crash's unfinished line.
+        let oversized = vec![b'x'; cap as usize + 1];
+        std::fs::write(&path, &oversized).unwrap();
+        assert!(
+            matches!(Inbox::open_capped(dir.path(), cap), Err(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), oversized);
+        // A valid tail can fit by bytes and still exceed its event count.
+        history.clear();
+        for seq in 1..=limits::MAX_UNAPPLIED as u64 + 1 {
+            serde_json::to_writer(&mut history, &event("box", seq)).unwrap();
+            history.push(b'\n');
+        }
+        assert!(history.len() < limits::MAX_UNAPPLIED_BYTES);
+        std::fs::write(&path, &history).unwrap();
+        assert!(
+            matches!(Inbox::open(dir.path()), Err(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), history);
     }
 
     #[test]

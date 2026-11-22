@@ -248,6 +248,10 @@ pub struct NodeView {
     pub branch: Option<String>,
     pub pr_state: Option<PrState>,
     pub pr_url: Option<String>,
+    /// The current pull request as its host's unit named it when it read
+    /// it, which the screen compares and opens it by; absent while no read
+    /// holds it.
+    pub pr_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The node's four steps (D-42, D-48): work, PR or branch, review, merge
     /// or main; none for a node with no pull request or branch (D-53).
     pub stage: Option<u8>,
@@ -611,6 +615,9 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
+    /// As its host's unit named it when it read it; absent while no read
+    /// holds it.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     /// The branch it merges into, as GitHub last answered (PRD
     /// mission-destination D-14): the destination, the lower pull
     /// request's branch of a stack, or another base. Absent while GitHub
@@ -4632,10 +4639,10 @@ impl Runtime {
         }
         let repository = self
             .github_project_on(&mission.device_id, &mission.project)
-            .and_then(|project| project.issues.repository_id.as_deref());
+            .and_then(crate::model::GithubProjectSnapshot::repository_id);
         let held = repository.is_some_and(|id| {
             self.github_projects_on(machine)
-                .any(|project| project.issues.repository_id.as_deref() == Some(id))
+                .any(|project| project.repository_id() == Some(id))
         });
         if !held {
             // A GitHub read that failed says why the repository is unknown,
@@ -4645,7 +4652,7 @@ impl Runtime {
                 .github_project_on(&mission.device_id, &mission.project)
                 .into_iter()
                 .chain(self.github_projects_on(machine))
-                .filter(|project| project.issues.repository_id.is_none())
+                .filter(|project| project.repository_id().is_none())
                 .find_map(|project| project.status.failure_category)
                 .and_then(crate::github::unread_action);
             return Err(match unread {
@@ -5160,6 +5167,7 @@ impl Runtime {
                                 PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                             }),
                             url: pull.map(|pull| pull.url.clone()),
+                            reference: pull.and_then(|pull| pull.reference.clone()),
                             base: pull.map(|pull| pull.base_branch.clone()),
                         }
                     })
@@ -5207,6 +5215,7 @@ impl Runtime {
                     branch: node.branch.clone(),
                     pr_state,
                     pr_url: pull.map(|pull| pull.url.clone()),
+                    pr_reference: pull.and_then(|pull| pull.reference.clone()),
                     stage: node_stage(node, pr_state),
                     attempts: node.attempts,
                     line: node.line.clone(),

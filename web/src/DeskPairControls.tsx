@@ -1,4 +1,4 @@
-import { ChevronDownIcon, Columns2Icon } from "lucide-react";
+import { ChevronDownIcon, Columns2Icon, Maximize2Icon, Minimize2Icon } from "lucide-react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { Button } from "./components/ui/button";
@@ -9,10 +9,35 @@ import { allAgents } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import type { ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
+import { useUiStore } from "./ui";
 
-// The desk's own pair view controls (PRD lane-desk-pair-view B17, B24, D-08,
-// D-41, D-42, D-50): ◧ beside the desk's ✕, and in pair view the one menu
-// the other agents' tabs fold into.
+// The desk's own controls beside its ✕: Expand, on the usual screen and in
+// pair view alike, and the pair view controls (PRD lane-desk-pair-view B17,
+// B24, D-08, D-41, D-42, D-50): ◧ beside the ✕, and in pair view the one
+// menu the other agents' tabs fold into.
+
+/** The desk's Expand, the rail `…` menu's Expand and ⇧⌘↩'s on the desk (B15, D-51, D-59) drawn where the operator looks at the page: pressed, it fills the body with the desk, and pressed again it returns. */
+export function DeskExpandButton() {
+  const { t } = useInterfaceTranslation();
+  const expanded = useUiStore((s) => s.laneExpanded);
+  const chord = useShellStore((s) => commandLabel("toggle_zoom", s.rest?.ui_state));
+  const label = expanded ? t("panes.lane.collapse") : t("panes.lane.expand");
+  return (
+    <Hint label={label} shortcut={chord || undefined}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label={label}
+        aria-pressed={expanded}
+        data-desk-expand={expanded ? "on" : "off"}
+        onClick={() => useUiStore.getState().setLaneExpanded(!expanded)}
+      >
+        {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
+      </Button>
+    </Hint>
+  );
+}
 
 /** The desk's ◧, a way into pair view only (D-42), drawn as the pane head's ◧ so one mark means one thing (D-50): the tab in front beside its agent's pane. The desk draws none in pair view, whose ways out are the strip's, ⌘., the pressed ◧ and closing the desk. */
 export function DeskPairButton({ displayId, actions }: { displayId: string | null; actions: Actions }) {

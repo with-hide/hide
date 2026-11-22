@@ -432,27 +432,31 @@ impl Runtime {
             "suggestion-issue",
             move || -> Result<Option<crate::issues::IssueSnapshot>, String> {
                 let mut place = place;
+                let host = *place.host();
+                let issues = host
+                    .unit()
+                    .issues()
+                    .ok_or_else(|| "The project's host keeps no issues".to_owned())?;
                 if let Some(since) = since {
-                    let repository = crate::github::issue_repository(link.as_ref(), &place)?;
-                    let found = crate::github::reconcile_issue_attempt(
-                        link.as_ref(),
-                        &place,
-                        &repository,
-                        &title,
-                        since,
-                        &[],
-                    )?;
+                    let repository = issues.issues_repository(link.as_ref(), &place)?;
+                    let found =
+                        issues.reconcile(link.as_ref(), &place, &repository, &title, since, &[])?;
                     if found.is_some() {
                         return Ok(found);
                     }
                     // A create names the repository just searched, so a
                     // remote changed since cannot send it elsewhere.
-                    place = crate::github::Where::Repository(repository);
+                    place = host
+                        .place_named(&repository)
+                        .ok_or_else(|| format!("The host named no repository: {repository}"))?;
                 }
                 let Some(body) = body else {
                     return Ok(None);
                 };
-                crate::github::create_issue(link.as_ref(), &place, &title, &body).map(Some)
+                issues
+                    .create(link.as_ref(), &place, &title, &body)
+                    .map(Some)
+                    .map_err(crate::code_host::CreateFailure::reason)
             },
             move |runtime, made| {
                 runtime.suggestions_work.apply.starting.remove(&carried);
@@ -822,6 +826,7 @@ impl Runtime {
     /// that fails counts nothing and is asked again after
     /// [`policy::WATCH_RETRY_MS`].
     fn judge_watch_heads(&mut self, now: u64) {
+        let hosts = self.code_hosts;
         let work = &mut self.suggestions_work.apply;
         let mut asks = Vec::new();
         let mut known = Vec::new();
@@ -839,7 +844,13 @@ impl Runtime {
             let Some(pr) = watched.pr.as_ref() else {
                 continue;
             };
-            let Some(repository) = crate::links::repository_of(&pr.url) else {
+            // A record keeps the address alone; its host's unit reads it,
+            // and only a server the host names is asked, as before hosts.
+            let Some((host, repository)) = hosts
+                .change_request_at(&pr.url)
+                .filter(|(_, repository, _)| hosts.on_named_server(repository))
+                .map(|(host, repository, _)| (host, repository))
+            else {
                 continue;
             };
             let mut heads = watched.heads.clone();
@@ -861,6 +872,7 @@ impl Runtime {
             }
             asks.push(WatchAsk {
                 key,
+                host,
                 repository,
                 number: pr.number,
                 merge_commit: watched.merge_commit.clone(),
@@ -1334,10 +1346,11 @@ impl Runtime {
     }
 }
 
-/// One watched line's question to GitHub.
+/// One watched line's question to its repository's host.
 struct WatchAsk {
     key: (String, u64),
-    repository: String,
+    host: crate::code_host::Host,
+    repository: crate::code_host::RepositoryRef,
     number: u32,
     merge_commit: Option<String>,
     heads: BTreeSet<String>,
@@ -1351,9 +1364,16 @@ impl WatchAsk {
     /// Off the lock: the merge commit while it is unknown, then each head
     /// in turn until a read fails.
     fn read(self, link: &dyn crate::node_access::NodeLink) -> WatchRead {
+        let Some(proof) = self.host.unit().merge_proof() else {
+            return (
+                self.merge_commit,
+                BTreeMap::new(),
+                Some("the repository's host proves no merge".into()),
+            );
+        };
         let merge = match self.merge_commit {
             Some(merge) => merge,
-            None => match crate::github::merge_commit(link, &self.repository, self.number) {
+            None => match proof.merge_commit(link, &self.repository, self.number) {
                 Ok(Some(merge)) => merge,
                 Ok(None) => {
                     return (
@@ -1367,7 +1387,7 @@ impl WatchAsk {
         };
         let mut heads = BTreeMap::new();
         for head in self.heads {
-            match crate::github::contains_commit(link, &self.repository, &merge, &head) {
+            match proof.contains_commit(link, &self.repository, &merge, &head) {
                 Ok(contains) => {
                     heads.insert(head, contains);
                 }
@@ -1674,6 +1694,7 @@ mod tests {
 
     fn pull(number: u32, branch: &str, created: u64) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: "fix".into(),
             checks: PullRequestChecks::Passing,

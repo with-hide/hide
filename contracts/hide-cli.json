@@ -25,7 +25,8 @@
             "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
             "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
             "access_spawn_parent": "A tool is no agent's parent; run hide agent spawn without --parent and follow the agent with hide agent show and hide inbox",
-            "access_unavailable": "Start Hide on this machine, then run the same command again"
+            "access_unavailable": "Start Hide on this machine, then run the same command again",
+            "caller_origin_unavailable": "Reconnect Hide, then retry from a terminal outside Hide's panes"
         }
     },
     "answers": {
@@ -9503,7 +9504,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:da5e7241ea642ff085eb2dfd30ba65bec16aafab5a4ca0ac58497fb92dbc87ea",
+    "digest": "sha256:99aa9a8c6ba493a141e26eefdb1b399fe97ff98906b18b68b6904931e887187c",
     "envelopes": {
         "access": {
             "answer": "value",
