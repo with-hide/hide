@@ -1063,7 +1063,7 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
 /// requests were read.
 #[test]
 fn a_node_read_whose_issues_alone_failed_keeps_the_full_wait() {
-    let repo = repo(Some("https://github.com/acme/app.git"), "main");
+    let repo = repo(Some("https://github.com/acme/app.git"), "feature");
     let shared = node_runtime(
         &repo,
         FakeDevice::new(),
@@ -2222,7 +2222,15 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
                 pull_requests_read: true,
                 issues_read: crate::model::PartRead::Read,
                 identity_read: crate::model::PartRead::Read,
-                repository: None,
+                repository: Some(crate::model::RepositoryIdentity {
+                    repository: crate::code_host::CodeHosts::STANDARD
+                        .repository("acme/app")
+                        .unwrap()
+                        .1,
+                    id: None,
+                    public: None,
+                    default_branch: None,
+                }),
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
                     issues: vec![github_issue("acme/app", 12, "Fix login")],

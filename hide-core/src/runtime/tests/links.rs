@@ -240,6 +240,15 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         ..Default::default()
     };
     remote.issues.repository = Some("acme/remote".into());
+    remote.repository = Some(crate::model::RepositoryIdentity {
+        repository: crate::code_host::CodeHosts::STANDARD
+            .repository("acme/remote")
+            .unwrap()
+            .1,
+        id: None,
+        public: None,
+        default_branch: None,
+    });
     runtime.device_github.insert(
         "remote".into(),
         crate::model::GithubSnapshot {

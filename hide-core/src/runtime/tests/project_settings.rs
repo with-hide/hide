@@ -886,6 +886,15 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
         ..Default::default()
     };
     github.issues.repository = Some("acme/original".into());
+    github.repository = Some(crate::model::RepositoryIdentity {
+        repository: crate::code_host::CodeHosts::STANDARD
+            .repository("acme/original")
+            .unwrap()
+            .1,
+        id: None,
+        public: None,
+        default_branch: None,
+    });
     runtime.device_github.insert(
         "mini".into(),
         crate::model::GithubSnapshot {
