@@ -1691,6 +1691,24 @@ A 태스크 row in 내 차례 whose line says something else, a question or a ru
 The 태스크 list's 내 차례 draws the missions that are their own Needs You item with the same row and choices as the 프로젝트 list's Needs You, counted in its head with the tasks; with-hide/hide-private `docs/tasks-and-pr-list.md`, 내 차례, says where they stand.
 Its 내 차례 lists every connected device's as the 프로젝트 list's Needs You does, by the same operator decision of 2026-11-08 ([Sidebar hierarchy](#sidebar-hierarchy) for the rule; `elsewhereTasks` in `web/src/taskList.ts`); the same private document says where they stand in each view.
 
+## Code hosts
+
+A project is read from the code host its remote names, GitHub or gitlab.com; `docs/ARCHITECTURE.md`, Code hosts, owns how the core picks the host and what each one declares.
+Every screen that names a project's pull requests takes the host's look from `web/src/codeHost.ts`: its mark, its name, its word for an item (`PR`, `MR`) and its number form (`#12`, `!12`).
+A number is drawn from the reference the core carried for it, never parsed from or built into an address on the screen; a place that has no reference and no host keeps `#12`.
+The words Hide gives its own lists stay Hide's: the sidebar's `PR` tab and its counts read `PR` for a gitlab.com project too.
+An action the host does not offer is not drawn, not drawn disabled: on gitlab.com today a card has no hand-over, merge queue, branch update, linked issue or new issue, and its Merge appears only once the host declares the merge.
+The host mark among a project row's buttons in the sidebar opens the repository its last read named, on that host; a project no read named yet has no mark there.
+With GitHub as the only host, every screen reads as it did before hosts.
+
+### Settings › Remote repositories
+
+The tab lists one row per host: GitHub always, and GitLab only while a gitlab.com project exists.
+There is no switch to turn a host on or off.
+Each row says whether its program (`gh`, `glab`) can read the host now, and a row that needs a sign-in shows the program's sign-in command to copy.
+Check again reads every project again.
+When a host cannot be read, the PR list keeps the other host's items and marks its head with that host's reason, and the phone's PR tab says the same line under its head.
+
 ## Explorer file management
 
 The home folder, when it is a project (PRD home-folder-project B8-B11), lists its top level without names starting with `.` and without `Library` (macOS) or `AppData` (Windows), and every other folder lists as in any project; opening a hidden path by typing it or from a link still works, and Removing the project removes only its registration.
