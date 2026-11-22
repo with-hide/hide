@@ -20,29 +20,31 @@ import { usePhone } from "./store";
 /** The phone's own clipboard, which Copy of a person's turn's place writes; a refusal is the log's. */
 const clipboard = browserClipboard((message) => console.warn("phone.copy_failed", { message }));
 
-/** The column a list row's detail lines start in: under the title, after the status mark alone. */
-export const LIST_INSET = "pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]";
-/** The detail head also draws the logo, so its lines start under the title after both marks. */
-export const DETAIL_INSET = "pl-(--size-mobile-row-inset)";
 
-/** The row's head: the detail screen (`large`) names the agent with its logo, a list row does not (PRD agent-mark-quiet B12). */
-export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean }) {
+/** The desktop row's mark for an agent; a read turn is dimmed as it is there, and a starred row waiting in 다시 볼 것 wears its ★ in the mark's place (PRD revisit-group D-03). */
+export function AgentStatusMark({ agent }: { agent: PhoneAgent }) {
+  if (agent.starred && agent.group === "revisit") return <RevisitStarShape slot data-phone-mark="star" />;
+  if (agent.read) return <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" />;
+  return <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />;
+}
+
+/** What leads the detail's title: the mark and the agent's logo, which a list row leaves out (PRD agent-mark-quiet B12). */
+export function AgentLead({ agent }: { agent: PhoneAgent }) {
   return (
-    <span className={`flex min-w-0 gap-sm ${large ? "items-start" : "items-center"}`}>
-      {/* The desktop row's mark; a read turn is dimmed as it is there. */}
-      {/* A starred row waiting in 다시 볼 것 wears its ★ in the mark's place, as the desktop's does (PRD revisit-group D-03). */}
-      {agent.starred && agent.group === "revisit" ? <RevisitStarShape slot data-phone-mark="star" /> : agent.read ? <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" /> : <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
-      {large ? <AgentMark kind={agent.agent_kind} /> : null}
-      <span
-        className={`min-w-0 ${large ? "whitespace-normal break-keep text-title font-medium wrap-anywhere" : "truncate text-title font-medium"} ${
-          agent.emphasized || large ? "text-foreground" : "text-subtle-foreground"
-        }`}
-      >
-        {agent.title}
-      </span>
-      {/* Anywhere else the ★ is small after the title. */}
-      {agent.starred && agent.group !== "revisit" ? <RevisitStarShape className={large ? "mt-sm" : undefined} /> : null}
-    </span>
+    <>
+      <AgentStatusMark agent={agent} />
+      <AgentMark kind={agent.agent_kind} />
+    </>
+  );
+}
+
+/** A list row's title, cut to one line, with the ★ small after it anywhere but 다시 볼 것. */
+export function AgentTitle({ agent }: { agent: PhoneAgent }) {
+  return (
+    <>
+      <span className={`min-w-0 truncate text-title font-medium ${agent.emphasized ? "text-foreground" : "text-subtle-foreground"}`}>{agent.title}</span>
+      {agent.starred && agent.group !== "revisit" ? <RevisitStarShape /> : null}
+    </>
   );
 }
 
@@ -63,17 +65,26 @@ export function DeviceTag({ label, computer = false }: { label: string; computer
   );
 }
 
-/** The row's place line: `computer` leads it in the gathered view, the computer whose work the row is. */
-export function Place({ agent, inset, computer }: { agent: PhoneAgent; inset: string; computer?: string }) {
-  if (!agent.place && !agent.device_label && !agent.tool && !computer) return null;
+/**
+ * Where an agent works, as pieces of a line its caller lays out: the gathered view's computer (`computer`), the tool whose work
+ * the row is, leading as on the desktop's sidebar row (PRD hide-external-control B46), the place, and the SSH device's chip. A
+ * list row names the project alone (`project`), from a Mac that predates it the whole place; the detail names project and branch.
+ */
+export function PlaceParts({ agent, project = false, computer }: { agent: PhoneAgent; project?: boolean; computer?: string }) {
+  const place = project ? (agent.project ?? agent.place) : agent.place;
   return (
-    <span className={`flex min-w-0 items-center gap-sm ${inset} text-body text-muted-foreground`}>
+    <>
       {computer ? <DeviceTag label={computer} computer /> : null}
       {/* The tool whose work this is leads the line, as on the desktop's sidebar row (PRD hide-external-control B46). */}
-      {agent.tool ? <span className="flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs" data-phone-tool={agent.tool}><span className="min-w-0 truncate">{agent.tool}</span>{agent.place ? <span aria-hidden="true">·</span> : null}</span> : null}
-      {agent.place ? <span className="min-w-0 truncate">{agent.place}</span> : null}
+      {agent.tool ? (
+        <span className="flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs text-muted-foreground" data-phone-tool={agent.tool}>
+          <span className="min-w-0 truncate">{agent.tool}</span>
+          {place ? <span aria-hidden="true">·</span> : null}
+        </span>
+      ) : null}
+      {place ? <span className="min-w-0 max-w-1/2 shrink-0 truncate text-muted-foreground" data-phone-place={place}>{place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
-    </span>
+    </>
   );
 }
 

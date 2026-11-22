@@ -3,13 +3,14 @@
 // and its runs, newest first, each with its mark, time, tags and result.
 // The rest of a run (its terminal, its conversation) stays on the desktop.
 
-import { ArrowLeftIcon, CheckIcon, Loader2Icon, MinusIcon, PauseIcon, PlayIcon, SquareIcon, XIcon } from "lucide-react";
-import { recordText, skippedFolded, spendText, whenText, type RecordTone } from "../automationWords";
+import { CheckIcon, Loader2Icon, MinusIcon, SquareIcon, XIcon } from "lucide-react";
+import { lineTime, recordText, spendText, whenText, type RecordTone } from "../automationWords";
 import { Button } from "../components/ui/button";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { ScheduleLine } from "./AutomationsScreen";
+import { PageHead, TwoLineRow } from "./layout";
 import { pressAutomation } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { noticeText, type PhoneAutomation, type PhoneAutomationRecord } from "./protocol";
@@ -30,19 +31,13 @@ function Page({ automation }: { automation: PhoneAutomation }) {
   const older = automation.records_omitted ?? 0;
   return (
     <main className="flex h-full flex-col" data-phone-automation-page={automation.id}>
-      <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
-        <div className="pt-md">
-          <Button variant="text" size="inline" className="min-h-(--size-touch-target) gap-xs text-body" data-phone-back="automations" onClick={closeAutomation}>
-            <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon)" />
-            {t("mobile.automations.title")}
-          </Button>
-        </div>
-        <h1 className="mt-sm break-keep text-headline font-semibold text-foreground wrap-anywhere">{automation.name}</h1>
-        <p className="mt-xs">
-          <ScheduleLine automation={automation} />
-        </p>
+      <PageHead
+        back={{ label: t("mobile.automations.title"), onClick: closeAutomation, tag: "automations" }}
+        title={automation.name}
+        line={<ScheduleLine automation={automation} page />}
+      >
         <Buttons automation={automation} connected={connected} />
-      </header>
+      </PageHead>
       {dim ? (
         <div role="status" className="flex items-center gap-sm px-lg py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
@@ -54,7 +49,7 @@ function Page({ automation }: { automation: PhoneAutomation }) {
         {automation.records.length === 0 ? (
           <p className="py-sm text-body text-subtle-foreground" data-phone-automation-records-state="empty">{t("mobile.automations.noRuns")}</p>
         ) : (
-          <ul className="divide-y divide-border border-b border-border">
+          <ul className="-mx-lg divide-y divide-border border-b border-border [&>li]:px-lg">
             {automation.records.map((record) => (
               <li key={recordKey(record)}>
                 <Record record={record} />
@@ -88,26 +83,26 @@ function Buttons({ automation, connected }: { automation: PhoneAutomation; conne
   const busy = !connected || other;
   const toggle = automation.paused ? "resume" : "pause";
   return (
-    <div className="mt-md flex flex-col gap-sm">
+    <div className="mt-sm flex flex-col gap-sm">
       <div className="flex gap-sm">
         <Button
           variant="secondary"
-          className="h-(--size-touch-target) flex-1 rounded-lg text-title"
+          className="h-(--size-touch-target) rounded-lg px-lg text-body"
           disabled={busy || automation.running}
           data-phone-automation-press="run"
           onClick={() => pressAutomation(automation.id, "run")}
         >
-          {pending === "run" ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : <PlayIcon aria-hidden="true" className="size-(--size-icon-lg)" />}
+          {pending === "run" ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : null}
           {t("mobile.automations.run")}
         </Button>
         <Button
           variant="secondary"
-          className="h-(--size-touch-target) flex-1 rounded-lg text-title"
+          className="h-(--size-touch-target) rounded-lg px-lg text-body"
           disabled={busy}
           data-phone-automation-press={toggle}
           onClick={() => pressAutomation(automation.id, toggle)}
         >
-          {pending === toggle ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : toggle === "pause" ? <PauseIcon aria-hidden="true" className="size-(--size-icon-lg)" /> : <PlayIcon aria-hidden="true" className="size-(--size-icon-lg)" />}
+          {pending === toggle ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : null}
           {t(toggle === "pause" ? "mobile.automations.pause" : "mobile.automations.resume")}
         </Button>
       </div>
@@ -124,16 +119,9 @@ const TONE: Record<RecordTone, { icon: typeof CheckIcon; className: string }> = 
   stopped: { icon: SquareIcon, className: "text-muted-foreground" },
 };
 
-/** When a record happened, in the computer's zone; a missed line and a skipped line of several times say their own range. */
+/** When a record happened, in the computer's zone: a run's start, a skipped or missed line's one time; a line of several times says its own span. */
 function recordAt(record: PhoneAutomationRecord): number | null {
-  switch (record.kind) {
-    case "run":
-      return record.started_at_unix_ms;
-    case "skipped":
-      return skippedFolded(record) ? null : record.at_unix_ms;
-    case "missed":
-      return null;
-  }
+  return record.kind === "run" ? record.started_at_unix_ms : lineTime(record);
 }
 
 /** One record (B19-B22): its mark, when it started with its tags and unseen dot, and its result. */
@@ -147,18 +135,26 @@ function Record({ record }: { record: PhoneAutomationRecord }) {
   const at = recordAt(record);
   const tag = record.kind === "run" && record.trigger !== "scheduled" ? t(record.trigger === "manual" ? "mobile.automations.manual" : "mobile.automations.missedRun") : null;
   const unseen = record.kind === "run" && !record.seen && line.tone !== "running";
+  const spend = record.kind === "run" && record.spend ? spendText(record.spend, language, t) : null;
   return (
-    <div className="flex min-h-(--size-touch-target) items-start gap-sm py-md" data-phone-automation-record={record.kind} data-phone-automation-record-tone={line.tone}>
-      <Icon aria-hidden="true" className={cn("mt-xxs size-(--size-icon) shrink-0", className)} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs">
-        <span className="flex min-w-0 flex-wrap items-center gap-sm text-title text-foreground">
-          {unseen ? <span role="img" aria-label={t("mobile.automations.unseen")} className="size-(--size-status-mark) shrink-0 rounded-full bg-foreground" /> : null}
-          {at !== null ? <span>{whenText(at, now, zone, language, t)}</span> : null}
-          {tag ? <span className="rounded-sm bg-secondary px-xs text-caption text-subtle-foreground" data-phone-automation-tag={record.kind === "run" ? record.trigger : undefined}>{tag}</span> : null}
-        </span>
-        <span className="break-keep text-body text-subtle-foreground wrap-anywhere" data-phone-automation-result="true">{line.text}</span>
-        {record.kind === "run" && record.spend ? <span className="text-caption tabular-nums text-muted-foreground" data-phone-automation-spend="true">{spendText(record.spend, language, t)}</span> : null}
-      </div>
+    <div className="flex min-h-(--size-touch-target) items-center py-md" data-phone-automation-record={record.kind} data-phone-automation-record-tone={line.tone}>
+      <TwoLineRow
+        lead={<Icon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", className)} />}
+        head={
+          <>
+            {at !== null ? <span className="shrink-0 text-title text-foreground">{whenText(at, now, zone, language, t)}</span> : null}
+            {unseen ? <span role="img" aria-label={t("mobile.automations.unseen")} className="size-(--size-status-mark) shrink-0 rounded-full bg-agent-working" /> : null}
+            {tag ? <span className="shrink-0 rounded-sm bg-secondary px-xs text-caption text-subtle-foreground" data-phone-automation-tag={record.kind === "run" ? record.trigger : undefined}>{tag}</span> : null}
+            {at === null ? <span className="min-w-0 break-keep text-title text-foreground wrap-anywhere" data-phone-automation-result="true">{line.text}</span> : null}
+          </>
+        }
+        line={at !== null ? (
+          <span className={cn("min-w-0 break-keep wrap-anywhere", line.tone === "failed" ? "text-destructive" : "text-subtle-foreground")}>
+            <span data-phone-automation-result="true">{line.text}</span>
+            {spend ? <> · <span className="tabular-nums" data-phone-automation-spend="true">{spend}</span></> : null}
+          </span>
+        ) : null}
+      />
     </div>
   );
 }
