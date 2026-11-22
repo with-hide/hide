@@ -311,7 +311,7 @@ function connect(): void {
       return;
     }
     if (frame.type === "input_result") {
-      onInputResult(frame.ok, frame.reason);
+      onInputResult(frame.request_id, frame.ok, frame.reason);
       return;
     }
     if (frame.type === "attach_ack") {
@@ -381,8 +381,10 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   uploadsLost(null);
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput?.kind === "choice" && state.answering) settleChoice(false, "uncertain");
-  else if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  // A choice on its way may have landed: each is answered in the terminal from now on.
+  for (const requestId of Object.keys(state.answering)) settleChoice(requestId, false, "uncertain");
+  if (state.pendingInput && state.pendingInput.kind !== "choice") patch({ pendingInput: null, inputError: inputFailure("offline") });
+  else if (state.pendingInput) patch({ pendingInput: null });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
   if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
@@ -526,19 +528,26 @@ function failLoadingLook(): void {
 }
 
 /**
- * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15).
- * A file gone or outside every checkout is, like one too large: its reason is all there is to see of it, here or on the desktop.
+ * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen, or an outside file with no desktop app open to read it, is not that (B24, D-15).
+ * A file gone, outside every checkout, or an outside file the desktop app can no longer read is, like one too large: its reason is all there is to see of it, here or on the desktop.
+ * A page with no picture is seen only when nothing would draw it later: one with a reason (no desktop app, another computer's window, not drawn yet)
+ * is still to be seen, as an outside file with no desktop app is, and the operator acts on the Mac first.
  * Every state answers, so a new one cannot be left out by accident.
  */
 const SEEN: Record<LookContent["state"], boolean> = {
-  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, not_found: true, outside_roots: true, closed: false, device_unreachable: false, failed: false,
+  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, not_found: true, outside_roots: true,
+  grant_expired: true, file_replaced: true, no_window: false, closed: false, device_unreachable: false, failed: false,
 };
+
+function seen(content: LookContent): boolean {
+  return content.state === "page" ? content.reason === null : SEEN[content.state];
+}
 
 /** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
 function markLookSeen(): void {
   const detail = usePhone.getState().detail;
   const look = detail?.look;
-  if (!detail || !look || look.shown || !SEEN[look.content.state]) return;
+  if (!detail || !look || look.shown || !seen(look.content)) return;
   const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
   if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }
@@ -771,30 +780,42 @@ export function sendChoice(choice: string): void {
   // An ask answered, or one whose answer may have landed, is never sent again from here: a second send would be a second press.
   const answered = state.answers[identity];
   if (answered && (answered.state !== "failed" || answered.inTerminal)) return;
+  // Room for it first: with every remembered answer still holding an ask that may stand, nothing is sent.
+  const sending = withAnswer(state.answers, identity, { choice, state: "sending" });
+  if (!sending) {
+    patch({ inputError: inputFailure("answers_full") });
+    return;
+  }
   const requestId = newRequestId();
   const sent = send(choiceMessage(detail.key, ask, choice, requestId));
   patch(
     sent
-      ? { pendingInput: { requestId, kind: "choice" }, answering: identity, answers: withAnswer(state.answers, identity, { choice, state: "sending" }) }
-      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) },
+      ? { pendingInput: { requestId, kind: "choice" }, answering: { ...state.answering, [requestId]: identity }, answers: sending }
+      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) ?? state.answers },
   );
 }
 
 /**
- * Settles the choice being sent: sent, or refused with why. One that may have landed (`uncertain`), or that stopped on a moved
- * highlight, is answered in the terminal from then on, whatever the phone does next.
+ * Settles the choice sent as `requestId` on the ask it was picked on, never on another: sent, or refused with why. One that may
+ * have landed (`uncertain`), or that the terminal no longer showed, is answered in the terminal from then on, whatever the phone
+ * does next.
  */
-function settleChoice(ok: boolean, reason: string | null): void {
-  const { answering, answers } = usePhone.getState();
-  const picked = answering ? answers[answering] : undefined;
-  if (!answering || !picked) {
-    patch({ pendingInput: null, answering: null });
+function settleChoice(requestId: string, ok: boolean, reason: string | null): void {
+  const state = usePhone.getState();
+  const identity = state.answering[requestId];
+  if (identity === undefined) return;
+  const answering = Object.fromEntries(Object.entries(state.answering).filter(([waiting]) => waiting !== requestId));
+  const pendingInput = state.pendingInput?.requestId === requestId ? null : state.pendingInput;
+  const picked = state.answers[identity];
+  if (!picked) {
+    patch({ pendingInput, answering });
     return;
   }
-  const state: ChoiceState = ok
+  const settled: ChoiceState = ok
     ? { choice: picked.choice, state: "sent" }
     : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown" };
-  patch({ pendingInput: null, answering: null, answers: withAnswer(answers, answering, state) });
+  // The answer is already kept, so setting it again takes no room.
+  patch({ pendingInput, answering, answers: withAnswer(state.answers, identity, settled) ?? state.answers });
 }
 
 /**
@@ -827,12 +848,14 @@ export function onReplyResult(listener: ReplyListener): () => void {
   return () => replyListeners.delete(listener);
 }
 
-function onInputResult(ok: boolean, reason: string | null): void {
-  const { pendingInput: pending } = usePhone.getState();
-  if (pending?.kind === "choice") {
-    settleChoice(ok, reason);
+function onInputResult(requestId: string | undefined, ok: boolean, reason: string | null): void {
+  if (requestId !== undefined && requestId in usePhone.getState().answering) {
+    settleChoice(requestId, ok, reason);
     return;
   }
+  const { pendingInput: pending } = usePhone.getState();
+  // A result for a reply or key no longer waited on (its detail closed) is not this one's.
+  if (!pending || pending.kind === "choice" || (requestId !== undefined && pending.requestId !== requestId)) return;
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     const detail = usePhone.getState().detail;

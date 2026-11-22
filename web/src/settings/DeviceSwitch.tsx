@@ -17,7 +17,7 @@ import { deviceTerminalCount, installParts, SWITCH_STEP_KEY, switchFailureKey, s
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { deviceConnectOffered, ownWindow } from "../pairing";
+import { ownWindow } from "../pairing";
 import { machineName, windowDeviceId } from "../screenMachine";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
@@ -128,7 +128,6 @@ export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShownDevice();
-  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const device = devices?.find((row) => row.id === front);
   // Said once: the line goes when the operator leaves the machine's screen
   // (`useSwitchedSeen`), whichever screen draws this strip meanwhile.
@@ -147,7 +146,7 @@ export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?
       </div>
     );
   }
-  if (!switchOffered(device, deviceConnect)) return null;
+  if (!switchOffered(device)) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switch-strip={device.id}>
       {device.switch ? (
@@ -314,7 +313,7 @@ function useSwitchedSeen() {
  */
 function useSwitchAfterAdd(actions: Actions) {
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const ready = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.switch_first === true && switchOffered(device, deviceConnectOffered(s.daemon)) && device.state === "ready" && device.host?.state === "ready" && !device.switch)?.id ?? null);
+  const ready = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.switch_first === true && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch)?.id ?? null);
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const asked = useRef(new Set<string>());
   // A device that was taken off is a new device when it is added again,

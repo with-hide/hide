@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awayDevice, coreMachineName, coreShared, machineName, screenNodeFromHash, systemMachineKey, windowFirst } from "./screenMachine";
+import { awayDevice, coreMachineName, machineName, screenNodeFromHash, systemMachineKey, windowFirst } from "./screenMachine";
 
 describe("the screen's own machine (PRD core-host-node-remote-core B13)", () => {
   it("is the node the hash names beside the token", () => {
@@ -45,13 +45,11 @@ describe("what this window calls each machine (PRD core-host-node-move B2, N1)",
     vi.unstubAllGlobals();
   });
 
-  it("names the core's own machine This Mac in a window on the core, and marks it only once a node dials in", () => {
+  it("names the core's own machine This Mac in a window on the core", () => {
     window.location.hash = "#token=t";
     expect(machineName(devices, "core", t)).toBe("이 Mac");
     expect(machineName(devices, "mbp", t)).toBe("MacBook Pro");
     expect(windowFirst(devices).map((row) => (row as { id: string }).id)).toEqual(["core", "mbp", "box"]);
-    expect(coreShared(devices)).toBe(true);
-    expect(coreShared([devices[0], devices[2]] as never)).toBe(false);
   });
 
   it("names the node This Mac and the core's machine by its own name in a window on a node, which comes first", () => {
@@ -60,7 +58,6 @@ describe("what this window calls each machine (PRD core-host-node-move B2, N1)",
     expect(machineName(devices, "core", t)).toBe("Mac mini");
     expect(coreMachineName(devices, t)).toBe("Mac mini");
     expect(windowFirst(devices).map((row) => (row as { id: string }).id)).toEqual(["mbp", "core", "box"]);
-    expect(coreShared([devices[0], devices[2]] as never)).toBe(true);
   });
 
   it("names this window's machine as its own system does, whichever machine the core runs on", () => {

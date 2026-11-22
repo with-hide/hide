@@ -102,6 +102,9 @@ pub enum Feature {
     /// A skill or MCP server added, changed, switched or removed, from
     /// Settings or `hide skill` / `hide mcp`.
     SkillsMcp,
+    /// A pairing with another computer that runs Hide finished, in either
+    /// direction (PRD device-connect-iroh): the daemon tells the core.
+    HidesPaired,
     /// An agent's own question, plan or tool permission answered with one
     /// of its choices from a phone.
     PhoneAnswer,
@@ -110,9 +113,10 @@ pub enum Feature {
 }
 
 impl Feature {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Focus,
         Self::SkillsMcp,
+        Self::HidesPaired,
         Self::PhoneAnswer,
         Self::PhoneAttachments,
     ];
@@ -121,6 +125,7 @@ impl Feature {
         match self {
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
+            Self::HidesPaired => "hides_paired",
             Self::PhoneAnswer => "phone_answer",
             Self::PhoneAttachments => "phone_attachments",
         }
@@ -185,6 +190,7 @@ pub struct ActiveDays {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skills_mcp: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    hides_paired: Option<u64>,
     phone_answer: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_attachments: Option<u64>,
@@ -201,6 +207,7 @@ impl ActiveDays {
             Daily::Surface(ActiveSurface::Phone) => &mut self.phone,
             Daily::Feature(Feature::Focus) => &mut self.focus,
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
+            Daily::Feature(Feature::HidesPaired) => &mut self.hides_paired,
             Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
             Daily::Feature(Feature::PhoneAttachments) => &mut self.phone_attachments,
         };
@@ -262,6 +269,7 @@ pub enum PracticeChapter {
     Automation,
     Focus,
     Bots,
+    Connect,
     Answer,
     Attachments,
 }
@@ -277,6 +285,7 @@ impl PracticeChapter {
             "automation" => Self::Automation,
             "focus" => Self::Focus,
             "bots" => Self::Bots,
+            "connect" => Self::Connect,
             "answer" => Self::Answer,
             "attachments" => Self::Attachments,
             _ => return None,
@@ -456,6 +465,7 @@ impl Event {
                         PracticeChapter::Automation => "automation",
                         PracticeChapter::Focus => "focus",
                         PracticeChapter::Bots => "bots",
+                        PracticeChapter::Connect => "connect",
                         PracticeChapter::Answer => "answer",
                         PracticeChapter::Attachments => "attachments",
                     },

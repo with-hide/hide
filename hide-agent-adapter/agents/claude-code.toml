@@ -293,5 +293,6 @@ regex = ['^4;0']
 [answer]
 marker = "❯"
 question = { down = "down", pick = "enter", row = "{n}." }
-plan_approval = { approve = ["enter"], keep_planning = ["esc"], row = "{n}." }
+# Approve picks the row that keeps the permission mode: the first switches Claude Code to auto mode.
+plan_approval = { approve = ["down", "enter"], keep_planning = ["esc"], row = "{n}.", approve_label = "Yes, manually approve edits" }
 permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}." }

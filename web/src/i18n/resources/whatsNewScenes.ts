@@ -5,6 +5,14 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.connect.here": "Fix the checkout 500",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux server",
+  "whatsNewScene.connect.miniTask": "Release notes",
+  "whatsNewScene.connect.windowsTask": "Fix the installer",
+  "whatsNewScene.connect.linuxTask": "Nightly build",
+  "whatsNewScene.connect.question": "New signing key?",
   "whatsNewScene.answer.agent": "Review fixes",
   "whatsNewScene.answer.read": "I read the 4 review comments.",
   "whatsNewScene.answer.question": "How should I apply them?",
@@ -82,6 +90,14 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "결제 500 오류 고치기",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux 서버",
+  "whatsNewScene.connect.miniTask": "릴리스 노트 쓰기",
+  "whatsNewScene.connect.windowsTask": "설치 프로그램 고치기",
+  "whatsNewScene.connect.linuxTask": "야간 빌드 고치기",
+  "whatsNewScene.connect.question": "서명 키를 바꿀까요?",
   "whatsNewScene.answer.agent": "리뷰 반영",
   "whatsNewScene.answer.read": "리뷰 4건을 읽었어요.",
   "whatsNewScene.answer.question": "어떻게 반영할까요?",
@@ -159,6 +175,14 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "修复结账 500",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux 服务器",
+  "whatsNewScene.connect.miniTask": "撰写发布说明",
+  "whatsNewScene.connect.windowsTask": "修复安装程序",
+  "whatsNewScene.connect.linuxTask": "修复夜间构建",
+  "whatsNewScene.connect.question": "要换签名密钥吗？",
   "whatsNewScene.answer.agent": "处理评审意见",
   "whatsNewScene.answer.read": "我看完了 4 条评审意见。",
   "whatsNewScene.answer.question": "要怎么处理？",
@@ -236,6 +260,14 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "決済の 500 を直す",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux サーバー",
+  "whatsNewScene.connect.miniTask": "リリースノートを書く",
+  "whatsNewScene.connect.windowsTask": "インストーラーを直す",
+  "whatsNewScene.connect.linuxTask": "ナイトリービルドを直す",
+  "whatsNewScene.connect.question": "署名キーを替えますか？",
   "whatsNewScene.answer.agent": "レビュー対応",
   "whatsNewScene.answer.read": "レビュー 4 件を読みました。",
   "whatsNewScene.answer.question": "どう反映しますか？",

@@ -4,9 +4,6 @@
 import type { Catalog, Catalogs } from "../schema";
 
 export const coreLinkEnglish = {
-  "coreLink.badge": "core",
-  "coreLink.runs": "Runs the core",
-  "coreLink.railCore": "core",
   "coreLink.disconnectMenu": "Disconnect from the {{machine}} core…",
   "coreLink.disconnectTitle": "Disconnect from the core on {{machine}}?",
   "coreLink.disconnectDescription": "The core refuses this Mac's pane input, file reads and browser actions at once. Reconnecting allows them again.",
@@ -29,9 +26,6 @@ export const coreLinkEnglish = {
 } as const;
 
 const ko = {
-  "coreLink.badge": "core",
-  "coreLink.runs": "core 실행 중",
-  "coreLink.railCore": "core",
   "coreLink.disconnectMenu": "{{machine}} core와 연결 끊기…",
   "coreLink.disconnectTitle": "{{machine}} core와 연결을 끊을까요?",
   "coreLink.disconnectDescription": "core가 이 Mac의 터미널 입력, 파일 읽기, 브라우저 조작을 바로 막아요. 다시 연결하면 다시 허용돼요.",
@@ -54,9 +48,6 @@ const ko = {
 } satisfies Catalog<typeof coreLinkEnglish>;
 
 const zhCN = {
-  "coreLink.badge": "core",
-  "coreLink.runs": "正在运行 core",
-  "coreLink.railCore": "core",
   "coreLink.disconnectMenu": "断开与 {{machine}} core 的连接…",
   "coreLink.disconnectTitle": "断开与 {{machine}} 上 core 的连接？",
   "coreLink.disconnectDescription": "core 会立即拒绝此 Mac 的窗格输入、文件读取和浏览器操作。重新连接后恢复。",
@@ -79,9 +70,6 @@ const zhCN = {
 } satisfies Catalog<typeof coreLinkEnglish>;
 
 const ja = {
-  "coreLink.badge": "core",
-  "coreLink.runs": "core を実行中",
-  "coreLink.railCore": "core",
   "coreLink.disconnectMenu": "{{machine}} の core との接続を切る…",
   "coreLink.disconnectTitle": "{{machine}} の core との接続を切りますか？",
   "coreLink.disconnectDescription": "core はこの Mac のペイン入力、ファイル読み取り、ブラウザ操作をすぐに拒否します。再接続すると再び許可されます。",

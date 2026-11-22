@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Flow 10's words (`practice/chapters/attachments.ts`).
+// Flow 11's words (`practice/chapters/attachments.ts`).
 const en = {
   "practice.attachments.title": "Send files from your phone",
   "practice.attachments.summary": "Attach a photo and a log on your phone, and the agent reads them on your computer",
@@ -21,7 +21,7 @@ const en = {
   "practice.attachments.typed.kick": "On your computer",
   "practice.attachments.typed.title": "The agent gets the files' paths",
   "practice.attachments.typed.text": "Your computer types where each file is saved before your words, so the agent opens them like any file. Wait a moment.",
-  "practice.attachments.end.kick": "End of chapter 10",
+  "practice.attachments.end.kick": "End of chapter 11",
   "practice.attachments.end.title": "Show an agent what you see",
   "practice.attachments.end.text": "Pair your phone in **Settings › Mobile**. Each file can be up to 10 MB, and a photo is made smaller before it goes. Thumbnails stay on that phone.",
 };
@@ -46,7 +46,7 @@ const ko = {
   "practice.attachments.typed.kick": "컴퓨터에서",
   "practice.attachments.typed.title": "에이전트가 파일 경로를 받아요",
   "practice.attachments.typed.text": "컴퓨터가 파일마다 저장된 경로를 말 앞에 입력해요. 에이전트는 다른 파일처럼 열어 봐요. 잠깐 기다려요.",
-  "practice.attachments.end.kick": "10장 끝",
+  "practice.attachments.end.kick": "11장 끝",
   "practice.attachments.end.title": "보고 있는 걸 에이전트에게 보여 줘요",
   "practice.attachments.end.text": "**설정 › 모바일**에서 폰을 연결해요. 파일 하나는 10 MB까지 보낼 수 있고, 사진은 줄여서 보내요. 미리보기는 그 폰에만 남아요.",
 } satisfies Catalog<typeof en>;
@@ -71,7 +71,7 @@ const zhCN = {
   "practice.attachments.typed.kick": "在电脑上",
   "practice.attachments.typed.title": "智能体收到文件路径",
   "practice.attachments.typed.text": "电脑会在你的文字前输入每个文件的保存位置，智能体像打开其他文件一样打开它们。稍等一下。",
-  "practice.attachments.end.kick": "第 10 章结束",
+  "practice.attachments.end.kick": "第 11 章结束",
   "practice.attachments.end.title": "把你看到的给智能体看",
   "practice.attachments.end.text": "在 **设置 › 移动端** 连接手机。每个文件最多 10 MB，照片会先缩小再发送。缩略图只留在那部手机上。",
 } satisfies Catalog<typeof en>;
@@ -96,7 +96,7 @@ const ja = {
   "practice.attachments.typed.kick": "コンピュータで",
   "practice.attachments.typed.title": "エージェントがファイルのパスを受け取ります",
   "practice.attachments.typed.text": "コンピュータが言葉の前に各ファイルの保存先を入力します。エージェントはほかのファイルと同じように開きます。少し待ちます。",
-  "practice.attachments.end.kick": "第 10 章 おわり",
+  "practice.attachments.end.kick": "第 11 章 おわり",
   "practice.attachments.end.title": "見ているものをエージェントに見せる",
   "practice.attachments.end.text": "**設定 › モバイル** でスマホをつなぎます。ファイルは 1 つ 10 MB まで、写真は小さくしてから送ります。サムネイルはそのスマホにだけ残ります。",
 } satisfies Catalog<typeof en>;

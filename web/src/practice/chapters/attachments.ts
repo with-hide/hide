@@ -1,4 +1,4 @@
-// Flow 10: files from the phone. An agent reported while the learner was away;
+// Flow 11: files from the phone. An agent reported while the learner was away;
 // its conversation stands on the learner's phone beside the screen. The learner
 // presses the `+` at the start of the reply field, sees a screenshot and a log
 // stand on the bar while a file past 10 MB is left out with one line, waits for
@@ -12,7 +12,7 @@ const PHONE = "[data-practice-phone]";
 
 export default chapter<AttachmentsModel>({
   id: "attachments",
-  number: 10,
+  number: 11,
   version: 1,
   since: "1.3.0",
   world: ATTACHMENTS_WORLD,

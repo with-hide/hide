@@ -266,6 +266,96 @@ it("never sends a choice again once the computer could not say whether it landed
   }
 });
 
+it("settles each choice by its own request, so an earlier answer's refusal never frees a later one that may have landed", async () => {
+  const waiting = { demand: "approval", status_code: "approval", changed_at_unix_ms: 100 } as const;
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent(waiting));
+  try {
+    const connection = await import("./connection");
+    const second = agent({ ...waiting, pane_id: "w1:p2", root_pane_id: "w1:p2" });
+    await serve({ type: "agents", groups: [{ group: "seen", count: 2, rows: [{ kind: "agent", ...agent(waiting) }, { kind: "agent", ...second }] }], devices: [], interface_language: "en", color_theme: null });
+    const answer = async (pane: string, call: string) => {
+      await serve({ type: "conversation", device_id: "local", pane_id: pane, state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+      await serve({ type: "ask", device_id: "local", pane_id: pane, ask: { kind: "permission", turn: "100", since_ms: 100, command: "pnpm build", command_truncated: false, call, answerable: true, choices: [{ id: "allow" }, { id: "deny" }] } });
+      await act(async () => container.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+    };
+    await answer("w1:p1", "call-a");
+    // The operator leaves for the second agent before the first answer comes back, and answers there too.
+    await act(async () => connection.closeDetail());
+    await act(async () => connection.openDetail({ device_id: "local", pane_id: "w1:p2" }));
+    await answer("w1:p2", "call-b");
+    const [first, later] = inputs().map((input) => String(input.request_id));
+    await serve({ type: "input_result", request_id: first!, ok: false, reason: "in_flight" });
+    await serve({ type: "input_result", request_id: later!, ok: false, reason: "uncertain" });
+    // The second answer may have landed: it is answered in the terminal, and nothing is sent again.
+    expect(container.querySelector('[data-phone-ask-terminal="refused"]')).not.toBeNull();
+    connection.sendChoice("allow");
+    expect(inputs()).toHaveLength(2);
+    // The first was refused before anything was typed, so it may be sent again.
+    await act(async () => connection.closeDetail());
+    await act(async () => connection.openDetail({ device_id: "local", pane_id: "w1:p1" }));
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "100", since_ms: 100, command: "pnpm build", command_truncated: false, call: "call-a", answerable: true, choices: [{ id: "allow" }, { id: "deny" }] } });
+    expect(container.querySelector('[data-phone-ask-terminal="refused"]')).toBeNull();
+    expect(container.querySelector("[data-phone-ask-send]")).not.toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("keeps an answer that may have landed while its call's approval goes and comes back, until the agent asks on another call", async () => {
+  const waiting = { demand: "approval", status_code: "approval", changed_at_unix_ms: 100 } as const;
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent(waiting));
+  try {
+    const connection = await import("./connection");
+    const { usePhone } = await import("./store");
+    const ask = (call: string, turn: string) => serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn, since_ms: Number(turn), command: "pnpm build", command_truncated: false, call, answerable: true, choices: [{ id: "allow" }, { id: "deny" }] } });
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "빌드할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    await ask("call-a", "100");
+    await act(async () => container.querySelector<HTMLElement>('[data-phone-ask-choice="allow"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.click());
+    await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: false, reason: "uncertain" });
+    // The agent works a moment, its row asks nothing under a later turn, and the same call's approval comes back.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: null });
+    await serve({ type: "agents", groups: [{ group: "seen", count: 1, rows: [{ kind: "agent", ...agent({ status_code: "working", changed_at_unix_ms: 200 }) }] }], devices: [], interface_language: "en", color_theme: null });
+    await ask("call-a", "300");
+    expect(container.querySelector('[data-phone-ask-terminal="refused"]')).not.toBeNull();
+    connection.sendChoice("allow");
+    expect(inputs()).toHaveLength(1);
+    // Asking on another call ends the first, whose answer then goes.
+    await ask("call-b", "400");
+    expect(Object.keys(usePhone.getState().answers)).toEqual([]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("never drops an answer that may still hold its ask to make room, and answers a new one in the terminal instead", async () => {
+  const { ANSWERS_KEPT, withAnswer, withoutEnded } = await import("./store");
+  const landed = { choice: "allow", state: "failed", notice: { key: "mobile.input.uncertain" }, inTerminal: true } as const;
+  const sent = { choice: "allow", state: "sent" } as const;
+  let answers = withAnswer({}, "local|w1:p1|permission|call a", landed)!;
+  for (let at = 1; at < ANSWERS_KEPT; at++) answers = withAnswer(answers, `local|p${at}|question|turn 100 ["?",null,[]]`, sent)!;
+  expect(withAnswer(answers, "local|new|permission|call n", sent)).toBeNull();
+  // An answer refused before anything was typed holds nothing, and goes first.
+  const refused = { choice: "allow", state: "failed", notice: { key: "mobile.input.inFlight" }, inTerminal: false } as const;
+  const room = withAnswer(withAnswer(Object.fromEntries(Object.entries(answers).slice(1)), "local|r|permission|call r", refused)!, "local|new|permission|call n", sent)!;
+  expect(Object.keys(room)).not.toContain("local|r|permission|call r");
+  expect(room["local|new|permission|call n"]).toEqual(sent);
+  // A turn the agent moved past ends that agent's asks known by an earlier turn, and no other's; a call's ask outlives turns.
+  const p1 = { device_id: "local", pane_id: "p1" };
+  expect(Object.keys(withoutEnded(answers, p1, { turn: 100 }))).toHaveLength(ANSWERS_KEPT);
+  const later = withoutEnded(answers, p1, { turn: 101 });
+  expect(Object.keys(later)).toHaveLength(ANSWERS_KEPT - 1);
+  expect(later["local|p2|question|turn 100 [\"?\",null,[]]"]).toEqual(sent);
+  const first = { device_id: "local", pane_id: "w1:p1" };
+  expect(withoutEnded(answers, first, { turn: 999 })).toBe(answers);
+  expect(withoutEnded(answers, first, { call: "a", turn: 999 })).toBe(answers);
+  // An answer on its way stays, whatever the agent asks.
+  const sending = { "local|w1:p1|permission|call a": { choice: "allow", state: "sending" } } as const;
+  expect(withoutEnded(sending, first, { call: "b", turn: 999 })).toBe(sending);
+});
+
 it("says a command runs by the clock from its start, never by what it runs", async () => {
   const { container, serve, unmount } = await openDetail({ answer: true }, agent({ status_code: "working", mark: "going", changed_at_unix_ms: Date.now() - 60_000 }));
   try {

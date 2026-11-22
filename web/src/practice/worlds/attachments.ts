@@ -1,4 +1,4 @@
-// Flow 10's world: one invented project with an agent that measured memory and reported, and the learner's phone beside the
+// Flow 11's world: one invented project with an agent that measured memory and reported, and the learner's phone beside the
 // screen, open on that agent's conversation. The phone's `+` stands in for the system's picker: it attaches a screenshot and a log
 // as a pick would, and leaves out a 14 MB trace with its line, since a file past 10 MB is never sent. The log uploads for a moment
 // with its band; send types the files' paths and the words into the agent's own screen as one message, the files stand over the

@@ -140,7 +140,9 @@ jobs:
           # The gate canary runs beside the lane's own tests, so a hand run can
           # fail one iteration on purpose and show that this job ends red
           # (stress_gate_canary; docs/TESTING.md, The repeat lane).
-          filter='test(/^(remote_delivery|node_contract|system_ssh|device_own_engine|pairing|stress_gate_canary)::/) & !test(protocol24)'
+          # The release A fault run takes minutes of faults and a relay of its
+          # own; scripts/release-gate.sh runs it before a release, not here.
+          filter='test(/^(remote_delivery|node_contract|system_ssh|device_own_engine|pairing|stress_gate_canary)::/) & !test(protocol24) & !test(/^pairing::fault_run::/)'
           # nextest ends 0 when only its last iteration passed, so its summary
           # is kept for the check below (`--stress-count` hides an earlier
           # failure in the exit status alone).

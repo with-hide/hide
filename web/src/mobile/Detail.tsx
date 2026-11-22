@@ -418,12 +418,14 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   const commandSince = working && running?.kind === "command" ? running.since_ms : null;
   // An unknown running line claims neither: a command may run among the calls the computer did not keep.
   const thinkingSince = working && commandSince === null && running?.kind !== "unknown" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
-  // The activity line and the ask are content too: one that appears with no new word still pulls a reader at the bottom down to it.
+  // The activity line, the ask and its answer are content too: one that appears or grows with no new word, such as a refusal
+  // under the card, still pulls a reader at the bottom down to it.
   const thinking = thinkingSince !== null || commandSince !== null;
-  const content = useMemo(() => ({ messages, thinking, ask }), [messages, thinking, ask]);
+  const key = usePhone((s) => s.detail?.key ?? null);
+  const answered = usePhone((s) => (key && ask ? s.answers[askIdentity(key, ask)] : undefined)) ?? null;
+  const content = useMemo(() => ({ messages, thinking, ask, answered }), [messages, thinking, ask, answered]);
   const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
   // The operator's messages that attached files: the files over the bubble, with this phone's thumbnails where it sent them (Doop 09).
-  const key = usePhone((s) => s.detail?.key ?? null);
   const shown = useMemo(
     () =>
       messages.map((message) => {

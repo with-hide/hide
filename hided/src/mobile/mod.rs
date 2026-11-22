@@ -453,10 +453,6 @@ pub struct Config {
     /// The desktop windows' gateways, which a page View's screenshot goes
     /// through (`page_shot.rs`).
     pub browser_control: Arc<crate::browser_control::BrowserControl>,
-    /// Whether this build offers connections between two Hides
-    /// (`env::Env::device_connect`): what the phone gains with them (the
-    /// gathered view, `hide phone`) stays away until it does.
-    pub device_connect: bool,
     /// The store a phone's attached files are uploaded into: the desktop's
     /// uploads' own, with its caps, eviction and release (`uploads.rs`).
     pub attachments: Arc<crate::attachments::Attachments>,
@@ -732,11 +728,6 @@ impl Mobile {
     fn relay_changed(&self) {
         self.relay_change
             .send_modify(|generation| *generation = generation.wrapping_add(1));
-    }
-
-    /// Whether this build offers connections between two Hides (`Config::device_connect`).
-    pub fn device_connect(&self) -> bool {
-        self.config.device_connect
     }
 
     /// The mac's name on the phone: its tailnet name, else the system's.
@@ -2020,9 +2011,7 @@ impl Mobile {
                         hide_core::product_analytics::Event::PhonePaired { route },
                     );
                 }
-                if self.config.device_connect {
-                    self.owe_paired_notice(phone.clone());
-                }
+                self.owe_paired_notice(phone.clone());
             }
             Err(refusal) => hide_core::diagnostic!(json!({
                 "component": "mobile_pairing", "kind": "pairing.refused", "reason": refusal.reason(),
@@ -3344,7 +3333,6 @@ pub(super) fn test_mobile_from(
             Arc::new(crate::index::IndexService::new()),
         )),
         browser_control: Arc::default(),
-        device_connect: false,
         attachments: Arc::new(crate::attachments::Attachments::new(
             &directory.join("state"),
         )),
@@ -3479,7 +3467,7 @@ mod tests {
             }
         }
         let mut phone = push::PhoneNotices::default();
-        let desktop = DesktopNotices::new(true);
+        let desktop = DesktopNotices::new();
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
             "macbook",
@@ -3563,7 +3551,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
-        let mobile = test_mobile_with(directory.path(), &gate, Arc::new(DesktopNotices::new(true)));
+        let mobile = test_mobile_with(directory.path(), &gate, Arc::new(DesktopNotices::new()));
         let desktop = &mobile.config.desktop;
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
@@ -3638,7 +3626,7 @@ mod tests {
         ] {
             let label = format!("phone {phone_on}, desktop {desktop_on}, in use {in_use}");
             let mut phone = push::PhoneNotices::default();
-            let desktop = DesktopNotices::new(true);
+            let desktop = DesktopNotices::new();
             desktop.set(1, desktop_on);
             desktop.set_waiting(1, desktop_on);
             desktop.activity(1, in_use);
@@ -3672,7 +3660,7 @@ mod tests {
         // phones do not rest for a wait the computer does not show, and the
         // window itself leaves the frame's wait out.
         let mut phone = push::PhoneNotices::default();
-        let desktop = DesktopNotices::new(true);
+        let desktop = DesktopNotices::new();
         desktop.set(1, true);
         desktop.activity(1, true);
         pass(&mut phone, true, &desktop, &projected("working", "none"));
@@ -3687,10 +3675,11 @@ mod tests {
         );
     }
 
-    /// B38, B33, in a build without connections between two Hides: each
-    /// side judges the shared projection only while it is on, a side turned
-    /// on later is seeded by what was already waiting, and the other side's
-    /// switch never changes what a side announces.
+    /// B38, B33, with the computer in use and its window showing no waits,
+    /// so the phones do not rest: each side judges the shared projection only
+    /// while it is on, a side turned on later is seeded by what was already
+    /// waiting, and the other side's switch never changes what a side
+    /// announces.
     #[test]
     fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
         for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
@@ -3698,6 +3687,8 @@ mod tests {
             let mut phone = push::PhoneNotices::default();
             let desktop = DesktopNotices::default();
             desktop.set(1, desktop_on);
+            // The computer is in use, so a notice may reach its window.
+            desktop.activity(1, true);
             assert_eq!(
                 pass(
                     &mut phone,
@@ -3731,6 +3722,8 @@ mod tests {
         );
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, false));
         desktop.set(1, true);
+        // The computer is in use, so a notice may reach its window.
+        desktop.activity(1, true);
         let mut frames = desktop.subscribe();
         assert!(
             judge_pass(
@@ -3756,6 +3749,8 @@ mod tests {
         let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
+        // The computer is in use, so a notice may reach its window.
+        desktop.activity(1, true);
         assert_eq!(
             pass(&mut phone, false, &desktop, &projected("working", "none")),
             (0, false)

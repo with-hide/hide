@@ -978,13 +978,12 @@ async fn run(
     hello["attachments"] = json!(true);
     // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
     // shows the gathered view only for a computer that says it offers
-    // connections between two Hides; an older bundle ignores the field.
-    if mobile.device_connect() {
-        hello["device_connect"] = json!(true);
-        // This computer's product device id, which another computer's
-        // `machines` names it by, so the phone knows which of those it has.
-        hello["machine"] = json!(mobile.node().as_str());
-    }
+    // connections between two Hides, which every computer from this build
+    // on does; an older bundle ignores the field.
+    hello["device_connect"] = json!(true);
+    // This computer's product device id, which another computer's
+    // `machines` names it by, so the phone knows which of those it has.
+    hello["machine"] = json!(mobile.node().as_str());
     let mut agents_omitted = 0;
     let (agents, omitted) = agents_frame(&projection.borrow_and_update());
     note_agents_omitted(phone_id, &mut agents_omitted, omitted);
@@ -3196,6 +3195,7 @@ mod tests {
             url: Some("http://localhost:5173/".to_owned()),
             committed: None,
             output: None,
+            external: None,
             unseen: true,
             at_unix_ms: 1,
         };
@@ -3203,10 +3203,8 @@ mod tests {
             .await
             .err()
             .expect("no window, no picture");
-        assert!(
-            !reason.is_empty(),
-            "the refusal names its reason for the log"
-        );
+        // The phone says why: no desktop app is open to draw the page.
+        assert_eq!(reason, "no_window");
     }
 
     #[tokio::test]

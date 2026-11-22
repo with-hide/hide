@@ -298,15 +298,7 @@ export class ExternalFiles {
    */
   inside(id: string, file: string): boolean {
     const held = this.grants.get(id);
-    if (!held) return false;
-    let real = file;
-    try {
-      real = realpathSync.native(file);
-    } catch {
-      // A file that is not there answers 404 inside the folder it names.
-    }
-    const relative = path.relative(held.folder, real);
-    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    return held ? within(held, file) !== null : false;
   }
 
   /**
@@ -317,40 +309,105 @@ export class ExternalFiles {
   async read(id: string): Promise<ExternalRead> {
     const held = this.grants.get(id);
     if (!held) return { failure: "grant_gone" };
+    const read = await this.readFile(held, held.real, (stat) => {
+      if (held.kind === "text" && stat.size > MAX_EXTERNAL_TEXT_BYTES) return { preview_only: true };
+      if (stat.size > MAX_EXTERNAL_BYTES) return { failure: "too_large" };
+      return stat.size;
+    });
+    return "total" in read ? { bytes: read.bytes } : read;
+  }
+
+  /**
+   * The first `limit` bytes of the granted file, or with `file` (a relative
+   * name with `/` between its parts) of a file in its folder that its page
+   * names, and the file's whole size: a phone's read, made now each time it
+   * opens the agent's View, so nothing is copied or kept (`hided/src/mobile/looks.rs`).
+   * A folder file is only an HTML grant's, reached by the rule its desktop
+   * page's files are (`within`, links resolved); the granted file itself must
+   * still be its own physical spelling, so one swapped for a link is refused.
+   *
+   * The grant is this process's own memory on every system: the host is not
+   * sandboxed on macOS (no app-sandbox entitlement, so no security-scoped
+   * bookmark), and reading a granted path needs nothing more there than on
+   * Windows or Linux. A grant ends with the app, so after a restart the
+   * agent's View names a grant this host never had (`grant_gone`).
+   */
+  async readPart(id: string, file: string | null, limit: number): Promise<{ bytes: Uint8Array; total: number } | { failure: string }> {
+    const held = this.grants.get(id);
+    if (!held) return { failure: "grant_gone" };
+    let target = held.real;
+    if (file !== null) {
+      const parts = file.split("/");
+      if (held.kind !== "html" || parts.some((part) => part === "" || /[\\\0]/u.test(part))) return { failure: "outside_folder" };
+      const reached = within(held, path.join(held.folder, ...parts));
+      if (reached === null) return { failure: "outside_folder" };
+      target = reached;
+    }
+    const read = await this.readFile(held, target, (stat) => Math.min(stat.size, limit));
+    if ("total" in read) return read;
+    return "failure" in read ? read : { failure: "read_failed" };
+  }
+
+  /**
+   * Reads the file at `real`, still its own physical spelling, as many bytes
+   * as `wanted` says for its size, or the answer `wanted` gives instead.
+   */
+  private async readFile(
+    held: Grant,
+    real: string,
+    wanted: (stat: { size: number }) => number | ExternalRead,
+  ): Promise<{ bytes: Uint8Array; total: number } | ExternalRead> {
     const fail = (reason: string): ExternalRead => {
-      this.log("external.read_failed", { grant: id, kind: held.kind, reason });
+      this.log("external.read_failed", { grant: held.id, kind: held.kind, reason });
       return { failure: reason };
     };
     try {
-      if ((await fs.realpath(held.real)) !== held.real) return fail("not_physical");
+      if ((await fs.realpath(real)) !== real) return fail("not_physical");
     } catch (error) {
       return fail(errorCode(error));
     }
     let handle;
     try {
-      handle = await fs.open(held.real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      handle = await fs.open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     } catch (error) {
       return fail(errorCode(error));
     }
     try {
       const stat = await handle.stat();
       if (!stat.isFile()) return fail("not_a_file");
-      if (held.kind === "text" && stat.size > MAX_EXTERNAL_TEXT_BYTES) return { preview_only: true };
-      if (stat.size > MAX_EXTERNAL_BYTES) return fail("too_large");
-      const bytes = new Uint8Array(stat.size);
+      const length = wanted(stat);
+      if (typeof length !== "number") return "failure" in length ? fail(length.failure) : length;
+      const bytes = new Uint8Array(length);
       let filled = 0;
       while (filled < bytes.length) {
         const { bytesRead } = await handle.read(bytes, filled, bytes.length - filled, filled);
         if (bytesRead === 0) break;
         filled += bytesRead;
       }
-      return { bytes: bytes.subarray(0, filled) };
+      return { bytes: bytes.subarray(0, filled), total: stat.size };
     } catch (error) {
       return fail(errorCode(error));
     } finally {
       await handle.close();
     }
   }
+}
+
+/**
+ * `file` with its links resolved when that is inside the folder of `held`,
+ * else null: the one rule for which of a grant's folder files a page may
+ * read, on the desktop and on a phone. A file that is not there keeps its
+ * own spelling, so its read answers that it is missing.
+ */
+function within(held: Grant, file: string): string | null {
+  let real = file;
+  try {
+    real = realpathSync.native(file);
+  } catch {
+    // Not there: answered as missing inside the folder it names.
+  }
+  const relative = path.relative(held.folder, real);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? real : null;
 }
 
 /** An HTML grant's page session: in memory, never two live grants' at once (PRD outside-path-in-hide B4). */

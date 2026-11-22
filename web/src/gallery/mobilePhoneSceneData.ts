@@ -224,7 +224,7 @@ const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; conte
   "phone-look-image": { id: "v2", content: { state: "image", url: CHART, size: 319_488 } },
   "phone-look-shot": { id: "v3", content: { state: "shot", url: PAGE_SHOT, size: 412_160, address: PAGE_ADDRESS, takenAt: Date.now() - 20_000, takenBy: "local" } },
   "phone-look-shot-refreshing": { id: "v3", refreshing: true, content: { state: "shot", url: PAGE_SHOT, size: 412_160, address: PAGE_ADDRESS, takenAt: Date.now() - 95_000, takenBy: "local" } },
-  "phone-look-page": { id: "v3", content: { state: "page", url: PAGE_ADDRESS } },
+  "phone-look-page": { id: "v3", content: { state: "page", url: PAGE_ADDRESS, reason: null } },
   "phone-look-other": { id: "v5", content: { state: "other" } },
   "phone-look-large": { id: "v6", content: { state: "too_large" } },
   "phone-look-html-large": { id: "v7", content: { state: "too_large" } },
