@@ -340,12 +340,14 @@ log={log}
 while [ ! -e {stop} ]; do
   inbox=$("$hide" inbox 2>&1)
   printf 'inbox %s\n' "$(printf '%s' "$inbox" | tr '\n' ' ' | cut -c1-300)" >> "$log"
-  for id in $(printf '%s' "$inbox" | grep -o 'letter-[0-9]*' | sort -u); do
+  ids=$(printf '%s' "$inbox" | grep -o 'letter-[0-9]*' | sort -u)
+  for id in $ids; do
     answer=$("$hide" request ack "$id" 2>&1)
     printf 'ack %s %s\n' "$id" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)" >> "$log"
   done
   tail -n 40 "$log" > "$log.tmp" && mv "$log.tmp" "$log"
-  sleep 2
+  # A backlog is read again at once; an empty inbox is read a second later.
+  [ -n "$ids" ] || sleep 1
 done
 "#,
         stop = quote(folder.join("stop")),
