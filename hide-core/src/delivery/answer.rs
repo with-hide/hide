@@ -29,7 +29,7 @@ pub struct AgentView {
     pub parent: Option<String>,
     /// The spawner, independently of responsibility; null for ordinary roots.
     pub origin: Option<String>,
-    /// The name of the external tool whose connection started this agent
+    /// The name of the bot whose connection started this agent
     /// (PRD hide-external-control B31); absent for every other start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_tool: Option<String>,
@@ -299,7 +299,7 @@ pub struct PsAgent {
     pub parent_pane: Option<String>,
     /// The registration id of the parent the registration names.
     pub parent: Option<String>,
-    /// The name of the external tool whose connection started this agent;
+    /// The name of the bot whose connection started this agent;
     /// absent for every other start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_tool: Option<String>,

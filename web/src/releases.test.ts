@@ -5,7 +5,7 @@ const words = (title: string) => ({ en: { title, line: `${title} line` } });
 const version = (v: string, highlights: string[], changes = 1) => ({
   version: v,
   date: "2026-11-20",
-  highlights: highlights.map((title) => ({ drawing: "mission", chapter: null, text: words(title) })),
+  highlights: highlights.map((title) => ({ drawing: "mission", chapter: null, settings: null, text: words(title) })),
   changes: Array.from({ length: changes }, (_, at) => ({ kind: at % 2 ? "fix" : "change", text: { en: `${v} change ${at}` } })),
 });
 const feedOf = (...versions: ReturnType<typeof version>[]): ReleaseFeed => parseReleaseFeed({ schema: 1, versions }).feed;

@@ -756,8 +756,15 @@ impl Refused {
 /// tool; the daemon refuses a pane again by what the kernel says of the
 /// caller (B52).
 fn operators(env: &Env) -> Result<(), Refused> {
-    if env.pane_id.is_some() || env.access.is_some() {
+    if env.pane_id.is_some() {
         return Err(Refused::code("device_from_pane"));
+    }
+    // A bot, named or the one key this home keeps, in either mode.
+    if crate::access_cli::tool_key(env)
+        .map_err(|code| Refused::code(&code))?
+        .is_some()
+    {
+        return Err(Refused::code(hide_core::access::OPERATOR_ONLY));
     }
     Ok(())
 }

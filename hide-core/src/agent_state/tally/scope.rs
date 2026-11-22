@@ -807,8 +807,9 @@ pub(crate) struct Cache {
     mission_asks: BTreeMap<String, Vec<String>>,
     /// Each device's automations that are their own Needs You line.
     automation_asks: BTreeMap<String, Vec<String>>,
-    /// The tools connected at Act, by connection id and name, in the access
-    /// list's order: each has a cell (PRD hide-external-control D-47).
+    /// The bots in own mode, by connection id and name, in the access list's
+    /// order: each has a cell (PRD hide-external-control D-47, mission-87);
+    /// an all-mode bot's work is the operator's and has none.
     tools: Vec<(String, String)>,
     /// Each tool's missions that are their own ask, by connection, laid on
     /// its cell at every apply as `mission_asks` is on a device's.

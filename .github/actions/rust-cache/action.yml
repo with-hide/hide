@@ -6,7 +6,7 @@ description: Restore, and on main save, one dependency set's cache for this syst
 
 inputs:
   set:
-    description: The dependency set, `workspace`, `platform` or `release`.
+    description: The dependency set, `workspace`, `lint`, `platform` or `release`.
     required: true
   save:
     description: Whether this job saves the set; true only for the set's one builder on main.

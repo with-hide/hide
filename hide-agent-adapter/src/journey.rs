@@ -292,7 +292,11 @@ fn context_cell(row: &super::AgentAdapter) -> bool {
 fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
     let mut paths = Vec::new();
     if row.bell {
-        paths.push(if row.tool_letters.is_some() {
+        // The bell's turn takes the letter in its prompt hook when that hook
+        // can carry context (Claude Code, Codex, Antigravity); only an agent
+        // whose prompt hook cannot (Grok) is handed it by a tool hook.
+        let prompt_carries = row.prompt_hook.is_some_and(|hook| hook.context);
+        paths.push(if row.tool_letters.is_some() && !prompt_carries {
             "bell_hook"
         } else {
             "bell"
@@ -476,6 +480,8 @@ mod tests {
         row.turn_end_letters = AgentId::Grok.adapter().turn_end_letters;
         assert_eq!(busy_letter_paths(&row), ["bell", "turn_end"]);
         row.tool_letters = AgentId::Grok.adapter().tool_letters;
+        assert_eq!(busy_letter_paths(&row), ["bell", "turn_end"]);
+        row.prompt_hook = AgentId::Grok.adapter().prompt_hook;
         assert_eq!(busy_letter_paths(&row), ["bell_hook", "turn_end"]);
         row.bell = false;
         assert_eq!(busy_letter_paths(&row), ["turn_end"]);

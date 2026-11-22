@@ -9,6 +9,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { INTERFACE_LANGUAGES } from "./i18n/locale";
 import { CHAPTERS } from "./practice/chapters";
+import { SETTINGS_GROUPS } from "./settings";
 import { parseReleaseFeed, RELEASE_DRAWINGS } from "./releases";
 
 const FILE = path.resolve(__dirname, "releases.json");
@@ -30,6 +31,17 @@ describe("web/src/releases.json", () => {
       for (const highlight of row.highlights) {
         expect(RELEASE_DRAWINGS, `${row.version} drawing`).toContain(highlight.drawing);
         if (highlight.chapter !== null) expect(chapters.has(highlight.chapter), `${row.version} chapter ${highlight.chapter}`).toBe(true);
+      }
+    }
+  });
+
+  it("names only Settings pages the app has, and only for a feature no chapter teaches", () => {
+    const pages = new Set<string>(SETTINGS_GROUPS.flatMap((group) => group.tabs));
+    for (const row of feed.versions) {
+      for (const highlight of row.highlights) {
+        if (highlight.settings === null) continue;
+        expect(pages.has(highlight.settings), `${row.version} settings ${highlight.settings}`).toBe(true);
+        expect(highlight.chapter, `${row.version} names both a chapter and a Settings page`).toBeNull();
       }
     }
   });
