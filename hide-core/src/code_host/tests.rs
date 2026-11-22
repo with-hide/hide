@@ -1096,3 +1096,53 @@ fn the_session_readers_hosts_are_the_registrys_and_their_names_are_its_keys() {
     assert_eq!(hosts.recorded(None), Some(hosts.before_hosts()));
     assert_eq!(hosts.recorded(Some("")), Some(hosts.before_hosts()));
 }
+
+#[test]
+fn a_record_key_is_the_units_answer_and_a_host_without_its_own_is_its_repository_key() {
+    const UNITS: &[&dyn CodeHost] = &[
+        &crate::github::host::GITHUB,
+        &crate::gitlab::host::GITLAB,
+        &PLAIN,
+    ];
+    let hosts = CodeHosts::new(UNITS, &crate::github::host::GITHUB);
+    // A host with no record form of its own keys a repository by its
+    // repository key, server and folding included, case and all.
+    for stored in [
+        "gitlab.com/Acme/Platform/App",
+        "gitlab.com/acme/platform/app",
+        "code.example/Acme/App",
+        "code.example/acme/Sub/App",
+    ] {
+        let (host, repository) = hosts.repository(stored).unwrap();
+        assert_eq!(
+            hosts.record_name(&repository).unwrap(),
+            host.repository_key(&repository),
+            "{stored}"
+        );
+        assert_eq!(
+            hosts.record_id(&repository, "7").unwrap(),
+            format!("{}/7", repository.authority),
+            "{stored}"
+        );
+    }
+    // Two spellings of one gitlab.com project share a key; the base-only
+    // host, which reads paths in their case, keeps two.
+    let key = |stored: &str| {
+        let repository = hosts.repository(stored).unwrap().1;
+        hosts.record_name(&repository).unwrap()
+    };
+    assert_eq!(key("gitlab.com/Acme/App"), key("gitlab.com/acme/app"));
+    assert_ne!(key("code.example/Acme/App"), key("code.example/acme/app"));
+    assert_ne!(key("gitlab.com/acme/app"), key("code.example/acme/app"));
+    // GitHub keeps what its records have always held: the bare path in lower
+    // case on github.com and on an Enterprise server, and the bare id.
+    for (stored, record) in [
+        ("Acme/App", "acme/app"),
+        ("github.com/Acme/App", "acme/app"),
+        ("ghe.example/Acme/App", "acme/app"),
+    ] {
+        let repository = hosts.repository(stored).unwrap().1;
+        assert_eq!(hosts.record_name(&repository).unwrap(), record, "{stored}");
+        assert_eq!(hosts.record_id(&repository, "R_1").unwrap(), "R_1");
+    }
+}

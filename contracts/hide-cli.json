@@ -8264,7 +8264,10 @@
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
-                "mission_machine_no_repository"
+                "mission_machine_no_repository",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9421,7 +9424,10 @@
                 "plan_file_outside",
                 "plan_file_missing",
                 "plan_file_unconfirmed",
-                "plan_report_missing"
+                "plan_report_missing",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9469,7 +9475,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:f507563ff68275ffcb74ef689ccacc66a482782d0e4f3ebdb934bb2ab78c8cd4",
+    "digest": "sha256:fc3b258ca38302127a895020db042a10e1e90830e2857e11c38975a3d73883cb",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9546,7 +9552,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
-        "change_request": "a change request's number above 0, bare, with its host's label (#12 on GitHub, !12 on gitlab.com) or as its address",
+        "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
         "commit": "7 to 64 hexadecimal digits",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",

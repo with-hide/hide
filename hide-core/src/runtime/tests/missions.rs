@@ -20590,3 +20590,137 @@ fn an_own_mode_bot_lists_and_shows_the_missions_its_agents_conduct_only() {
         Some(crate::access::NOT_OWN_WORK)
     );
 }
+
+/// The project's repository read as `stored`'s, as its host answered it.
+fn read_as(stored: &str) -> GithubSnapshot {
+    let mut project = GithubProjectSnapshot {
+        pull_requests_read: true,
+        root_path: PROJECT.into(),
+        ..Default::default()
+    };
+    project.repository = crate::code_host::CodeHosts::STANDARD
+        .repository(stored)
+        .map(|(host, repository)| crate::model::RepositoryIdentity::named(host.unit(), repository));
+    GithubSnapshot {
+        projects: vec![project],
+    }
+}
+
+/// A node's `--pr` or `--base-pr` written with another host's label, or as
+/// an address of another host or repository, attaches nothing and says
+/// which project's change request it expected, never what was written; the
+/// project's own forms and a bare number attach, as does an event from an
+/// older `hide` that sends the number alone.
+#[test]
+fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_nothing() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let held = |runtime: &Runtime| {
+        let node = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        (node.prs.clone(), node.base_pr)
+    };
+    let node = |runtime: &mut Runtime, patch: Value| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": patch}),
+        )
+        .map(|_| ())
+        .map_err(|refusal| {
+            let (code, detail) = crate::coordination::split_refusal(&refusal);
+            (code.to_owned(), detail.map(str::to_owned))
+        })
+    };
+    // While the project's repository is not read, only a bare number.
+    assert_eq!(
+        node(
+            &mut runtime,
+            json!({"pr": 12, "pr_place": {"host": "github"}})
+        ),
+        Err(("change_request_project_unknown".to_owned(), None))
+    );
+    node(&mut runtime, json!({"pr": 3})).unwrap();
+
+    runtime.github = read_as("acme/app");
+    for (patch, code, detail) in [
+        (
+            json!({"pr": 12, "pr_place": {"host": "gitlab"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+        (
+            json!({"pr": 12, "pr_place": {"host": "gitlab", "repository": "gitlab.com/acme/app"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+        (
+            json!({"pr": 12, "pr_place": {"host": "github", "repository": "acme/other"}}),
+            "change_request_other_repository",
+            "acme/app",
+        ),
+        (
+            json!({"pr": 12, "base_pr": 2, "base_pr_place": {"host": "gitlab"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+    ] {
+        assert_eq!(
+            node(&mut runtime, patch.clone()),
+            Err((code.to_owned(), Some(detail.to_owned()))),
+            "{patch}"
+        );
+        assert_eq!(held(&runtime), (vec![3], None), "{patch}");
+    }
+    for patch in [
+        json!({"pr": 12}),
+        json!({"pr": 13, "pr_place": {"host": "github"}}),
+        json!({"pr": 14, "pr_place": {"host": "github", "repository": "acme/app"}, "base_pr": 2}),
+    ] {
+        node(&mut runtime, patch.clone()).unwrap();
+    }
+    assert_eq!(held(&runtime).1, Some(2));
+    assert!(
+        held(&runtime).0.ends_with(&[12, 13, 14]),
+        "{:?}",
+        held(&runtime)
+    );
+
+    // On a gitlab.com project `#12` is GitHub's label and `!12` its own.
+    runtime.github = read_as("gitlab.com/acme/app");
+    assert_eq!(
+        node(
+            &mut runtime,
+            json!({"pr": 15, "pr_place": {"host": "github"}})
+        ),
+        Err((
+            "change_request_other_host".to_owned(),
+            Some("GitLab".to_owned())
+        ))
+    );
+    node(
+        &mut runtime,
+        json!({"pr": 15, "pr_place": {"host": "gitlab"}}),
+    )
+    .unwrap();
+    node(
+        &mut runtime,
+        json!({"pr": 16, "pr_place": {"host": "gitlab", "repository": "gitlab.com/acme/app"}}),
+    )
+    .unwrap();
+}

@@ -30,6 +30,12 @@ pub(crate) trait SessionHost: Sync {
     /// The program name of the host's command line tool.
     fn program(&self) -> &'static str;
 
+    /// Whether `server` (lower case) is one the host is known by name, as
+    /// its core unit's `names_server` answers: a host that also reads
+    /// servers it does not name (GitHub Enterprise) never takes one of
+    /// these.
+    fn names_server(&self, server: &str) -> bool;
+
     /// Read one call of the host's program: `args` are the words after the
     /// program, `assignments` the `NAME=value` words before it.
     fn command(&self, args: &[String], assignments: &[&str], place: &Place, found: &mut Found);
@@ -104,6 +110,14 @@ pub(crate) fn recorded_key(key: &'static str) -> Option<String> {
     (key != BEFORE_HOSTS.key()).then(|| key.to_owned())
 }
 
+/// Whether a registered host other than `key`'s names `server`.
+pub(crate) fn named_by_another(key: &str, server: &str) -> bool {
+    let server = server.to_ascii_lowercase();
+    STANDARD
+        .iter()
+        .any(|host| host.key() != key && host.names_server(&server))
+}
+
 /// The host whose program a command word names.
 pub(crate) fn of_program(program: &str) -> Option<&'static dyn SessionHost> {
     STANDARD
@@ -123,6 +137,25 @@ pub(crate) fn assigned<'a>(assignments: &[&'a str], name: &str) -> Option<&'a st
 /// The GitHub issue addresses in `text`, each with where it starts.
 pub(crate) fn issue_addresses_in(text: &str) -> Vec<(usize, String, u64)> {
     github::issue_addresses_in(text)
+}
+
+/// Whether the address that reaches `text[start..]` (where its server
+/// starts) carries a user part: an `@` anywhere in its word before the
+/// server, as in `https://user:secret@server/...`. Such an address is no
+/// reference on any host, so a credential written into one is never read,
+/// kept or logged. The word starts after whitespace or a quote or bracket.
+pub(crate) fn carries_user(text: &str, start: usize) -> bool {
+    text[..start]
+        .bytes()
+        .rev()
+        .take_while(|byte| {
+            !byte.is_ascii_whitespace()
+                && !matches!(
+                    byte,
+                    b'"' | b'\'' | b'`' | b'<' | b'>' | b'(' | b')' | b'[' | b']' | b'{' | b'}'
+                )
+        })
+        .any(|byte| byte == b'@')
 }
 
 /// A path part of a repository: what a host lets a name be.

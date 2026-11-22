@@ -606,6 +606,79 @@ gh pr view 5",
         );
     }
 
+    /// Every written form of a repository override that named a repository
+    /// before an unreadable one named nothing still names it.
+    #[test]
+    fn a_gh_repository_override_that_named_a_repository_still_does() {
+        for written in [
+            "acme/app",
+            "Acme/App",
+            "acme/app/",
+            "acme/app.git",
+            "github.com/acme/app",
+            "https://github.com/acme/app",
+            "http://github.com/acme/app",
+            "https://github.com/acme/app/",
+            "https://github.com/acme/app.git",
+            "my.org/app",
+        ] {
+            let expected = written
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_start_matches("github.com/")
+                .trim_end_matches('/')
+                .trim_end_matches(".git")
+                .to_owned();
+            for command in [
+                format!("gh pr view 5 -R {written}"),
+                format!("gh pr view 5 --repo={written}"),
+                format!("GH_REPO={written} gh pr view 5"),
+                format!("gh browse 5 -R {written}"),
+            ] {
+                assert_eq!(shell_call(&command), vec![at(&expected, 5)], "{command}");
+            }
+        }
+    }
+
+    /// An override in force that names no repository this reading can place
+    /// names nothing, rather than the folder's pull request of that number:
+    /// an address with a user part, a server another host names, a path
+    /// that is no repository. `-R` wins over `GH_REPO`, and an Enterprise
+    /// server's `host/owner/name` names that server's repository.
+    #[test]
+    fn a_gh_repository_override_that_names_no_repository_names_nothing() {
+        for command in [
+            "gh pr view 12 -R https://other.example/acme/app/extra",
+            "gh pr view 12 -R https://user:secret@github.com/acme/app",
+            "gh pr view 12 -R git@github.com:acme/app.git",
+            "gh pr view 12 -R gitlab.com/acme/app",
+            "gh pr view 12 -R acme",
+            "gh pr view 12 -R localhost:8080/acme/app",
+            "GH_REPO=gitlab.com/acme/app gh pr view 12",
+            "GH_REPO=https://user:secret@github.com/acme/app gh pr view 12",
+            "GH_REPO=acme gh api repos/{owner}/{repo}/pulls/12",
+            "GH_REPO=acme/app gh pr view 12 -R gitlab.com/acme/app",
+        ] {
+            assert_eq!(shell_call(command), vec![], "{command}");
+        }
+        assert_eq!(
+            shell_call("GH_REPO=gitlab.com/acme/app gh pr view 12 -R acme/app"),
+            vec![at("acme/app", 12)]
+        );
+        assert_eq!(
+            shell_call("GH_REPO=acme/app gh api repos/{owner}/{repo}/pulls/12"),
+            vec![at("acme/app", 12)]
+        );
+        assert_eq!(shell_call("GH_REPO= gh pr view 12"), vec![here(12)]);
+        for written in ["ghe.example/acme/app", "https://GHE.example/acme/app.git"] {
+            assert_eq!(
+                shell_call(&format!("gh pr view 12 -R {written}")),
+                vec![at("ghe.example/acme/app", 12)],
+                "{written}"
+            );
+        }
+    }
+
     #[test]
     fn a_gh_api_path_under_one_pull_request_names_it() {
         assert_eq!(
@@ -863,8 +936,8 @@ gh pr view 5",
     }
 
     /// `glab mr note` takes a note's id before the merge request on the
-    /// commands that act on one note; a token in an address's user part, or
-    /// a group with a dotted name, is read as `glab` reads it.
+    /// commands that act on one note; an address with a user part names
+    /// nothing, and a group with a dotted name is read as `glab` reads it.
     #[test]
     fn a_glab_call_names_the_merge_request_and_not_a_note_or_a_credential() {
         let project = Some("gitlab.com/acme/app");
@@ -873,8 +946,14 @@ gh pr view 5",
             ("glab mr note resolve 3f2a 7", vec![on_gitlab(None, 7)]),
             ("glab mr note draft list", vec![]),
             ("glab mr show 7 -R acme/app", vec![on_gitlab(project, 7)]),
+            // Any user part, a Git login's included, is never read.
+            ("glab mr view 7 -R git@gitlab.com:acme/app.git", vec![]),
             (
-                "glab mr view 7 -R git@gitlab.com:acme/app.git",
+                "glab mr view 7 -R ssh://git@gitlab.com/acme/app.git",
+                vec![],
+            ),
+            (
+                "glab mr view 7 -R ssh://gitlab.com/acme/app.git",
                 vec![on_gitlab(project, 7)],
             ),
             (
@@ -889,6 +968,35 @@ gh pr view 5",
             (
                 "GITLAB_HOST=https://gitlab.com glab mr view 7",
                 vec![on_gitlab(None, 7)],
+            ),
+        ] {
+            assert_eq!(shell_call(command), expected, "{command}");
+        }
+    }
+
+    /// A short flag takes a value on one `glab mr` verb and is a switch on
+    /// another: a number given as `update`'s description or `approve`'s SHA
+    /// is not the merge request, and the merge request after `merge -d` or
+    /// `view -s` is.
+    #[test]
+    fn a_glab_flags_value_is_read_by_its_verb_and_never_taken_for_the_merge_request() {
+        for (command, expected) in [
+            ("glab mr update -d 77 12", vec![on_gitlab(None, 12)]),
+            (
+                "glab mr update --description 77 12",
+                vec![on_gitlab(None, 12)],
+            ),
+            ("glab mr update -t 99 -m 3 12 -y", vec![on_gitlab(None, 12)]),
+            ("glab mr update -d 77", vec![]),
+            ("glab mr merge -d 12", vec![on_gitlab(None, 12)]),
+            ("glab mr merge -s -d -m 5 12", vec![on_gitlab(None, 12)]),
+            ("glab mr approve -s 1234 12", vec![on_gitlab(None, 12)]),
+            ("glab mr view -s 12", vec![on_gitlab(None, 12)]),
+            ("glab mr view -p 2 12", vec![on_gitlab(None, 12)]),
+            ("glab mr checkout -b 5 12", vec![on_gitlab(None, 12)]),
+            (
+                "glab mr note create --line 42 12 -m x",
+                vec![on_gitlab(None, 12)],
             ),
         ] {
             assert_eq!(shell_call(command), expected, "{command}");

@@ -1999,6 +1999,9 @@ pub const COMMANDS: &[Spec] = &[
             "mission_machine_unavailable",
             "mission_projects_loading",
             "mission_machine_no_repository",
+            "change_request_other_host",
+            "change_request_other_repository",
+            "change_request_project_unknown",
         ],
     },
     Spec {
@@ -2475,6 +2478,9 @@ pub const COMMANDS: &[Spec] = &[
             "plan_file_missing",
             "plan_file_unconfirmed",
             "plan_report_missing",
+            "change_request_other_host",
+            "change_request_other_repository",
+            "change_request_project_unknown",
         ],
     },
     Spec {
@@ -2643,7 +2649,7 @@ fn body() -> Value {
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "span": "whole minutes or hours, such as 30m or 2h",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
-            "change_request": "a change request's number above 0, bare, with its host's label (#12 on GitHub, !12 on gitlab.com) or as its address",
+            "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
             "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
                 "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",

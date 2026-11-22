@@ -844,6 +844,51 @@ fn a_glab_reference_that_names_no_gitlab_com_project_names_nothing_in_every_form
     }
 }
 
+/// An address with a user part is no reference on either host, in every
+/// format and every path: printed by a tool, given to `-R` or `GH_REPO`, or
+/// given back by a call that makes one. Nothing of it is kept, so the
+/// credential it carries never leaves the reader.
+#[test]
+fn an_address_with_a_user_part_is_no_reference_in_every_format() {
+    for address in [
+        "https://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+        "https://user:example-secret@github.com/acme/app/pull/12",
+        "https://example-secret@www.github.com/acme/app/pull/12",
+        "user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+    ] {
+        for call in [
+            "bash scripts/ship.sh",
+            "glab mr create --fill --yes",
+            "gh pr create --fill",
+            "git push -o merge_request.create origin fix/x",
+        ] {
+            for (format, _, facts) in every_format(call, address) {
+                // Some fixtures print another pull request beside it.
+                assert!(
+                    facts.prs.iter().all(|pr| pr.number != 12),
+                    "{format}: {call}: {address}"
+                );
+                assert_eq!(named(&facts), vec![], "{format}: {call}: {address}");
+                let kept = format!("{facts:?}");
+                assert!(!kept.contains("example-secret"), "{format}: {call}: {kept}");
+            }
+        }
+    }
+    for call in [
+        "glab mr view 12 -R https://oauth2:example-secret@gitlab.com/acme/platform/app",
+        "glab mr checkout https://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+        "gh pr view 12 -R https://user:example-secret@github.com/acme/app",
+        "GH_REPO=https://user:example-secret@github.com/acme/app gh pr view 12",
+        "gh pr checkout https://user:example-secret@github.com/acme/app/pull/12",
+    ] {
+        for (format, _, facts) in every_format(call, MERGE_REQUEST) {
+            assert_eq!(named(&facts), vec![], "{format}: {call}");
+            let kept = format!("{facts:?}");
+            assert!(!kept.contains("example-secret"), "{format}: {call}: {kept}");
+        }
+    }
+}
+
 /// A merge request made by a push option is that push's making in every
 /// format that pairs a call with its output, as `glab mr create` is.
 #[test]

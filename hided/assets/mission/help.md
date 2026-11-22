@@ -298,6 +298,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   Writing code, CI, review and the merge wait are all `working`; what waits on you or the operator is the node's raise (below), not a status.
 - Keep each node's line current: `--line` says what it does now, its conclusion or its check's result; `--pr`, `--base-pr` and `--branch` name what it made.
   `--pr <n>` (a number, `#12`, gitlab.com's `!12`, or its address; `--base-pr` the same) adds a pull request to the node as its current one, keeping those it holds; `--no-pr` lets go of every one.
+  A label or address of another host, or an address of another repository, than the mission's project is refused (`change_request_other_host`, `change_request_other_repository`), and while the project's repository is not read yet only a bare number is taken (`change_request_project_unknown`).
   When a `direct` change reaches the destination, record its commit with `--commit <sha>`; when a general node ends with a judgment (a `verify` node always, any other that checked something), record `--verdict pass|fail` and `--checks <passed>/<total>`.
   Hide refuses a commit on any other node and a verdict on a code or waiting node (`mission_field_kind_invalid`), and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, when an outside node is in main, and when a finish line another node waits on passes or opens again (above).

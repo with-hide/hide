@@ -213,9 +213,9 @@ fn minutes(flag: &str, value: &str) -> Result<u32, String> {
 
 /// A pull request's number, written bare, with its host's label (`#12`,
 /// `!12`) or as its address; the node's project is the one it is read in.
-fn number(flag: &str, value: &str) -> Result<u32, String> {
+fn number(flag: &str, value: &str) -> Result<(u32, hide_core::ChangeRequestPlace), String> {
     hide_core::written_change_request(value)
-        .and_then(|written| u32::try_from(written.number).ok())
+        .and_then(|written| Some((u32::try_from(written.number).ok()?, written.place())))
         .ok_or_else(|| format!("{flag} takes a pull request number"))
 }
 
@@ -359,11 +359,25 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let text = |value: &str, clear: &str| -> Result<Option<Option<String>>, String> {
                 Ok(one(&values, &set, value, clear)?.map(|value| value.map(str::to_owned)))
             };
-            let pr = |flag: &str, clear: &str| -> Result<Option<Option<u32>>, String> {
-                one(&values, &set, flag, clear)?
+            // The number, and where its label or address said it is, which
+            // the core holds to the mission's project.
+            type Written = (Option<Option<u32>>, Option<hide_core::ChangeRequestPlace>);
+            let pr = |flag: &str, clear: &str| -> Result<Written, String> {
+                let written = one(&values, &set, flag, clear)?
                     .map(|value| value.map(|value| number(flag, value)).transpose())
-                    .transpose()
+                    .transpose()?;
+                let place = written
+                    .as_ref()
+                    .and_then(|written| written.as_ref())
+                    .map(|(_, place)| place.clone())
+                    .filter(|place| !place.is_bare());
+                Ok((
+                    written.map(|written| written.map(|(number, _)| number)),
+                    place,
+                ))
             };
+            let (pr_number, pr_place) = pr("--pr", "--no-pr")?;
+            let (base_pr, base_pr_place) = pr("--base-pr", "--no-base-pr")?;
             let agent_id = text("--agent-id", "--no-agent-id")?;
             if agent_id
                 .as_ref()
@@ -375,8 +389,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let patch = NodePatch {
                 status,
                 agent_id,
-                pr: pr("--pr", "--no-pr")?,
-                base_pr: pr("--base-pr", "--no-base-pr")?,
+                pr: pr_number,
+                base_pr,
+                pr_place,
+                base_pr_place,
                 branch: text("--branch", "--no-branch")?,
                 attempts: values
                     .get("--attempts")
@@ -966,10 +982,20 @@ mod tests {
         assert!(parse(both.iter()).is_err());
         let zero = words(&["node", "a", "--pr", "0"]);
         assert!(parse(zero.iter()).is_err());
-        for written in [
-            "!12",
-            "#12",
-            "https://gitlab.com/acme/sub/app/-/merge_requests/12",
+        // The label or address goes to the core beside the number, which
+        // holds it to the mission's project; a bare number carries none.
+        let place = |host: &str, repository: Option<&str>| hide_core::ChangeRequestPlace {
+            host: Some(host.to_owned()),
+            repository: repository.map(str::to_owned),
+        };
+        for (written, expected) in [
+            ("12", None),
+            ("!12", Some(place("gitlab", None))),
+            ("#12", Some(place("github", None))),
+            (
+                "https://gitlab.com/acme/sub/app/-/merge_requests/12",
+                Some(place("gitlab", Some("gitlab.com/acme/sub/app"))),
+            ),
         ] {
             let merge_request = words(&["node", "a", "--pr", written, "--base-pr", "!3"]);
             let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =
@@ -982,6 +1008,8 @@ mod tests {
                 (Some(Some(12)), Some(Some(3))),
                 "{written}"
             );
+            assert_eq!(patch.pr_place, expected, "{written}");
+            assert_eq!(patch.base_pr_place, Some(place("gitlab", None)));
         }
         assert!(parse(words(&["node", "a", "--pr", "!x"]).iter()).is_err());
         // The Conductor sets working, done or dropped; Hide keeps the rest.

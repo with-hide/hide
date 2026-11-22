@@ -99,6 +99,59 @@ pub struct WrittenChangeRequest {
     pub repository: Option<String>,
 }
 
+impl WrittenChangeRequest {
+    /// Where it says the change request is, beside its number.
+    pub fn place(&self) -> ChangeRequestPlace {
+        ChangeRequestPlace {
+            host: self.host.clone(),
+            repository: self.repository.clone(),
+        }
+    }
+}
+
+/// Where a written change request says it is (a `--pr` option's label or
+/// address): what an event carries beside the number, so the owner that
+/// knows the project can refuse one of another host or repository
+/// ([`CodeHosts::admit_place`]). Both `None` for a bare number, which is
+/// how an event without it reads.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ChangeRequestPlace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+
+impl ChangeRequestPlace {
+    /// Whether it names nothing beside the number.
+    pub fn is_bare(&self) -> bool {
+        self.host.is_none() && self.repository.is_none()
+    }
+}
+
+/// The refusals of [`CodeHosts::admit_place`] that carry what was expected.
+pub const PLACE_REFUSALS: [&str; 2] = [
+    "change_request_other_host",
+    "change_request_other_repository",
+];
+
+/// What to do after a refusal of [`CodeHosts::admit_place`], for the
+/// mission's and the task's own next actions.
+pub fn place_next_action(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "change_request_other_host" => {
+            "That change request is of another host than this project's (the reason names the project's host): give its number bare, with the project's host's label, or as its address"
+        }
+        "change_request_other_repository" => {
+            "That address is of another repository than this project's (the reason names the project's): give the number of this project's change request"
+        }
+        "change_request_project_unknown" => {
+            "Hide has not read this project's repository yet: give the number bare, or run the command again once the project's change requests show"
+        }
+        _ => return None,
+    })
+}
+
 /// Read `word` as [`WrittenChangeRequest`], or `None` for anything else.
 pub fn written_change_request(word: &str) -> Option<WrittenChangeRequest> {
     let hosts = CodeHosts::STANDARD;
@@ -368,6 +421,20 @@ pub(crate) trait CodeHost: Sync {
     /// common code and the screen compare references by equality alone.
     fn repository_key(&self, repository: &RepositoryRef) -> String;
 
+    /// The name the link record and a session's references key
+    /// `repository` by: its [`repository_key`](Self::repository_key), which
+    /// already carries the server, unless the host's records held another
+    /// form before hosts were named.
+    fn record_name(&self, repository: &RepositoryRef) -> String {
+        self.repository_key(repository)
+    }
+
+    /// The record's key for the host's own id of `repository`: the id under
+    /// the repository's server, so two hosts' ids never meet.
+    fn record_id(&self, repository: &RepositoryRef, id: &str) -> String {
+        format!("{}/{id}", repository.authority)
+    }
+
     /// Whether the host finds a checkout's repository itself from the
     /// checkout's remotes, so a checkout whose remotes Hide does not know is
     /// read in place ([`Place::Checkout`]).
@@ -592,32 +659,53 @@ impl CodeHosts {
             .is_some_and(|host| host.names_server(&repository.authority))
     }
 
-    /// The name the link record and a session's references key
-    /// `repository` by, the one place it is folded: its host's stored name
-    /// in lower case, as a session's reader spells it (`hide_session::hosts`),
-    /// so github.com's is the bare `owner/name` the record has always held
-    /// and gitlab.com's carries its server (`gitlab.com/group/project`); on a
-    /// server its host does not name (GitHub Enterprise), its path, as the
-    /// record held it before hosts. `None` for a host not registered.
-    pub(crate) fn record_name(self, repository: &RepositoryRef) -> Option<String> {
-        let host = self.of(repository)?;
-        let name = if host.names_server(&repository.authority) {
-            host.stored_name(repository)
-        } else {
-            repository.path.clone()
+    /// Whether a change request written at `place` can be one of the
+    /// project whose repository is `project`: a bare number always is; a
+    /// label or address of another host, or an address of another
+    /// repository, is refused, and so is anything but a bare number while
+    /// the project's repository is not known. The refusal names what was
+    /// expected, never what was written, which may carry a credential.
+    pub(crate) fn admit_place(
+        self,
+        place: &ChangeRequestPlace,
+        project: Option<&RepositoryRef>,
+    ) -> Result<(), String> {
+        if place.is_bare() {
+            return Ok(());
+        }
+        let Some((host, project)) = project.and_then(|project| Some((self.of(project)?, project)))
+        else {
+            return Err("change_request_project_unknown".into());
         };
-        Some(name.to_ascii_lowercase())
+        if place.host.as_deref().is_some_and(|key| key != host.key()) {
+            return Err(crate::coordination::refusal(
+                "change_request_other_host",
+                host.name(),
+            ));
+        }
+        if let Some(repository) = &place.repository
+            && Some(repository) != self.record_name(project).as_ref()
+        {
+            return Err(crate::coordination::refusal(
+                "change_request_other_repository",
+                &host.stored_name(project),
+            ));
+        }
+        Ok(())
     }
 
-    /// The record's key for the host's own id of `repository`: the id under
-    /// the server part of its record name, so two hosts' ids never meet
-    /// (`gitlab.com/<id>`), and github.com's bare id as it always was.
+    /// The name the link record and a session's references key
+    /// `repository` by, as its host answers it ([`CodeHost::record_name`]).
+    /// `None` for a host not registered.
+    pub(crate) fn record_name(self, repository: &RepositoryRef) -> Option<String> {
+        self.of(repository).map(|host| host.record_name(repository))
+    }
+
+    /// The record's key for the host's own id of `repository`, as its host
+    /// answers it ([`CodeHost::record_id`]).
     pub(crate) fn record_id(self, repository: &RepositoryRef, id: &str) -> Option<String> {
-        let name = self.record_name(repository)?;
-        let server = name
-            .strip_suffix(&repository.path.to_ascii_lowercase())
-            .unwrap_or_default();
-        Some(format!("{server}{id}"))
+        self.of(repository)
+            .map(|host| host.record_id(repository, id))
     }
 
     fn best(self, read: impl Fn(Host) -> Option<RepositoryRef>) -> Option<(Host, RepositoryRef)> {

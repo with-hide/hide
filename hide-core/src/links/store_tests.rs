@@ -1760,8 +1760,108 @@ fn a_merge_request_and_a_pull_request_of_one_name_and_number_link_only_their_own
     );
 }
 
+/// `gh pr view 7` and `glab mr view 7` in one session and one folder are
+/// two references, whichever comes first: each links the session to its own
+/// host's change request, and appending to the file or opening the record
+/// again keeps both.
+#[test]
+fn one_session_naming_seven_on_both_hosts_keeps_both_in_either_order() {
+    use std::io::Write as _;
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let gitlab = ProjectFacts {
+        key: "project:gl".into(),
+        root: "/work/gl".into(),
+        repository: Some("gitlab.com/acme/app".into()),
+        repository_id: Some("gitlab.com/gid://gitlab/Project/1".into()),
+        worktrees: Vec::new(),
+        ..project(vec![PrFact {
+            repository: "gitlab.com/acme/app".into(),
+            url: "https://gitlab.com/acme/app/-/merge_requests/7".into(),
+            ..pr(7, "feat/y", T0, None)
+        }])
+    };
+    let sessions = |store: &LinkStore, project: &str| -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .pr_panel(project, 7, Some(here()))
+            .unwrap()
+            .unwrap()
+            .sessions
+            .into_iter()
+            .map(|line| line.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        store
+            .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+            .unwrap();
+        store.apply_project(&gitlab, T0).unwrap();
+        for (id, cwd, command) in [
+            ("s-gl-a", "/work/gl", "gh pr view 7; glab mr view 7"),
+            ("s-gl-b", "/work/gl", "glab mr view 7; gh pr view 7"),
+            ("s-gh-a", ROOT, "gh pr view 7; glab mr view 7"),
+            ("s-gh-b", ROOT, "glab mr view 7; gh pr view 7"),
+        ] {
+            let file = claude_call(home.path(), id, cwd, T0 + 10 * MIN, "봐 줘", command, None);
+            ingest(&mut store, home.path(), &file);
+        }
+        // A session that names GitHub's 7 first and gitlab.com's later, in
+        // a turn appended to its file.
+        let file = claude_call(
+            home.path(),
+            "s-append",
+            "/work/gl",
+            T0 + 10 * MIN,
+            "봐 줘",
+            "gh pr view 7",
+            None,
+        );
+        ingest(&mut store, home.path(), &file);
+        assert_eq!(sessions(&store, "project:gl"), ["s-gl-a", "s-gl-b"]);
+        let later = tempfile::tempdir().unwrap();
+        let appended = claude_call(
+            later.path(),
+            "s-append",
+            "/work/gl",
+            T0 + 20 * MIN,
+            "이것도",
+            "glab mr view 7",
+            None,
+        );
+        let turn = fs::read_to_string(&appended)
+            .unwrap()
+            .replace("s-append-u", "s-append-u2")
+            .replace("s-append-a", "s-append-a2")
+            .replace("\"t1\"", "\"t2\"");
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(turn.as_bytes())
+            .unwrap();
+        ingest(&mut store, home.path(), &file);
+        assert_eq!(
+            sessions(&store, "project:gl"),
+            ["s-append", "s-gl-a", "s-gl-b"]
+        );
+        assert_eq!(sessions(&store, PROJECT), ["s-gh-a", "s-gh-b"]);
+    }
+    let (store, opened) = LinkStore::open(&path).unwrap();
+    assert_eq!(opened, Opened::Existing);
+    assert_eq!(rows(&store, "session_named_prs"), 10);
+    assert_eq!(
+        sessions(&store, "project:gl"),
+        ["s-append", "s-gl-a", "s-gl-b"]
+    );
+    assert_eq!(sessions(&store, PROJECT), ["s-gh-a", "s-gh-b"]);
+}
+
 /// A record from before named change requests kept their host (version
-/// 17) gains the column with nothing read again; its rows are of the host
+/// 17) is keyed by it with nothing read again and no row lost; its rows are of the host
 /// from before hosts. An older node's reader, which knows no `glab`,
 /// sends nothing for a `glab` call: nothing is named and nothing fails.
 #[test]
@@ -1787,12 +1887,41 @@ fn a_record_from_before_hosts_reads_its_named_numbers_as_github_and_reads_nothin
         store
             .connection
             .execute_batch(
-                "ALTER TABLE session_named_prs DROP COLUMN host; PRAGMA user_version=17;",
+                "CREATE TABLE named_17(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
+                     file TEXT NOT NULL, repo_name TEXT NOT NULL, number INTEGER NOT NULL,
+                     folder TEXT NOT NULL, at INTEGER NOT NULL, request TEXT,
+                     PRIMARY KEY(device, agent, id, repo_name, number, folder));
+                 INSERT INTO named_17 SELECT device,agent,id,file,repo_name,number,folder,at,request
+                     FROM session_named_prs;
+                 DROP TABLE session_named_prs;
+                 ALTER TABLE named_17 RENAME TO session_named_prs;
+                 PRAGMA user_version=17;",
             )
             .unwrap();
     }
     let (mut store, opened) = LinkStore::open(&path).unwrap();
     assert_eq!(opened, Opened::Existing);
+    let key: Vec<String> = store
+        .connection
+        .prepare("SELECT name FROM pragma_table_info('session_named_prs') WHERE pk > 0 ORDER BY pk")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        key,
+        [
+            "device",
+            "agent",
+            "id",
+            "host",
+            "repo_name",
+            "number",
+            "folder"
+        ]
+    );
+    assert_eq!(rows(&store, "session_named_prs"), 1, "every row is kept");
     assert_ne!(
         store
             .stamps(DEVICE)

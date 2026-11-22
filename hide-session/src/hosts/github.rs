@@ -13,6 +13,8 @@ pub(super) static GITHUB: Github = Github;
 
 const KEY: &str = "github";
 
+const SERVER_NAME: &str = "github.com";
+
 const SERVER: &str = "github.com/";
 
 /// The keys a GitHub tool takes a pull request's number under.
@@ -27,8 +29,14 @@ impl SessionHost for Github {
         "gh"
     }
 
+    fn names_server(&self, server: &str) -> bool {
+        server == SERVER_NAME
+    }
+
     fn command(&self, args: &[String], assignments: &[&str], place: &Place, found: &mut Found) {
-        let variable = assigned(assignments, "GH_REPO").and_then(repository_of);
+        let variable = assigned(assignments, "GH_REPO")
+            .filter(|value| !value.trim().is_empty())
+            .map(repository_of);
         gh(args, variable, place, found);
     }
 
@@ -89,7 +97,11 @@ impl SessionHost for Github {
 }
 
 /// `gh pr <verb> <target>`, `gh api <path>` and `gh browse <number>`.
-fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Found) {
+///
+/// `variable` is `GH_REPO`, and `-R` beside it wins: `None` when neither is
+/// given, `Some(None)` when the one in force names no repository this
+/// reading can place, which names nothing rather than the folder's.
+fn gh(args: &[String], variable: Option<Option<String>>, place: &Place, found: &mut Found) {
     let Some((subcommand, rest)) = args.split_first() else {
         return;
     };
@@ -119,7 +131,15 @@ fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Foun
             if let Some(endpoint) = endpoint
                 && let Some((repository, number)) = api_path(endpoint)
             {
-                name(KEY, repository, number, place, found);
+                // `{owner}/{repo}` stand for `GH_REPO`'s when it is given.
+                match (repository, variable) {
+                    (Some(repository), _) => name(KEY, Some(repository), number, place, found),
+                    (None, Some(Some(repository))) => {
+                        name(KEY, Some(repository), number, place, found);
+                    }
+                    (None, Some(None)) => {}
+                    (None, None) => name(KEY, None, number, place, found),
+                }
             }
             if endpoint.is_some_and(is_pulls_path) && api_posts(rest) {
                 found.creates = true;
@@ -134,7 +154,11 @@ fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Foun
     if let Some((repository, number)) = GITHUB.address(target) {
         found.push(KEY, Some(repository), number, None);
     } else if let Some(number) = pr_number(target.strip_prefix('#').unwrap_or(target)) {
-        name(KEY, repository.or(variable), number, place, found);
+        match repository.or(variable) {
+            Some(Some(repository)) => name(KEY, Some(repository), number, place, found),
+            Some(None) => {}
+            None => name(KEY, None, number, place, found),
+        }
     }
 }
 
@@ -219,24 +243,55 @@ const API_VALUE_FLAGS: &[&str] = &[
     "--preview",
 ];
 
-/// `-R owner/name`, `--repo owner/name`, `--repo=owner/name`, `-Rowner/name`.
-fn flag_repository(args: &[String]) -> Option<String> {
-    crate::named_prs::flag_value(args, "-R", "--repo").and_then(repository_of)
+/// `-R owner/name`, `--repo owner/name`, `--repo=owner/name`, `-Rowner/name`:
+/// `None` without one, `Some(None)` for one this reading cannot place.
+fn flag_repository(args: &[String]) -> Option<Option<String>> {
+    crate::named_prs::flag_value(args, "-R", "--repo").map(repository_of)
 }
 
-/// `owner/name`, `github.com/owner/name` or its address; another host is
-/// not GitHub's repository, and names nothing here.
+/// `owner/name`, `github.com/owner/name`, an Enterprise server's
+/// `host/owner/name`, or the address of one, as `gh` reads its
+/// `[HOST/]OWNER/REPO`. A server another host names (gitlab.com) is not
+/// GitHub's, and an address with a user part (which can carry a credential)
+/// is read as nothing.
 fn repository_of(value: &str) -> Option<String> {
-    let value = value
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let value = value.strip_prefix(SERVER).unwrap_or(value);
-    let mut parts = value.trim_end_matches('/').split('/');
-    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+    let value = value.trim();
+    if value.contains('@') {
         return None;
+    }
+    let value = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .unwrap_or(value)
+        .trim_end_matches('/');
+    let value = value.strip_suffix(".git").unwrap_or(value);
+    let parts: Vec<&str> = value.split('/').collect();
+    let (server, owner, name) = match parts.as_slice() {
+        [owner, name] => (None, *owner, *name),
+        [server, owner, name] => (Some(server.to_ascii_lowercase()), *owner, *name),
+        _ => return None,
     };
-    let name = name.strip_suffix(".git").unwrap_or(name);
-    (is_name(owner) && is_name(name)).then(|| format!("{owner}/{name}"))
+    if !is_name(owner) || !is_name(name) {
+        return None;
+    }
+    match server.as_deref() {
+        None | Some(SERVER_NAME | "www.github.com") => Some(format!("{owner}/{name}")),
+        Some(server) if is_server_name(server) && !super::named_by_another(KEY, server) => {
+            Some(format!("{server}/{owner}/{name}"))
+        }
+        Some(_) => None,
+    }
+}
+
+/// A server's name: dotted labels of letters, digits and `-`.
+fn is_server_name(server: &str) -> bool {
+    server.contains('.')
+        && server.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 /// `repos/<owner>/<name>/pulls/<number>` (or `issues/<number>`, which GitHub
@@ -296,6 +351,9 @@ fn addresses_at(text: &str, kind: &str) -> Vec<(usize, String, u64)> {
     while let Some(at) = text[from..].find(SERVER) {
         let start = from + at;
         from = start + SERVER.len();
+        if super::carries_user(text, start) {
+            continue;
+        }
         if let Some((repository, number)) = parse_address(&text[from..], kind)
             && !crate::sightings::keep_distinct(&mut found, (start, repository, number))
         {

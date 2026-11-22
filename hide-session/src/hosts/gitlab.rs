@@ -7,9 +7,9 @@
 //! number is read only where the command or the address says it is a merge
 //! request: `12` or `!12` after a `glab mr` verb, never `#12`. A project
 //! named by its numeric id, a server other than gitlab.com, or an address
-//! carrying credentials names nothing.
+//! with a user part (which can carry a credential) names nothing.
 
-use super::{SessionHost, assigned, is_name};
+use super::{SessionHost, assigned, carries_user, is_name};
 use crate::named_prs::{Found, Place, first_positional, flag_value, name, pr_number};
 
 pub(super) struct Gitlab;
@@ -35,6 +35,10 @@ impl SessionHost for Gitlab {
 
     fn program(&self) -> &'static str {
         "glab"
+    }
+
+    fn names_server(&self, server: &str) -> bool {
+        server == SERVER
     }
 
     fn command(&self, args: &[String], assignments: &[&str], place: &Place, found: &mut Found) {
@@ -78,7 +82,7 @@ impl SessionHost for Gitlab {
                 .bytes()
                 .next_back()
                 .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'));
-            if joined {
+            if joined || carries_user(text, start) {
                 continue;
             }
             if let Some((repository, number)) = change_request_after(&text[from..])
@@ -174,40 +178,86 @@ const MR_VERBS: [&str; 19] = [
     "show",
 ];
 
-/// `glab mr` flags whose value is the next word, so a number there is not
-/// the target. `-d` and `-s` take a value only on some verbs and are read
-/// as switches: a target after them is missed, never misread.
-const MR_VALUE_FLAGS: &[&str] = &[
-    "-R",
-    "--repo",
-    "-F",
-    "--output",
-    "-p",
-    "--page",
-    "-P",
-    "--per-page",
-    "--jq",
-    "-a",
-    "--assignee",
-    "--description",
-    "--description-file",
-    "-l",
-    "--label",
-    "-m",
-    "--milestone",
-    "--message",
-    "--reviewer",
-    "--state",
-    "-b",
-    "--target-branch",
-    "--source-branch",
-    "-t",
-    "--title",
-    "-u",
-    "--unlabel",
-    "--sha",
-    "--squash-message",
-];
+/// The `glab mr <verb>` flags whose value is the next word, so a number
+/// there is not the target, as `glab mr <verb> --help` lists them: a short
+/// flag means one thing on one verb and another on the next (`-d` is
+/// `update`'s description and `merge`'s switch to remove the source branch,
+/// `-s` `approve`'s SHA and `view`'s switch), so each verb has its own. A
+/// flag a verb does not list is read as a switch.
+fn value_flags(verb: &str) -> &'static [&'static str] {
+    match verb {
+        "update" => &[
+            "-R",
+            "--repo",
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "-l",
+            "--label",
+            "-m",
+            "--milestone",
+            "--reviewer",
+            "--state",
+            "--target-branch",
+            "-t",
+            "--title",
+            "-u",
+            "--unlabel",
+        ],
+        "merge" | "accept" => &[
+            "-R",
+            "--repo",
+            "-m",
+            "--message",
+            "--sha",
+            "--squash-message",
+        ],
+        "approve" => &["-R", "--repo", "-s", "--sha"],
+        "view" | "show" => &[
+            "-R",
+            "--repo",
+            "--jq",
+            "-F",
+            "--output",
+            "-p",
+            "--page",
+            "-P",
+            "--per-page",
+        ],
+        "checkout" => &[
+            "-R",
+            "--repo",
+            "-b",
+            "--branch",
+            "-u",
+            "--set-upstream-to",
+            "--worktree",
+        ],
+        "diff" => &["-R", "--repo", "--color"],
+        "approvers" => &["-R", "--repo", "--jq", "-F", "--output"],
+        "note" => &[
+            "-R",
+            "--repo",
+            "--attach",
+            "--file",
+            "--line",
+            "-m",
+            "--message",
+            "--old-line",
+            "--reply",
+            "--jq",
+            "-F",
+            "--output",
+            "--state",
+            "-t",
+            "--type",
+        ],
+        _ => &["-R", "--repo"],
+    }
+}
 
 /// `glab mr note` subcommands whose first word is a note or discussion
 /// id, before the merge request.
@@ -232,7 +282,7 @@ fn mr(args: &[String], place: &Place, found: &mut Found) {
         },
         None => None,
     };
-    let positionals = positionals(rest);
+    let positionals = positionals(rest, value_flags(verb));
     let target = if verb == "note" {
         match positionals.first().map(|word| word.as_str()) {
             Some("create" | "list") => positionals.get(1),
@@ -255,7 +305,7 @@ fn mr(args: &[String], place: &Place, found: &mut Found) {
 
 /// The words that are not flags or a value-taking flag's value, in order;
 /// everything after `--` is one.
-fn positionals(args: &[String]) -> Vec<&String> {
+fn positionals<'a>(args: &'a [String], value_flags: &[&str]) -> Vec<&'a String> {
     let mut out = Vec::new();
     let mut words = args.iter();
     while let Some(word) = words.next() {
@@ -264,7 +314,7 @@ fn positionals(args: &[String]) -> Vec<&String> {
             break;
         }
         if word.starts_with('-') && word.len() > 1 {
-            if MR_VALUE_FLAGS.contains(&word.as_str()) {
+            if value_flags.contains(&word.as_str()) {
                 words.next();
             }
             continue;
@@ -275,32 +325,27 @@ fn positionals(args: &[String]) -> Vec<&String> {
 }
 
 /// `-R` / `--repo`: `group/project`, `group/sub/project`, its gitlab.com
-/// address or its Git address. Another server's, or an address with a user
-/// part over `https`, is none.
+/// address or its `ssh://` address. Another server's, or any address with a
+/// user part, is none.
 fn repository_of(value: &str) -> Option<String> {
     let value = value.trim();
+    // A user part, a Git login's included, is never read (it can carry a
+    // credential).
+    if value.contains('@') {
+        return None;
+    }
     let path = if let Some(rest) = value
         .strip_prefix("https://")
         .or_else(|| value.strip_prefix("http://"))
     {
         let (server, path) = rest.split_once('/')?;
-        if server.contains('@') || !is_server(server) {
+        if !is_server(server) {
             return None;
         }
         path
     } else if let Some(rest) = value.strip_prefix("ssh://") {
         let (authority, path) = rest.split_once('/')?;
-        let server = authority
-            .rsplit_once('@')
-            .map_or(authority, |(_, server)| server);
-        if !is_server(server.split(':').next()?) {
-            return None;
-        }
-        path
-    } else if let Some((user_server, path)) = value.split_once(':')
-        && user_server.contains('@')
-    {
-        if !is_server(user_server.rsplit_once('@')?.1) {
+        if !is_server(authority.split(':').next()?) {
             return None;
         }
         path

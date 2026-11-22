@@ -944,3 +944,83 @@ fn a_shown_plan_carries_its_child_and_the_childs_plan() {
     assert_eq!(wire["evidence"], Value::Null);
     assert_eq!(wire["delegation"]["state"], "working");
 }
+
+/// A step's `--pr` written with another host's label, or as an address of
+/// another host or repository, is refused before anything is judged and
+/// names the project's host or repository, never what was written; the
+/// project's own forms go on to be judged as a bare number does.
+#[test]
+fn a_steps_change_request_of_another_host_or_repository_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, sender, _worker) = start(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    command(&mut runtime, &sender, plan(false)).unwrap();
+    let done = |place: Value| json!({"verb": "node", "key": "core", "status": "done", "pr": 12, "pr_place": place});
+    let refusal = |runtime: &mut Runtime, place: Value| {
+        let refused = turn(runtime, &sender, done(place), &Proofs::default())
+            .err()
+            .expect("refused");
+        let (code, detail) = crate::coordination::split_refusal(&refused);
+        (code.to_owned(), detail.map(str::to_owned))
+    };
+    assert_eq!(
+        refusal(&mut runtime, json!({"host": "github"})),
+        ("change_request_project_unknown".to_owned(), None),
+        "only a bare number while the project's repository is not read"
+    );
+    // The sender's checkout is its project's root in the worktree catalog.
+    let project = authority(&sender).context.checkout_path;
+    runtime
+        .worktree_catalog
+        .projects
+        .push(crate::model::ProjectWorktreesSnapshot {
+            root_path: project.clone(),
+            ..Default::default()
+        });
+    let mut read = crate::model::GithubProjectSnapshot {
+        pull_requests_read: true,
+        root_path: project,
+        ..Default::default()
+    };
+    read.repository = crate::code_host::CodeHosts::STANDARD
+        .repository("acme/app")
+        .map(|(host, repository)| crate::model::RepositoryIdentity::named(host.unit(), repository));
+    runtime.github = crate::model::GithubSnapshot {
+        projects: vec![read],
+    };
+    assert_eq!(
+        refusal(&mut runtime, json!({"host": "gitlab"})),
+        (
+            "change_request_other_host".to_owned(),
+            Some("GitHub".to_owned())
+        )
+    );
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"host": "github", "repository": "acme/other"})
+        ),
+        (
+            "change_request_other_repository".to_owned(),
+            Some("acme/app".to_owned())
+        )
+    );
+    for place in [
+        json!({"host": "github"}),
+        json!({"host": "github", "repository": "acme/app"}),
+    ] {
+        if let Err(refused) = turn(
+            &mut runtime,
+            &sender,
+            done(place.clone()),
+            &Proofs::default(),
+        ) {
+            assert!(
+                !crate::coordination::split_refusal(&refused)
+                    .0
+                    .starts_with("change_request_"),
+                "{place}: {refused}"
+            );
+        }
+    }
+}

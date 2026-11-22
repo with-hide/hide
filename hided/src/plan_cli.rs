@@ -177,16 +177,24 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             if status.is_none() && line.is_none() {
                 return Err("give --status, --line or both".into());
             }
-            let pr = values
+            // Bare, with its host's label (`#12`, `!12`) or as its address,
+            // whose place the core holds to the session's project. The
+            // refusal does not repeat what was written, which may carry a
+            // credential.
+            let written = values
                 .get("--pr")
                 .map(|number| {
-                    // Bare, with its host's label (`#12`, `!12`) or as its
-                    // address.
                     hide_core::written_change_request(number)
-                        .and_then(|written| u32::try_from(written.number).ok())
-                        .ok_or_else(|| format!("--pr takes a pull request number, not {number}"))
+                        .and_then(|written| Some((u32::try_from(written.number).ok()?, written.place())))
+                        .ok_or_else(|| {
+                            "--pr takes a change request's number, bare, with its host's label or as its address".to_owned()
+                        })
                 })
                 .transpose()?;
+            let pr = written.as_ref().map(|(number, _)| *number);
+            let pr_place = written
+                .map(|(_, place)| place)
+                .filter(|place| !place.is_bare());
             // A path is sent as every machine spells it, `/` between names,
             // and read from the session's checkout by the core (B12).
             let file = values
@@ -203,6 +211,7 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
                 status,
                 line,
                 pr,
+                pr_place,
                 file,
             }
         }
@@ -398,19 +407,47 @@ mod tests {
                 ..
             })
         ));
-        for written in [
-            "!1890",
-            "https://gitlab.com/acme/sub/app/-/merge_requests/1890",
+        // The label or address goes to the core with the number, which holds
+        // it to the session's project; a bare number carries no place.
+        for (written, host, repository) in [
+            ("1890", None, None),
+            ("#1890", Some("github"), None),
+            ("!1890", Some("gitlab"), None),
+            (
+                "https://gitlab.com/acme/sub/app/-/merge_requests/1890",
+                Some("gitlab"),
+                Some("gitlab.com/acme/sub/app"),
+            ),
         ] {
-            assert!(
-                matches!(
-                    parse(words(&["node", "pr", "--status", "done", "--pr", written]).iter())
-                        .unwrap(),
-                    PlanCli::Command(PlanCommand::Node { pr: Some(1890), .. })
-                ),
+            let Ok(PlanCli::Command(PlanCommand::Node { pr, pr_place, .. })) =
+                parse(words(&["node", "pr", "--status", "done", "--pr", written]).iter())
+            else {
+                panic!("{written}");
+            };
+            assert_eq!(pr, Some(1890), "{written}");
+            assert_eq!(
+                pr_place,
+                (host.is_some() || repository.is_some()).then(|| hide_core::ChangeRequestPlace {
+                    host: host.map(str::to_owned),
+                    repository: repository.map(str::to_owned),
+                }),
                 "{written}"
             );
         }
+        let refused = parse(
+            words(&[
+                "node",
+                "pr",
+                "--status",
+                "done",
+                "--pr",
+                "https://u:secret@github.com/a/b/pull/3",
+            ])
+            .iter(),
+        )
+        .err()
+        .unwrap();
+        assert!(!refused.contains("secret"), "{refused}");
         assert!(matches!(
             parse(words(&["node", "spec", "--status", "done", "--file", "docs/spec.md"]).iter())
                 .unwrap(),
