@@ -13,7 +13,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { ConfirmGuestPaneClose, GuestPaneScreen, guestPaneMenu } from "../GuestPaneScreen";
 import { GuestMachineGroups, GuestProjectRows, PeerWorkRows } from "../GuestWorkRows";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
-import type { Peer } from "../pairing";
+import { NOTHING_UNDER_WAY, type Peer } from "../pairing";
 import type { Device, GuestPanes, PeerWork } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
@@ -52,6 +52,8 @@ export function GuestWorkScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
+      // This computer's own window: another computer's rows show only there.
+      pairing: NOTHING_UNDER_WAY,
       rest: { navigator: { devices: [LOCAL], peers: PEERS, guest_panes: GUEST_PANES, peer_work: PEER_WORK, focused_device_id: "local", workspaces: [PROJECT] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
     } as never);
     useUiStore.setState({ screen: { kind: "guest", paneId: PANE }, guestClose: params.get("close") === "ask" ? PANE : null });
