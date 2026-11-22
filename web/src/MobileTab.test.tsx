@@ -3,9 +3,9 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
-import { NOTHING_UNDER_WAY } from "./pairing";
 import { MobileTab } from "./MobileTab";
 import type { MobileState } from "./mobileSettings";
+import { NOTHING_UNDER_WAY } from "./pairing";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
@@ -41,7 +41,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** `own`: this machine's own window, which hided sends the pairing frame; another machine's view of it gets none (B52). */
+/** `own`: this machine's own window, which hided sends the `pairing` frame; a screen another machine shows of this one gets none. */
 async function mount(mobile: MobileState, own = true) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
@@ -60,19 +60,6 @@ async function mount(mobile: MobileState, own = true) {
 }
 
 const kinds = (events: Parameters<DispatchFn>[0][]) => events.map((event) => event.kind);
-
-// PRD device-connect-iroh B52, D-70: another machine's view of this one
-// pairs no phone and turns nothing on; it lists the phones and removes one.
-it("lists and removes phones, and offers no pairing, in another machine's view", async () => {
-  const phone = { id: "p1", name: "iPhone", last_seen_ms: 0, connected: true, notifications: "on", revoke_at_ms: 0 } as const;
-  const view = await mount(frame({ method: "relay", phones: [phone] }), false);
-  expect(view.q("[data-mobile-view-only]")).not.toBeNull();
-  expect(view.q("[data-mobile-switch]")).toBeNull();
-  expect(view.q("[data-mobile-show-code]")).toBeNull();
-  await act(async () => view.q('[data-mobile-revoke="p1"]')!.click());
-  expect(kinds(view.events)).toEqual(["mobile_observe", "mobile_revoke"]);
-  await view.unmount();
-});
 
 it("opens with no code and sends no code request: only Show QR asks for one (B58)", async () => {
   const { events, q, unmount } = await mount(frame({}));
@@ -161,5 +148,20 @@ it("keeps a direct cleanup failure in the connection line while relay pairing re
   expect(container.querySelector("[data-mobile-connection]")?.textContent).not.toContain("Connected · Hide relay");
   expect(q('[data-mobile-show-code="true"]')).not.toBeNull();
   expect(container.querySelector('[role="alert"], [role="dialog"]')).toBeNull();
+  await unmount();
+});
+
+// PRD device-connect-iroh D-53, D-70: a screen another machine shows of this one removes a phone and never pairs one. The
+// switch and the method decide whether a phone can pair and end a code shown on that machine, so they are not offered either,
+// and the screen does not count as a watcher of the page, whose last one leaving ends that code.
+it("offers no pairing control on a screen of another machine, and keeps Revoke there", async () => {
+  const phone = { id: "p1", name: "iPhone", last_seen_ms: 0, connected: true, notifications: "on", revoke_at_ms: 1 } as MobileState["phones"][number];
+  const { events, q, container, unmount } = await mount(frame({ method: "relay", checklist: null, phones: [phone] }), false);
+  expect(q("[data-mobile-pairing]")).toBeNull();
+  expect(q("[data-mobile-show-code]")).toBeNull();
+  expect(container.querySelector('[role="switch"]')).toBeNull();
+  expect(q("[data-mobile-remote-line]")?.textContent).toContain("Here you can revoke a phone");
+  await act(async () => { q('[data-mobile-revoke="p1"]')?.click(); });
+  expect(kinds(events)).toEqual(["mobile_revoke"]);
   await unmount();
 });

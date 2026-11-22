@@ -42,7 +42,7 @@ public class NoticeWordsTest {
         Map<String, Map<String, String>> android = new TreeMap<>();
         for (Map.Entry<String, Map<String, String>> table : NoticeWords.TABLES.entrySet()) android.put(table.getKey(), new TreeMap<>(table.getValue()));
         assertEquals(java.util.List.of("en", "ja", "ko", "zh"), new java.util.ArrayList<>(ios.keySet()));
-        assertEquals(15, ios.get("en").size());
+        assertEquals(16, ios.get("en").size());
         assertEquals(ios, android);
     }
 

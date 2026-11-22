@@ -15,10 +15,13 @@ StateDirectory=hide-relay-proxy
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
-MemoryMax=256M
+# Each proxied WebSocket holds two descriptors and two copy buffers here:
+# 1024 device + 1536 phone connections (iroh-relay.nft, hide-relay
+# MAX_CONNECTIONS) at about 100 KiB each, docs/RELAY_PROTOCOL.md.
+MemoryMax=320M
 MemorySwapMax=0
 TasksMax=128
-LimitNOFILE=4096
+LimitNOFILE=6144
 LimitCORE=0
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

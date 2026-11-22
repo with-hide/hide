@@ -116,8 +116,14 @@ function Loader() {
         const path = bundlePath(protocol, supported);
         if (!path) { setVersion({ device: protocol, supported }); return; }
         const query = new URLSearchParams({ host: target.room });
-        const tag = new URLSearchParams(location.search).get("open");
+        const asked = new URLSearchParams(location.search);
+        const tag = asked.get("open");
         if (tag) query.set("open", tag);
+        // A computer's chip in the gathered view opens that computer's list alone (`gather.ts`).
+        if (asked.has("one")) query.set("one", "1");
+        // So does another computer's automation that stopped for a person.
+        const automation = asked.get("automation");
+        if (automation) query.set("automation", automation);
         let hash = "";
         if ("code" in target) {
           query.set("connect", "1");

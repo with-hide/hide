@@ -10,6 +10,16 @@ export interface PairedHost {
   credential: string | null;
   protocol: number;
   lastSeen: number | null;
+  /**
+   * Whether the computer's last hello offered connections between two Hides (`device_connect`), so a page that opens on it while
+   * it is out of reach still offers the gathered view; absent until a hello said it, and dropped by a bundle before it.
+   */
+  deviceConnect?: boolean;
+  /**
+   * The computer's product device id, which its last hello named (`machine`), so the phone knows which of the machines another
+   * computer opens it already has (PRD device-connect-iroh B56); absent until a hello said it, and dropped by a bundle before it.
+   */
+  machine?: string;
 }
 export const HOSTS_KEY = "hide.phone.hosts.v1";
 /** The app's list: the same rows without the two secrets (the credential and the computer's key), which are in the Keychain. */
@@ -29,6 +39,12 @@ export interface HostStore {
 
 type Row = Omit<PairedHost, "noiseKey" | "credential"> & Partial<Pick<PairedHost, "noiseKey" | "credential">>;
 
+/** A machine id as a computer's hello names it: some text, short, with no control character. */
+export function validMachine(machine: unknown): machine is string {
+  // eslint-disable-next-line no-control-regex
+  return typeof machine === "string" && machine.length > 0 && machine.length <= 256 && !/[\u0000-\u001f\u007f]/.test(machine);
+}
+
 function checked(hosts: unknown, secrets: boolean): PairedHost[] | Row[] {
   if (!Array.isArray(hosts) || hosts.length > MAX_HOSTS) throw new Error("host_storage_invalid");
   const rooms = new Set<string>();
@@ -38,7 +54,9 @@ function checked(hosts: unknown, secrets: boolean): PairedHost[] | Row[] {
         (secrets && h.credential !== null && (typeof h.credential !== "string" || !h.credential || h.credential.length > 512)) ||
         typeof h.name !== "string" || !h.name.trim() || new TextEncoder().encode(h.name).length > 128 ||
         !Number.isSafeInteger(h.protocol) || h.protocol < 1 ||
-        (h.lastSeen !== null && (!Number.isSafeInteger(h.lastSeen) || h.lastSeen < 0)) || rooms.has(h.room)) {
+        (h.lastSeen !== null && (!Number.isSafeInteger(h.lastSeen) || h.lastSeen < 0)) ||
+        (h.deviceConnect !== undefined && typeof h.deviceConnect !== "boolean") ||
+        (h.machine !== undefined && !validMachine(h.machine)) || rooms.has(h.room)) {
       throw new Error("host_storage_invalid");
     }
     rooms.add(h.room);
@@ -62,7 +80,7 @@ export function readHosts(storage: Pick<Storage, "getItem">): PairedHost[] {
 export function browserStore(storage: Storage): HostStore {
   const write = (hosts: PairedHost[]) => {
     // Serialize named fields only; even a caller passing a QR cannot persist its code.
-    const encoded = JSON.stringify(hosts.map(({ room, name, noiseKey, credential, protocol, lastSeen }) => ({ room, name, noiseKey, credential, protocol, lastSeen })));
+    const encoded = JSON.stringify(hosts.map(({ room, name, noiseKey, credential, protocol, lastSeen, deviceConnect, machine }) => ({ room, name, noiseKey, credential, protocol, lastSeen, deviceConnect, machine })));
     checked(JSON.parse(encoded), true);
     storage.setItem(HOSTS_KEY, encoded);
   };
@@ -96,7 +114,7 @@ export function browserStore(storage: Storage): HostStore {
 export function appStore(storage: Storage): HostStore {
   const rows = () => parse(storage, APP_HOSTS_KEY, false) as Row[];
   const write = (hosts: Row[]) => {
-    const encoded = JSON.stringify(hosts.map(({ room, name, protocol, lastSeen }) => ({ room, name, protocol, lastSeen })));
+    const encoded = JSON.stringify(hosts.map(({ room, name, protocol, lastSeen, deviceConnect, machine }) => ({ room, name, protocol, lastSeen, deviceConnect, machine })));
     checked(JSON.parse(encoded), false);
     storage.setItem(APP_HOSTS_KEY, encoded);
   };
@@ -112,7 +130,7 @@ export function appStore(storage: Storage): HostStore {
     const found: PairedHost[] = [];
     for (const row of listed) {
       const item = held.has(row.room) ? await keychain.read(row.room) : null;
-      if (item) found.push({ room: row.room, name: row.name, protocol: row.protocol, lastSeen: row.lastSeen, noiseKey: item.noiseKey, credential: item.credential });
+      if (item) found.push({ room: row.room, name: row.name, protocol: row.protocol, lastSeen: row.lastSeen, deviceConnect: row.deviceConnect, machine: row.machine, noiseKey: item.noiseKey, credential: item.credential });
     }
     if (found.length !== listed.length) write(found);
     for (const room of held) if (!found.some((host) => host.room === room)) await keychain.remove(room);
@@ -204,8 +222,15 @@ export function hostToOpen(query: URLSearchParams, hosts: readonly PairedHost[])
   return hosts[0]!.credential === null ? null : hosts[0]!;
 }
 
-export function hostLink(host: PairedHost, tag?: string): string {
+/** The start page that opens `host`: at `tag`'s agent when given, and on that computer's list alone with `one` (`gather.ts`). */
+export function hostLink(host: Pick<PairedHost, "room">, tag?: string, one = false): string {
   const query = new URLSearchParams({ host: host.room });
   if (tag) query.set("open", tag);
+  if (one) query.set("one", "1");
   return `/?${query}`;
+}
+
+/** The start page that opens `host` on its automation `id`'s page, for an automation that stopped for a person (`gather.ts`). */
+export function automationLink(host: Pick<PairedHost, "room">, id: string): string {
+  return `/?${new URLSearchParams({ host: host.room, automation: id })}`;
 }

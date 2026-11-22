@@ -20,7 +20,10 @@ import { lineText, markWords, rowDimmed } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { sleepingCaption } from "../sleeping-session";
 import { actOnSleepingSession, openDetail } from "./connection";
-import { AgentHead, LIST_INSET, PhoneHumanTurn, Place } from "./parts";
+import type { GatheredRow } from "./gather";
+import { hostLink } from "./hosts";
+import { humanTurnText } from "../humanTurn";
+import { AgentHead, DeviceTag, LIST_INSET, PhoneHumanTurn, Place } from "./parts";
 import { keyTag, type AgentGroup, type GroupRow, type PhoneAgent, type PhoneSleepingSession } from "./protocol";
 import { foldKey, openFold, setChildrenOpen, usePhone } from "./store";
 
@@ -56,7 +59,7 @@ function TopRow({ row }: { row: GroupRow }) {
 }
 
 /** "더 보기 N", opened in place; the note says how many of the folded rows sleep. */
-function FoldButton({ label, note, onOpen, ...rest }: { label: string; note: string | null; onOpen: () => void } & Record<`data-${string}`, string>) {
+export function FoldButton({ label, note, onOpen, ...rest }: { label: string; note: string | null; onOpen: () => void } & Record<`data-${string}`, string>) {
   return (
     <Button variant="text" size="inline" className="min-h-(--size-touch-target) w-full justify-start gap-sm text-body" onClick={onOpen} {...rest}>
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
@@ -265,5 +268,80 @@ export function SleepingRow({ session }: { session: PhoneSleepingSession }) {
         ) : null}
       </div>
     </li>
+  );
+}
+
+/**
+ * A row of the gathered view (`gather.ts`, PRD device-connect-iroh B55): the row's head, the computer it came from and its line,
+ * read-only. A press opens it where it lives: the open computer's detail here, another computer's through the start page, which
+ * opens that computer's bundle on the agent as a notification does. A sleeping conversation of another computer opens that
+ * computer's own list, where its wake is. `dim` is the open computer's unreachable list, which dims only its own rows.
+ */
+export function GatheredRowItem({ item, dim }: { item: GatheredRow; dim: boolean }) {
+  const { row } = item;
+  if (row.kind === "sleeping" && item.here) return <SleepingRow session={row} />;
+  return (
+    <li className={item.here && dim ? "opacity-(--opacity-dimmed)" : undefined} data-phone-gathered={`${item.host.room}|${rowKey(row)}`}>
+      {row.kind === "agent" ? <GatheredAgentRow agent={row} item={item} /> : <GatheredSleepingRow session={row} item={item} />}
+    </li>
+  );
+}
+
+function GatheredAgentRow({ agent, item }: { agent: PhoneAgent; item: GatheredRow }) {
+  const { t } = useInterfaceTranslation();
+  const elapsed = useElapsed(agent.changed_at_unix_ms);
+  const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
+  const turn = agent.human_turn ? humanTurnText(t, agent.human_turn) : null;
+  const label = [words, agent.title, item.host.name, agentProductName(agent.agent_kind), agent.tool, agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
+  const open = () => {
+    if (item.here) openDetail({ device_id: agent.device_id, pane_id: agent.pane_id }, agent.mark === "look" ? "looks" : "conversation");
+    else window.location.assign(hostLink(item.host, keyTag(agent)));
+  };
+  return (
+    <RowButton
+      aria-label={label}
+      data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
+      className={cn("min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
+      onClick={open}
+    >
+      <span className="flex w-full items-center gap-sm">
+        <span className="min-w-0 flex-1">
+          <AgentHead agent={agent} large={false} />
+        </span>
+        <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+      </span>
+      <Place agent={agent} inset={LIST_INSET} computer={item.host.name} />
+      {/* A person's turn says what it waits on; its Done is on the row's own computer. */}
+      {turn ? (
+        <span className={`line-clamp-2 ${LIST_INSET} text-body text-warning`} data-phone-line="human_turn">{turn}</span>
+      ) : agent.line ? (
+        <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
+          {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line)}
+        </span>
+      ) : null}
+    </RowButton>
+  );
+}
+
+function GatheredSleepingRow({ session, item }: { session: PhoneSleepingSession; item: GatheredRow }) {
+  const { t } = useInterfaceTranslation();
+  const caption = t(sleepingCaption(session));
+  return (
+    <RowButton
+      aria-label={[session.title, item.host.name, agentProductName(session.agent_kind), caption].join(", ")}
+      className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
+      onClick={() => window.location.assign(hostLink(item.host, undefined, true))}
+    >
+      <span className="flex w-full min-w-0 items-center gap-sm">
+        <span className="flex size-(--size-agent-mark) shrink-0 items-center justify-center"><StatusMark mark="asleep" data-phone-mark="asleep" /></span>
+        <span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}</span>
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+      </span>
+      <span className={`flex min-w-0 items-center gap-sm ${LIST_INSET} text-body text-muted-foreground`}>
+        <DeviceTag label={item.host.name} computer />
+        <span className="min-w-0 truncate">{caption}</span>
+      </span>
+    </RowButton>
   );
 }

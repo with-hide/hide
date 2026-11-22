@@ -83,6 +83,11 @@ pub struct PaneRequest {
     /// answers and whose shape is that daemon's; a device's node refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<serde_json::Value>,
+    /// What `hide phone` asks about the phones paired with this computer
+    /// (PRD device-connect-iroh D-70), answered by the core's own daemon in
+    /// the shape of that daemon (`hided::mobile::command`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<serde_json::Value>,
 }
 
 /// What an external tool asks the core's bootstrap socket, with the key it
@@ -276,6 +281,7 @@ mod tests {
         let request = |install: Option<&str>| PaneRequest {
             access: None,
             device: None,
+            phone: None,
             pane_id: "w1:p1".to_owned(),
             nonce: "0".repeat(32),
             one_shot: false,

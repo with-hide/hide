@@ -52,6 +52,7 @@
       "pane"
     ],
     "max_clear_tags": 64,
+    "max_phone_name_chars": 64,
     "messages": {
       "call": {
         "fields": [
@@ -114,6 +115,12 @@
       "notice_clear": {
         "fields": [
           "tags"
+        ],
+        "since": 1
+      },
+      "phone_paired": {
+        "fields": [
+          "phone"
         ],
         "since": 1
       },

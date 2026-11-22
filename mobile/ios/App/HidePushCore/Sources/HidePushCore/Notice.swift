@@ -1,7 +1,8 @@
 import Foundation
 
 /// What hided sends the phone about one agent, as `push::payload` builds it (`hided/src/mobile/push.rs`), read for the
-/// parts a notification uses. The rest of the JSON (the tags to close, the subject) is not kept.
+/// parts a notification uses. The rest of the JSON (the tags to close, the subject) is not kept. A notice about the
+/// computer itself, such as a new phone paired with it, names no agent: its device and pane are both empty, never one.
 public struct Notice: Equatable {
     public let title: String
     public let state: String
@@ -35,8 +36,8 @@ public struct Notice: Equatable {
               let title = object["title"] as? String, !title.isEmpty, title.count <= 512,
               let state = object["state"] as? String, state.count <= 64,
               let tag = object["tag"] as? String, !tag.isEmpty, tag.count <= 768,
-              let deviceId = object["device_id"] as? String, !deviceId.isEmpty, deviceId.count <= 256,
-              let paneId = object["pane_id"] as? String, !paneId.isEmpty, paneId.count <= 512,
+              let deviceId = object["device_id"] as? String, deviceId.count <= 256,
+              let paneId = object["pane_id"] as? String, paneId.count <= 512, deviceId.isEmpty == paneId.isEmpty,
               let room = object["room"] as? String, PushKeychain.isRoom(room) else { return nil }
         self.title = title
         self.state = state

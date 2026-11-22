@@ -1,8 +1,17 @@
 use std::time::Duration;
 
-pub const MAX_CONNECTIONS: usize = 512;
+/// Every admitted WebSocket, devices and phones together. A phone attaches
+/// to each computer it is paired with while its gathered view is on screen
+/// (PRD device-connect-iroh D-69), so a user of three computers holds three
+/// device sockets and up to three phone sockets where one computer held two.
+/// Memory is bounded by [`MAX_QUEUED_BYTES`] rather than by sockets times
+/// their eight frames (`docs/RELAY_PROTOCOL.md`, Server budgets).
+pub const MAX_CONNECTIONS: usize = 1536;
 pub const MAX_PHONES_PER_ROOM: usize = 4;
-pub const MAX_CONNECTIONS_PER_IP: usize = 60;
+/// New WebSockets from one address in [`IP_WINDOW`]: a phone and the
+/// computers it is paired with often share one address, and each return to
+/// the gathered view opens one socket per other computer.
+pub const MAX_CONNECTIONS_PER_IP: usize = 180;
 pub const IP_WINDOW: Duration = Duration::from_secs(60);
 pub const MAX_BYTES_PER_ROOM_PER_DAY: u64 = 1024 * 1024 * 1024;
 pub const DAY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -11,6 +20,12 @@ pub const MAX_IP_RECORDS: usize = 4096;
 pub const MAX_ROOM_RECORDS: usize = 4096;
 pub const MAX_PENDING_HTTP: usize = 32;
 pub const MAX_QUEUED_FRAMES: usize = 8;
+/// Data bytes queued for every socket together, each frame counted until its
+/// write ends. With this cap the relay's queued data stays at what 512
+/// sockets of eight full frames could hold, however many sockets are open; a
+/// frame that finds it spent is refused as one that finds its socket's eight
+/// frames full is.
+pub const MAX_QUEUED_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_QUEUED_CONTROLS: usize = 16;
 /// Discard at most one bounded frame plus the largest WebSocket header on refusal.
 pub const MAX_CLOSE_DRAIN_BYTES: usize = MAX_FRAME + 14;
@@ -91,6 +106,7 @@ impl PushLimits {
 pub struct Limits {
     pub idle_timeout: Duration,
     pub queued_controls: usize,
+    pub queued_bytes: usize,
     pub connections: usize,
     pub phones_per_room: usize,
     pub connections_per_ip: usize,
@@ -103,6 +119,7 @@ impl Default for Limits {
         Self {
             idle_timeout: IDLE_TIMEOUT,
             queued_controls: MAX_QUEUED_CONTROLS,
+            queued_bytes: MAX_QUEUED_BYTES,
             connections: MAX_CONNECTIONS,
             phones_per_room: MAX_PHONES_PER_ROOM,
             connections_per_ip: MAX_CONNECTIONS_PER_IP,
@@ -118,6 +135,9 @@ impl Limits {
             && self.idle_timeout <= IDLE_TIMEOUT
             && self.queued_controls > 0
             && self.queued_controls <= MAX_QUEUED_CONTROLS
+            // One full frame always fits.
+            && self.queued_bytes >= MAX_FRAME
+            && self.queued_bytes <= MAX_QUEUED_BYTES
             && self.connections > 0
             && self.connections <= MAX_CONNECTIONS
             && self.phones_per_room > 0

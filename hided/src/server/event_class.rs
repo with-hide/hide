@@ -67,8 +67,10 @@ const FAMILIES: &[(&str, Class)] = &[
     // The pairing of machines: share, allow, pause, remove and the request
     // the other way (D-53, B52).
     ("pairing_", Class::OwnWindow),
-    // The phone's pairing; its removal and the list it is chosen from are
-    // in the table (D-70).
+    // The phone's pairing. What another machine's screen may still do (remove
+    // a phone, retry the relay, set when phones are notified, watch the tab)
+    // is in the table, which `mobile_event_reaches` reads for a linked
+    // node's screen too (D-53, D-70).
     ("mobile_", Class::OwnWindow),
 ];
 
@@ -308,6 +310,8 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("mission_shown", Screen),
     ("mission_view_reopen", Screen),
     ("mobile_observe", Window),
+    ("mobile_push_mode", Window),
+    ("mobile_retry", Window),
     ("mobile_revoke", Window),
     ("open_external", Local),
     ("overview_graph_change", Screen),
@@ -593,6 +597,8 @@ mod tests {
         }
         // A phone is removed from any window (D-70).
         assert_eq!(admit("mobile_revoke", Client::Remote), Ok(()));
+        assert_eq!(admit("mobile_retry", Client::Remote), Ok(()));
+        assert_eq!(admit("mobile_push_mode", Client::Remote), Ok(()));
         assert_eq!(
             admit("s3_unclassified_probe", Client::Remote),
             Err(Refused::Unclassified)

@@ -44,7 +44,7 @@ use futures_util::{SinkExt, StreamExt};
 use hide_peer::protocol::hello::GrantState;
 use hide_peer::protocol::{PeerKey, StreamKind};
 use hide_peer::store::KnownState;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::{Notify, mpsc};
 use tokio_tungstenite::tungstenite;
 
@@ -407,17 +407,6 @@ async fn bulk_upgrade(
     })
 }
 
-/// The mobile frame another machine's view gets: the phones, to remove one,
-/// never the code that pairs a phone (D-70).
-pub fn mobile_frame_for_view(payload: &Value) -> Value {
-    let mut payload = payload.clone();
-    if let Some(fields) = payload.as_object_mut() {
-        fields.insert("qr".to_owned(), Value::Null);
-        fields.insert("code_expires_at_ms".to_owned(), Value::Null);
-    }
-    payload
-}
-
 // The guest side.
 
 /// Why a host's view could not be opened, as the desktop app reads it.
@@ -772,16 +761,6 @@ mod tests {
         let again = screens.seat(viewer(2)).unwrap();
         drop((second, others, again));
         assert_eq!(screens.seated(), 0);
-    }
-
-    #[test]
-    fn a_view_never_gets_the_code_that_pairs_a_phone() {
-        let frame = mobile_frame_for_view(&json!({
-            "qr": "hide://pair", "code_expires_at_ms": 5, "phones": [{"id": "p1"}],
-        }));
-        assert_eq!(frame["qr"], Value::Null);
-        assert_eq!(frame["code_expires_at_ms"], Value::Null);
-        assert_eq!(frame["phones"][0]["id"], "p1");
     }
 
     fn asset(host: u8, build: &str, path: &str) -> AssetKey {

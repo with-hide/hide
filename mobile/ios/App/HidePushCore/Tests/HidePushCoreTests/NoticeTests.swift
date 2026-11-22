@@ -59,6 +59,17 @@ final class NoticeTests: XCTestCase {
         XCTAssertEqual(letter.body(words: NoticeWords.forLanguages(["en"])), "Letter not delivered · letter-7")
     }
 
+    func testReadsANoticeAboutTheComputerItselfWhichNamesNoAgent() throws {
+        let paired = try XCTUnwrap(Notice(json: notice(room: room, extra: [
+            "title": "build-box", "state": "phone_paired", "status_code": NSNull(), "detail": "Pixel 9", "place": "",
+            "tag": "|", "device_id": "", "pane_id": "",
+        ])))
+        XCTAssertEqual(paired.body(words: NoticeWords.forLanguages(["ko"])), "새 폰이 연결됐어요 · Pixel 9")
+        XCTAssertEqual(NoticeInfo.of(paired), ["room": room, "device_id": "", "pane_id": ""])
+        XCTAssertNil(Notice(json: notice(room: room, extra: ["device_id": ""])), "an agent's notice names both its device and its pane")
+        XCTAssertNil(Notice(json: notice(room: room, extra: ["pane_id": ""])))
+    }
+
     func testTheDemoSampleIsWordedAsARealQuestionIs() {
         let sample = Notice(sampleTitle: "Address review comments", statusCode: "question", state: "needs_you", detail: "Apply all 3 review comments?", place: "demo · fix/review")
         XCTAssertEqual(sample.title, "Address review comments")

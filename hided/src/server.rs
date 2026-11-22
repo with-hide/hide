@@ -958,6 +958,45 @@ pub(crate) async fn remote_client_loop(
     screen_loop(socket, state, connection, handshake, None, Some(seat)).await;
 }
 
+/// The `mobile` frame for a screen. A screen another machine shows of this
+/// one gets no pairing code: a phone pairs only from this machine's own
+/// window or terminal, and only removing a phone is open to that screen (PRD
+/// device-connect-iroh D-53, D-70).
+fn mobile_frame(payload: &Value, own_screen: bool) -> Value {
+    let mut payload = payload.clone();
+    if !own_screen && let Some(fields) = payload.as_object_mut() {
+        fields.insert("qr".to_owned(), Value::Null);
+        fields.insert("code_expires_at_ms".to_owned(), Value::Null);
+    }
+    json!({"type": "mobile", "payload": payload})
+}
+
+/// Whether a `mobile_*` event from a screen goes on to Mobile. A screen
+/// another machine shows of this one may send only the kinds the class table
+/// opens to any window (`event_class`, the one list: removing a phone,
+/// retrying the relay, setting when phones are notified, watching the tab);
+/// everything else is refused here, at the connection (PRD
+/// device-connect-iroh D-53, D-70): making or ending a code, and Mobile's
+/// switch and method, which decide whether a phone can pair and end the code
+/// a person at this machine is pairing with. Its watching of Settings >
+/// Mobile is not counted, since the last watcher leaving ends that code too
+/// (`Mobile::release`). A kind the table does not open is refused, so a new
+/// control is this machine's own until it is let in.
+fn mobile_event_reaches(kind: &str, own_screen: bool) -> Result<bool, String> {
+    if own_screen {
+        return Ok(true);
+    }
+    if kind == "mobile_observe" {
+        return Ok(false);
+    }
+    match event_class::class_of(kind) {
+        Some(event_class::Class::Window) => Ok(true),
+        _ => Err(format!(
+            "{kind} is for this machine's own screen: a screen of another machine removes phones but never pairs one"
+        )),
+    }
+}
+
 /// One screen's session after its handshake: the snapshot stream, the
 /// answers to its events and, for a screen of this machine, its terminals.
 /// A linked node's screen (`relay`) draws terminals from its own node's hub
@@ -1065,12 +1104,11 @@ async fn screen_loop(
     let mut agent_notices = desktop.then(|| state.desktop_notices.subscribe());
     // Settings > Mobile reads one `mobile` frame, sent now and on each change.
     let mut mobile_frames = state.mobile.subscribe_frame();
-    let mobile_frame = |payload: &Value| match remote {
-        true => crate::remote_screen::mobile_frame_for_view(payload),
-        false => payload.clone(),
-    };
+    // A linked node's screen and another machine's view are both a screen
+    // another machine shows of this one (D-53, D-70).
+    let own_screen = relay.is_none() && !remote;
     if renderer {
-        let frame = json!({"type": "mobile", "payload": mobile_frame(mobile_frames.borrow_and_update().as_ref())});
+        let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
         if socket
             .send(Message::Text(frame.to_string().into()))
             .await
@@ -1278,7 +1316,7 @@ async fn screen_loop(
                 if changed.is_err() {
                     break;
                 }
-                let frame = json!({"type": "mobile", "payload": mobile_frame(mobile_frames.borrow_and_update().as_ref())});
+                let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
                 if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
@@ -1332,7 +1370,7 @@ async fn screen_loop(
                         {
                             terminals.keyed(&pane);
                         }
-                        match handle_client_text(&state, &text, connection, client) {
+                        match handle_client_text(&state, &text, connection, client, own_screen) {
                             // A view's file bytes go on its bulk stream, from
                             // their own task (D-67).
                             Ok(ClientAction::FileBytes(event)) if remote => {
@@ -2839,6 +2877,7 @@ fn handle_client_text(
     text: &str,
     connection: u64,
     client: Client,
+    own_screen: bool,
 ) -> Result<ClientAction, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|error| format!("client json: {error}"))?;
@@ -3051,7 +3090,9 @@ fn handle_client_text(
             return Ok(ClientAction::Pairing(event));
         }
         Some(kind) if kind.starts_with("mobile_") => {
-            state.mobile.handle_event(connection, &event)?;
+            if mobile_event_reaches(kind, own_screen)? {
+                state.mobile.handle_event(connection, &event)?;
+            }
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("open_external") => {
@@ -6818,6 +6859,44 @@ mod tests {
                 &hide_platform::fs::identity::canonical(&app).unwrap()
             )
         );
+    }
+
+    /// A screen another machine shows of this one lists the phones and can
+    /// remove one, and never receives a live pairing code (PRD
+    /// device-connect-iroh D-53, D-70).
+    #[test]
+    fn a_screen_of_another_machine_gets_no_pairing_code() {
+        let payload = json!({"qr": "https://app.withhide.dev/#pair=x", "code_expires_at_ms": 9, "phones": [{"id": "a"}]});
+        let own = mobile_frame(&payload, true);
+        assert_eq!(own["payload"], payload);
+        let other = mobile_frame(&payload, false);
+        assert_eq!(other["payload"]["qr"], Value::Null);
+        assert_eq!(other["payload"]["code_expires_at_ms"], Value::Null);
+        assert_eq!(other["payload"]["phones"], payload["phones"]);
+    }
+
+    /// The same screen cannot make or end a code by asking, nor by turning
+    /// Mobile off or changing its method, which end it too: the connection
+    /// refuses them, removing a phone still goes through, and its watching of
+    /// Settings > Mobile never ends the code a person at this machine shows
+    /// (PRD device-connect-iroh D-53, D-70).
+    #[test]
+    fn a_screen_of_another_machine_cannot_make_or_end_a_pairing_code() {
+        for kind in [
+            "mobile_show_code",
+            "mobile_hide_code",
+            "mobile_enable",
+            "mobile_method",
+            "mobile_unknown",
+        ] {
+            assert!(mobile_event_reaches(kind, false).is_err(), "{kind}");
+            assert_eq!(mobile_event_reaches(kind, true), Ok(true), "{kind}");
+        }
+        assert_eq!(mobile_event_reaches("mobile_observe", false), Ok(false));
+        assert_eq!(mobile_event_reaches("mobile_observe", true), Ok(true));
+        for kind in ["mobile_revoke", "mobile_retry", "mobile_push_mode"] {
+            assert_eq!(mobile_event_reaches(kind, false), Ok(true), "{kind}");
+        }
     }
 
     /// Add a project's folder list words a node's refusal by the code the

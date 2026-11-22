@@ -59,6 +59,9 @@ ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 hyper = { version = "=1.12.0", features = ["client", "http1", "server"] }
 hyper-util = { version = "=0.1.21", features = ["service", "tokio"] }
 http-body-util = "=0.1.5"
+# The QR `hide phone pair` draws in a terminal (`phone_cli`); no dependencies
+# of its own.
+qrcodegen = "=1.8.0"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]

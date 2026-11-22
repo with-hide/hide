@@ -29,12 +29,13 @@ public final class PushOpenInbox {
               notificationID: "\(notification.request.identifier):\(notification.date.timeIntervalSince1970)")
     }
 
-    /// Keeps the target of `userInfo` when it names an agent of a computer by the shapes the extension writes.
+    /// Keeps the target of `userInfo` when it names an agent of a computer, or the computer itself with no agent (both
+    /// empty), by the shapes the extension writes.
     @discardableResult
     public func offer(_ userInfo: [AnyHashable: Any], notificationID: String? = nil) -> Bool {
         guard let room = userInfo[NoticeInfo.room] as? String, PushKeychain.isRoom(room),
-              let device = userInfo[NoticeInfo.deviceId] as? String, !device.isEmpty, device.count <= 256,
-              let pane = userInfo[NoticeInfo.paneId] as? String, !pane.isEmpty, pane.count <= 512 else { return false }
+              let device = userInfo[NoticeInfo.deviceId] as? String, device.count <= 256,
+              let pane = userInfo[NoticeInfo.paneId] as? String, pane.count <= 512, device.isEmpty == pane.isEmpty else { return false }
         lock.lock()
         if let notificationID, lastNotificationID == notificationID { lock.unlock(); return false }
         lastNotificationID = notificationID
