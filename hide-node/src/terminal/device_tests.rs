@@ -347,7 +347,10 @@ fn a_host_screens_size_resizes_a_guests_pane_so_its_frames_reach_the_host() {
     pane.frame(SIZE, true, b"\x1bcat the guest's grid");
     wait_for(|| tap.saw("w1:p1", b"at the guest's grid"));
 
-    let host = GridSize { rows: 40, cols: 120 };
+    let host = GridSize {
+        rows: 40,
+        cols: 120,
+    };
     node.size_from_tap("w1:p1", host);
     // The program is told the host's grid: the lines before it (the
     // attach's own size) say the guest's.

@@ -646,7 +646,9 @@ mod tests {
             refusal.message,
             "이 버전의 Hide는 아직 hide phone을 지원하지 않아요. 설정 › 모바일에서 폰을 연결하세요."
         );
-        let english = pair(&env, &Words(InterfaceLanguage::English)).err().unwrap();
+        let english = pair(&env, &Words(InterfaceLanguage::English))
+            .err()
+            .unwrap();
         assert_eq!(
             english.message,
             next_action(crate::pairing::DEVICE_CONNECT_OFF)
