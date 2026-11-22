@@ -414,7 +414,7 @@ export type PhoneMessage =
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
-  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey } | { turn: string; choice: string }))
+  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string }))
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
@@ -477,11 +477,11 @@ export const GROUP_TITLE: Record<GroupId, MessageKey> = {
 export type QuickKey = "enter" | "escape" | "up" | "down" | "ctrl_c";
 
 export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageKey }[] = [
-  { key: "enter", label: "⏎", name: "mobile.key.enter" },
+  { key: "enter", label: "Enter", name: "mobile.key.enter" },
   { key: "escape", label: "Esc", name: "mobile.key.escape" },
   { key: "up", label: "↑", name: "mobile.key.up" },
   { key: "down", label: "↓", name: "mobile.key.down" },
-  { key: "ctrl_c", label: "^C", name: "mobile.key.ctrlC" },
+  { key: "ctrl_c", label: "Ctrl-C", name: "mobile.key.ctrlC" },
 ];
 
 /** The longest reply a computer before `answer` writes in one input, on one line. */
@@ -503,16 +503,30 @@ export type PhoneAsk = {
   truncated?: boolean;
   command?: string;
   command_truncated?: boolean;
+  /** The call the computer tied the ask to, when it could: the same call under a new turn is the same ask. */
+  call?: string;
   choices: { id: string; label?: string; note?: string }[];
   answerable: boolean;
 };
 
-/** What runs now under the agent's turn, by kind and since when, never by what it runs (Doop 02). */
+/**
+ * Which ask an answer belongs to: the agent's call when the computer names one, else the turn and what it asks, so a new
+ * question or approval with the same words is a new ask and an answered one that stays open under a new turn is not.
+ */
+export function askIdentity(key: AgentKey, ask: PhoneAsk): string {
+  const what = ask.call !== undefined ? `call ${ask.call}` : `turn ${ask.turn} ${JSON.stringify([ask.text ?? null, ask.command ?? null, ask.choices])}`;
+  return `${key.device_id}|${key.pane_id}|${ask.kind}|${what}`;
+}
+
+/**
+ * What runs now under the agent's turn, by kind and since when, never by what it runs (Doop 02); `unknown` when the computer
+ * kept fewer of the agent's open calls than it made, so it cannot say.
+ */
 export type Running = { kind: string; since_ms: number | null };
 
 /** The input that picks `choice` on the ask the phone showed: typed by the computer as keys, never as text. */
-export function choiceMessage(key: AgentKey, ask: Pick<PhoneAsk, "turn">, choice: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
-  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, turn: ask.turn, choice };
+export function choiceMessage(key: AgentKey, ask: Pick<PhoneAsk, "turn" | "kind">, choice: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, turn: ask.turn, kind: ask.kind, choice };
 }
 
 export const MAX_FRAME_BYTES = 16 * 1024;
@@ -568,8 +582,8 @@ export function inputFailure(reason: string | null, lines = false): Notice {
     case "stale":
     case "unknown_choice":
       return { key: "mobile.input.stale" };
-    case "highlight_moved":
-      return { key: "mobile.input.highlightMoved" };
+    case "screen_differs":
+      return { key: "mobile.input.screenDiffers" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":

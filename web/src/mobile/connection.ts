@@ -20,7 +20,7 @@ import {
   parseFragment,
   prFailure,
   refusalOf,
-  choiceMessage, replyMessage,
+  askIdentity, choiceMessage, replyMessage,
   replyProblem,
   sameKey,
   sleepTarget,
@@ -39,7 +39,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
@@ -369,7 +369,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput?.kind === "choice" && state.choice) patch({ pendingInput: null, choice: { turn: state.choice.turn, choice: state.choice.choice, state: "failed", notice: inputFailure("uncertain") } });
+  if (state.pendingInput?.kind === "choice" && state.answering) settleChoice(false, "uncertain");
   else if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
@@ -426,7 +426,7 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   }
   const view: DetailView = "conversation";
   dropTransfer();
-  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null, choice: null });
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
@@ -449,7 +449,7 @@ export function setTab(tab: DetailTab): void {
 
 export function closeDetail(): void {
   dropTransfer();
-  patch({ detail: null, inputError: null, pendingInput: null, choice: null });
+  patch({ detail: null, inputError: null, pendingInput: null });
   send({ type: "close" });
 }
 
@@ -743,13 +743,34 @@ export function sendChoice(choice: string): void {
   const detail = state.detail;
   const ask = detail?.ask;
   if (!detail || !ask || !ask.answerable || state.pendingInput) return;
+  const identity = askIdentity(detail.key, ask);
+  // An ask answered, or one whose answer may have landed, is never sent again from here: a second send would be a second press.
+  const answered = state.answers[identity];
+  if (answered && (answered.state !== "failed" || answered.inTerminal)) return;
   const requestId = newRequestId();
   const sent = send(choiceMessage(detail.key, ask, choice, requestId));
   patch(
     sent
-      ? { pendingInput: { requestId, kind: "choice" }, choice: { turn: ask.turn, choice, state: "sending" } }
-      : { choice: { turn: ask.turn, choice, state: "failed", notice: inputFailure("offline") } },
+      ? { pendingInput: { requestId, kind: "choice" }, answering: identity, answers: withAnswer(state.answers, identity, { choice, state: "sending" }) }
+      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) },
   );
+}
+
+/**
+ * Settles the choice being sent: sent, or refused with why. One that may have landed (`uncertain`), or that stopped on a moved
+ * highlight, is answered in the terminal from then on, whatever the phone does next.
+ */
+function settleChoice(ok: boolean, reason: string | null): void {
+  const { answering, answers } = usePhone.getState();
+  const picked = answering ? answers[answering] : undefined;
+  if (!answering || !picked) {
+    patch({ pendingInput: null, answering: null });
+    return;
+  }
+  const state: ChoiceState = ok
+    ? { choice: picked.choice, state: "sent" }
+    : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" };
+  patch({ pendingInput: null, answering: null, answers: withAnswer(answers, answering, state) });
 }
 
 /**
@@ -783,12 +804,9 @@ export function onReplyResult(listener: ReplyListener): () => void {
 }
 
 function onInputResult(ok: boolean, reason: string | null): void {
-  const { pendingInput: pending, choice } = usePhone.getState();
+  const { pendingInput: pending } = usePhone.getState();
   if (pending?.kind === "choice") {
-    patch({
-      pendingInput: null,
-      choice: choice && (ok ? { ...choice, state: "sent" } : { turn: choice.turn, choice: choice.choice, state: "failed", notice: inputFailure(reason) }),
-    });
+    settleChoice(ok, reason);
     return;
   }
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
