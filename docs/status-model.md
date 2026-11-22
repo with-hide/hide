@@ -9,7 +9,7 @@ What it needs from the operator, whether it is running, whether it has reported 
 - Activity: working, stopped, unknown.
 - Completion: reported, not reported.
 - Read: read, unread.
-- Ownership: operator, delegated, Hide AI's, for work a Hide-started agent does for a screen that owns it, or a bot's, for work a bot the operator approved in own mode started and keeps.
+- Ownership: operator, delegated, Hide AI's, for work a Hide-started agent does for a screen that owns it, or a bot's, for work a bot the operator made or approved in own mode started and keeps.
 
 `hide-core/src/agent_state/axes.rs` is the single owner of all five.
 `agent_state/turn.rs` derives the group, request verb, close and rest gates from them; `sidebar.rs` assembles the snapshot rows.
@@ -48,7 +48,7 @@ Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_an
 
 ### Work an external tool keeps
 
-A bot the operator approved in own mode ([ARCHITECTURE.md: Bots](ARCHITECTURE.md#bots)) starts agents for its own purposes, and they are the bot's work, not the operator's: the agent it started, and every agent started under that one with `--parent` however deep, such as a Conductor's workers (PRD hide-external-control D-09, B26, B27).
+A bot the operator made or approved in own mode ([ARCHITECTURE.md: Bots](ARCHITECTURE.md#bots)) starts agents for its own purposes, and they are the bot's work, not the operator's: the agent it started, and every agent started under that one with `--parent` however deep, such as a Conductor's workers (PRD hide-external-control D-09, B26, B27).
 The coordination ledger is the only source of the fact: `coordination::started` collects, from the tool's handoff spawns and the registrations whose responsibility parent is already one of them, each registration with its connection's id and name (`HideStarted::tool_work`), ended ones included, and the runtime lays the `tool` mark `{connection, name, owns}` on each live row of them by its pane and the session the registration holds, as it lays Hide AI's.
 `owns` is read from the connection list on every projection and stored nowhere: it holds while the bot's connection stands in own mode (`Runtime::access_keeps_work`).
 A bot in all mode works as the operator: what it starts is the operator's own work from the start, in the operator's scopes, lists and Needs You, and its rows still carry the `tool` mark with `owns` false, naming the bot as the starter (mission-87).

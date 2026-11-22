@@ -280,9 +280,16 @@ pub(super) fn left(file: &Path) -> String {
 /// The grid a screen of either machine draws a pane at.
 const GRID: (u16, u16) = (31, 97);
 
-/// Types `line` and Enter into `pane` as a screen of `machine`'s Hide does:
-/// it shows the pane at its grid, has it drawn whole, and sends the keys.
+/// Types `line` and Enter into `pane` as a screen of `machine`'s Hide does
+/// at [`GRID`].
 pub(super) async fn types(machine: &Machine, pane: &str, line: &str) {
+    types_at(machine, pane, line, GRID).await;
+}
+
+/// Types `line` and Enter into `pane` as a screen of `machine`'s Hide does:
+/// it shows the pane at `grid` (rows, columns), has it drawn whole, and
+/// sends the keys.
+pub(super) async fn types_at(machine: &Machine, pane: &str, line: &str, grid: (u16, u16)) {
     let screen = machine.screen();
     let mut window = Window::open_at(screen.port, &screen.token, "web").await;
     // A pane on another machine is drawn while that machine is the one in
@@ -298,9 +305,20 @@ pub(super) async fn types(machine: &Machine, pane: &str, line: &str) {
     window
         .send(
             "terminal_viewport",
-            json!({"pane_id": pane, "rows": GRID.0, "cols": GRID.1, "new_view": true}),
+            json!({"pane_id": pane, "rows": grid.0, "cols": grid.1, "new_view": true}),
         )
         .await;
+    // As the web shell does (`web/src/terminals.ts`, `sendGrid`): the grid
+    // goes to the core as a resize too, except for another machine's pane
+    // on its host, which its own node sizes from the view through the tap.
+    if !pane.starts_with("guest:") {
+        window
+            .send(
+                "terminal_resize",
+                json!({"pane_id": pane, "rows": grid.0, "cols": grid.1}),
+            )
+            .await;
+    }
     window
         .frame("the pane drawn on the screen", |frame| {
             frame["type"] == "terminal"
@@ -461,6 +479,19 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
     types(&guest, &on_guest, &asks_its_core("f3")).await;
     let answered = left(&at("f3"));
     assert!(answered.contains("\"ok\":true"), "{answered}");
+    // B10, D-74: the pane has one grid, the one the screen that sized it
+    // last draws at. The guest's screen at its own grid sizes the program
+    // to it; the host's screen drawing it next sizes it back, so the
+    // program draws at the grid the host shows and its frames are not
+    // refused as the wrong size.
+    let size_into = |file: &str| format!("stty size > {}", at(file).display());
+    types_at(&guest, &on_guest, &size_into("f11"), (27, 88)).await;
+    assert_eq!(left(&at("f11")).trim(), "27 88");
+    types(&host, &pane, &size_into("f12")).await;
+    assert_eq!(
+        left(&at("f12")).trim(),
+        format!("{} {}", GRID.0, GRID.1).as_str()
+    );
     // B10: the host's screen says which folder the pane was started in, as
     // the guest's node told it, so the pane stands under the project there.
     let folder = project.to_string_lossy().into_owned();

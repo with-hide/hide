@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { BUILDER, FOCUS_WORLD, type FocusModel } from "./practice/worlds/focus";
+import type { ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
+import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
 import type { DispatchFn } from "./ws";
 
@@ -30,12 +32,14 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
   });
   afterEach(async () => {
     await act(async () => root.unmount());
-    container.remove(); useShellStore.setState(saved, true); vi.unstubAllGlobals(); vi.restoreAllMocks(); document.documentElement.removeAttribute("style");
+    container.remove(); useShellStore.setState(saved, true); useUiStore.setState({ laneExpanded: false }); vi.unstubAllGlobals(); vi.restoreAllMocks(); document.documentElement.removeAttribute("style");
   });
 
-  async function draw(model: FocusModel) {
+  async function draw(model: FocusModel, display: Partial<ViewDisplaySnapshot> = {}) {
     // No document is sent, so the page is not drawn: the tree is what is under test.
     const { rest } = FOCUS_WORLD.snapshot(model, Date.now());
+    const tree = rest.workspace_view?.layout?.root;
+    if (tree && "area" in tree) tree.area.displays = tree.area.displays.map((shown) => ({ ...shown, ...display }));
     useShellStore.setState({ connection: "live", rest, editor: null, documents: {} });
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => root.render(<TooltipProvider><ViewAreas actions={actions} /></TooltipProvider>));
@@ -52,6 +56,31 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
     actions.toggleLane();
     expect(pressed).toEqual(events);
     expect(pressed.map((event) => [event.kind, event.payload])).toEqual([["pair_view_desk", { shown: false }]]);
+  });
+
+  it("has Expand beside it in and outside the mode, which fills the body with the desk and returns it, sending nothing", async () => {
+    const expand = () => container.querySelector<HTMLButtonElement>("[data-desk-expand]")!;
+    for (const model of [FOCUS_WORLD.initial(), pair(FOCUS_WORLD.initial())]) {
+      await draw(model);
+      expect(expand().compareDocumentPosition(close()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(expand().getAttribute("aria-pressed")).toBe("false");
+      await act(async () => expand().click());
+      expect([useUiStore.getState().laneExpanded, expand().getAttribute("aria-pressed")]).toEqual([true, "true"]);
+      await act(async () => expand().click());
+      expect(useUiStore.getState().laneExpanded).toBe(false);
+    }
+    expect(events).toEqual([]);
+  });
+
+  it("names a pasted image as one on its tab and path line, and a file under home by its ~/ path", async () => {
+    const title = () => container.querySelector("[role=tab] [data-tab-title]")?.textContent;
+    const line = () => container.querySelector("[data-editor-path]")?.textContent;
+    await draw(FOCUS_WORLD.initial(), { pasted: true, path: "/Users/alice/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", label: "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", home_relative: "~/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png" });
+    expect([title(), line()]).toEqual(["Pasted image", "Pasted image"]);
+    await draw(FOCUS_WORLD.initial(), { path: "/Users/alice/Downloads/report.pdf", label: "report.pdf", home_relative: "~/Downloads/report.pdf" });
+    expect([title(), line()]).toEqual(["report.pdf", "~/Downloads/report.pdf"]);
+    await draw(FOCUS_WORLD.initial(), { path: "/Volumes/disk/report.pdf", label: "report.pdf" });
+    expect(line()).toBe("/Volumes/disk/report.pdf");
   });
 
   it("keeps its ◧ and closes the documents outside the mode", async () => {

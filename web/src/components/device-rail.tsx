@@ -3,7 +3,7 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { badgeText, deviceConnected, railFrontId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
+import { badgeText, deviceConnected, peerCounts, railFrontId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
 import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
 import { numberOf } from "../numbering";
@@ -12,7 +12,6 @@ import { deviceConnectOffered, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
-import type { BotModeKind } from "../bots";
 import type { AccessConnection } from "../snapshot";
 import { BotFace } from "./bot-mark";
 import { EntryContextMenu } from "./entry-menu";
@@ -26,9 +25,6 @@ import { SidebarMenus } from "./sidebar-menus";
 export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
 
 const NO_BOTS: AccessConnection[] = [];
-
-/** A paired machine's tile counts nothing until its core sends its counts over the connection (D-50). */
-const NO_COUNTS: TileCounts = { needs_you: 0, done: 0 };
 
 /** The rounded square every tile is, the add tile included; a tile's marks hang off its corners, and the focus outline stands outside the selected ring. */
 const TILE = "relative flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
@@ -54,7 +50,11 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const guestPane = useUiStore((s) => s.screen?.kind === "guest");
   const front = useShellStore((s) => railFrontId(s.rest, guestPane));
   const tools = useShellStore((s) => toolCells(s.rest));
-  const bots = useShellStore((s) => s.access?.connections ?? NO_BOTS);
+  // Only a bot in its own space has a tile: its work gathers in its cell. A
+  // 전체 bot works as the operator, so its work is in the operator's lists
+  // and it is listed in Settings › 봇 alone.
+  const allBots = useShellStore((s) => s.access?.connections ?? NO_BOTS);
+  const bots = useMemo(() => allBots.filter((bot) => bot.mode.kind === "own"), [allBots]);
   // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).
   const toolFront = useFrontTool()?.connection ?? null;
   // Every computer tile in one group before `+`: this computer, each device,
@@ -120,14 +120,13 @@ export function DeviceRail({ actions }: { actions: Actions }) {
               </button>
             </Hint>
           </li>
-          {/* Every connected bot, under a short line, after the devices and Add device, in the order they were approved (PRD hide-external-control D-50).
-              A bot in its own space opens its cell; a 전체 bot has none, since its work is the operator's, and opens Settings › 봇. */}
+          {/* Every bot in its own space, under a short line, after the devices and Add device, in the order they were approved (PRD hide-external-control D-50); each opens its cell. */}
           {bots.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
           {bots.map((bot) => {
-            const cell = bot.mode.kind === "own" ? tools.find((one) => one.connection === bot.id) : undefined;
+            const cell = tools.find((one) => one.connection === bot.id);
             return (
               <li key={bot.id} className="flex">
-                <BotTileView name={bot.name} turn={cell?.turn ?? 0} connection={bot.id} mode={bot.mode.kind} selected={cell !== undefined && cell.connection === toolFront} onSelect={() => (cell ? actions.focusTool(cell.connection) : actions.openSettings("externalTools"))} />
+                <BotTileView name={bot.name} turn={cell?.turn ?? 0} connection={bot.id} selected={cell !== undefined && cell.connection === toolFront} onSelect={() => (cell ? actions.focusTool(cell.connection) : actions.openSettings("externalTools"))} />
               </li>
             );
           })}
@@ -142,15 +141,18 @@ export function DeviceRail({ actions }: { actions: Actions }) {
 }
 
 /**
- * A paired machine's tile (B17, B21): its own Hide screen, or the reason it
- * cannot show now in its hint (not connected, paused, update needed, not
- * allowed), dimmed with the cross while it cannot.
+ * A paired machine's tile (B17, B21): its own Hide screen with the Needs You
+ * and Done that machine told of its own work, or the reason it cannot show
+ * now in its hint (not connected, paused, update needed, not allowed), dimmed
+ * with the cross while it cannot.
  */
 function ScreenTile({ tile, peer, selected, number, onSelect }: { tile: Tile; peer: Peer; selected: boolean; number: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
   const state = screenState(peer);
   const note = state === "ready" ? null : t(screenStateKey(state));
-  return <RailTileView tile={tile} selected={selected} counts={NO_COUNTS} connected={state === "ready"} note={note} number={number} onSelect={onSelect} />;
+  // What that machine told of its own work (D-50), the counts its own window's This Mac tile shows.
+  const counts = useShellStore(useShallow((s) => peerCounts(s.rest, peer.key)));
+  return <RailTileView tile={tile} selected={selected} counts={counts} connected={state === "ready"} note={note} number={number} onSelect={onSelect} />;
 }
 
 const RailTile = memo(function RailTile({ tile, selected, number, actions }: { tile: Tile; selected: boolean; number: number | null; actions: Actions }) {
@@ -226,14 +228,14 @@ export function RailTileView({ tile, selected, counts, connected, note = null, n
 /**
  * A bot's tile (PRD hide-external-control D-50, B39, B41): the size of a
  * device's, its owl on the colour its name chooses (`botLook`), so it never
- * reads as a machine. A bot in `all` mode, which also reaches the operator's
- * workspaces, wears a lime ring; one in its own space none. Its one mark is the grey number of what
- * waits on the bot's answer (`9+` from ten), which no Needs You, badge or
- * notice of the operator's counts; the hint names it a bot and its mode.
+ * reads as a machine. Only a bot in its own space has one, so the tile marks
+ * no mode. Its one mark is the grey number of what waits on the bot's answer
+ * (`9+` from ten), which no Needs You, badge or notice of the operator's
+ * counts; the hint names it a bot in its own space.
  */
-export function BotTileView({ name, turn, connection, mode, selected, onSelect }: { name: string; turn: number; connection: string; mode: BotModeKind; selected: boolean; onSelect: () => void }) {
+export function BotTileView({ name, turn, connection, selected, onSelect }: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
-  const facts = [name, t("devices.rail.tool"), t(`devices.rail.botMode.${mode}`), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
+  const facts = [name, t("devices.rail.tool"), t("devices.rail.botMode.own"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
   return (
     <Hint label={facts.join(" · ")} side="right">
       <Button
@@ -242,11 +244,10 @@ export function BotTileView({ name, turn, connection, mode, selected, onSelect }
         aria-label={facts.join(", ")}
         aria-pressed={selected}
         data-rail-tool={connection}
-        data-rail-bot-mode={mode}
         className={cn(TILE, "p-0 hover:bg-transparent focus-visible:ring-0", selected && "ring-2 ring-foreground ring-offset-2 ring-offset-sidebar")}
         onClick={onSelect}
       >
-        <BotFace name={name} size="tile" mode={mode} />
+        <BotFace name={name} size="tile" />
         {turn > 0 ? (
           <span
             aria-hidden="true"

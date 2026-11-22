@@ -3,7 +3,7 @@ import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
 import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -16,7 +16,7 @@ import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
 import { PR_LOOK, rowPulls } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
-import { isRemoteView } from "./remoteView";
+import { isRemoteView, readViewer, subscribeViewer } from "./remoteView";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
 import { asksOperator, badgeWords, sumMarks } from "./agentRow";
@@ -253,8 +253,14 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
   const remoteStatus = useShellStore((s) => s.rest?.status?.remote);
   const tools = useShellStore((s) => toolCells(s.rest));
   const tool = useFrontTool();
+  // Shown in another machine's window, this machine's own title is the name that window calls it by, not This Mac.
+  const viewer = useSyncExternalStore(subscribeViewer, readViewer, () => null);
   // A tool's cell in front is named by the tool, an external tool (PRD hide-external-control B40).
-  const title = useMemo(() => (tool ? { name: tool.name, note: t("devices.rail.tool") } : frontTitle(devices, frontId, t)), [tool, devices, frontId, t]);
+  const title = useMemo(() => {
+    if (tool) return { name: tool.name, note: t("devices.rail.tool") };
+    const front = frontTitle(devices, frontId, t);
+    return viewer?.name && front.note === null ? { ...front, name: viewer.name } : front;
+  }, [tool, devices, frontId, t, viewer]);
   const deviceMenu = useMemo<DeviceMenu>(() => {
     const list = windowFirst(devices);
     const localId = list.find((device) => device.kind !== "remote")?.id ?? "";

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BotTileView, RailTileView, type Tile } from "./components/device-rail";
-import { botLook, type BotModeKind } from "./bots";
+import { botLook } from "./bots";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { sidebarBody, type TileCounts } from "./devices";
 import type { SnapshotRest } from "./snapshot";
@@ -118,9 +118,9 @@ describe("a rail tile (quick device-rail-slack)", () => {
 });
 
 describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
-  const bot = (turn: number, { selected = false, mode = "own" as BotModeKind } = {}) => renderToStaticMarkup(
+  const bot = (turn: number, { selected = false } = {}) => renderToStaticMarkup(
     <TooltipProvider>
-      <BotTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" mode={mode} selected={selected} onSelect={() => undefined} />
+      <BotTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" selected={selected} onSelect={() => undefined} />
     </TooltipProvider>,
   );
   const button = (html: string) => html.match(/<button[^>]*data-rail-tool[^>]*>/)?.[0] ?? "";
@@ -141,11 +141,9 @@ describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
     expect(button(bot(0))).toContain('aria-label="nightly, Bot, Own space"');
   });
 
-  it("rings the owl in lime only while the bot works in all of Hide, which its name says", () => {
+  it("marks no mode on the owl: only a bot in its own space has a tile", () => {
+    expect(bot(0)).not.toContain("data-bot-full");
     expect(bot(0)).not.toContain("ring-primary");
-    const all = bot(0, { mode: "all" });
-    expect(all).toMatch(/data-bot-mode="all"[^>]*ring-primary|ring-primary[^>]*data-bot-mode="all"/);
-    expect(button(all)).toContain('aria-label="nightly, Bot, Full"');
   });
 
   it("rings as selected while its cell is in front", () => {

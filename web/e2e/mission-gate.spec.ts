@@ -57,6 +57,8 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
     await phone.locator('[data-phone-tab="missions"]').tap();
     await expect(phone.locator("[data-mission-row-gates]")).toHaveAttribute("data-mission-row-gates", "1");
     await phone.locator("[data-phone-mission]").tap();
+    // The page opens on its step list (Doop 14); the cards are the map's, behind the head's map button.
+    await phone.locator("[data-phone-mission-map-toggle]").tap();
     await expect(phone.locator("[data-mission-gates]")).toHaveAttribute("data-mission-gates", "1");
     await screenshot(phone, "mission-gate-plan-phone");
     // The Conductor starts only after the operator's conversational approval.

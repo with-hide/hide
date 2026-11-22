@@ -27,9 +27,9 @@ import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
-import { displayIdentity, displayMenu, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
+import { displayIdentity, displayMenu, displayName, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
-import { DeskPairButton, PairOthers } from "./DeskPairControls";
+import { DeskExpandButton, DeskPairButton, PairOthers } from "./DeskPairControls";
 import { drawnPair } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
@@ -185,8 +185,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    // The desk's ✕ is the same part in focus mode, where it folds the desk as ⌘E does (`closeDocuments`, D-57, D-63); the ◧ is a way in only and is not drawn there (D-42).
-    close: { label: pair === null ? t("panes.lane.closeDocuments") : t("panes.lane.foldDesk", { chord: commandLabel("toggle_lane") }), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: pair === null ? <DeskPairButton displayId={front} actions={actions} /> : undefined },
+    // The desk's ✕ is the same part in focus mode, where it folds the desk as ⌘E does (`closeDocuments`, D-57, D-63); Expand stands beside it in both, and the ◧ is a way in only and is not drawn there (D-42).
+    close: { label: pair === null ? t("panes.lane.closeDocuments") : t("panes.lane.foldDesk", { chord: commandLabel("toggle_lane") }), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <><DeskExpandButton />{pair === null ? <DeskPairButton displayId={front} actions={actions} /> : null}</> },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
@@ -258,7 +258,8 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
     comments > 0 ? t("feedback.tab.comments", { count: comments }) : null,
     (display.not_delivered ?? 0) > 0 ? t("feedback.tab.notDelivered") : null,
   ].filter(Boolean).join(" · ");
-  const closeLabel = t("documents.closeView", { label: display.label });
+  const name = displayName(display, t);
+  const closeLabel = t("documents.closeView", { label: name });
   return (
     <Hint label={identity} reveals>
     <div
@@ -302,7 +303,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
       </span>
       {attached ? <Badge aria-hidden="true" data-browser-attached="true"><Link2Icon /></Badge> : null}
       <span data-tab-title="true" className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
-        {display.label}
+        {name}
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}
       </span>
@@ -348,7 +349,7 @@ function ExternalBadge({ path }: { path: string | null }) {
 
 /** A display's name on its tab, a card's short one from what the shell holds of its subject. */
 function tabLabel(display: ViewDisplaySnapshot, t: Parameters<typeof cardTitle>[1]): string {
-  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null, true) : display.label;
+  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null, true) : displayName(display, t);
 }
 
 /** A file's type mark, the diff's comparison mark or a card's own; never colour alone (D-15). */

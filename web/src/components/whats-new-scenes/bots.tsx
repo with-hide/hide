@@ -1,12 +1,13 @@
-// What's new scene for bots (1.3.0): a program outside Hide becomes a bot
-// the operator can see. A request comes up in Settings › 봇 with the owl the
-// bot will get, 자기 공간 is chosen and approved, and the bot's owl lands on the
-// device rail beside a 전체 bot already there, which wears the lime ring. Then
-// the 전체 bot's agent asks the operator, and its row in 내 차례 wears that bot's
-// owl on its logo, the line saying who started it. It is drawn from the
-// screens' own parts and words (`BotFace`, `AgentMark`, `externalTools.*`,
-// `devices.rail.*`, `common.bot.allStarted`), and the bots and their work are
-// examples, never the operator's.
+// What's new scene for bots (1.3.0): an AI outside Hide becomes a bot the
+// operator made. Settings › 봇 opens its make card with the name typed and the
+// owl it gets, 봇 공간 chosen, and the pointer presses 만들기; the bot waits for
+// its AI, then is connected, and its owl lands on the device rail. Beside it a
+// 전체 bot already connected wears a person in its owl's corner and has no rail
+// tile. Then the 전체 bot's agent asks the operator, and its row in 내 차례
+// wears that bot's owl on its logo, the line saying who started it. It is drawn
+// from the screens' own parts and words (`BotFace`, `AgentMark`,
+// `externalTools.*`, `devices.rail.*`, `common.bot.allStarted`), and the bots
+// and their work are examples, never the operator's.
 
 import { LaptopIcon } from "lucide-react";
 import { AgentMark } from "../../AgentMark";
@@ -19,46 +20,44 @@ import { SCENE_CSS, type SceneProps } from "./scene";
 
 /** One loop, in ms: the beats below fall inside it. */
 export const BOTS_LOOP_MS = 11_000;
-/** The request comes up; the pointer rests on 자기 공간, already chosen, and presses it. */
-const ASKED = 300;
-const CHOOSE_POINT = 1_300;
-const CHOOSE = 1_900;
-/** It moves to the approve button and presses it; the request leaves and the bot is connected. */
-const APPROVE_POINT = 2_600;
-const APPROVE = 3_300;
-const CONNECTED = 3_600;
+/** The make card comes up with the name typed and 봇 공간 chosen; the pointer presses 만들기. */
+const MAKING = 300;
+const MAKE_POINT = 1_300;
+const MAKE = 1_900;
+/** The bot waits for its AI, which joins; the bot is connected. */
+const WAITING = 2_300;
+const CONNECTED = 3_900;
 /** The owl lands on the rail. */
-const LANDED = 4_100;
+const LANDED = 4_400;
 /** The 전체 bot's agent asks, and its row comes up in 내 차례 wearing the bot's owl. */
-const ASKS = 5_600;
-/** The moment a still picture shows: both owls on the rail, both bots listed, the row in 내 차례. */
-export const BOTS_STILL_MS = 7_500;
+const ASKS = 5_900;
+/** The moment a still picture shows: the made bot's owl on the rail, both bots listed, the row in 내 차례. */
+export const BOTS_STILL_MS = 7_800;
 
-/** The bot that asks in the scene, and the 전체 bot already connected. */
-const ASKING = "nightly";
+/** The bot made in the scene, and the 전체 bot already connected. */
+const MADE = "nightly";
 const FULL = "hermes";
 
 export function BotsScene({ at }: SceneProps) {
   const { t } = useInterfaceTranslation();
-  const pending = at >= ASKED && at < CONNECTED;
+  const making = at >= MAKING && at < WAITING;
+  const waiting = at >= WAITING && at < CONNECTED;
   const connected = at >= CONNECTED;
-  const pointer = at < APPROVE_POINT
-    ? { left: 22, top: 28, shown: at >= CHOOSE_POINT, pressed: at >= CHOOSE }
-    : { left: 87, top: 38, shown: at < CONNECTED + 600, pressed: at >= APPROVE };
+  const pointer = { left: 86, top: 44, shown: at >= MAKE_POINT && at < WAITING + 400, pressed: at >= MAKE };
   return (
-    <div className="relative flex aspect-[2/1] overflow-hidden bg-background text-foreground" data-whats-new-scene="bots" data-scene-beat={at >= ASKS ? "asks" : connected ? "connected" : "request"} aria-hidden>
+    <div className="relative flex aspect-[2/1] overflow-hidden bg-background text-foreground" data-whats-new-scene="bots" data-scene-beat={at >= ASKS ? "asks" : connected ? "connected" : waiting ? "waiting" : "make"} aria-hidden>
       <style>{SCENE_CSS}</style>
       <div className="flex w-(--size-rail) shrink-0 flex-col items-center gap-md border-r border-border bg-sidebar py-md">
         <span className="flex size-(--size-icon-button-standard) items-center justify-center rounded-md border border-border bg-muted"><LaptopIcon className="size-(--size-icon)" /></span>
-        <span className="h-(--size-hairline) w-(--size-icon) bg-border" />
-        <BotFace name={FULL} size="tile" mode="all" />
-        {at >= LANDED ? <BotFace name={ASKING} size="tile" mode="own" className="wns-pop" /> : null}
+        {at >= LANDED ? <span className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
+        {at >= LANDED ? <BotFace name={MADE} size="tile" className="wns-pop" /> : null}
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-sm p-md">
         <div className="flex min-h-0 flex-col rounded-md border border-border">
           <span className="border-b border-border px-md py-xs text-caption font-medium text-muted-foreground">{t("settings.tabs.externalTools")}</span>
-          {pending ? <Request at={at} /> : null}
-          {connected ? <Connected name={ASKING} mode="own" rise /> : null}
+          {making ? <Make at={at} /> : null}
+          {waiting ? <Waiting /> : null}
+          {connected ? <Connected name={MADE} mode="own" rise /> : null}
           <Connected name={FULL} mode="all" />
         </div>
         {at >= ASKS ? (
@@ -73,15 +72,15 @@ export function BotsScene({ at }: SceneProps) {
   );
 }
 
-/** The waiting request as Settings › 봇 draws it: owl, name, the two modes with its own space chosen, and Approve beside Refuse. */
-function Request({ at }: { at: number }) {
+/** The make card as Settings › 봇 draws it: the name with the owl it gets, the two modes with its own space chosen, and 만들기. */
+function Make({ at }: { at: number }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="wns-rise flex flex-col gap-sm border-b border-border px-md py-sm">
+      <span className="text-micro text-muted-foreground">{t("externalTools.create.title")}</span>
       <span className="flex items-center gap-sm">
-        <BotFace name={ASKING} size="row" mode="own" />
-        <span className="text-caption font-medium">{ASKING}</span>
-        <span className="text-micro text-muted-foreground">{t("externalTools.pending.title")}</span>
+        <BotFace name={MADE} size="row" />
+        <span className="flex-1 rounded-md border border-border px-sm py-xxs font-mono text-caption">{MADE}</span>
       </span>
       <span className="grid grid-cols-2 gap-sm">
         {(["own", "all"] as const).map((mode) => (
@@ -91,11 +90,23 @@ function Request({ at }: { at: number }) {
           </span>
         ))}
       </span>
-      <span className="flex justify-end gap-sm text-micro">
-        <span className="px-sm py-xxs text-muted-foreground">{t("externalTools.refuse")}</span>
-        <span className={cn("rounded-md px-sm py-xxs font-medium transition-colors", at >= APPROVE ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground")}>{t("externalTools.approve.own")}</span>
+      <span className="flex justify-end text-micro">
+        <span className={cn("rounded-md px-sm py-xxs font-medium transition-colors", "bg-primary text-primary-foreground", at >= MAKE && "opacity-(--opacity-dimmed)")}>{t("externalTools.create.submit")}</span>
       </span>
     </div>
+  );
+}
+
+/** The made bot waiting for its AI: the owl dimmed, under the group's title. */
+function Waiting() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <span className="wns-rise flex items-center gap-sm border-b border-border px-md py-xs">
+      <BotFace name={MADE} size="row" className="opacity-(--opacity-dimmed)" />
+      <span className="text-caption font-medium">{MADE}</span>
+      <Badge variant="secondary">{t("externalTools.mode.own")}</Badge>
+      <span className="ml-auto text-micro text-muted-foreground">{t("externalTools.invites.title")}</span>
+    </span>
   );
 }
 

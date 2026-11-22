@@ -368,7 +368,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     const oneRow = phone.locator(`[data-phone-agent$="|${one}"]`);
     const twoRow = phone.locator(`[data-phone-agent$="|${two}"]`);
     await expect(phone.locator('[data-phone-group="needs_you"]').locator(`[data-phone-agent$="|${one}"]`)).toBeVisible({ timeout: 20_000 });
-    await expect(oneRow.locator("[data-phone-line]")).toHaveText("배포 전에 테스트를 다시 돌릴까요?");
+    // The row's press lies behind its content (Doop 01), so its line is read from the row itself.
+    await expect(phone.locator(`[data-phone-row$="|${one}"] [data-phone-line]`)).toHaveText("배포 전에 테스트를 다시 돌릴까요?");
     await expect(phone.locator('[data-phone-group="working"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible();
     await expect(phone.locator("[data-phone-group] h2").first()).toContainText("Needs You");
     // B21: live; two asks and joins one under Needs You without a reload.
@@ -966,6 +967,9 @@ test("the phone's mission page ends each step in the desktop's line to the missi
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
     await phone.locator('[data-phone-tab="missions"]').tap();
     await phone.locator("[data-phone-mission]").first().tap();
+    // The page opens on its step list (Doop 14); the cards and their lines are the map's, one press away.
+    await expect(phone.locator('[data-phone-mission-view="steps"]')).toBeVisible();
+    await phone.locator("[data-phone-mission-map-toggle]").tap();
 
     await expect(phone.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
     const card = (key: string) => phone.locator(`[data-mission-node="${key}"]`);
@@ -1028,26 +1032,26 @@ test("the phone's automations tab lists, runs, pauses and turns on again, keeps 
     const row = phone.locator("[data-phone-automation]");
     await expect(row).toHaveCount(1);
     await expect(row.locator("[data-phone-automation-next]")).toContainText("Weekdays 09:00 · ");
-    const presses = row.locator("[data-phone-automation-press]");
-    await expect(presses).toHaveCount(2);
+    // Doop 15: a row carries a button only when a person must fix it; running and pausing are on its page.
+    await expect(row.locator("[data-phone-automation-press]")).toHaveCount(0);
+    await row.locator('[data-slot="row-overlay-button"]').tap();
+    const automationPage = phone.locator("[data-phone-automation-page]");
+    await expect(automationPage).toBeVisible();
+    await expect(phone.locator('[data-phone-automation-records-state="empty"]')).toBeVisible();
 
-    // B34: [멈춤] and [다시 켜기] reach the core and come back on the row.
-    await row.locator('[data-phone-automation-press="pause"]').tap();
-    await expect(row.locator("[data-phone-automation-paused]")).toHaveText("⏸ Paused");
-    await expect(row).toHaveAttribute("data-phone-automation-state", "paused");
-    await row.locator('[data-phone-automation-press="resume"]').tap();
-    await expect(row).toHaveAttribute("data-phone-automation-state", /on|running/);
-    await expect(row.locator('[data-phone-automation-press="pause"]')).toBeVisible();
+    // B34: [멈춤] and [다시 켜기] reach the core and come back on the page.
+    await automationPage.locator('[data-phone-automation-press="pause"]').tap();
+    await expect(automationPage.locator("[data-phone-automation-paused]")).toContainText("Paused");
+    await automationPage.locator('[data-phone-automation-press="resume"]').tap();
+    await expect(automationPage.locator('[data-phone-automation-press="pause"]')).toBeVisible();
 
     // B34, B19: [지금 실행] from the page starts a run marked manual.
-    await row.locator('[data-slot="row-overlay-button"]').tap();
-    await expect(phone.locator("[data-phone-automation-page]")).toBeVisible();
-    await expect(phone.locator('[data-phone-automation-records-state="empty"]')).toBeVisible();
-    await phone.locator('[data-phone-automation-page] [data-phone-automation-press="run"]').tap();
+    await automationPage.locator('[data-phone-automation-press="run"]').tap();
     await expect(phone.locator('[data-phone-automation-record="run"] [data-phone-automation-tag="manual"]')).toHaveCount(1, { timeout: 20_000 }); // wait-ok: the core's run reaches the phone's frame
     await expect(phone.locator('[data-phone-automation-notice]')).toHaveCount(0);
     await screenshot(phone, "mobile-phone-automation-page");
     await phone.locator('[data-phone-back="automations"]').tap();
+    await expect(row).toHaveAttribute("data-phone-automation-state", /on|running/);
 
     // B35: the computer goes away; the list stays dimmed under the other tabs' line with its buttons off, and fills again on reconnect.
     daemon = await live.restart(async () => {

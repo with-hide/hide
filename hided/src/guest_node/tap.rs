@@ -351,7 +351,7 @@ impl TapHub {
                     node.key(KeyTarget::Pane(pane), bytes, now_unix_ms());
                 }
                 ToNode::Resize { pane, rows, cols } => {
-                    node.view(&pane, GridSize { rows, cols }, false);
+                    node.size_from_tap(&pane, GridSize { rows, cols });
                 }
                 ToNode::Terminate { pane } => {
                     if let Some(terminate) = self.terminate.get() {
