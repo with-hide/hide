@@ -51,6 +51,21 @@ pub enum Event {
     FeatureUsed {
         feature: Feature,
     },
+    /// A bot was connected: the operator made it and its AI joined with the
+    /// code, or it asked and the operator approved it; with the mode it
+    /// works in. A join run again after a lost answer adds none.
+    BotConnected {
+        way: BotWay,
+        mode: crate::access::Mode,
+    },
+}
+
+/// How a bot came in: made in Settings › Bots and joined with its code, or
+/// asked with `hide access request` and approved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BotWay {
+    Made,
+    Asked,
 }
 
 /// The example an automation's form started from; `Own` for one written
@@ -114,6 +129,7 @@ pub fn measures() -> Vec<String> {
         "hide_active",
         "hide_automation_created",
         "hide_automation_run_ended",
+        "hide_bot_connected",
     ]
     .map(str::to_owned)
     .to_vec();
@@ -337,6 +353,7 @@ impl Event {
             Self::AutomationCreated { .. } => "hide_automation_created",
             Self::AutomationRunEnded { .. } => "hide_automation_run_ended",
             Self::FeatureUsed { .. } => "hide_feature_used",
+            Self::BotConnected { .. } => "hide_bot_connected",
         }
     }
 
@@ -469,6 +486,22 @@ impl Event {
                 ),
             ],
             Self::FeatureUsed { feature } => vec![("feature", feature.name())],
+            Self::BotConnected { way, mode } => vec![
+                (
+                    "way",
+                    match way {
+                        BotWay::Made => "made",
+                        BotWay::Asked => "asked",
+                    },
+                ),
+                (
+                    "mode",
+                    match mode {
+                        crate::access::Mode::Own => "own",
+                        crate::access::Mode::All => "all",
+                    },
+                ),
+            ],
         }
     }
 }

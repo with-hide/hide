@@ -20,6 +20,7 @@ use crate::latest_file::{LatestFile, read_capped};
 use crate::model::{
     AccessConnectionSnapshot, AccessInviteSnapshot, AccessPendingSnapshot, AccessSnapshot,
 };
+use crate::product_analytics::BotWay;
 
 #[derive(Default)]
 pub(crate) struct AccessRuntime {
@@ -283,6 +284,9 @@ impl Runtime {
                     }
                     if joined.put_up {
                         self.access_changed(true);
+                        if let Standing::Connected(connection) = &joined.standing {
+                            self.bot_connected(BotWay::Made, connection.mode);
+                        }
                     }
                     standing_answer(&joined.standing)
                 }
@@ -417,6 +421,9 @@ impl Runtime {
             Ok((kind, id, mode, save)) => {
                 self.note_access(kind, Some(id), mode, None);
                 self.access_changed(save);
+                if let AccessEvent::Approve { mode, .. } = &event {
+                    self.bot_connected(BotWay::Asked, *mode);
+                }
                 // Who keeps the bot's work follows the event that moved it:
                 // a bot of the whole Hide works as the operator, so all mode
                 // or a disconnect hands it to the operator at once, and own
@@ -440,6 +447,14 @@ impl Runtime {
                 self.note_access("access.event_refused", Some(id), None, Some(reason));
                 false
             }
+        }
+    }
+
+    /// A bot was connected: the usage statistics count it with how it came
+    /// in and its mode, and nothing of its name, key or program.
+    fn bot_connected(&self, way: BotWay, mode: Mode) {
+        if let Some(sink) = &self.product_analytics {
+            sink.capture(crate::product_analytics::Event::BotConnected { way, mode });
         }
     }
 
