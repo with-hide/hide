@@ -5995,6 +5995,11 @@ pub const PR_CARD_LIMIT: usize = 8;
 pub struct PrCardSnapshot {
     pub workspace_id: String,
     pub number: u32,
+    /// The host of the pull request's project, with the operations it
+    /// offers: the card draws an action only when its host declares it, and
+    /// the core refuses the event of one it does not. Absent until a read of
+    /// the card has placed the project.
+    pub host: Option<crate::code_host::HostDeclaration>,
     /// A read is in flight; the parts below are the last read's.
     pub reading: bool,
     /// The head commit the parts were read at, which a merge is conditioned on.
@@ -7278,6 +7283,13 @@ pub struct GithubStatusSnapshot {
     /// are unknown (issue #1189).
     #[serde(default)]
     pub unread_queries: Vec<ExtraQuery>,
+    /// The host whose read this is: its key, the operations it offers and
+    /// how it is reached ([`crate::code_host::HostDeclaration`]). Absent
+    /// before any host has answered for the project, for a project no
+    /// registered host reads (`no_github_remote`), and in a payload or a
+    /// saved file from before hosts were declared, which was GitHub's.
+    #[serde(default)]
+    pub host: Option<crate::code_host::HostDeclaration>,
 }
 
 /// How one part of a project's read stands: the four answers the reader,

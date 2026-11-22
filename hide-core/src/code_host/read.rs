@@ -254,7 +254,13 @@ pub(super) fn read(
                     generation: placed.project.generation,
                 })
                 .collect();
-            let answers = host_reads.read(node, &due);
+            let declaration = super::declaration(host.unit());
+            let mut answers = host_reads.read(node, &due);
+            // Every answer a host gives carries its declaration, set here
+            // once rather than by each host.
+            for answer in &mut answers {
+                answer.status.host = Some(declaration.clone());
+            }
             debug_assert_eq!(
                 answers.len(),
                 mine.len(),

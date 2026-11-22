@@ -100,6 +100,11 @@ pub struct PhonePr {
 /// What a card read beyond the list, without the body and the threads.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneCard {
+    /// The pull request's host and the operations it offers, as the
+    /// desktop's card carries it; absent from a core before hosts were
+    /// declared, which read GitHub alone.
+    #[serde(default)]
+    pub host: Option<crate::code_host::HostDeclaration>,
     #[serde(default)]
     pub reading: bool,
     #[serde(default)]

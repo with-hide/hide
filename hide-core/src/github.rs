@@ -492,6 +492,7 @@ fn read_project(
                     unavailable_reason: None,
                     failure_category: None,
                     unread_queries,
+                    host: None,
                 },
             },
             warning,
@@ -2805,6 +2806,7 @@ fn failed(reason: GhFailure) -> GithubStatusSnapshot {
         unavailable_reason: Some(reason.reason),
         failure_category: Some(reason.category),
         unread_queries: Vec::new(),
+        host: None,
     }
 }
 

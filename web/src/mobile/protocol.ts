@@ -208,7 +208,7 @@ export type PhonePrProject = {
 };
 
 /** What a card read beyond the list, as the phone gets it: no body and no threads. */
-export type PhonePrCard = Pick<PrCard, "reading" | "head" | "files" | "files_total" | "merge" | "failed" | "write">;
+export type PhonePrCard = Pick<PrCard, "host" | "reading" | "head" | "files" | "files_total" | "merge" | "failed" | "write">;
 
 /**
  * One listed pull request: the desktop list's value (`PullRequest`) with the board's group and reason, the agents it names on rows
