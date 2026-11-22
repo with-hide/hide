@@ -265,7 +265,7 @@ function Buttons({ pr, projects, connected }: { pr: PhonePr; projects: readonly 
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-md pb-md">
       <div className="flex flex-col gap-sm">
         {showWhy ? (
-          <p className="text-body text-muted-foreground" data-phone-pr-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base })}</p>
+          <p className="text-body text-muted-foreground" data-phone-pr-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base, host: pullHost(pr).name })}</p>
         ) : null}
         <WriteLine pr={pr} connected={connected} />
         {notice ? <p role="alert" className="text-body text-warning" data-phone-pr-notice="true">{noticeText(t, notice)}</p> : null}

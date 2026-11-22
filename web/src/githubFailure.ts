@@ -1,7 +1,7 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { githubReasonsEnglish } from "./i18n/resources/githubReasons";
-import { namedHost } from "./codeHost";
+import { isOtherHost, namedHost } from "./codeHost";
 import type { GithubFailureCategory, GithubStatus } from "./snapshot";
 
 /** A refusal of `gh` itself rather than of one repository: missing, older than Hide's commands need, or signed out. It is the same for every repository the core reads, so it speaks before any other failure. */
@@ -26,7 +26,7 @@ export const GH_REFUSAL_KEY: Record<GhRefusal, MessageKey> = {
 export function githubFailureText(status: Pick<GithubStatus, "failure_category" | "host">, t: TFunction<"translation">): string {
   const category = status.failure_category ?? "other";
   const host = namedHost(status.host);
-  if (host.key !== namedHost(null).key) {
+  if (isOtherHost(status.host)) {
     if (category !== "other" && isGhRefusal(category)) return t(GH_REFUSAL_KEY[category], { program: host.program });
     return t(category === "network_or_rate_limit" ? "githubReason.hostUnanswered" : "githubReason.hostUnread", { host: host.name });
   }

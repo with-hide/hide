@@ -1,6 +1,7 @@
 // The task row the docs teach first: one row that moves from working to a person's turn to done, drawn by the
 // sidebar's own `SessionRow`. With `state=` it holds that state; without it, it plays the three in turn, and under
 // reduced motion it holds the last one.
+import { pullLabel } from "../../codeHost";
 import { useEffect, useState } from "react";
 import { AgentMark } from "../../AgentMark";
 import { PrMark } from "../../components/pr-mark";
@@ -34,7 +35,7 @@ export default function TaskRowPart({ state }: PartProps) {
       <ol data-docs-state={shown}>
         {shown === "working" && <SessionRow mark={<><StatusMark mark="going" /><AgentMark kind="claude" /></>} title="api-refactor" right={time("12m")} line={{ text: "editing 3 files" }} />}
         {shown === "question" && <SessionRow mark={<><StatusMark mark="turn" /><AgentMark kind="claude" /></>} title="api-refactor" right={time("14m")} line={{ text: "asks: keep the old endpoint for one release?", className: "text-warning", wrap: true }} />}
-        {shown === "done" && <SessionRow mark={<><StatusMark mark="done" /><AgentMark kind="claude" /></>} title="api-refactor" chips={<PrMark state="mergeable" label={`${"#"}412`} />} right={time("21m")} line={{ text: "tests pass, PR opened" }} />}
+        {shown === "done" && <SessionRow mark={<><StatusMark mark="done" /><AgentMark kind="claude" /></>} title="api-refactor" chips={<PrMark state="mergeable" label={pullLabel({ number: 412 })} />} right={time("21m")} line={{ text: "tests pass, PR opened" }} />}
       </ol>
     </PartFrame>
   );

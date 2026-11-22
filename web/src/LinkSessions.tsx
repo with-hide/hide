@@ -1,5 +1,5 @@
 import { CopyIcon, LoaderCircleIcon, MessageSquareIcon, PlayIcon, CircleHelpIcon, SquareTerminalIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { hostLook, offers, projectHost, projectPullWords } from "./codeHost";
+import { hostLook, offers, projectPullWords } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -18,7 +18,7 @@ import { deviceLabel, failureKey, foldTimeline, resumeProvider, resumeBlock, res
 import { allAgents } from "./navigation";
 import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
-import { catalogOf, catalogWorkspaces, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
+import { catalogOf, catalogWorkspaces, localDeviceId, type HostDeclaration, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { useSessionResume } from "./useSessionResume";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -46,6 +46,7 @@ const ON_RAIL = "relative inline-flex rounded-full bg-background";
 export function LinkTimeline({
   panel,
   project,
+  host,
   pr,
   milestones,
   branchOf,
@@ -54,6 +55,8 @@ export function LinkTimeline({
 }: {
   panel: LinkPanel;
   project: Workspace;
+  /** The host whose operations decide the hand-over and whose word names the item (`codeHost.actionHost`). */
+  host: HostDeclaration | null;
   /** The list's row for the pull request, or none while it is unlisted (then only sessions are drawn). */
   pr: PullRequest | null;
   milestones: readonly Milestone[];
@@ -78,9 +81,8 @@ export function LinkTimeline({
   const { shown, earlier } = foldTimeline(entries, (entry) => entry.kind === "session", (entry) => entry.kind === "session" && entry.session.live !== null, unfolded);
   const finding = panel.loading || filling;
   const empty = lines.length === 0 && !panel.failure && !panel.loading;
-  // The pull request's word and its hand-over follow the project's host; an action it does not offer is not drawn
+  // The pull request's word and its hand-over follow its host; an action it does not offer is not drawn
   // (docs/UI_BEHAVIOR.md, Code hosts).
-  const host = projectHost(project);
   const item = hostLook(host?.key).item;
   return (
     <div className="flex flex-col gap-xs" data-link-sessions={panel.total} data-link-loading={finding ? "true" : undefined}>

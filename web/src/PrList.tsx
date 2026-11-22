@@ -1,5 +1,5 @@
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, PlayIcon } from "lucide-react";
-import { offers, projectHost, pullHost, pullLabel, pullWords } from "./codeHost";
+import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import type { PrGroupId } from "./agentScope";
@@ -240,8 +240,10 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   const folderGone = checkout !== null && (!checkout.exists || checkout.worktree?.missing === true);
   const worktree = checkout?.is_worktree === true && checkout.is_primary !== true;
   const local = project.tasks?.source?.kind === "local";
-  // An action the project's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts).
-  const host = projectHost(project);
+  // An action the pull request's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts): its card's
+  // declaration once read, else its project's.
+  const cardHost = useShellStore((state) => state.rest?.pr_work?.cards?.find((card) => card.workspace_id === project.id && card.number === pr.number)?.host);
+  const host = projectActionHost(project, cardHost);
   const linkable = !merged && row.issue === null && offers(host, "issues") && (!local || (worktree && !folderGone));
   const handover = offers(host, "handover");
   const delegate = () => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number });

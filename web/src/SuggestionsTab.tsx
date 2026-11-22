@@ -217,7 +217,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
             <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
           )}
           {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging" || row.attempt.phase === "syncing") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
-          {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : pullName({ number: row.attempt.pr_number ?? row.attempt.reference?.number ?? 0, reference: row.attempt.reference })} /> : null}
+          {row.attempt?.url && row.attempt.phase !== "pr_open" && attemptLinkLabel(row.attempt, row.outcome, t) ? <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={attemptLinkLabel(row.attempt, row.outcome, t)!} /> : null}
           {/* A ready branch's line below names the agent once. */}
           {row.attempt?.phase === "ready" && row.attempt.branch ? null : <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />}
         </span>
@@ -603,4 +603,14 @@ export function BranchButtons({ row, project, actions, again, className }: { row
       <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "discard")} data-suggestion-discard={row.id}>{t("suggestions.branch.discard")}</Button>
     </div>
   );
+}
+
+/**
+ * The words of an attempt's link: the issue it opened, or its pull request as its host names it; null when the
+ * attempt carries neither a number nor a reference, so no link is drawn rather than a made-up number.
+ */
+function attemptLinkLabel(attempt: NonNullable<SuggestionRow["attempt"]>, outcome: SuggestionRow["outcome"], t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+  if (outcome === "issue" && attempt.pr_number === null) return t("suggestions.openIssue");
+  const number = attempt.pr_number ?? attempt.reference?.number ?? null;
+  return number === null ? null : pullName({ number, reference: attempt.reference });
 }

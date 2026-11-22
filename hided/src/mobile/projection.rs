@@ -256,6 +256,7 @@ mod tests {
                 mode: "news".into(),
                 tone: "news",
                 pull_request: None,
+                pull_reference: None,
                 subject: None,
             })
         );

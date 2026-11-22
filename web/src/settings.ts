@@ -2,7 +2,7 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
-import { hostLook, namedHost, offers, projectHost } from "./codeHost";
+import { hostLook, isOtherHost, namedHost, offers, projectHost } from "./codeHost";
 import { engineStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
@@ -118,9 +118,9 @@ const GH_FAILURE_KEY: Partial<Record<GithubFailureCategory, MessageKey>> = {
  */
 export function githubAccessLine(access: GithubAccess, t: Translate, coreMachine: string | null = null, declaration: HostDeclaration | null = null): { text: string; tone: "ok" | "warn" } {
   if (access.state === "connected") return { text: t("common.connected"), tone: "ok" };
-  const { key: host, program } = namedHost(declaration);
+  const { program } = namedHost(declaration);
   // Another host's row reads as the approved mockup draws it; GitHub's keeps its own words.
-  if (access.category === "not_logged_in" && host !== namedHost(null).key) return { text: coreMachine ? t("settings.signInNeededOn", { machine: coreMachine }) : t("settings.signInNeeded"), tone: "warn" };
+  if (access.category === "not_logged_in" && isOtherHost(declaration)) return { text: coreMachine ? t("settings.signInNeededOn", { machine: coreMachine }) : t("settings.signInNeeded"), tone: "warn" };
   if (access.category === "not_logged_in" && coreMachine) return { text: t("issueSettings.ghNotLoggedInOn", { machine: coreMachine, program }), tone: "warn" };
   const key = GH_FAILURE_KEY[access.category];
   return { text: key ? t(key, { program }) : access.category, tone: "warn" };

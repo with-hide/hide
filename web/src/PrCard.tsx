@@ -1,5 +1,5 @@
 import { CheckCircle2Icon, LoaderCircleIcon, ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
-import { offers, projectHost, pullHost, pullLabel, pullWords } from "./codeHost";
+import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -19,7 +19,7 @@ import { ReviewBlock } from "./PrReviewers";
 import { badgeWord, staleLabel, staleness } from "./prMark";
 import { findPrEntry, opensCard, type PrEntry } from "./prWork";
 import { requireInterfaceLanguage } from "./i18n/locale";
-import { catalogWorkspaces, frontCheckout, type LinkPanel, type PrCard, type PrMergeMethod, type PullRequest, type Workspace } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type HostDeclaration, type LinkPanel, type PrCard, type PrMergeMethod, type PullRequest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { useRequestViewDemand } from "./requestViewDemand";
@@ -138,7 +138,7 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
       <div className="flex min-w-0 flex-wrap items-center gap-xs">
         <button type="button" className="mr-auto rounded-xs outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-number={pr.number}><span className="inline-flex items-center gap-xs"><PrMark state={pr.state} label={pullLabel(pr)} /><span className="text-micro text-muted-foreground">{badgeWord(pr, t).label}</span></span></button>
         <Button variant="outline" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-github="true">{t("recordCard.github", pullWords(pr))}<ExternalLinkIcon aria-hidden="true" /></Button>
-        <CardMenu project={project} pr={pr} entry={entry} actions={actions} />
+        <CardMenu project={project} pr={pr} entry={entry} cardHost={card?.host} actions={actions} />
       </div>
       <h2 className="min-w-0 whitespace-normal text-subhead font-semibold [overflow-wrap:anywhere]" data-pr-card-title="true">{pr.title}</h2>
       {author ? <span className="text-caption text-muted-foreground" data-pr-card-author={author}>{t("work.row.author", { name: author })}</span> : null}
@@ -155,13 +155,13 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
 }
 
 /** `⋯` of the card (D-28): hand the PR to an agent, make an issue for it, copy the branch name. */
-function CardMenu({ project, pr, entry, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; actions: Actions }) {
+function CardMenu({ project, pr, entry, cardHost, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; cardHost: HostDeclaration | null | undefined; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const merged = pr.state === "merged" || pr.state === "closed";
   const checkout = entry?.row.checkout_id ? project.checkouts.find((row) => row.id === entry.row.checkout_id) : null;
   const worktree = checkout?.is_worktree === true && !checkout.is_primary && checkout.exists && !checkout.worktree?.missing;
-  // An action the project's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts).
-  const host = projectHost(project);
+  // An action the pull request's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts).
+  const host = projectActionHost(project, cardHost);
   const linkable = !merged && !entry?.row.issue && offers(host, "issues") && (project.tasks?.source?.kind !== "local" || worktree);
   const handover = offers(host, "handover");
   const [linking, setLinking] = useState(false);
@@ -230,7 +230,7 @@ function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace
           {counts && counts.total > 0 ? <p className="mt-xs flex flex-wrap gap-x-sm gap-y-xxs text-micro text-muted-foreground" data-pr-card-check-counts="true">{(["passed", "running", "waiting", "failed", "skipped", "unknown"] as const).filter((key) => counts[key] > 0).map((key) => <span key={key}>{t(`recordCard.ci.${key}`, { count: counts[key] })}</span>)}</p> : null}
           {pr.reference ? <Button variant="text-link" size="inline" className="mt-xs gap-xxs text-micro" onClick={() => actions.openPullRequest(pr.reference!.checks_url, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></Button> : null}
         </div>
-        {review ? <ReviewBlock review={review} onPreCheck={offers(projectHost(project), "handover") ? () => preCheck(project, pr) : null} /> : null}
+        {review ? <ReviewBlock review={review} onPreCheck={offers(projectActionHost(project, card?.host), "handover") ? () => preCheck(project, pr) : null} /> : null}
       </Buttons>
       {entry && ["queued", "unjudged", "checking"].includes(entry.reason.kind) ? <ReasonLine reason={entry.reason} group={entry.row.group} className="whitespace-normal [overflow-wrap:anywhere]" /> : null}
       {facts.length > 0 ? <p className="text-micro text-muted-foreground" data-pr-card-fact-line="true">{facts.map((fact) => factText(fact, t)).join(" · ")}</p> : null}
@@ -303,7 +303,7 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const writing = write?.phase === "working";
   const head = card?.head ?? null;
   const words = pullWords(pr);
-  const host = projectHost(project);
+  const host = projectActionHost(project, card?.host);
   const confirming = confirm !== null && confirmHolds(confirm, { head, queue, method, mergeBlocked: why !== null, behind: pr.work?.merge_state === "behind" }) ? confirm : null;
   useEffect(() => {
     if (confirm !== null && confirming === null) setConfirm(null);
@@ -407,7 +407,7 @@ function Timeline({ project, pr, card, panel, waiting, number, actions }: { proj
         {holder.loading || !holder.total ? null : <span className="font-normal" data-pr-card-sessions={holder.total}>· {t("links.sessionsCount", { count: holder.total })}</span>}
       </h3>
       {/* A card out of front with no timeline drawn yet waits quietly for its turn rather than spinning. */}
-      {waiting ? <p className="text-caption text-muted-foreground" data-pr-card-waiting="true">{t("detail.readInFront")}</p> : <LinkTimeline panel={holder} project={project} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />}
+      {waiting ? <p className="text-caption text-muted-foreground" data-pr-card-waiting="true">{t("detail.readInFront")}</p> : <LinkTimeline panel={holder} project={project} host={projectActionHost(project, card?.host)} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />}
     </section>
   );
 }

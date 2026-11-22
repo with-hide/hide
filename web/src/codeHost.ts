@@ -34,6 +34,11 @@ export function namedHost(declaration: HostDeclaration | null | undefined): Name
   return declaration ? { key: declaration.key, name: declaration.name, program: declaration.access.program } : { key: UNDECLARED, name: LOOKS[UNDECLARED]!.name, program: "gh" };
 }
 
+/** Whether `declaration` names a host other than GitHub, whose screens keep main's words (docs/UI_BEHAVIOR.md, Code hosts). */
+export function isOtherHost(declaration: HostDeclaration | null | undefined): boolean {
+  return namedHost(declaration).key !== UNDECLARED;
+}
+
 /**
  * The look of the host `key` names; no key is GitHub's, as a core before hosts sent none. A host the core
  * registered and this table does not know yet draws a plain repository mark under its key, and its numbers come
@@ -98,6 +103,11 @@ export function statusesHost(statuses: readonly GithubStatus[]): HostDeclaration
  */
 export function actionHost(cardHost: HostDeclaration | null | undefined, projectStatuses: readonly GithubStatus[]): HostDeclaration | null {
   return cardHost ?? statusesHost(projectStatuses);
+}
+
+/** [`actionHost`] for a desktop project, whose statuses sit on its checkouts. */
+export function projectActionHost(workspace: Workspace, cardHost: HostDeclaration | null | undefined): HostDeclaration | null {
+  return actionHost(cardHost, hostStatuses(workspace));
 }
 
 

@@ -113,7 +113,7 @@ it.each([[" CLAUDE_CODE ", "claude", "Claude Code"], [" CODEX ", "codex", "Codex
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   try {
     useShellStore.setState({ rest: { navigator: { workspaces: [project], devices: [{ agent_scope: emptyScope(), id: "local", kind: "local", label: "Local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null }] } } });
-    await act(async () => root.render(<TooltipProvider><LinkTimeline panel={panel} project={project} pr={null} milestones={[]} branchOf={() => "task"} onRetry={() => undefined} actions={actions} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><LinkTimeline panel={panel} project={project} host={null} pr={null} milestones={[]} branchOf={() => "task"} onRetry={() => undefined} actions={actions} /></TooltipProvider>));
     // The row leads with its status mark and the agent's logo; the logo names the product, so the line carries only the state (PRD record-card-readability D-09, B17).
     expect(container.querySelector("[data-session-row] [data-agent-mark]")).not.toBeNull();
     expect(container.querySelector("[data-session-row-line]")?.textContent).toBe("Done");

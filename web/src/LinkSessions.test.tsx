@@ -35,7 +35,7 @@ async function mountTimeline(host: HostDeclaration, language: "en" | "ko") {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><LinkTimeline panel={panel} project={project} pr={pr} milestones={[{ kind: "opened", at: 1 }]} branchOf={() => "feat/retry"} onRetry={() => undefined} actions={createActions(() => true)} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider><LinkTimeline panel={panel} project={project} host={host} pr={pr} milestones={[{ kind: "opened", at: 1 }]} branchOf={() => "feat/retry"} onRetry={() => undefined} actions={createActions(() => true)} /></TooltipProvider>));
   return {
     none: container.querySelector("[data-link-none]")?.textContent ?? "",
     opened: container.querySelector("[data-timeline-milestone=opened]")?.textContent ?? "",
