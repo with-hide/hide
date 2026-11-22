@@ -13,7 +13,7 @@ import { sourceTime } from "./memoryList";
 import { lineParts, sidebarLine } from "./agentRow";
 import { BranchFileDiff } from "./BranchCard";
 import { allAgents } from "./paneAgents";
-import { pullName } from "./codeHost";
+import { pullName, servesSuggestions, useProjectHost } from "./codeHost";
 import { catalogWorkspaces, type AgentRow, type ChangeRequestRef, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionPlan, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
@@ -522,7 +522,7 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 
 /**
  * A choice's `문서 고치기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요`
- * in its place (B18), a ready branch's choices, and a failed
+ * in its place (B18) unless the project's host files no issues, a ready branch's choices, and a failed
  * attempt's `다시 시도` (B12), each
  * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
  * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it
@@ -532,6 +532,8 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 function Buttons({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
+  // A host that files no issues, such as gitlab.com for now, holds an issue row for good: nothing to connect, so no hold is drawn.
+  const host = useProjectHost(id);
   const offer = applyOffer(row);
   const line = !offered(row) && row.group !== "applied" ? attemptLine(t, row) : null;
   const retry = line?.retry === true;
@@ -552,7 +554,7 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
           {t(row.local?.failure === "write_failed" ? "suggestions.retry" : "suggestions.makeLocal")}
         </Button>
       ) : offer === "github_needed" ? (
-        <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
+        servesSuggestions(host) ? <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span> : null
       ) : offer ? (
         <Button className="pointer-events-auto" size="sm" variant="secondary" onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {offer === "issue" ? t("suggestions.makeIssue") : row.plan ? t("suggestions.makePrFile", { file: fileName(row.plan.path) }) : t("suggestions.makePr")}

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { GITLAB } from "./gallery/PrCardScene";
 import { HideAiTool } from "./HideAiTool";
 import { clientI18n } from "./i18n/translator";
 import type { ProjectSuggestions, SnapshotRest } from "./snapshot";
@@ -460,6 +461,20 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestions-global]")?.textContent).toContain("Too large, so sessions aren't given it");
     expect(q('[data-suggestion="s1"] [data-suggestion-local]')?.textContent).toContain("Can't confirm the evidence");
     expect(q('[data-suggestion-apply="local_held"]')?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("draws no GitHub hold and no GitHub signals for a gitlab.com project, whose host files no issues (docs/UI_BEHAVIOR.md, Code hosts)", async () => {
+    const project = suggestionsProject({ rows: [suggestionRow("s3", { outcome: "issue", hold: "github_needed" })] });
+    project.settings.signals = project.settings.signals.map((row) => (row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const } : row));
+    await render(project);
+    const onGitlab = structuredClone(rest);
+    onGitlab.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: 1, host: GITLAB };
+    await act(async () => useShellStore.setState({ rest: onGitlab }));
+    expect(q('[data-suggestion="s3"] [data-suggestion-github-needed]')).toBeNull();
+    expect(q('[data-suggestion="s3"] [data-suggestion-dismiss]')?.textContent).toBe("Skip");
+    await press("[data-hide-ai-settings-open]");
+    expect([...q("[data-hide-ai-settings]")!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session"]);
+    expect(q("[data-hide-ai-settings]")?.textContent).not.toContain("GitHub");
   });
 
   it("opens on the row a Needs You row named, in 제안 (B11)", async () => {
