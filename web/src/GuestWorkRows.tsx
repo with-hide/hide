@@ -1,13 +1,14 @@
 import { useMemo } from "react";
 import type { Actions } from "./actions";
-import { DeviceChip } from "./components/device-chip";
 import { StatusMark } from "./components/status-mark";
 import { RowButton } from "./components/ui/row-button";
 import { AgentRowMark } from "./AgentRowMark";
 import { Elapsed } from "./components/elapsed";
 import { SessionRowBody } from "./components/session-row";
 import { GuestMark, useGuestPanes } from "./GuestPaneScreen";
-import { guestGroups, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { guestGroups, peerMachines, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { ownWindow } from "./pairing";
+import { tileMonogram } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import type { RowMark } from "./snapshot";
@@ -90,26 +91,53 @@ export function GuestMachineGroups({ actions, projects = null }: { actions: Acti
   );
 }
 
-/** A connected machine's own rows in `group`, as that machine told them. */
+/**
+ * A connected machine's own rows in `group`, as that machine told them, on
+ * this computer's own window only: another computer showing this one's
+ * screen shows this computer's work and nobody else's.
+ */
 export function usePeerRows(group: "needs_you" | "done"): PeerRow[] {
+  const own = useShellStore((s) => ownWindow(s.pairing));
   const work = useShellStore((s) => s.rest?.navigator?.peer_work);
   const peers = useShellStore((s) => s.rest?.navigator?.peers);
-  return useMemo(() => peerRows(useShellStore.getState().rest, group), [work, peers, group]);
+  return useMemo(() => (own ? peerRows(useShellStore.getState().rest, group) : NO_PEER_ROWS), [own, work, peers, group]);
 }
+
+const NO_PEER_ROWS: PeerRow[] = [];
 
 /**
  * Another machine's own Needs You or Done rows (D-50, B49), after this
- * computer's, drawn as this computer's own rows are: the status mark and the
- * agent's logo as the logo view mode says, the title with that machine's
- * filled chip and the time since it changed, then where it runs and why it
- * waits. The chip is filled because the work is that machine's and opens in
- * its tile. This computer rings nothing for them; the machine that owns the
- * work picks where its notice goes.
+ * computer's, under one small head per machine with its letters, its name
+ * and its count; this computer's own rows keep no head. Each row is drawn as
+ * this computer's own are: the status mark and the agent's logo as the logo
+ * view mode says, the title and the time since it changed, then where it
+ * runs and why it waits. This computer rings nothing for them; the machine
+ * that owns the work picks where its notice goes.
  */
 export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
   const rows = usePeerRows(group);
+  const machines = useMemo(() => peerMachines(rows), [rows]);
   if (rows.length === 0) return null;
+  return (
+    <>
+      {machines.map((machine) => (
+        <li key={machine.deviceId} data-peer-machine={machine.deviceId}>
+          <div className="flex h-(--size-sidebar-section-header) items-center gap-xs px-xs text-micro font-medium text-muted-foreground" data-peer-machine-head={machine.deviceId}>
+            <span aria-hidden="true" className="rounded-xs bg-secondary px-xxs font-semibold text-subtle-foreground">{tileMonogram(machine.name)}</span>
+            <span className="min-w-0 truncate">{machine.name}</span>
+            <span className="tabular-nums">{machine.rows.length}</span>
+          </div>
+          <ul aria-label={machine.name} className="flex min-w-0 flex-col">
+            <PeerMachineRows group={group} rows={machine.rows} actions={actions} />
+          </ul>
+        </li>
+      ))}
+    </>
+  );
+}
+
+function PeerMachineRows({ group, rows, actions }: { group: "needs_you" | "done"; rows: PeerRow[]; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
   return (
     <>
       {rows.map(({ row, deviceId, machine }) => {
@@ -134,9 +162,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
                   <AgentRowMark kind={row.agent_kind} />
                 </>}
                 head={<>
-                  <span className="min-w-0 truncate text-foreground">{row.title}</span>
-                  <DeviceChip label={machine} variant="remote" className="max-w-2/5" />
-                  <span className="min-w-0 flex-1" />
+                  <span className="min-w-0 flex-1 truncate text-foreground">{row.title}</span>
                   <Elapsed since={row.changed_at_unix_ms} aria-hidden="true" className="shrink-0 font-mono text-caption text-muted-foreground" data-peer-elapsed="true" />
                 </>}
               >

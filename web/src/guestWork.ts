@@ -131,6 +131,17 @@ export function peerRows(rest: SnapshotRest | null | undefined, group: "needs_yo
   });
 }
 
+/** `rows` by the machine they are on, in the order the machines first come. */
+export function peerMachines(rows: readonly PeerRow[]): { deviceId: string; name: string; rows: PeerRow[] }[] {
+  const machines = new Map<string, { deviceId: string; name: string; rows: PeerRow[] }>();
+  for (const row of rows) {
+    const machine = machines.get(row.deviceId) ?? { deviceId: row.deviceId, name: row.machine, rows: [] };
+    machine.rows.push(row);
+    machines.set(row.deviceId, machine);
+  }
+  return [...machines.values()];
+}
+
 /**
  * Why another machine's row waits, in this window's words, when that
  * machine's core sent no sentence of its own: the same words this

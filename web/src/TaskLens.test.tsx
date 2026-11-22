@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { NOTHING_UNDER_WAY } from "./pairing";
 import { createRoot } from "react-dom/client";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
@@ -59,7 +60,8 @@ async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | 
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
-  useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused });
+  // This computer's own window, the one that hided sends its pairing frame to.
+  useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused, pairing: NOTHING_UNDER_WAY });
   useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false });
   const sent: Sent[] = [];
   const actions = createActions((event) => { sent.push(event as Sent); return true; });
@@ -475,6 +477,25 @@ it("counts a connected machine's Needs You rows in the group's head and says why
   expect(container.querySelector("[data-peer-row='mini:w1:p1'] [data-peer-elapsed]")).not.toBeNull();
   expect(container.querySelector("[data-peer-row='mini:w1:p1']")?.textContent).toContain("권한 요청에서 멈춤");
   expect(container.querySelector("[data-peer-row='mini:w1:p2']")?.textContent).toContain("답을 기다림");
+  // This computer's own row keeps no head; the other machine's rows stand under its letters, name and count.
+  expect(container.querySelector('[data-task-group="needs_you"] [data-task-row="ask"]')?.closest("[data-peer-machine]")).toBeNull();
+  expect(container.querySelector("[data-task-group='needs_you'] [data-peer-machine-head='mini']")?.textContent).toBe("MmMac-mini2");
+  expect([...container.querySelectorAll("[data-task-group='needs_you'] [data-peer-machine='mini'] [data-peer-row]")].map((element) => element.getAttribute("data-peer-row"))).toEqual(["mini:w1:p1", "mini:w1:p2"]);
+});
+
+// Another computer showing this one's screen shows this computer's Needs You only, not the rows of the machines this one opens.
+it("shows no connected machine's rows on a screen another computer shows of this one", async () => {
+  const KEY = "ab".repeat(32);
+  const agents = [row("ask", { status_code: "question" }, { group: "needs_you" })];
+  const base = snapshot(agents, [card("ask", "needs_you", "hide-main")]);
+  const told = [{ id: "w1:p1", group: "needs_you", title: "Fix login", agent_kind: "claude", mark: "turn", status_code: "approval", changed_at_unix_ms: 1 }];
+  const rest = { ...base, navigator: { ...base.navigator, peers: [{ key: KEY, device_id: "macbook", name: "MacBook", connected: true }], peer_work: [{ device_id: "macbook", key: KEY, needs_you: 1, done: 0, rows: told }] } } as unknown as SnapshotRest;
+  const { container } = await render(rest, agents);
+  expect(container.querySelector("[data-peer-row]")).not.toBeNull();
+  // hided sends the pairing frame to this computer's own windows only.
+  await act(async () => useShellStore.setState({ pairing: null }));
+  expect(container.querySelector('[data-task-group-head="needs_you"]')?.textContent).toBe("내 차례1");
+  expect(container.querySelector("[data-peer-row]")).toBeNull();
 });
 
 // A task row draws the row's own mark and line, as the sidebar's (status-marks D-12, D-22, D-24, B16, B33, B35).
