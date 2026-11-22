@@ -117,6 +117,15 @@ impl Window {
             if value["type"] == "error" {
                 return value["message"].as_str().unwrap().to_owned();
             }
+            // A kind the connection may not send is refused on it alone
+            // (PRD device-connect-iroh D-67).
+            if value["type"] == "refused" {
+                return format!(
+                    "refused {} {}",
+                    value["payload"]["kind"].as_str().unwrap(),
+                    value["payload"]["reason"].as_str().unwrap()
+                );
+            }
         }
     }
 }
@@ -680,10 +689,7 @@ async fn only_an_operator_window_approves_a_tool() {
     screen
         .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
-    assert_eq!(
-        screen.error().await,
-        "Bots are approved in an operator window"
-    );
+    assert_eq!(screen.error().await, "refused access_approve not_here");
     let status = tool.run(&["access", "status", "--json"]);
     assert_eq!(status.json()["value"]["state"], "pending", "{}", status.out);
 

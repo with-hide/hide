@@ -35,6 +35,7 @@ import { InlineStartHost } from "./AgentTabStart";
 import { FONT_SIZE_BASE, usableAccent, usableFontSize, usableTerminalFontFamily, usableTerminalFontSize } from "./settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
+import { RemoteStage } from "./RemoteStage";
 import { TitleRow } from "./TitleRow";
 import { readEditorAvailability } from "./host";
 import { RegionFailed, RenderBoundary, ShellFailed, SidebarFailed, TitleRowFailed } from "./RenderBoundary";
@@ -42,6 +43,8 @@ import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
+import { remoteBridge } from "./remoteView";
+import { takeComputerWork } from "./computerWork";
 import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
@@ -69,6 +72,18 @@ export function App() {
   useGithubLook(actions);
   useFetchLook(actions);
   usePracticeChannel(actions);
+  // Another computer's view takes the work its own window's operator asked of it (PRD device-connect-iroh D-73, D-78).
+  useEffect(() => {
+    const bridge = remoteBridge();
+    if (!bridge) return;
+    return takeComputerWork(bridge, {
+      actions,
+      rest: () => useShellStore.getState().rest,
+      subscribe: (listener) => useShellStore.subscribe(listener),
+      connected: () => useShellStore.getState().connection === "live",
+      note: (message) => useShellStore.getState().noteDiagnostic(message),
+    });
+  }, [actions]);
   // Open in VS Code is offered only where the desktop app found it (D-14).
   useEffect(() => readEditorAvailability(), []);
 
@@ -274,6 +289,7 @@ export function App() {
   // window's width under the top row, because while it shows the whole window
   // waits on the core; every other notice stands in the window's corner,
   // newest nearest the corner.
+  const remoteScreen = useUiStore((s) => s.remoteScreen);
   const notices: [string, ReactNode][] = [
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
@@ -321,14 +337,23 @@ export function App() {
           {leftOut(["connection", <ConnectionBadge actions={actions} />])}
           {leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />])}
           <div className="flex min-h-0 flex-1">
-            <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
-              <Sidebar actions={actions} />
-            </RenderBoundary>
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <RenderBoundary region="screen" fallback={<RegionFailed />}>
-                <CenterScreen actions={actions} />
+            {/* A paired machine's own screen takes the sidebar's and the center's place, beside the rail (PRD device-connect-iroh B17). */}
+            {remoteScreen !== null ? (
+              <RenderBoundary region="remote_screen" fallback={<RegionFailed />}>
+                <RemoteStage actions={actions} />
               </RenderBoundary>
-            </main>
+            ) : (
+              <>
+                <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
+                  <Sidebar actions={actions} />
+                </RenderBoundary>
+                <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <RenderBoundary region="screen" fallback={<RegionFailed />}>
+                    <CenterScreen actions={actions} />
+                  </RenderBoundary>
+                </main>
+              </>
+            )}
           </div>
           <ToastStack>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}

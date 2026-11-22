@@ -94,6 +94,8 @@ struct Shared {
     /// Ends every stream of the connection when it closes.
     open: Arc<Gate>,
     closed: watch::Sender<Option<CloseCode>>,
+    /// The path both ends read: [`PathKind::Local`] unless a test moved it.
+    path: watch::Sender<PathKind>,
 }
 
 impl Shared {
@@ -132,6 +134,16 @@ fn proof_failed(error: io::Error) -> TransportError {
 }
 
 impl Loopback {
+    /// Moves every live connection of this machine onto `path`, as a
+    /// transport does when a direct path opens beside the relay; both ends
+    /// read it.
+    pub fn move_path(&self, path: PathKind) {
+        let conns = self.conns.lock().expect("the connection list's lock");
+        for conn in conns.iter().filter_map(Weak::upgrade) {
+            conn.path.send_replace(path);
+        }
+    }
+
     fn track(&self, conn: &LoopConn) {
         let mut conns = self.conns.lock().expect("the connection list's lock");
         conns.retain(|known| known.strong_count() > 0);
@@ -163,6 +175,7 @@ impl PeerTransport for Loopback {
             id: self.net.next_id.fetch_add(1, Ordering::AcqRel) + 1,
             open: Gate::new(OPEN),
             closed: watch::channel(None).0,
+            path: watch::channel(PathKind::Local).0,
         });
         let (to_them, from_us) = mpsc::channel(BACKLOG);
         let (to_us, from_them) = mpsc::channel(BACKLOG);
@@ -304,7 +317,20 @@ impl PeerConn for LoopConn {
     }
 
     fn path(&self) -> PathKind {
-        PathKind::Local
+        *self.shared.path.borrow()
+    }
+
+    async fn path_changed(&self, from: PathKind) -> PathKind {
+        let mut path = self.shared.path.subscribe();
+        loop {
+            let now = *path.borrow_and_update();
+            if now != from {
+                return now;
+            }
+            if path.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+        }
     }
 
     async fn open(&self, _priority: i32) -> Result<Halves, TransportError> {
@@ -361,6 +387,7 @@ mod tests {
                 id: net.next_id.fetch_add(1, Ordering::AcqRel) + 1,
                 open: Gate::new(OPEN),
                 closed: watch::channel(None).0,
+                path: watch::channel(PathKind::Local).0,
             }),
             peer: as_key,
             dialed: false,

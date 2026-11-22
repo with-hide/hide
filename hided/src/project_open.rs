@@ -179,17 +179,19 @@ pub(crate) fn answer(request_id: &str, outcome: Result<Value, Refused>) -> Value
 /// `workspace_result` as every scoped request is, then closed. It is never a
 /// screen: no snapshot, no terminal.
 pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, connection: u64) {
-    let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-    if previous >= crate::state_file::MAX_CLIENTS {
-        state.clients.fetch_sub(1, Ordering::SeqCst);
-        crate::server::refuse(
-            &mut socket,
-            crate::server::CloseReason::ClientLimit,
-            Some(previous + 1),
-        )
-        .await;
-        return;
-    }
+    let _local = match crate::server::LocalSeat::take(&state) {
+        Ok(local) => local,
+        Err(count) => {
+            crate::server::refuse(
+                &mut socket,
+                crate::server::CloseReason::ClientLimit,
+                Some(count),
+            )
+            .await;
+            return;
+        }
+    };
+    state.clients.fetch_add(1, Ordering::SeqCst);
     let incoming = tokio::time::timeout(Duration::from_secs(10), socket.recv()).await;
     let request = match incoming {
         Ok(Some(Ok(Message::Text(text)))) if text.len() <= 16 * 1024 => {

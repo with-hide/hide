@@ -8,12 +8,19 @@
 import type { TFunction } from "i18next";
 import { deviceScope } from "./agentScope";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
+import { isRemoteView } from "./remoteView";
 import { localDeviceId, type AgentRow, type Device, type SnapshotRest, type Workspace } from "./snapshot";
 
 export { thisMachineKey } from "./screenMachine";
 
-/** The rail is shown unless the operator hid it; the choice is the core's `ui_state.device_rail_visible`. */
+/**
+ * The rail is shown unless the operator hid it; the choice is the core's
+ * `ui_state.device_rail_visible`. Another machine's view draws none: the
+ * desktop that shows it has its own rail beside it (PRD device-connect-iroh
+ * B20).
+ */
 export function railShown(rest: SnapshotRest | null): boolean {
+  if (isRemoteView()) return false;
   return rest?.ui_state?.device_rail_visible ?? true;
 }
 

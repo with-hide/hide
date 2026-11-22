@@ -9,7 +9,7 @@ import { deviceScope } from "./agentScope";
 // and a number with nothing at it selects nothing.
 
 import { asksOperator, type TreeRow } from "./agentRow";
-import { frontDeviceId, railDeviceIds } from "./devices";
+import { frontDeviceId } from "./devices";
 import { deviceListedAgents } from "./navigation";
 import { agentsByPane, allAgents as everyPaneAgent } from "./paneAgents";
 import { projectRows, activeCheckouts, inactiveCheckouts, folderCheckout, projectExpanded } from "./projects";
@@ -20,7 +20,7 @@ import { contextWorkspaces, contextAgents } from "./remote";
 import { areasOf, findArea } from "./areaLayout";
 import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
-import { listedCatalog, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
+import { listedCatalog, type AgentRow, type Checkout, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
 import { frontTool, toolProjectChoice, toolSidebarProjects, toolTaskList } from "./toolCells";
 import { boardProjects } from "./navigation";
@@ -37,16 +37,6 @@ export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
   const seen = new Set<string>();
   panes.filter((pane) => !seen.has(pane) && !!seen.add(pane)).slice(0, DIGITS.length).forEach((pane, index) => numbered.set(DIGITS[index]!, pane));
   return numbered;
-}
-
-/**
- * The device id at each number ⌘n selects: the rail's tiles top to bottom,
- * the window's own machine first, numbered the same whether the rail shows
- * or not. A tile drawn before the core named its machine has no id to
- * select, so it holds no number.
- */
-export function numberedDevices(devices: readonly Device[] | undefined): Map<Digit, string> {
-  return numberedPanes(railDeviceIds(devices).filter((id) => id !== ""));
 }
 
 /**

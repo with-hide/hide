@@ -272,8 +272,15 @@ async function openMenu(q: (selector: string) => HTMLElement | null, id: string)
   });
 }
 
-it("crowns the core's machine and offers no device the core (PRD device-connect-iroh D-35)", async () => {
-  const { q, unmount } = await mount(state([remote("mini")]));
+it("crowns the core's machine only where Hides do not connect, and offers no device the core (PRD device-connect-iroh D-35, D-80)", async () => {
+  const next = state([remote("mini")]);
+  // The crown is the old model's, where one core serves every machine: a build
+  // that connects two Hides runs a core on each and marks none (PRD
+  // device-connect-iroh D-80).
+  const connected = await mount(next);
+  expect(connected.q("[data-device-core]")).toBeNull();
+  await connected.unmount();
+  const { q, unmount } = await mount({ ...next, daemon: { device_connect: false } } as never);
   expect(q('[data-device-core="local"]')?.textContent).toBe("core");
   expect(q('[data-device-core="mini"]')).toBeNull();
   await openMenu(q, "mini");
@@ -287,7 +294,7 @@ it("puts a node's own machine first as This Mac, with the end of its link in its
   const node = remote("mbp", { label: "MacBook Pro", dials_in: true, ssh_alias: null });
   const next = state([remote("mini"), node]);
   (next.rest.navigator.devices[0] as Record<string, unknown>).machine_name = "Mac Studio";
-  const { q, unmount } = await mount(next);
+  const { q, unmount } = await mount({ ...next, daemon: { device_connect: false } } as never);
   const names = [...document.querySelectorAll("[data-device-name]")].map((row) => row.textContent);
   expect(names).toEqual(["This Mac", "Mac Studio", "Mac mini"]);
   expect(q('[data-device-core="local"]')).not.toBeNull();

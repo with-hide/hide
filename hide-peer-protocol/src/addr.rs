@@ -66,6 +66,10 @@ impl PeerAddr {
 pub enum PathKind {
     /// Between the two machines' own addresses.
     Direct,
+    /// Between the two machines' addresses on a Tailscale network: a direct
+    /// path to an address in 100.64.0.0/10, named apart because the operator
+    /// set that network up (PRD device-connect-iroh D-86).
+    Tailscale,
     /// Through the relay.
     Relay,
     /// Inside one machine: the loopback transport, or `wsl.exe` between a

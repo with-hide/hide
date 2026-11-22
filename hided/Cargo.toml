@@ -54,9 +54,11 @@ ring = "=0.17.14"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 # A device pane's command stream arrives as bytes over its node link and is
 # served as HTTP in process (`server::serve_link_connection`); axum already
-# builds both.
-hyper = { version = "=1.12.0", features = ["http1", "server"] }
+# builds both. A guest reads a host's page and assets over a screen stream
+# with hyper's client (`remote_screen`).
+hyper = { version = "=1.12.0", features = ["client", "http1", "server"] }
 hyper-util = { version = "=0.1.21", features = ["service", "tokio"] }
+http-body-util = "=0.1.5"
 # The QR `hide phone pair` draws in a terminal (`phone_cli`); no dependencies
 # of its own.
 qrcodegen = "=1.8.0"

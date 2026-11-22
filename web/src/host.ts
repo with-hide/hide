@@ -10,6 +10,7 @@
 import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
+import type { RemoteWork, RemoteWorkResult } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
 
@@ -180,6 +181,8 @@ export type HostBridge = {
   openPath(path: string): void;
   /** Outside files shown in Hide; absent from an older host. */
   external?: ExternalBridge;
+  /** Another machine's own Hide screen in this window (PRD device-connect-iroh D-67); absent on an older host. */
+  remoteScreens?: RemoteScreensBridge;
   /**
    * Shows a system notification about one Factory item (PRD factory-observer
    * D-50) or agent (PRD first-run-onboarding D-10) while the app runs; a
@@ -345,6 +348,36 @@ declare global {
     hideHost?: HostBridge;
   }
 }
+
+/**
+ * Another machine's Hide screen, which the desktop host draws in a sandboxed
+ * view of its own over the window (PRD device-connect-iroh D-67, B20): the
+ * shell says which machine and where, and hears how its page loaded.
+ */
+export type RemoteScreensBridge = {
+  /**
+   * Shows that machine's screen over `rect` of the window, in the shell's CSS
+   * pixels, or none. Its socket to that machine lives only while it shows
+   * (B63); a screen whose page could not load loads again when shown. `key`
+   * is the key the machine is paired under now: a page loaded under another
+   * key is closed and the machine's page loaded anew.
+   */
+  show(view: { device: string; key: string; rect: BrowserRect } | null): void;
+  /**
+   * The operator's ask of that machine's screen (PRD device-connect-iroh
+   * D-73, D-78): its work to show, or a start to make there. Made as the
+   * screen is asked to show; its page takes it once loaded under `key`, or
+   * drops it when it does not load. Absent on an older desktop app.
+   */
+  go?(request: { device: string; key: string; work: RemoteWork }): void;
+  /** How the shown screen's page loaded; returns the unsubscribe. */
+  onState(listener: (state: RemoteScreenState) => void): () => void;
+  /** How each start handed by `go` ended, by its request id; returns the unsubscribe. Absent with `go`. */
+  onWorkResult?(listener: (result: RemoteWorkResult & { device: string }) => void): () => void;
+};
+
+/** `failed` carries the reason this computer's daemon gave (`not_connected`, `paused`, `paused_there`, `no_grant`, ...). */
+export type RemoteScreenState = { device: string; state: "opening" | "shown" | "failed"; reason?: string };
 
 export function hostBridge(): HostBridge | null {
   return typeof window !== "undefined" && window.hideHost?.kind === "electron" ? window.hideHost : null;

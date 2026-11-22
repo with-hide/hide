@@ -169,7 +169,7 @@
   "automation_weekday": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
   "peer_opens": ["confirming", "active", "paused", "paused_there", "removing", "unpaired"],
   "peer_opened_by": ["active", "paused"],
-  "peer_path": ["direct", "relay", "local"],
+  "peer_path": ["direct", "tailscale", "relay", "local"],
   "peer_reason": ["relay_unreachable", "relay_monthly_limit"],
   "peer_update": ["here", "there", "here_asked", "there_asked", "updating", "update_not_reached", "update_rolled_back", "update_busy", "update_failed"],
   "store_item_kind": ["skill", "mcp"],

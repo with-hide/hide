@@ -74,6 +74,12 @@ pub enum PeerEvent {
         key: PeerKey,
         code: CloseCode,
     },
+    /// The connection's bytes take another path now: a direct one opened
+    /// beside the relay, or the relay took over (D-86).
+    PathChanged {
+        key: PeerKey,
+        path: PathKind,
+    },
     /// The two builds cannot connect until one updates (D-40).
     UpdateNeeded {
         key: PeerKey,
@@ -293,9 +299,18 @@ struct Place {
     kind: StreamKind,
 }
 
+/// A kind's place in [`Counts`]: its place in [`StreamKind::ALL`], since
+/// tags need not follow each other.
+fn slot(kind: StreamKind) -> usize {
+    StreamKind::ALL
+        .iter()
+        .position(|listed| *listed == kind)
+        .expect("every kind is in ALL")
+}
+
 impl Counts {
     fn take(self: &Arc<Self>, kind: StreamKind) -> Option<Place> {
-        let count = &self.0[kind.tag() as usize - 1];
+        let count = &self.0[slot(kind)];
         if count.fetch_add(1, Ordering::AcqRel) >= limits::max_streams_of(kind) {
             count.fetch_sub(1, Ordering::AcqRel);
             return None;
@@ -309,7 +324,7 @@ impl Counts {
 
 impl Drop for Place {
     fn drop(&mut self) {
-        self.counts.0[self.kind.tag() as usize - 1].fetch_sub(1, Ordering::AcqRel);
+        self.counts.0[slot(self.kind)].fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -1231,10 +1246,10 @@ impl<T: PeerTransport> Inner<T> {
         tokio::spawn(Arc::clone(self).read_hello_frames(link.clone(), recv));
         tokio::spawn(Arc::clone(self).accept_streams(link.clone()));
         tokio::spawn(Arc::clone(self).watch_end(link.clone()));
-        self.emit(PeerEvent::Connected {
-            key,
-            path: link.path(),
-        });
+        // Read once, so a move before the watcher first runs is still heard.
+        let path = link.path();
+        tokio::spawn(Arc::clone(self).watch_path(link.clone(), path));
+        self.emit(PeerEvent::Connected { key, path });
         Ok(link)
     }
 
@@ -1388,6 +1403,21 @@ impl<T: PeerTransport> Inner<T> {
             // The grant's own wait may end later than the connection's.
             Reason::Pending { left } => Some(ungranted.max(Instant::now() + left)),
             Reason::None => Some(ungranted),
+        }
+    }
+
+    /// Says when the link's bytes move off `path`, the path it was admitted
+    /// on, and each later move, until it ends.
+    async fn watch_path(self: Arc<Self>, link: Link<T::Conn>, mut path: PathKind) {
+        let key = link.key();
+        loop {
+            tokio::select! {
+                _ = link.closed() => return,
+                now = link.inner.conn.path_changed(path) => {
+                    path = now;
+                    self.emit(PeerEvent::PathChanged { key, path });
+                }
+            }
         }
     }
 

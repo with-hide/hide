@@ -15,11 +15,13 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
-import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
+import { keySystemOf, pageKeepsKeyboard, systemRegistry } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL, REMOTE_GO_CHANNEL, REMOTE_SHOW_CHANNEL } from "../channel";
 import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
+import { RemoteScreens, type Daemon } from "./remoteScreens";
+import { parseGo, parseShow } from "./remotePage";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
@@ -166,6 +168,10 @@ export class DesktopHost {
   private quitting = false;
   /** The pages of browser displays; made once the app is ready, since a session needs it. */
   private browsers: BrowserViews | null = null;
+  /** Paired machines' own Hide screens in this window (`remoteScreens.ts`). */
+  private remote: RemoteScreens | null = null;
+  /** The resolved shortcuts, which the remote screens read for ⌥⌘n. */
+  private registry: readonly import("../../../web/src/shortcuts").Command[] = systemRegistry(keySystemOf(process.platform));
   /** Outside files this window's operator clicked open in Hide (PRD outside-path-in-hide). */
   private readonly externals = new ExternalFiles((event, fields) => this.log.event(event, fields));
   private browserCdp: BrowserCdpGateway | null = null;
@@ -235,6 +241,7 @@ export class DesktopHost {
       this.externals,
     );
     this.startBrowserControl(this.browsers);
+    this.listenRemoteScreens();
     this.listenReveal();
     this.listenComeForward();
     this.listenPickFolder();
@@ -301,6 +308,7 @@ export class DesktopHost {
    * dropped.
    */
   setBrowserRegistry(registry: readonly import("../../../web/src/shortcuts").Command[]): void {
+    this.registry = registry;
     this.browsers?.setRegistry(registry);
   }
 
@@ -379,6 +387,41 @@ export class DesktopHost {
    * frame): the window comes forward as a second launch brings it. Only this
    * window's page on the daemon origin is heard.
    */
+  /**
+   * A paired machine's own Hide screen (PRD device-connect-iroh D-67): the
+   * shell says which one shows where, and only this window's shell is heard.
+   */
+  private listenRemoteScreens(): void {
+    const remote = new RemoteScreens({ window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, log: this.log });
+    this.remote = remote;
+    remote.listen();
+    ipcMain.on(REMOTE_SHOW_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
+      if (!this.fromShell(event)) return;
+      const request = parseShow(reported);
+      if (request === undefined) {
+        this.log.event("remote.show_refused", {});
+        return;
+      }
+      remote.show(request);
+    });
+    ipcMain.on(REMOTE_GO_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
+      if (!this.fromShell(event)) return;
+      const request = parseGo(reported);
+      if (request === undefined) {
+        this.log.event("remote.go_refused", {});
+        return;
+      }
+      remote.go(request);
+    });
+  }
+
+  /** This computer's daemon as the window is attached to it, whose token opens a remote screen; none while detached. */
+  private remoteDaemon(): Daemon | null {
+    if (this.state.kind !== "attached") return null;
+    const token = new URLSearchParams(new URL(this.state.url).hash.slice(1)).get("token");
+    return token ? { origin: this.state.origin, token } : null;
+  }
+
   private listenComeForward(): void {
     ipcMain.on(COME_FORWARD_CHANNEL, (event: IpcMainEvent) => {
       if (!this.fromShell(event) || !this.window) {
@@ -900,6 +943,8 @@ export class DesktopHost {
     // the command's surface (the palette, a dialog) needs the keyboard, unless
     // the command leaves the operator in the page (Expand).
     if (this.browsers?.hasFocus() && !(command && pageKeepsKeyboard(command))) this.window.webContents.focus();
+    // A paired machine's screen in front takes the menu's commands (B20).
+    if (command && this.remote?.sendCommand(id)) return;
     this.window.webContents.send(COMMAND_CHANNEL, id);
   }
 
@@ -1177,6 +1222,9 @@ export class DesktopHost {
    * and a click waits for its next report, which comes once it is live again.
    */
   private enter(next: HostState): void {
+    // A screen another machine shows is opened with this daemon's token: a
+    // daemon gone or replaced closes every one, and the shell asks again.
+    if (next.kind !== "attached" || this.state.kind !== "attached" || next.url !== this.state.url) this.remote?.closeAll();
     this.state = next;
     if (next.kind === "attached") return;
     this.clicks.shellGone();
@@ -1531,6 +1579,7 @@ export class DesktopHost {
     });
     window.on("closed", () => {
       if (this.window !== window) return;
+      this.remote?.closeAll();
       this.window = null;
       // The practice window keeps its progress through this window's shell, so it goes with it.
       this.practice?.close();

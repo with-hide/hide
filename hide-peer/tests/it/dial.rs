@@ -4,7 +4,7 @@
 use hide_peer::loopback::Net;
 use hide_peer::peers::PeerEvent;
 use hide_peer::protocol::hello::GrantState;
-use hide_peer::protocol::{CloseCode, StreamKind};
+use hide_peer::protocol::{CloseCode, PathKind, StreamKind};
 
 use crate::{Machine, granted, pair, within};
 
@@ -138,4 +138,46 @@ async fn a_guest_dials_again_after_its_connection_dropped() {
         .await;
     assert_ne!(guest.peers.link(&host_key).unwrap().id(), first);
     assert_eq!(net.dials(), 2, "one dial per connection");
+}
+
+/// D-86: when the transport moves a connection to another path, as a
+/// direct one opening beside the relay, both machines hear it and read the
+/// new path from the link, so a device list follows it.
+#[tokio::test]
+async fn a_connection_that_moves_to_another_path_says_so_on_both_machines() {
+    let net = Net::new();
+    let mut host = Machine::new(&net, "windows-pc");
+    let mut guest = Machine::new(&net, "macbook");
+    pair(&host, &guest);
+    let link = guest.peers.dial(&host.addr()).await.unwrap();
+    assert_eq!(link.path(), PathKind::Local);
+    let (host_key, guest_key) = (host.key(), guest.key());
+
+    guest.peers.transport().move_path(PathKind::Tailscale);
+    guest
+        .event("the guest hears the new path", |event| {
+            matches!(event, PeerEvent::PathChanged { key, path: PathKind::Tailscale } if *key == host_key)
+                .then_some(())
+        })
+        .await;
+    host.event("the host hears the new path", |event| {
+        matches!(event, PeerEvent::PathChanged { key, path: PathKind::Tailscale } if *key == guest_key)
+            .then_some(())
+    })
+    .await;
+    assert_eq!(link.path(), PathKind::Tailscale);
+    assert_eq!(
+        host.peers.link(&guest_key).unwrap().path(),
+        PathKind::Tailscale
+    );
+
+    // And back: the relay takes over.
+    guest.peers.transport().move_path(PathKind::Relay);
+    guest
+        .event("the guest hears the relay", |event| {
+            matches!(event, PeerEvent::PathChanged { key, path: PathKind::Relay } if *key == host_key)
+                .then_some(())
+        })
+        .await;
+    assert_eq!(link.path(), PathKind::Relay);
 }

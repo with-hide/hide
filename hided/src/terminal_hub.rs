@@ -58,6 +58,38 @@ use serde_json::json;
 /// socket can interleave with the rest.
 const FRAME_CHUNKS: usize = 256;
 const FRAME_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+/// How much one client's output may wait and how large a frame it is sent.
+/// A window of this machine reads at loopback speed; another machine's view
+/// over a peer connection reads at the link's, so it waits less, gets
+/// smaller frames and the pane it typed in first (PRD D-84): without that, a
+/// program redrawing a whole screen beside the typed pane held a key's echo
+/// at 0.77 s p95 over a 200 ms link, and with it 0.38 s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// A pane's output past its full frame that may wait for the client;
+    /// more drops it and draws the pane again whole.
+    pub unsent: usize,
+    /// The text after which a frame takes no more.
+    pub frame: usize,
+    /// The frame is a bound, not a mark: a chunk longer than what is left
+    /// of it is sent in pieces, each in a frame of its own size, and the
+    /// pane the client last typed in is sent first.
+    pub bounded: bool,
+}
+
+impl Limits {
+    pub const LOCAL: Self = Self {
+        unsent: MAX_UNSENT_OUTPUT_BYTES,
+        frame: FRAME_TEXT_BYTES,
+        bounded: false,
+    };
+    pub const REMOTE: Self = Self {
+        unsent: 64 * 1024,
+        frame: 32 * 1024,
+        bounded: true,
+    };
+}
 /// The longest output chunk the hub draws, in bytes before encoding; with
 /// a pane's ring and unsent output this bounds what one pane holds.
 const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -139,6 +171,18 @@ impl Waiting {
     /// The waiting chunk the hub numbered first.
     fn pop(&mut self) -> Option<Arc<Chunk>> {
         let (_, pane) = self.fronts.pop_first()?;
+        self.pop_front_of(pane)
+    }
+
+    /// The first waiting chunk of `pane`, if it has one.
+    fn pop_of(&mut self, pane: &str) -> Option<Arc<Chunk>> {
+        let front = self.panes.get(pane)?.front()?.sequence;
+        let pane = self.fronts.remove(&front)?;
+        self.pop_front_of(pane)
+    }
+
+    /// Takes `pane`'s first chunk; its front is already out of `fronts`.
+    fn pop_front_of(&mut self, pane: Arc<str>) -> Option<Arc<Chunk>> {
         let queue = self.panes.get_mut(&pane)?;
         let chunk = queue.pop_front()?;
         match queue.front() {
@@ -150,6 +194,16 @@ impl Waiting {
             }
         }
         Some(chunk)
+    }
+
+    /// Puts what is left of a chunk sent in pieces back at its pane's front.
+    fn push_front(&mut self, chunk: Arc<Chunk>) {
+        let queue = self.panes.entry(Arc::clone(&chunk.pane)).or_default();
+        if let Some(front) = queue.front() {
+            self.fronts.remove(&front.sequence);
+        }
+        self.fronts.insert(chunk.sequence, Arc::clone(&chunk.pane));
+        queue.push_front(chunk);
     }
 
     fn is_empty(&self) -> bool {
@@ -180,6 +234,10 @@ struct Client {
     /// The `clipboard` frames not sent to this client, the latest of each pane.
     clipboard: WaitingCopies<Arc<str>>,
     wake: Arc<tokio::sync::Notify>,
+    limits: Limits,
+    /// The pane this client last typed in, sent first under
+    /// [`Limits::bounded`].
+    keyed: Option<Arc<str>>,
 }
 
 #[derive(Default)]
@@ -235,8 +293,13 @@ impl TerminalHub {
         })
     }
 
-    /// Adds a client, starting where `resume` says.
+    /// Adds a window of this machine, starting where `resume` says.
     pub fn connect(self: &Arc<Self>, resume: Resume) -> HubClient {
+        self.connect_with(resume, Limits::LOCAL)
+    }
+
+    /// Adds a client under `limits`, starting where `resume` says.
+    pub fn connect_with(self: &Arc<Self>, resume: Resume, limits: Limits) -> HubClient {
         let wake = Arc::new(tokio::sync::Notify::new());
         let mut state = lock(&self.state);
         let id = state.next_client;
@@ -250,6 +313,8 @@ impl TerminalHub {
             announce: resume == Resume::Fresh,
             clipboard: WaitingCopies::default(),
             wake: Arc::clone(&wake),
+            limits,
+            keyed: None,
         };
         match resume {
             Resume::Fresh => {}
@@ -492,7 +557,7 @@ impl OutputSink for TerminalHub {
                 client.wake.notify_one();
                 continue;
             }
-            if *unsent + chunk.size() > MAX_UNSENT_OUTPUT_BYTES {
+            if *unsent + chunk.size() > client.limits.unsent {
                 let dropped = *unsent;
                 *unsent = 0;
                 freed.extend(client.queue.clear(&pane));
@@ -501,7 +566,7 @@ impl OutputSink for TerminalHub {
                     "kind": "terminal.output_overflow",
                     "pane_id": pane.as_ref(),
                     "bytes": dropped + chunk.size(),
-                    "cap": MAX_UNSENT_OUTPUT_BYTES,
+                    "cap": client.limits.unsent,
                 }));
                 await_full(client, ring, &pane, "overflow");
                 client.wake.notify_one();
@@ -567,6 +632,21 @@ fn clipboard_frame(pane: &str, text: &[u8]) -> String {
 }
 
 impl HubClient {
+    /// The client typed in `pane`: under [`Limits::bounded`] its output
+    /// goes out ahead of other panes' (D-84).
+    pub fn keyed(&self, pane: &str) {
+        let mut state = lock(&self.hub.state);
+        let pane = state
+            .panes
+            .get_key_value(pane)
+            .map_or_else(|| Arc::from(pane), |(key, _)| Arc::clone(key));
+        if let Some(client) = state.clients.get_mut(&self.id)
+            && client.limits.bounded
+        {
+            client.keyed = Some(pane);
+        }
+    }
+
     /// Resolves when this client has something to send or a redraw to ask
     /// for, including one no full frame answered that comes due again.
     pub async fn ready(&self) {
@@ -668,13 +748,49 @@ impl HubClient {
         client.announce = false;
         let mut text = String::from(r#"{"type":"terminal","payload":{"chunks":["#);
         let mut last = 0;
+        let Limits {
+            frame: frame_bytes,
+            bounded,
+            ..
+        } = client.limits;
         for index in 0..FRAME_CHUNKS {
-            if index > 0 && text.len() >= FRAME_TEXT_BYTES {
+            let full = match bounded {
+                true => text.len() + FRAME_TRAILER + PIECE_MIN > frame_bytes,
+                false => text.len() >= frame_bytes,
+            };
+            if index > 0 && full {
                 break;
             }
-            let Some(chunk) = client.queue.pop() else {
+            let keyed = client.keyed.clone();
+            let Some(chunk) = keyed
+                .and_then(|pane| client.queue.pop_of(&pane))
+                .or_else(|| client.queue.pop())
+            else {
                 break;
             };
+            // A chunk longer than the frame goes in pieces: this one now,
+            // the rest at its pane's front, and the cursor stays before it
+            // until its last piece is sent.
+            let room = frame_bytes
+                .saturating_sub(text.len() + FRAME_TRAILER)
+                .max(PIECE_MIN);
+            if bounded
+                && chunk.size() > room
+                && let Some((piece, rest)) = split_chunk(&chunk, room)
+            {
+                if !chunk.full
+                    && let Some(unsent) = client.unsent.get_mut(&chunk.pane)
+                {
+                    *unsent = unsent.saturating_sub(chunk.size() - rest.size());
+                }
+                if index > 0 {
+                    text.push(',');
+                }
+                text.push_str(&piece);
+                last = last.max(chunk.sequence - 1);
+                client.queue.push_front(Arc::new(rest));
+                break;
+            }
             if !chunk.full
                 && let Some(unsent) = client.unsent.get_mut(&chunk.pane)
             {
@@ -707,6 +823,36 @@ impl HubClient {
         }
         (Some(TerminalFrame { text }), redraws)
     }
+}
+
+/// The least of a chunk a frame carries when it splits one.
+const PIECE_MIN: usize = 4 * 1024;
+/// What a frame takes after its chunks: the epoch and the cursor.
+const FRAME_TRAILER: usize = 96;
+
+/// `chunk` cut into a piece whose JSON fits `room` and the rest, as chunks
+/// of the same pane and sequence: its base64 is cut at a multiple of four
+/// characters, so each part decodes to the bytes before or after the cut
+/// and the page writes them in order. The rest keeps the chunk's `full`, so
+/// what waits is counted as it was. `None` when it cannot be cut shorter.
+fn split_chunk(chunk: &Chunk, room: usize) -> Option<(String, Chunk)> {
+    const HEAD: &str = r#","bytes_base64":""#;
+    let start = chunk.json.find(HEAD)? + HEAD.len();
+    let end = chunk.json.len().checked_sub(2)?;
+    let encoded = &chunk.json[start..end];
+    let take = room.saturating_sub(start + 2) / 4 * 4;
+    if take == 0 || take >= encoded.len() {
+        return None;
+    }
+    let prefix = &chunk.json[..start];
+    let piece = format!(r#"{prefix}{}"}}"#, &encoded[..take]);
+    let rest = Chunk {
+        sequence: chunk.sequence,
+        pane: Arc::clone(&chunk.pane),
+        full: chunk.full,
+        json: format!(r#"{prefix}{}"}}"#, &encoded[take..]).into_boxed_str(),
+    };
+    Some((piece, rest))
 }
 
 impl Drop for HubClient {
@@ -802,6 +948,73 @@ mod tests {
             assert_eq!(copied.len(), 1);
             assert_eq!(copy_of(&copied[0]), ("w1:p1".to_owned(), b"next".to_vec()));
         }
+    }
+
+    /// PRD D-84: another machine's view gets the pane it typed in first, in
+    /// frames of at most 32 KiB, a long chunk in pieces that join to its
+    /// bytes, and a pane that falls 64 KiB behind is drawn again whole; a
+    /// window of this machine keeps its own limits.
+    #[test]
+    fn a_remote_view_gets_its_typed_pane_first_in_small_frames() {
+        let hub = TerminalHub::new();
+        let remote = hub.connect_with(Resume::Fresh, Limits::REMOTE);
+        let local = hub.connect(Resume::Fresh);
+        let _ = remote.take();
+        let _ = local.take();
+        hub.output("w1:flood", &[b'x'; 20 * 1024], false);
+        hub.output("w1:keys", b"a", false);
+        remote.keyed("w1:keys");
+        let (frame, _) = remote.take();
+        let frame = frame.unwrap();
+        assert!(
+            frame.text.len() <= Limits::REMOTE.frame,
+            "{}",
+            frame.text.len()
+        );
+        let (chunks, _) = frame_chunks(&frame);
+        assert_eq!(chunks[0], ("w1:keys".to_owned(), b"a".to_vec()));
+
+        // A chunk longer than a frame goes in pieces that join to it.
+        let long: Vec<u8> = (0..100_000_u32).map(|n| (n % 251) as u8).collect();
+        hub.output("w1:long", &long, true);
+        let mut joined = Vec::new();
+        let mut cursors = Vec::new();
+        while let (Some(frame), _) = remote.take() {
+            assert!(
+                frame.text.len() <= Limits::REMOTE.frame,
+                "{}",
+                frame.text.len()
+            );
+            let (chunks, cursor) = frame_chunks(&frame);
+            cursors.push(cursor);
+            for (pane, bytes) in chunks {
+                if pane == "w1:long" {
+                    joined.extend(bytes);
+                }
+            }
+        }
+        assert_eq!(joined, long);
+        assert!(
+            cursors.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{cursors:?}"
+        );
+
+        // 64 KiB behind drops the backlog and asks the pane drawn again; the
+        // local window keeps it all.
+        for _ in 0..8 {
+            hub.output("w1:flood", &[b'y'; 10 * 1024], false);
+        }
+        let (_, redraws) = remote.take();
+        assert_eq!(redraws, ["w1:flood".to_owned()]);
+        let mut local_bytes = 0;
+        while let (Some(frame), _) = local.take() {
+            local_bytes += frame_chunks(&frame)
+                .0
+                .iter()
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>();
+        }
+        assert!(local_bytes >= 80 * 1024 + long.len(), "{local_bytes}");
     }
 
     #[test]

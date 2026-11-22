@@ -82,6 +82,7 @@ pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
 pub mod relay;
+pub mod remote_screen;
 pub mod role;
 pub mod screen_event;
 pub mod screen_sign_in;
@@ -635,6 +636,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // of what two machines show of each other's work (D-50, D-60) runs: no
     // list of its own Needs You and Done is told or kept, no seat is told,
     // and no notice is handed to another computer or taken from one.
+    let remote_screens = remote_screen::RemoteScreens::new();
     if env.device_connect {
         guests.serve(&peers, shutdown.clone());
         peer_core::PeerCore::serve(
@@ -644,6 +646,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             mobile.subscribe_projection(),
             shutdown.clone(),
         );
+        remote_screens.serve(&peers);
     }
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
@@ -710,6 +713,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         browser_comments: Arc::default(),
         allowed_origins: Arc::new(server::allowed_origins(port, env.vite_origin.as_deref())),
         clients: Arc::new(AtomicUsize::new(0)),
+        local_seats: Arc::new(AtomicUsize::new(0)),
         renderers,
         desktop_renderers,
         connections: Arc::new(AtomicU64::new(0)),
@@ -764,12 +768,14 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         guests: Arc::clone(&guests),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
+        remote_screens: Arc::clone(&remote_screens),
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
         listeners: Arc::clone(&listeners),
         window_calls: tokio::sync::broadcast::channel(4).0,
     };
     seat.starting("core.roots");
+    remote_screens.attach(app.clone());
     node_panes.serve(app.clone());
     // Seeded before the server accepts a client with the registrations the
     // core loaded in `CoreHandle::spawn`. A checkout the core learns later,

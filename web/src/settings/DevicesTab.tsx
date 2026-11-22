@@ -115,7 +115,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             focused={focused === device.id}
             place={{
               name: machineName(devices, device.id, t),
-              core: isCoreMachine(devices, device.id),
+              // Every computer runs a core of its own once two Hides connect, so no row is marked as the core's (PRD device-connect-iroh D-80).
+              core: !pairs && isCoreMachine(devices, device.id),
               own: device.id === own,
               windowIsNode,
               coreName,

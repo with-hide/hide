@@ -16,6 +16,7 @@ import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
 import { PR_LOOK, rowPulls } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
+import { isRemoteView } from "./remoteView";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
 import { asksOperator, badgeWords, sumMarks } from "./agentRow";
@@ -270,8 +271,8 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
       toolFront: tool?.connection ?? null,
       onSelectTool: actions.focusTool,
       onSelect: actions.focusDevice,
-      onAddDevice: actions.openAddDevice,
-      onShowRail: actions.showDeviceRail,
+      onAddDevice: isRemoteView() ? null : actions.openAddDevice,
+      onShowRail: isRemoteView() ? null : actions.showDeviceRail,
     };
   }, [devices, frontId, remoteStatus, tools, tool, actions, t]);
   return { title, deviceMenu };

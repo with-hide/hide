@@ -84,7 +84,7 @@ export type Peer = {
   /** It opens this machine. */
   opened_by?: "active" | "paused" | null;
   connected: boolean;
-  path?: "direct" | "relay" | "local" | null;
+  path?: "direct" | "tailscale" | "relay" | "local" | null;
   reason?: "relay_unreachable" | "relay_monthly_limit" | null;
   /**
    * Which side must update before the two connect, or where this machine's
@@ -220,7 +220,8 @@ export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" |
     const reason: MessageKey | null = peer.reason === "relay_monthly_limit" ? "pairing.reason.relayMonthlyLimit" : peer.reason === "relay_unreachable" ? "pairing.reason.relayUnreachable" : null;
     return line("pairing.state.notConnected", "warn", peer.opens != null ? "retry" : null, reason);
   }
-  return line(peer.path === "relay" ? "pairing.state.relay" : "pairing.state.direct", "ok");
+  // The path the connection takes now, in one word (D-86).
+  return line(peer.path === "relay" ? "pairing.state.relay" : peer.path === "tailscale" ? "pairing.state.tailscale" : "pairing.state.direct", "ok");
 }
 
 /** Whether this machine may ask `peer` to be let in the other way (B50): it is opened by a machine it does not open. */

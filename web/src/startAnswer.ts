@@ -3,7 +3,7 @@
 // surface reads only the receipt that carries the id it sent. Another
 // surface's start, or an older one of its own, is never its answer.
 
-import type { SnapshotRest } from "./snapshot";
+import type { SnapshotRest, TaskOperation } from "./snapshot";
 
 /** The core's bound for a start, including the first catalog of its checkout. */
 export const START_ANSWER_TIMEOUT_MS = 90_000;
@@ -31,4 +31,18 @@ export function startAnswer(rest: SnapshotRest | null, requestId: string, kind: 
   if (operation.phase === "failed") return { phase: "failed", message: operation.failure };
   if (operation.phase !== "ready") return { phase: "pending" };
   return { phase: "ready", taskId: operation.id, paneId: operation.pane_id, deviceId: operation.device_id ?? null, agentPhase: operation.agent_phase, agentReason: operation.agent_reason, agentLine: operation.agent_line };
+}
+
+/**
+ * How the agent of a start whose tab exists ended, followed by the task id
+ * the core gave it (B31): `starting` while it is still coming up, `failed`
+ * with its reason when it did not start or the core could not tell, and
+ * `started` otherwise. A slot that no longer holds that task also reads
+ * `started`: the core keeps a task with a starting agent in the slot and
+ * refuses another until the agent answered (`begin_task_operation`).
+ */
+export function agentAnswer(operation: TaskOperation | null | undefined, taskId: number): { phase: "starting" | "started" } | { phase: "failed"; reason: string | null; line: string | null } {
+  if (!operation || operation.id !== taskId) return { phase: "started" };
+  if (operation.agent_phase === "failed" || operation.agent_phase === "unknown") return { phase: "failed", reason: operation.agent_reason, line: operation.agent_line };
+  return { phase: operation.agent_phase === "starting" ? "starting" : "started" };
 }

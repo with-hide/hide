@@ -94,8 +94,12 @@ pub const fn max_streams_of(kind: StreamKind) -> usize {
         StreamKind::Terminal => 32,
         StreamKind::File => 4,
         StreamKind::Page => 16,
-        // The remote screen's two streams, and its parallel asset requests.
-        StreamKind::Screen => 8,
+        // The remote screen's socket: one view per guest, a second while it
+        // takes the first's place.
+        StreamKind::Screen => 2,
+        // Behind it, its page and asset requests (six at once) and its file
+        // bytes' socket, the second view's beside it.
+        StreamKind::ScreenBulk => 8,
     }
 }
 

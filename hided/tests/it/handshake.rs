@@ -1959,8 +1959,9 @@ async fn a_window_cannot_say_whether_windows_are_attached() {
     let (_dir, running) = start().await;
     let mut socket = live_socket(&running).await;
     let answer = send_event(&mut socket, "ui_attached", json!({"attached": false})).await;
-    assert_eq!(answer["type"], "error");
-    assert_eq!(answer["message"], "ui_attached is sent by the daemon only");
+    assert_eq!(answer["type"], "refused");
+    assert_eq!(answer["payload"]["kind"], "ui_attached");
+    assert_eq!(answer["payload"]["reason"], "not_here");
 }
 
 async fn post_json(url: &str, token: Option<&str>, body: &str) -> u16 {

@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
+use futures_util::StreamExt as _;
 use hide_peer::limits;
 use hide_peer::transport::{PeerConn, PeerTransport, RelayState, TransportError};
 use hide_peer_protocol::addr::rank_self_discovered;
@@ -386,6 +387,20 @@ fn code_of(error: &ConnectionError) -> CloseCode {
     }
 }
 
+/// The path a connection's selected address makes (D-86): through the
+/// relay, between the two machines' own addresses, or between their
+/// Tailscale addresses (100.64.0.0/10). No selected address yet reads as
+/// direct, as a connection the dial just proved is.
+fn kind_of(selected: Option<&TransportAddr>) -> PathKind {
+    match selected {
+        Some(TransportAddr::Relay(_)) => PathKind::Relay,
+        Some(TransportAddr::Ip(address)) if Candidate::Ip(*address).is_carrier_grade_nat() => {
+            PathKind::Tailscale
+        }
+        _ => PathKind::Direct,
+    }
+}
+
 impl IrohConn {
     fn end(&self, error: &ConnectionError) -> CloseCode {
         *self.end.get_or_init(|| code_of(error))
@@ -417,16 +432,31 @@ impl PeerConn for IrohConn {
     }
 
     fn path(&self) -> PathKind {
-        let relayed = self
+        let selected = self
             .conn
             .paths()
             .iter()
-            .any(|path| path.is_selected() && path.is_relay());
-        if relayed {
-            PathKind::Relay
-        } else {
-            PathKind::Direct
+            .find(|path| path.is_selected())
+            .map(|path| path.remote_addr().clone());
+        kind_of(selected.as_ref())
+    }
+
+    async fn path_changed(&self, from: PathKind) -> PathKind {
+        // The first list is the paths now, so a change between two calls is
+        // not missed.
+        let mut lists = self.conn.paths_stream();
+        while let Some(list) = lists.next().await {
+            let selected = list
+                .iter()
+                .find(|path| path.is_selected())
+                .map(|path| path.remote_addr().clone());
+            let now = kind_of(selected.as_ref());
+            if now != from {
+                return now;
+            }
         }
+        // The connection ended; its end is the caller's to read.
+        std::future::pending().await
     }
 
     async fn open(&self, priority: i32) -> Result<(SendStream, RecvStream), TransportError> {
@@ -541,6 +571,24 @@ async fn watch_relay_path(endpoint: Endpoint, conn: IrohConn) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D-86: the device list names the path by the address the connection
+    /// sends to now.
+    #[test]
+    fn a_selected_address_names_its_path() {
+        let ip = |text: &str| TransportAddr::Ip(text.parse().unwrap());
+        let relay = TransportAddr::Relay("https://relay.example./".parse().unwrap());
+        assert_eq!(kind_of(Some(&relay)), PathKind::Relay);
+        assert_eq!(kind_of(Some(&ip("100.101.7.9:4433"))), PathKind::Tailscale);
+        assert_eq!(
+            kind_of(Some(&ip("100.127.255.1:4433"))),
+            PathKind::Tailscale
+        );
+        // Just outside 100.64.0.0/10, and a home network's address.
+        assert_eq!(kind_of(Some(&ip("100.128.0.1:4433"))), PathKind::Direct);
+        assert_eq!(kind_of(Some(&ip("192.168.0.9:4433"))), PathKind::Direct);
+        assert_eq!(kind_of(None), PathKind::Direct);
+    }
 
     #[test]
     fn a_connection_is_dialed_again_only_for_a_relay_path_it_lost_and_can_regain() {

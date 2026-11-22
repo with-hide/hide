@@ -13,10 +13,12 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Textarea } from "./components/ui/textarea";
 import { Hint } from "./components/ui/tooltip";
 import { DeviceChip } from "./components/device-chip";
-import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
+import { agentAnswer, START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
 import { agentFailure, useStartPanel, startFailure, startRefusal } from "./startDraft";
 import { QuotedLine } from "./QuotedLine";
 import { projectOf, resolveTarget, startTargets, type StartProject, type StartTarget, type StartTargets } from "./startTargets";
+import { HANDED_ANSWER_MS, handedFailure, startWork } from "./computerWork";
+import { hostBridge } from "./host";
 import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { restoreFocus } from "./terminals";
@@ -95,15 +97,46 @@ function useSpentStart() {
   useEffect(() => {
     if (!spent) return;
     const panel = useStartPanel.getState();
-    if (!operation || operation.id !== spent.taskId) return panel.settle();
-    if (operation.agent_phase === "failed" || operation.agent_phase === "unknown") panel.restore(agentFailure(operation.agent_reason, operation.agent_line));
-    else if (operation.agent_phase !== "starting") panel.settle();
+    const answer = agentAnswer(operation, spent.taskId);
+    if (answer.phase === "failed") panel.restore(agentFailure(answer.reason, answer.line));
+    else if (answer.phase === "started") panel.settle();
   }, [spent, operation]);
+}
+
+/**
+ * Follows a start handed to another computer's screen (PRD device-connect-iroh
+ * D-73): that computer says how it ended, by the request id; one that did not
+ * go, or that no answer came for within `HANDED_ANSWER_MS`, opens the panel
+ * again on its text and target with why (B31's rule for a start's words).
+ * Once its tab exists there and its agent is coming up, it is followed like
+ * `spent`, to its agent's own answer, with no bound of its own.
+ */
+function useHandedStart() {
+  const handed = useStartPanel((s) => s.handed);
+  useEffect(
+    () =>
+      hostBridge()?.remoteScreens?.onWorkResult?.((result) => {
+        const panel = useStartPanel.getState();
+        if (!panel.handed || result.request !== panel.handed.request) return;
+        // Its tab exists there and its agent is coming up: no longer silence, and its end follows.
+        if (result.outcome === "starting") return panel.handedStarting();
+        const failure = handedFailure(result, panel.handed.device);
+        if (failure) panel.takeBack(failure);
+        else panel.settleHanded();
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (!handed || handed.starting) return undefined;
+    const timer = window.setTimeout(() => useStartPanel.getState().takeBack({ key: "startPanel.handOff.noAnswer", values: { device: handed.device } }), HANDED_ANSWER_MS);
+    return () => window.clearTimeout(timer);
+  }, [handed]);
 }
 
 export function StartPanelHost({ actions }: { actions: Actions }) {
   useStartAnswer();
   useSpentStart();
+  useHandedStart();
   const open = useStartPanel((s) => s.isOpen);
   // A palette or a dialog opening over the panel takes the place; the draft stays.
   const covered = useUiStore((s) => s.overlay !== "none" || s.workspaceDialog !== null);
@@ -340,6 +373,16 @@ function StartPanel({ actions }: { actions: Actions }) {
   const start = () => {
     if (!canStart || !target || selection.kind === "terminal") return;
     const id = startRequestId();
+    // A start on a paired computer is that computer's own work (PRD device-connect-iroh D-59, D-73, B64): its own screen makes it and
+    // shows it, and the window moves to that computer's tile. The panel keeps its words until that computer says the start went; one
+    // that could not be handed (no screen of it drawn here) does not go at all, never as this computer's work there.
+    const handed = actions.openComputerWork(target.deviceId, startWork(target, { request: id, provider: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, profile: profileToSend, branch: worktreeBranch.trim(), base: base || null }));
+    if (handed !== "not_paired") {
+      const device = targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? target.deviceId;
+      if (handed === "handed") useStartPanel.getState().handOff(id, target.key, device);
+      else useStartPanel.getState().fail({ key: "startPanel.handOff.needsScreen", values: { device } });
+      return;
+    }
     // An open that asked to stay (from the Overview's work map) leaves the screen where it is when the start goes.
     const stay = useStartPanel.getState().stay;
     useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start", !stay);
@@ -420,7 +463,7 @@ function StartPanel({ actions }: { actions: Actions }) {
       />
       {failure ? (
         <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
-          {"key" in failure ? t(failure.key) : failure.message}
+          {"values" in failure ? t(failure.key, failure.values) : "key" in failure ? t(failure.key) : failure.message}
           {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
         </p>
       ) : null}

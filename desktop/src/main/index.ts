@@ -11,6 +11,7 @@ import { menuBindings, menuTemplate } from "./menu";
 import { HostLanguage, languageFile } from "./language";
 import { recordUncaught } from "./uncaught";
 import { APP_ID } from "./notificationPermission";
+import { registerRemoteScheme } from "./remoteScreens";
 
 const env = loadEnv(process.env);
 // Pinned before anything reads it: the single-instance lock, web storage and
@@ -20,6 +21,9 @@ app.setAppLogsPath(path.join(app.getPath("userData"), "logs"));
 
 // Windows groups and attributes the app's notifications by this identifier (PRD first-run-onboarding D-13).
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+
+// Another machine's Hide screen loads on its own scheme, which must be named before the app is ready.
+registerRemoteScheme();
 
 if (!app.requestSingleInstanceLock()) {
   // B6: the running instance brings its window forward instead.

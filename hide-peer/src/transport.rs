@@ -100,7 +100,13 @@ pub trait PeerConn: Clone + Send + Sync + 'static {
     /// Whether this side dialed.
     fn dialed(&self) -> bool;
 
+    /// The path the connection's bytes take now.
     fn path(&self) -> PathKind;
+
+    /// Resolves with the path once it is no longer `from`. It may wait as
+    /// long as the connection lives; a caller races it with
+    /// [`PeerConn::closed`].
+    fn path_changed(&self, from: PathKind) -> impl Future<Output = PathKind> + Send;
 
     /// Opens a stream both ways. A larger `priority` is sent first when
     /// streams compete.

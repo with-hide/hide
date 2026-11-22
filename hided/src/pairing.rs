@@ -2062,6 +2062,7 @@ fn name_one(mut paired: Vec<Paired>, text: &str) -> Result<Paired, &'static str>
 fn path_of(path: PathKind) -> PeerPath {
     match path {
         PathKind::Direct => PeerPath::Direct,
+        PathKind::Tailscale => PeerPath::Tailscale,
         PathKind::Relay => PeerPath::Relay,
         PathKind::Local => PeerPath::Local,
     }

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
 import { clientI18n } from "../i18n/translator";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import type { AccessConnection, AccessSection } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
@@ -53,7 +54,7 @@ async function mount(access: AccessSection | null, language: "en" | "ko" = "en",
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    useShellStore.setState({ connection: "live", access, ...extra } as never);
+    useShellStore.setState({ connection: "live", access, pairing: NOTHING_UNDER_WAY, ...extra } as never);
     useUiStore.getState().openSettings("externalTools");
     root.render(<ExternalToolsTab actions={actions} />);
   });

@@ -31,6 +31,7 @@ mod core_letters;
 mod guest_work;
 #[cfg(unix)]
 mod moved_core;
+mod remote_view;
 
 /// The machine id the guest daemon runs under, so one host is two machines.
 const GUEST: &str = "pairing-guest";
@@ -244,6 +245,89 @@ impl Terminal {
     }
 }
 
+/// B1 to B3: the host's window shares a link, the guest adds it at a
+/// terminal, both show the same four words and the host's window allows it.
+/// Returns that window, the host's device id as the guest names it and the
+/// link, used once.
+async fn pair_by_link(
+    running: &hided::RunningDaemon,
+    host: &Terminal,
+    guest: &Terminal,
+) -> (Window, String, String) {
+    // B1: the host's window shares a link that names the words' language.
+    let mut window = Window::open(running, "web").await;
+    let idle = window
+        .frame("pairing frame", |frame| frame["type"] == "pairing")
+        .await;
+    assert!(idle["payload"]["offer"].is_null(), "{idle}");
+    window
+        .send(
+            "pairing_share",
+            json!({"request_id": "s1", "language": "ko"}),
+        )
+        .await;
+    let shared = window.result("share").await;
+    assert_eq!(shared["ok"], true, "{shared}");
+    assert_eq!(shared["request_id"], "s1", "{shared}");
+    let link = shared["link"].as_str().unwrap().to_owned();
+    assert!(link.starts_with("hide://pair#"), "{link}");
+
+    // B2: the guest pastes it at a terminal; both sides show four words.
+    let adding = guest.typing(&["device", "add", &link], "y\n");
+    let asked = window
+        .frame("the guest's ask", |frame| {
+            frame["type"] == "pairing"
+                && frame["payload"]["asks"]
+                    .as_array()
+                    .is_some_and(|asks| !asks.is_empty())
+        })
+        .await;
+    let ask = &asked["payload"]["asks"][0];
+    assert_eq!(ask["kind"], "link", "{ask}");
+    assert_eq!(ask["device"], GUEST, "{ask}");
+    let shown: Vec<String> = ask["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|word| word.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(shown.len(), 4, "{ask}");
+    // Nothing is connected while the host's operator has not answered.
+    assert!(host.peers().is_empty());
+    window
+        .send(
+            "pairing_answer",
+            json!({"request_id": "a1", "ask": ask["id"], "allow": true}),
+        )
+        .await;
+    assert_eq!(window.result("answer").await["ok"], true);
+
+    // B3: both said yes, so each lists the other, connected.
+    let added = adding.await.unwrap();
+    assert!(added.ok, "{}", added.text());
+    assert_eq!(
+        words_printed(&added),
+        shown,
+        "the same words, in the same order"
+    );
+    let on_guest = guest
+        .peer_becomes("the guest opens the host", |peer| {
+            peer["opens"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert!(on_guest["opened_by"].is_null(), "{on_guest}");
+    assert_eq!(on_guest["path"], "direct", "{on_guest}");
+    let on_host = host
+        .peer_becomes("the host is opened by the guest", |peer| {
+            peer["opened_by"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert_eq!(on_host["id"], GUEST, "{on_host}");
+    assert!(on_host["opens"].is_null(), "{on_host}");
+    let host_id = on_guest["id"].as_str().unwrap().to_owned();
+    (window, host_id, link)
+}
+
 /// What one `hide` run answered.
 struct Ran {
     ok: bool,
@@ -384,86 +468,18 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     in_a_pane(&host, &["device", "share", "--json"]).refused("device_from_pane");
 
     // A screen that is not this machine's own window is refused, hears so
-    // alone, and is never sent the pairings under way.
+    // alone, and is never sent the pairings under way (D-67).
     let mut phone = Window::open(&running, "mobile").await;
     phone
         .send("pairing_share", json!({"request_id": "p1"}))
         .await;
-    let refused = phone.result("share").await;
-    assert_eq!(refused["ok"], false, "{refused}");
-    assert_eq!(refused["reason"], "device_from_other_screen", "{refused}");
+    let refused = phone
+        .frame("the refusal", |frame| frame["type"] == "refused")
+        .await;
+    assert_eq!(refused["payload"]["kind"], "pairing_share", "{refused}");
+    assert_eq!(refused["payload"]["reason"], "not_here", "{refused}");
 
-    // B1: the host's window shares a link that names the words' language.
-    let mut window = Window::open(&running, "web").await;
-    let idle = window
-        .frame("pairing frame", |frame| frame["type"] == "pairing")
-        .await;
-    assert!(idle["payload"]["offer"].is_null(), "{idle}");
-    window
-        .send(
-            "pairing_share",
-            json!({"request_id": "s1", "language": "ko"}),
-        )
-        .await;
-    let shared = window.result("share").await;
-    assert_eq!(shared["ok"], true, "{shared}");
-    assert_eq!(shared["request_id"], "s1", "{shared}");
-    let link = shared["link"].as_str().unwrap().to_owned();
-    assert!(link.starts_with("hide://pair#"), "{link}");
-
-    // B2: the guest pastes it at a terminal; both sides show four words.
-    let adding = guest.typing(&["device", "add", &link], "y\n");
-    let asked = window
-        .frame("the guest's ask", |frame| {
-            frame["type"] == "pairing"
-                && frame["payload"]["asks"]
-                    .as_array()
-                    .is_some_and(|asks| !asks.is_empty())
-        })
-        .await;
-    let ask = &asked["payload"]["asks"][0];
-    assert_eq!(ask["kind"], "link", "{ask}");
-    assert_eq!(ask["device"], GUEST, "{ask}");
-    let shown: Vec<String> = ask["words"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|word| word.as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(shown.len(), 4, "{ask}");
-    // Nothing is connected while the host's operator has not answered.
-    assert!(host.peers().is_empty());
-    window
-        .send(
-            "pairing_answer",
-            json!({"request_id": "a1", "ask": ask["id"], "allow": true}),
-        )
-        .await;
-    assert_eq!(window.result("answer").await["ok"], true);
-
-    // B3: both said yes, so each lists the other, connected.
-    let added = adding.await.unwrap();
-    assert!(added.ok, "{}", added.text());
-    assert_eq!(
-        words_printed(&added),
-        shown,
-        "the same words, in the same order"
-    );
-    let on_guest = guest
-        .peer_becomes("the guest opens the host", |peer| {
-            peer["opens"] == "active" && peer["connected"] == true
-        })
-        .await;
-    assert!(on_guest["opened_by"].is_null(), "{on_guest}");
-    assert_eq!(on_guest["path"], "direct", "{on_guest}");
-    let on_host = host
-        .peer_becomes("the host is opened by the guest", |peer| {
-            peer["opened_by"] == "active" && peer["connected"] == true
-        })
-        .await;
-    assert_eq!(on_host["id"], GUEST, "{on_host}");
-    assert!(on_host["opens"].is_null(), "{on_host}");
-    let host_id = on_guest["id"].as_str().unwrap().to_owned();
+    let (mut window, host_id, link) = pair_by_link(&running, &host, &guest).await;
 
     // The link worked once (B4), and the same machine is not added twice
     // (B51).
@@ -473,16 +489,10 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
 
     // A client never names the paired machines.
     window.send("peer_machines", json!({"machines": []})).await;
-    let error = window
-        .frame("an error", |frame| frame["type"] == "error")
+    let refused = window
+        .frame("a refusal", |frame| frame["type"] == "refused")
         .await;
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("sent by the daemon only"),
-        "{error}"
-    );
+    assert_eq!(refused["payload"]["kind"], "peer_machines", "{refused}");
     assert_eq!(host.peers().len(), 1);
 
     // B50: the host asks its guest to be let in the other way; the guest's
@@ -608,7 +618,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
         if frame["type"] == "pairing" {
             pairing_frames += 1;
         }
-        if frame["type"] == "pairing_result" && frame["payload"]["request_id"] == "p2" {
+        if frame["type"] == "refused" {
             break;
         }
     }

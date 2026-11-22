@@ -286,6 +286,8 @@ type Store = {
   /** A new connection starts with nothing in flight: what the old socket lost is not awaited. */
   releaseOperatorFocus: () => void;
   noteDiagnostic: (message: string) => void;
+  /** Forgets the pairings an earlier connection showed; the next connection says again whether this screen may see them. */
+  clearPairing: () => void;
   clearPathRefusal: () => void;
   setAttachmentRefusal: (refusal: { pane_id: string; reason: string } | null) => void;
   setThreadInputRefusal: (refusal: { request_id: string; reason: string } | null) => void;
@@ -434,6 +436,9 @@ export const useShellStore = create<Store>((set, get) => ({
   releaseOperatorFocus: () => set({ operatorFocusSent: get().operatorFocusApplied }),
   noteDiagnostic: (message) =>
     set(withDiagnostics(get().diagnostics, get().diagnosticsDropped, [message])),
+  clearPairing: () => {
+    if (get().pairing !== null || get().pairingResult !== null) set({ pairing: null, pairingResult: null });
+  },
   clearPathRefusal: () => {
     if (get().pathRefusal) set({ pathRefusal: null });
   },
@@ -702,6 +707,13 @@ export const useShellStore = create<Store>((set, get) => ({
           indexing: payload.indexing ?? false,
         },
       });
+      return [];
+    }
+    // The daemon refused an event this connection may not send (D-67): the
+    // refusal is the daemon's log; the page keeps only its own note of it.
+    if (frame.type === "refused") {
+      const refused = frame.payload as { kind?: string; reason?: string } | undefined;
+      get().noteDiagnostic(`hided refused: ${refused?.kind ?? "unknown"} ${refused?.reason ?? ""}`.trimEnd());
       return [];
     }
     if (frame.type === "error") {

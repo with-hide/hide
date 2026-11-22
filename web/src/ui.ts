@@ -297,6 +297,13 @@ export type PendingTrash = {
 
 type UiStore = {
   screen: Screen | null;
+  /**
+   * The paired machine whose own Hide screen this window shows in place of
+   * its sidebar and center (PRD device-connect-iroh B17), by its id; null
+   * while this window shows its own. The window's choice, kept by no core.
+   */
+  remoteScreen: string | null;
+  setRemoteScreen: (device: string | null) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
   /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
@@ -530,6 +537,8 @@ export function coveringLayer(layers: readonly (() => void)[]): (() => void) | n
 
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
+  remoteScreen: null,
+  setRemoteScreen: (remoteScreen) => set({ remoteScreen }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
   deskLane: DESK_LANE_CLOSED,

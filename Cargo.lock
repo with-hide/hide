@@ -1743,6 +1743,7 @@ dependencies = [
 name = "hide-peer-iroh"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "hide-peer",
  "hide-peer-protocol",
  "iroh",

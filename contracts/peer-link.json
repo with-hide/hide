@@ -638,6 +638,13 @@
         "priority": 75,
         "since": 1,
         "tag": 11
+      },
+      {
+        "name": "screen_bulk",
+        "needs_grant": true,
+        "priority": -100,
+        "since": 1,
+        "tag": 12
       }
     ],
     "message": {

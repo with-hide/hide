@@ -308,6 +308,7 @@
     "hided/src/pane_auth.rs": {"max": 6, "reason": "import"},
     "hided/src/pane_cli.rs": {"max": 1, "reason": "prd-slug"},
     "hided/src/project_open.rs": {"max": 8, "reason": "import"},
+    "hided/src/server/event_class.rs": {"max": 2, "reason": "import"},
     "hided/src/supervisor.rs": {"max": 3, "reason": "import"},
     "hided/src/workspace_cli.rs": {"max": 5, "reason": "import"},
     "hided/tests/it/connect_build.rs": {"max": 5, "reason": "test"},

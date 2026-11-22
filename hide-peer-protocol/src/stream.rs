@@ -25,15 +25,21 @@ pub enum StreamKind {
     Terminal,
     File,
     Page,
+    /// Another machine's view of this one: its socket's control and
+    /// terminal frames (PRD D-67).
     Screen,
     /// What the two machines' cores say to each other (D-72): opened by a
     /// side that holds a grant, written by both, and apart from the
     /// management stream, which belongs to a guest's node.
     Core,
+    /// The same view's page, its assets and its file bytes, behind
+    /// everything else, so neither a page load nor a file read holds a
+    /// key's echo (D-67).
+    ScreenBulk,
 }
 
 impl StreamKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Hello,
         Self::Pairing,
         Self::Revoke,
@@ -45,6 +51,7 @@ impl StreamKind {
         Self::Page,
         Self::Screen,
         Self::Core,
+        Self::ScreenBulk,
     ];
 
     pub const fn tag(self) -> u8 {
@@ -60,6 +67,7 @@ impl StreamKind {
             Self::Page => 9,
             Self::Screen => 10,
             Self::Core => 11,
+            Self::ScreenBulk => 12,
         }
     }
 
@@ -80,6 +88,7 @@ impl StreamKind {
             Self::Page => "page",
             Self::Screen => "screen",
             Self::Core => "core",
+            Self::ScreenBulk => "screen_bulk",
         }
     }
 
@@ -93,7 +102,7 @@ impl StreamKind {
             Self::Hello | Self::Pairing | Self::Revoke | Self::Management | Self::Core => 75,
             Self::NodeLink => 50,
             Self::Terminal | Self::Screen => 0,
-            Self::File | Self::Page => -100,
+            Self::File | Self::Page | Self::ScreenBulk => -100,
         }
     }
 
@@ -191,7 +200,10 @@ mod tests {
             if kind != StreamKind::Keys {
                 assert!(kind.priority() < StreamKind::Keys.priority(), "{kind:?}");
             }
-            if !matches!(kind, StreamKind::File | StreamKind::Page) {
+            if !matches!(
+                kind,
+                StreamKind::File | StreamKind::Page | StreamKind::ScreenBulk
+            ) {
                 assert!(kind.priority() > StreamKind::File.priority(), "{kind:?}");
             }
         }

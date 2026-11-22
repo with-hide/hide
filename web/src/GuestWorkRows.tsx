@@ -115,7 +115,10 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
             data-peer-group={group}
             data-task-focus="row"
             className="min-h-(--size-control-lg) items-start gap-sm rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
-            onClick={() => actions.focusDevice(deviceId)}
+            // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
+            onClick={() => {
+              if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
+            }}
           >
             <span className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs">
               <StatusMark mark={markOf(row.mark)} read={row.read === true} />

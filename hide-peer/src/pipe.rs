@@ -289,6 +289,12 @@ impl PeerConn for PipeConn {
         PathKind::Local
     }
 
+    /// One carrier is the only path a pipe has, so it never moves; the
+    /// caller's race with [`PeerConn::closed`] ends the wait.
+    async fn path_changed(&self, _from: PathKind) -> PathKind {
+        std::future::pending().await
+    }
+
     async fn open(&self, priority: i32) -> Result<(PipeSend, PipeRecv), TransportError> {
         self.pipe
             .open(priority)
@@ -419,6 +425,13 @@ impl<M: PeerConn, P: PeerConn> PeerConn for Either<M, P> {
         match self {
             Self::Main(conn) => conn.path(),
             Self::Pipe(conn) => conn.path(),
+        }
+    }
+
+    async fn path_changed(&self, from: PathKind) -> PathKind {
+        match self {
+            Self::Main(conn) => conn.path_changed(from).await,
+            Self::Pipe(conn) => conn.path_changed(from).await,
         }
     }
 
