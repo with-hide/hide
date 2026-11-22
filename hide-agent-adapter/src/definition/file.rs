@@ -127,7 +127,10 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     }
     if let Some(plan) = &answer.plan_approval {
         lists.push(("plan_approval.approve", plan.approve.iter().collect()));
-        lists.push(("plan_approval.keep_planning", plan.keep_planning.iter().collect()));
+        lists.push((
+            "plan_approval.keep_planning",
+            plan.keep_planning.iter().collect(),
+        ));
     }
     if let Some(permission) = &answer.permission {
         lists.push(("permission.allow", permission.allow.iter().collect()));

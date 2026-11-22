@@ -216,9 +216,9 @@ pub fn choices(agent_kind: &str, ask: Ask) -> Vec<String> {
         return Vec::new();
     };
     match ask {
-        Ask::Question(count) if answer.question.is_some() => {
-            (1..=count.min(QUESTION_CHOICES)).map(|at| at.to_string()).collect()
-        }
+        Ask::Question(count) if answer.question.is_some() => (1..=count.min(QUESTION_CHOICES))
+            .map(|at| at.to_string())
+            .collect(),
         Ask::PlanApproval if answer.plan_approval.is_some() => {
             vec!["approve".to_owned(), "keep_planning".to_owned()]
         }
@@ -237,7 +237,10 @@ pub fn choices(agent_kind: &str, ask: Ask) -> Vec<String> {
 /// The keys that pick `choice` on `ask`, from the agent's key table; `None`
 /// for a choice [`choices`] does not offer.
 pub fn choice_keys(agent_kind: &str, ask: Ask, choice: &str) -> Option<Vec<String>> {
-    if !choices(agent_kind, ask).iter().any(|offered| offered == choice) {
+    if !choices(agent_kind, ask)
+        .iter()
+        .any(|offered| offered == choice)
+    {
         return None;
     }
     let answer = answer_table(agent_kind)?;
@@ -294,7 +297,10 @@ mod tests {
         assert_eq!(problem("a\rb", 0), Some("control_characters"));
         assert_eq!(problem(&"a".repeat(LIMIT_BYTES), 0), None);
         assert_eq!(problem(&"a".repeat(LIMIT_BYTES + 1), 0), Some("too_long"));
-        assert_eq!(problem(&"가".repeat(LIMIT_BYTES / 3 + 1), 0), Some("too_long"));
+        assert_eq!(
+            problem(&"가".repeat(LIMIT_BYTES / 3 + 1), 0),
+            Some("too_long")
+        );
         assert_eq!(problem("files", MAX_FILES + 1), Some("too_many_files"));
     }
 
@@ -400,7 +406,11 @@ mod tests {
         assert_eq!(choices("claude", Ask::Question(3)), ["1", "2", "3"]);
         assert_eq!(
             choice_keys("claude", Ask::Question(3), "3"),
-            Some(vec!["down".to_owned(), "down".to_owned(), "enter".to_owned()])
+            Some(vec![
+                "down".to_owned(),
+                "down".to_owned(),
+                "enter".to_owned()
+            ])
         );
         assert_eq!(choice_keys("claude", Ask::Question(3), "4"), None);
         assert_eq!(choice_keys("claude", Ask::Question(3), "0"), None);
@@ -428,7 +438,11 @@ mod tests {
     #[test]
     fn every_key_in_a_built_in_table_is_one_the_engine_types() {
         for definition in hide_agent_adapter::definition::builtins() {
-            for ask in [Ask::Question(QUESTION_CHOICES), Ask::PlanApproval, Ask::Permission] {
+            for ask in [
+                Ask::Question(QUESTION_CHOICES),
+                Ask::PlanApproval,
+                Ask::Permission,
+            ] {
                 for choice in choices(&definition.id, ask) {
                     let keys = choice_keys(&definition.id, ask, &choice).unwrap();
                     let keys: Vec<&str> = keys.iter().map(String::as_str).collect();

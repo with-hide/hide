@@ -401,7 +401,10 @@ fn one_question_of_one_choice_keeps_each_choice_note_and_is_one_pick() {
         assert_eq!(content.note(0), None);
     }
     // Two questions in one call are answered in turn, never by one pick.
-    let two = fact(&Session::question(Agent::Claude).read()).unwrap().content.unwrap();
+    let two = fact(&Session::question(Agent::Claude).read())
+        .unwrap()
+        .content
+        .unwrap();
     assert!(!two.pick_one());
 }
 

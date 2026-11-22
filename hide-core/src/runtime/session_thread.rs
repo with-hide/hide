@@ -481,7 +481,10 @@ impl Runtime {
         let device = open.device.clone();
         let raw_pane = open.raw_pane.clone();
         let generation = open.generation;
-        let Some(engine) = self.delivery_engine(&device).map(crate::engine::EngineHandle::new) else {
+        let Some(engine) = self
+            .delivery_engine(&device)
+            .map(crate::engine::EngineHandle::new)
+        else {
             let reason = if device == self.node.as_str() {
                 "unavailable"
             } else {

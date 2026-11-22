@@ -10,9 +10,7 @@
 //! [`CATCH_UP_PAGES`] pages behind, reads the newest page.
 
 use hide_session::Accounts;
-use hide_session::thread::{
-    ThreadCursor, ThreadRead, ThreadRequest, acp, read_pane_thread,
-};
+use hide_session::thread::{ThreadCursor, ThreadRead, ThreadRequest, acp, read_pane_thread};
 
 /// The open calls kept; past it the oldest is dropped.
 const OPEN_LIMIT: usize = 32;
@@ -90,7 +88,9 @@ impl Calls {
             let page = match read_pane_thread(accounts, &self.request) {
                 Ok(page) => page,
                 // The file was replaced: read it anew from its newest page.
-                Err(refusal) if refusal.reason() == "thread_cursor_stale" && self.cursor.is_some() => {
+                Err(refusal)
+                    if refusal.reason() == "thread_cursor_stale" && self.cursor.is_some() =>
+                {
                     self.cursor = None;
                     continue;
                 }
@@ -127,8 +127,7 @@ impl Calls {
                     }
                     self.open.push(OpenCall {
                         id: id.to_owned(),
-                        command: (call.kind == acp::ToolKind::Execute)
-                            .then(|| call.title.clone()),
+                        command: (call.kind == acp::ToolKind::Execute).then(|| call.title.clone()),
                         since_ms: call
                             .meta
                             .as_ref()
@@ -206,19 +205,27 @@ mod tests {
     fn the_newest_open_command_is_followed_until_its_result_or_the_next_turn() {
         let mut calls = calls();
         calls.fold(&[
-            update(json!({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "cargo test",
-                "kind": "execute", "status": "pending", "_meta": {"hide": {"at_ms": 100}}})),
-            update(json!({"sessionUpdate": "tool_call", "toolCallId": "b", "title": "src/lib.rs",
-                "kind": "read", "status": "pending"})),
+            update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "cargo test",
+                "kind": "execute", "status": "pending", "_meta": {"hide": {"at_ms": 100}}}),
+            ),
+            update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": "b", "title": "src/lib.rs",
+                "kind": "read", "status": "pending"}),
+            ),
         ]);
         let open = calls.command().unwrap();
         assert_eq!(open.command.as_deref(), Some("cargo test"));
         assert_eq!(open.since_ms, Some(100));
-        calls.fold(&[update(json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
-            "status": "completed"}))]);
+        calls.fold(&[update(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
+            "status": "completed"}),
+        )]);
         assert_eq!(calls.command(), None);
-        calls.fold(&[update(json!({"sessionUpdate": "tool_call", "toolCallId": "c",
-            "title": "npm run build", "kind": "execute", "status": "pending"}))]);
+        calls.fold(&[update(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "c",
+            "title": "npm run build", "kind": "execute", "status": "pending"}),
+        )]);
         assert!(calls.command().is_some());
         calls.fold(&[update(json!({"sessionUpdate": "user_message_chunk",
             "content": {"type": "text", "text": "멈추고 다시"}}))]);

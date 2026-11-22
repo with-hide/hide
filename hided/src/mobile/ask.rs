@@ -26,9 +26,7 @@ pub fn kind_of(agent: &PhoneAgent) -> Option<Ask> {
     match agent.user_turn.as_ref() {
         Some(fact) => match (fact.kind, fact.content.as_ref()) {
             (UserTurnKind::PlanApproval, _) => Some(Ask::PlanApproval),
-            (UserTurnKind::Question, Some(content)) => {
-                Some(Ask::Question(content.choices().len()))
-            }
+            (UserTurnKind::Question, Some(content)) => Some(Ask::Question(content.choices().len())),
             // A question whose words the record does not hold is answered
             // with a reply.
             (UserTurnKind::Question, None) => None,
@@ -149,9 +147,11 @@ mod tests {
     #[test]
     fn a_question_is_asked_with_its_notes_and_picked_by_its_agents_keys() {
         let question = |pick_one: bool| {
-            listed(json!({"agent_kind": "claude", "status_code": "question", "demand": "question",
+            listed(
+                json!({"agent_kind": "claude", "status_code": "question", "demand": "question",
                 "user_turn": {"kind": "question", "content": {"text": "어느 쪽?", "choices": ["전부", "나눠서"],
-                "notes": ["리뷰 4건을 이 PR에서", ""], "pick_one": pick_one, "truncated": false}}}))
+                "notes": ["리뷰 4건을 이 PR에서", ""], "pick_one": pick_one, "truncated": false}}}),
+            )
         };
         let one = question(true);
         let asked = of(agent(&one), None).unwrap();
@@ -191,12 +191,19 @@ mod tests {
             asked["choices"],
             json!([{"id": "allow"}, {"id": "allow_always"}, {"id": "deny"}])
         );
-        assert_eq!(keys(agent(&opencode), "100", "deny"), Ok(vec!["esc".to_owned()]));
+        assert_eq!(
+            keys(agent(&opencode), "100", "deny"),
+            Ok(vec!["esc".to_owned()])
+        );
         let pi = waiting("pi");
         let asked = of(agent(&pi), Some("ls")).unwrap();
-        assert_eq!((asked["answerable"].clone(), asked["choices"].clone()), (json!(false), json!([])));
+        assert_eq!(
+            (asked["answerable"].clone(), asked["choices"].clone()),
+            (json!(false), json!([]))
+        );
         assert_eq!(keys(agent(&pi), "100", "allow"), Err("unknown_choice"));
-        let resting = listed(json!({"agent_kind": "claude", "status_code": "idle", "demand": "none"}));
+        let resting =
+            listed(json!({"agent_kind": "claude", "status_code": "idle", "demand": "none"}));
         assert_eq!(of(agent(&resting), Some("ls")), None);
     }
 }

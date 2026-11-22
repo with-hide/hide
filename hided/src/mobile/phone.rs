@@ -35,11 +35,11 @@ use super::calls::Calls;
 use super::conversation::{self, Tail, Transcript};
 use super::looks;
 use super::pane::{self, PaneError};
-use hide_core::operator_input::{self, Typed};
 use super::projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use super::prs;
 use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
+use hide_core::operator_input::{self, Typed};
 
 /// How often an open detail reads its pane again.
 const DETAIL_INTERVAL: Duration = Duration::from_secs(1);
@@ -603,7 +603,9 @@ fn running(mobile: &Mobile, key: &AgentKey, calls: Option<&Calls>) -> Value {
 /// What the agent asks, as the detail's ask frame carries it.
 fn asked(mobile: &Mobile, key: &AgentKey, calls: Option<&Calls>) -> Value {
     let projection = mobile.projection_now();
-    let command = calls.and_then(Calls::command).and_then(|open| open.command.as_deref());
+    let command = calls
+        .and_then(Calls::command)
+        .and_then(|open| open.command.as_deref());
     projection
         .find(key)
         .and_then(|agent| ask::of(agent, command))
@@ -654,7 +656,11 @@ async fn conversation_step(
             }
         }
         match Transcript::open(&reader.session_accounts(), &account, &pane_id, source) {
-            Ok((open, page)) => (Some(open), calls, Some((page.messages, page.before, "reset"))),
+            Ok((open, page)) => (
+                Some(open),
+                calls,
+                Some((page.messages, page.before, "reset")),
+            ),
             // Reported, and nothing written yet.
             Err(hide_session::SessionError::SessionFileMissing) => (None, calls, None),
             Err(error) => {
@@ -2153,7 +2159,10 @@ async fn input(
     // A choice on the agent's own ask (Doop 03, 04), always written for the
     // ask the phone showed: typed as the keys its screen takes, never as text.
     let choice = message.get("choice").and_then(Value::as_str);
-    let turn = message.get("turn").and_then(Value::as_str).map(str::to_owned);
+    let turn = message
+        .get("turn")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let problem = match (text, engine_key, choice) {
         (Some(text), None, None) => operator_input::problem(text, 0),
         (None, Some(key), None) => pane::engine_key(key).is_none().then_some("unknown_key"),
@@ -2489,10 +2498,24 @@ mod tests {
         for (request, fields, expected) in [
             ("no-turn", json!({"choice": "allow"}), "invalid_request"),
             ("old-turn", json!({"choice": "allow", "turn": "4"}), "stale"),
-            ("no-such", json!({"choice": "approve", "turn": "5"}), "unknown_choice"),
-            ("with-text", json!({"choice": "allow", "turn": "5", "text": "yes"}), "invalid_request"),
+            (
+                "no-such",
+                json!({"choice": "approve", "turn": "5"}),
+                "unknown_choice",
+            ),
+            (
+                "with-text",
+                json!({"choice": "allow", "turn": "5", "text": "yes"}),
+                "invalid_request",
+            ),
         ] {
-            let answer = input(&mobile, "phone-a", &input_message(request, fields), &waiting).await;
+            let answer = input(
+                &mobile,
+                "phone-a",
+                &input_message(request, fields),
+                &waiting,
+            )
+            .await;
             assert_eq!(reason(&answer), Some(expected), "{request}");
             assert_eq!(mobile.claimed_input("phone-a", request), None, "{request}");
         }
@@ -2504,7 +2527,10 @@ mod tests {
             &waiting,
         )
         .await;
-        assert!(!matches!(reason(&matching), Some("stale" | "unknown_choice" | "invalid_request")));
+        assert!(!matches!(
+            reason(&matching),
+            Some("stale" | "unknown_choice" | "invalid_request")
+        ));
     }
 
     /// A notice's Reply that was written and is sent again with the same request id (a retry after a lost answer or a
