@@ -619,7 +619,10 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
 
     // The core's node on the original machine starts from the core's build
     // there and takes up the panes it held: the row says ready again, on
-    // the connection the two Hides made.
+    // the connection the two Hides made. The row's own state is the
+    // session's: the node's link (`host`) is ready a moment before the core
+    // has opened the machine's session on it, and until then the core
+    // refuses a pane brought forward there (`remote.control.unavailable`).
     let mut last = Value::Null;
     wait_within("the core's node on the original machine", WITHIN, || {
         last = screen.snapshot()?;
@@ -629,7 +632,10 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
             .into_iter()
             .flatten()
             .any(|row| {
-                row["id"] == ORIGINAL && row["dials_in"] == false && row["host"]["state"] == "ready"
+                row["id"] == ORIGINAL
+                    && row["dials_in"] == false
+                    && row["host"]["state"] == "ready"
+                    && row["state"] == "ready"
             });
         Ok(ready.then_some(()))
     })
