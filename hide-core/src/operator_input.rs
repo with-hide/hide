@@ -12,10 +12,14 @@
 //! the engine of the pane's machine), and only then types: words through the
 //! engine's `prompt_agent`, as the operator's (one paste where the program
 //! takes bracketed paste, then Enter after the prompt's gap), keys one by
-//! one as the engine's key input. Keys that count from the row the agent's
-//! screen has highlighted are typed only after the visible screen shows that
-//! row highlighted ([`Start`]): a highlight moved in the terminal would make
-//! them pick another row, such as allow for refuse.
+//! one as the engine's key input. One key write runs in a pane at a time,
+//! and a choice's keys are typed only while the visible screen shows what
+//! the operator answered ([`Screen`]): before the first key, the ask's rows
+//! and the command a permission was shown with, so an Esc never reaches a
+//! command already running; and before each key that counts from the
+//! highlight, the highlight on the row it expects, the pick included: a
+//! highlight moved in the terminal would make it pick another row, such as
+//! allow for refuse.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,9 +47,18 @@ const KEY_BYTES: usize = 16;
 /// input in chunks sees each key as its own press.
 const KEY_GAP: Duration = Duration::from_millis(80);
 
-/// Why keys counted from the highlighted row typed nothing: the screen does
-/// not show the row they count from highlighted.
-pub const HIGHLIGHT_MOVED: &str = "highlight_moved";
+/// Why a choice's keys stopped before picking: the screen does not show the
+/// command the operator was shown, or the highlight on the row the next key
+/// expects.
+pub const SCREEN_DIFFERS: &str = "screen_differs";
+
+/// Why a key write typed nothing: another key write to the pane is under way.
+pub const IN_FLIGHT: &str = "in_flight";
+
+/// How many times a key reads the screen for the row it expects after a
+/// down this write typed, [`KEY_GAP`] apart, so a program still drawing the
+/// move is not read as a moved highlight.
+const ROW_READS: usize = 6;
 
 /// What may stand before a highlighted row on a line: a box's border.
 const BORDER: [char; 4] = [' ', '│', '┃', '║'];
@@ -81,11 +94,11 @@ pub enum Typed<'a> {
     /// Keys in order, each an engine key name (`down`, `enter`, `esc`) or
     /// one character typed as a key press, never pasted.
     Keys(&'a [&'a str]),
-    /// Keys that count from `start`, typed only while the screen shows it
-    /// highlighted.
-    FromStart {
+    /// A choice's keys, each typed only while the screen shows what `screen`
+    /// expects there.
+    Choice {
         keys: &'a [&'a str],
-        start: &'a Start,
+        screen: &'a Screen,
     },
 }
 
@@ -96,7 +109,7 @@ impl Typed<'_> {
     fn reserved(&self) -> usize {
         match self {
             Self::Words(text) => text.len() + 1,
-            Self::Keys(keys) | Self::FromStart { keys, .. } => keys.len() * KEY_BYTES,
+            Self::Keys(keys) | Self::Choice { keys, .. } => keys.len() * KEY_BYTES,
         }
     }
 }
@@ -173,36 +186,52 @@ pub fn write(
     // Held until the write returns: a sleep that starts now waits for these
     // words to land, and a pane closed since refuses them.
     let _admission = gate.admit(core_pane).map_err(|_| Unwritten::Asleep)?;
+    // One key write in a pane at a time, so two screens' keys never
+    // interleave between a row read and the key after it.
+    let _keys = match typed {
+        Typed::Words(_) => None,
+        Typed::Keys(_) | Typed::Choice { .. } => Some(
+            gate.hold_keys(core_pane)
+                .ok_or(Unwritten::Unready(IN_FLIGHT))?,
+        ),
+    };
     let engine = ready().map_err(Unwritten::Unready)?;
     match typed {
         Typed::Words(text) => engine
             .prompt_agent(raw_pane, text, STEP_TIMEOUT)
             .map_err(|error| Unwritten::of(&error)),
-        Typed::Keys(keys) => press(&engine, raw_pane, keys),
-        Typed::FromStart { keys, start } => {
-            // A failed read typed nothing, whatever the engine answered.
-            let screen = engine
-                .read_visible(raw_pane, STEP_TIMEOUT)
-                .map_err(|error| match Unwritten::of(&error) {
-                    Unwritten::Uncertain => Unwritten::Unavailable,
-                    certain => certain,
-                })?;
-            if !start.highlighted(&screen) {
-                return Err(Unwritten::Unready(HIGHLIGHT_MOVED));
-            }
-            press(&engine, raw_pane, keys)
-        }
+        Typed::Keys(keys) => press(&engine, raw_pane, keys, None),
+        Typed::Choice { keys, screen } => press(&engine, raw_pane, keys, Some(screen)),
     }
 }
 
-/// Presses `keys` one by one in `raw_pane`.
-fn press(engine: &EngineHandle, raw_pane: &str, keys: &[&str]) -> Result<(), Unwritten> {
+/// Presses `keys` one by one in `raw_pane`; with `screen`, the first only
+/// once the screen shows the ask's rows and the command it expects, and each
+/// key that counts from the highlight only once the screen shows it on the
+/// row that key expects, the first on the first row and each after a down
+/// one row lower.
+fn press(
+    engine: &EngineHandle,
+    raw_pane: &str,
+    keys: &[&str],
+    screen: Option<&Screen>,
+) -> Result<(), Unwritten> {
+    let mut place = 0;
     for (index, key) in keys.iter().enumerate() {
         if index > 0 {
             // A production wait: the program reads the next key as its own
             // press only once it has read this one.
             #[allow(clippy::disallowed_methods)]
             std::thread::sleep(KEY_GAP);
+        }
+        if let Some(screen) = screen {
+            let row = counts_from_highlight(key).then_some(place);
+            if row.is_some() || (index == 0 && *screen != Screen::default()) {
+                await_screen(engine, raw_pane, screen, row, index > 0)?;
+            }
+        }
+        if *key == "down" {
+            place += 1;
         }
         if let Err(error) = engine.send_keys(raw_pane, &[key], STEP_TIMEOUT) {
             // A key after the first lands on a form the first moved.
@@ -215,6 +244,38 @@ fn press(engine: &EngineHandle, raw_pane: &str, keys: &[&str]) -> Result<(), Unw
         }
     }
     Ok(())
+}
+
+/// Reads the visible screen until it shows what `screen` expects, with the
+/// highlight on row `place` when given: once, or, after a key this write
+/// typed, up to [`ROW_READS`] times while the program draws the move. Any
+/// other screen stops the write before this key, so nothing is picked.
+fn await_screen(
+    engine: &EngineHandle,
+    raw_pane: &str,
+    screen: &Screen,
+    place: Option<usize>,
+    after_key: bool,
+) -> Result<(), Unwritten> {
+    let reads = if after_key { ROW_READS } else { 1 };
+    for read in 0..reads {
+        if read > 0 {
+            // A production wait: the program has not drawn the last key yet.
+            #[allow(clippy::disallowed_methods)]
+            std::thread::sleep(KEY_GAP);
+        }
+        // A failed read typed nothing, whatever the engine answered.
+        let visible = engine
+            .read_visible(raw_pane, STEP_TIMEOUT)
+            .map_err(|error| match Unwritten::of(&error) {
+                Unwritten::Uncertain => Unwritten::Unavailable,
+                certain => certain,
+            })?;
+        if screen.shows(&visible, place) {
+            return Ok(());
+        }
+    }
+    Err(Unwritten::Unready(SCREEN_DIFFERS))
 }
 
 /// An ask on the agent's own screen that a choice answers.
@@ -253,7 +314,7 @@ pub fn choices(agent_kind: &str, ask: Ask) -> Vec<String> {
     // Keys that count from the highlight are typed only where the screen
     // shows where they start; without that, the ask is answered in the
     // terminal.
-    let blind = first_of(answer, ask).is_none()
+    let blind = row_of(answer, ask).is_none()
         && offered.iter().any(|choice| {
             keys_of(answer, ask, choice)
                 .is_some_and(|keys| keys.iter().any(|key| counts_from_highlight(key)))
@@ -326,21 +387,90 @@ fn keys_of(
     })
 }
 
-/// The row a choice's keys count from, as the agent's screen draws it
-/// highlighted: its table's `marker` before the text its `first` names.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Start {
-    marker: String,
-    first: String,
-    /// `first` is the row's whole text (a choice's label), not its start.
-    whole: bool,
+/// What the agent's screen must show while a choice's keys are typed: the
+/// ask's rows and the command the operator was shown, before the first key,
+/// and the highlighted row, for a key that counts from it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Screen {
+    /// How the screen draws the ask's highlighted row; `None` where the
+    /// agent's table does not say.
+    rows: Option<Rows>,
+    /// The start of the command a permission was shown with: the ask on the
+    /// screen is that command's.
+    command: Option<String>,
 }
 
-impl Start {
-    /// Whether `screen`, a pane's visible text, shows this row highlighted:
-    /// the lowest line that begins with the marker, past a box's border, is
-    /// this row. A screen with no highlighted row, or another one, does not.
-    pub fn highlighted(&self, screen: &str) -> bool {
+/// A highlighted row as the agent's screen draws it: its table's `marker`
+/// before the text its `row` names, the row's place (`{n}.`) or its
+/// question's choice label.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Rows {
+    marker: String,
+    row: String,
+    /// The question's choices, for a `row` that names a row by its label.
+    labels: Vec<String>,
+}
+
+/// How much of a command's first line the screen must show: short enough
+/// to sit on one line of any pane a dialog fits in.
+const COMMAND_PROBE_CHARS: usize = 40;
+
+/// The places a numbered row is looked for at, when any row of the ask
+/// will do: more than any ask an agent's screen lists.
+const ROW_PLACES: usize = 16;
+
+impl Screen {
+    /// This screen, which also shows the start of `command`, the one the
+    /// operator was shown.
+    #[must_use]
+    pub fn showing(mut self, command: &str) -> Self {
+        let first = command.trim().lines().next().unwrap_or_default().trim();
+        self.command = Some(first.chars().take(COMMAND_PROBE_CHARS).collect());
+        self
+    }
+
+    /// Whether `visible`, a pane's visible text, shows what this screen
+    /// expects: the highlight on row `place` when given, else on any row of
+    /// the ask, where its table says how rows are drawn.
+    pub fn shows(&self, visible: &str, place: Option<usize>) -> bool {
+        let command = self
+            .command
+            .as_deref()
+            .is_none_or(|command| visible.contains(command));
+        let row = match (&self.rows, place) {
+            (Some(rows), Some(place)) => rows.highlighted(visible, place),
+            (None, Some(_)) => false,
+            (Some(rows), None) => {
+                let labelled = rows.row.contains(hide_agent_adapter::definition::ROW_LABEL);
+                let places = if labelled {
+                    rows.labels.len()
+                } else {
+                    ROW_PLACES
+                };
+                (0..places).any(|place| rows.highlighted(visible, place))
+            }
+            (None, None) => true,
+        };
+        command && row
+    }
+}
+
+impl Rows {
+    /// Whether `screen`, a pane's visible text, shows the highlight on row
+    /// `place` (0 for the first): the lowest line that begins with the
+    /// marker, past a box's border, is that row. A screen with no
+    /// highlighted row, or another one, does not.
+    fn highlighted(&self, screen: &str, place: usize) -> bool {
+        use hide_agent_adapter::definition::{ROW_LABEL, ROW_NUMBER};
+        let whole = self.row.contains(ROW_LABEL);
+        let expected = if whole {
+            let Some(label) = self.labels.get(place) else {
+                return false;
+            };
+            self.row.replace(ROW_LABEL, label)
+        } else {
+            self.row.replace(ROW_NUMBER, &(place + 1).to_string())
+        };
         let Some(row) = screen.lines().rev().find_map(|line| {
             line.trim_start_matches(BORDER)
                 .strip_prefix(self.marker.as_str())
@@ -349,12 +479,13 @@ impl Start {
         };
         let Some(rest) = row
             .trim_start()
-            .strip_prefix(self.first.as_str())
+            .strip_prefix(expected.as_str())
             .map(|rest| rest.trim_end_matches(BORDER))
         else {
             return false;
         };
-        if self.whole {
+        // A label is the row's whole text; a place starts it.
+        if whole {
             rest.is_empty()
         } else {
             rest.is_empty() || rest.starts_with(char::is_whitespace)
@@ -362,32 +493,30 @@ impl Start {
     }
 }
 
-/// The start the keys of `choice` on `ask` count from, or `None` when they
-/// do not depend on the highlight (`esc`, or letters). `first_choice` is a
-/// question's first label, which a table may name its first row by.
-pub fn choice_start(
-    agent_kind: &str,
-    ask: Ask,
-    choice: &str,
-    first_choice: Option<&str>,
-) -> Option<Start> {
-    let keys = choice_keys(agent_kind, ask, choice)?;
-    if !keys.iter().any(|key| counts_from_highlight(key)) {
-        return None;
+/// What the screen must show while the keys of a choice on `ask` are typed:
+/// the ask's rows, as its agent's table draws them, which an Esc or a letter
+/// waits for too, so it never lands on a screen the ask has left. `labels`
+/// are a question's choices, which a table may name its rows by.
+pub fn choice_screen(agent_kind: &str, ask: Ask, labels: &[String]) -> Screen {
+    let rows = answer_table(agent_kind).and_then(|answer| {
+        Some(Rows {
+            marker: answer.marker.clone()?,
+            row: row_of(answer, ask)?.to_owned(),
+            labels: labels.to_vec(),
+        })
+    });
+    Screen {
+        rows,
+        command: None,
     }
-    let answer = answer_table(agent_kind)?;
-    let first = first_of(answer, ask)?;
-    let whole = first.contains(hide_agent_adapter::definition::FIRST_LABEL);
-    let first = if whole {
-        first.replace(hide_agent_adapter::definition::FIRST_LABEL, first_choice?)
-    } else {
-        first.to_owned()
-    };
-    Some(Start {
-        marker: answer.marker.clone()?,
-        first,
-        whole,
-    })
+}
+
+/// Whether the agent's permission names no command, since it records a call
+/// only once it is allowed (`unnamed` in its key table).
+pub fn unnamed_permission(agent_kind: &str) -> bool {
+    answer_table(agent_kind)
+        .and_then(|answer| answer.permission.as_ref())
+        .is_some_and(|permission| permission.unnamed)
 }
 
 /// Whether `key` acts on the highlighted row, or moves it: every key but
@@ -396,13 +525,13 @@ fn counts_from_highlight(key: &str) -> bool {
     key != "esc" && key.chars().count() != 1
 }
 
-/// The text the start row of `ask` begins with, from its table.
-fn first_of(answer: &hide_agent_adapter::definition::Answer, ask: Ask) -> Option<&str> {
+/// The text `ask`'s rows are drawn with, from its table.
+fn row_of(answer: &hide_agent_adapter::definition::Answer, ask: Ask) -> Option<&str> {
     answer.marker.as_ref()?;
     match ask {
-        Ask::Question(_) => answer.question.as_ref()?.first.as_deref(),
-        Ask::PlanApproval => answer.plan_approval.as_ref()?.first.as_deref(),
-        Ask::Permission => answer.permission.as_ref()?.first.as_deref(),
+        Ask::Question(_) => answer.question.as_ref()?.row.as_deref(),
+        Ask::PlanApproval => answer.plan_approval.as_ref()?.row.as_deref(),
+        Ask::Permission => answer.permission.as_ref()?.row.as_deref(),
     }
 }
 
@@ -558,8 +687,11 @@ mod tests {
             choice_keys("codex", Ask::Permission, "allow_always"),
             Some(vec!["down".to_owned(), "enter".to_owned()])
         );
-        assert_eq!(choices("omp", Ask::Permission), ["allow", "deny"]);
-        assert_eq!(choice_keys("omp", Ask::Permission, "allow_always"), None);
+        assert_eq!(choices("omp", Ask::Question(2)), ["1", "2"]);
+        // omp's plan and permission rows are fixed words with no place to
+        // count by.
+        assert!(choices("omp", Ask::Permission).is_empty());
+        assert!(choices("omp", Ask::PlanApproval).is_empty());
         assert_eq!(
             choice_keys("grok", Ask::PlanApproval, "approve"),
             Some(vec!["a".to_owned()])
@@ -598,101 +730,218 @@ mod tests {
     }
 
     /// Rows as the agents drew them in real panes (live-checks, 2026-11-23):
-    /// the start is read where it is highlighted, and not where the
-    /// highlight stands on another row, such as allow-always for allow.
+    /// a row is read where the highlight stands on it, and not where it
+    /// stands on another, such as allow-always for allow.
     #[test]
-    fn the_start_is_read_only_where_the_agents_screen_highlights_it() {
-        let start = |agent: &str, ask: Ask, choice: &str, first: Option<&str>| {
-            choice_start(agent, ask, choice, first).unwrap()
+    fn a_row_is_read_only_where_the_agents_screen_highlights_it() {
+        struct Rows(Screen);
+        impl Rows {
+            fn highlighted(&self, visible: &str, place: usize) -> bool {
+                self.0.shows(visible, Some(place))
+            }
+        }
+        let rows = |agent: &str, ask: Ask, labels: &[&str]| {
+            let labels: Vec<String> = labels.iter().map(|label| (*label).to_owned()).collect();
+            Rows(choice_screen(agent, ask, &labels))
         };
-        let claude = start("claude", Ask::Permission, "allow", None);
-        let rows = [
+        let claude = rows("claude", Ask::Permission, &[]);
+        let first = [
             " Do you want to proceed?",
             " ❯ 1. Yes",
             "   2. Yes, and always allow access to /private/tmp/hlc/proj from this project",
             "   4. No",
-        ];
-        assert!(claude.highlighted(&rows.join("\n")));
-        let moved = [
+        ]
+        .join("\n");
+        let second = [
             " Do you want to proceed?",
             "   1. Yes",
             " ❯ 2. Yes, and always allow access to /private/tmp/hlc/proj from this project",
             "   4. No",
-        ];
-        assert!(!claude.highlighted(&moved.join("\n")));
-        assert!(!claude.highlighted(" Do you want to proceed?\n"));
-        let codex = start("codex", Ask::Question(4), "2", Some("Red"));
+        ]
+        .join("\n");
+        assert!(claude.highlighted(&first, 0));
+        assert!(!claude.highlighted(&second, 0));
+        assert!(claude.highlighted(&second, 1));
+        assert!(!claude.highlighted(&first, 1));
+        assert!(!claude.highlighted(" Do you want to proceed?\n", 0));
+        let codex = rows("codex", Ask::Question(4), &[]);
         assert!(codex.highlighted(
-            "  Which color do you prefer?\n  › 1. Red (Recommended)  Choose red.\n    2. Green"
+            "  Which color do you prefer?\n  › 1. Red (Recommended)  Choose red.\n    2. Green",
+            0
         ));
-        assert!(
-            !codex.highlighted("  1. Red (Recommended)\n› 2. Green              Choose green.")
-        );
         // A tenth row is not the first.
-        assert!(!codex.highlighted("› 10. Other"));
-        let antigravity = start("antigravity", Ask::Permission, "deny", None);
-        assert!(
-            antigravity.highlighted("Run this command?\n> 1. Yes, run command\n  4. No, cancel")
-        );
-        // omp numbers no rows: its first question row is the first choice,
-        // whole.
-        let omp = start("omp", Ask::Question(3), "1", Some("Red"));
-        let border = "│ ❯ ○ Red                                     │";
-        assert!(omp.highlighted(border));
-        assert!(!omp.highlighted("│   ○ Red   │\n│ ❯ ○ Green │"));
-        assert!(!start("omp", Ask::Question(3), "1", Some("Re")).highlighted(border));
-        let plan = start("omp", Ask::PlanApproval, "keep_planning", None);
-        assert!(plan.highlighted(
-            "│ Plan mode - next step\n│ ❯ Approve and execute\n│   Approve and compact context"
-        ));
-        assert!(!plan.highlighted("│   Approve and execute\n│ ❯ Approve and compact context"));
-        // Esc and letters act wherever the highlight is.
-        assert_eq!(choice_start("claude", Ask::Permission, "deny", None), None);
+        assert!(!codex.highlighted("› 10. Other", 0));
+        let antigravity = rows("antigravity", Ask::Permission, &[]);
+        assert!(antigravity.highlighted("  1. Yes, run command\n> 4. No, cancel", 3));
+        // omp numbers no rows: a question's rows are its choices, whole.
+        let omp = rows("omp", Ask::Question(3), &["Red", "Green", "Blue"]);
+        let red = "│ ❯ ○ Red                                     │\n│   ○ Green │";
+        assert!(omp.highlighted(red, 0));
+        assert!(!omp.highlighted(red, 1));
+        assert!(omp.highlighted("│   ○ Red   │\n│ ❯ ○ Green │", 1));
+        assert!(!rows("omp", Ask::Question(3), &["Re"]).highlighted(red, 0));
+        // Esc waits for any row of the ask, wherever the highlight stands;
+        // Grok's letters have no rows to wait for.
+        let deny = choice_screen("claude", Ask::Permission, &[]);
+        assert!(deny.shows(&second, None));
+        assert!(!deny.shows("  ⎿  $ python3 -c \"import time\"\n\n ❯ \n", None));
         assert_eq!(
-            choice_start("grok", Ask::PlanApproval, "approve", None),
-            None
+            choice_screen("grok", Ask::PlanApproval, &[]),
+            Screen::default()
         );
     }
 
-    /// Keys that count from the highlighted row read the screen first and
-    /// type nothing when the highlight stands elsewhere: a highlight moved
-    /// in the terminal never turns a refusal into an allow.
+    /// An engine whose screen is Antigravity's permission for `cargo test
+    /// --workspace` with the highlight on row `at`, which each down this
+    /// write types moves one row, and the first down `jump` rows more, as a
+    /// key typed in the terminal between two keys would.
+    fn menu(at: usize, jump: usize) -> Arc<FakeEngine<'static>> {
+        let at = Arc::new(Mutex::new((at, jump)));
+        FakeEngine::start(move |method, params| {
+            let mut state = at.lock().unwrap();
+            match method {
+                "read_pane" => {
+                    let rows = [
+                        "Yes, run command",
+                        "Yes, and always allow",
+                        "Yes, always",
+                        "No, cancel",
+                    ];
+                    let text = std::iter::once("  cargo test --workspace".to_owned())
+                        .chain(rows.iter().enumerate().map(|(row, words)| {
+                            let mark = if row == state.0 { ">" } else { " " };
+                            format!("{mark} {}. {words}", row + 1)
+                        }))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    reply(crate::engine::PaneText {
+                        text,
+                        truncated: false,
+                    })
+                }
+                "send_keys" => {
+                    if params["keys"][0] == "down" {
+                        let other = std::mem::take(&mut state.1);
+                        state.0 += 1 + other;
+                    }
+                    reply(())
+                }
+                _ => reply(()),
+            }
+        })
+    }
+
+    /// A choice's keys are typed only while the screen shows what the
+    /// operator answered: the command the card showed before the first key,
+    /// and the highlight where each key that counts from it expects it. A
+    /// highlight moved in the terminal before the answer, or another
+    /// command's ask, types nothing, and a key typed in the terminal between
+    /// two keys stops the write before the pick, so a refusal never becomes
+    /// an allow.
     #[test]
-    fn keys_from_the_start_are_refused_when_the_highlight_moved() {
-        let screen = Arc::new(Mutex::new(String::new()));
-        let shown = Arc::clone(&screen);
-        let fake = FakeEngine::start(move |method, _| match method {
+    fn keys_stop_before_the_pick_when_the_screen_is_not_what_they_expect() {
+        let gate = Arc::new(PaneInputGate::default());
+        let open = node(None);
+        let screen = choice_screen("antigravity", Ask::Permission, &[])
+            .showing("cargo test --workspace\nmore");
+        let keys = ["down", "down", "down", "enter"];
+        let write_with = |fake: &Arc<FakeEngine<'static>>, keys: &[&str], screen: &Screen| {
+            let engine = EngineHandle::new(fake.engine());
+            let ready = || Ok(engine.clone());
+            write(
+                &open,
+                &gate,
+                "w1:p1",
+                "p1",
+                Typed::Choice { keys, screen },
+                &ready,
+            )
+        };
+        let answer = |fake: &Arc<FakeEngine<'static>>| write_with(fake, &keys, &screen);
+        let sent = |fake: &Arc<FakeEngine<'static>>| -> Vec<String> {
+            fake.calls_of("send_keys")
+                .iter()
+                .map(|call| call["keys"][0].as_str().unwrap().to_owned())
+                .collect()
+        };
+
+        let moved = menu(1, 0);
+        assert_eq!(answer(&moved), Err(Unwritten::Unready(SCREEN_DIFFERS)));
+        assert_eq!(moved.methods(), ["read_pane"]);
+        assert_eq!(
+            moved.calls_of("read_pane")[0],
+            serde_json::json!({"pane": "p1", "source": "visible", "lines": 0})
+        );
+
+        let interrupted = menu(0, 1);
+        assert_eq!(
+            answer(&interrupted),
+            Err(Unwritten::Unready(SCREEN_DIFFERS))
+        );
+        assert_eq!(sent(&interrupted), ["down"]);
+
+        let steady = menu(0, 0);
+        assert_eq!(answer(&steady), Ok(()));
+        assert_eq!(sent(&steady), keys);
+
+        // Esc counts from no row, yet waits for the ask's rows and the
+        // command the card showed: an ask allowed already, whose command
+        // runs, or another command's, takes no Esc that would stop it.
+        let rows = choice_screen("antigravity", Ask::Permission, &[]);
+        let other = rows.clone().showing("rm -rf build");
+        let elsewhere = menu(0, 0);
+        assert_eq!(
+            write_with(&elsewhere, &["esc"], &other),
+            Err(Unwritten::Unready(SCREEN_DIFFERS))
+        );
+        assert_eq!(elsewhere.methods(), ["read_pane"]);
+        let running = FakeEngine::start(|method, _| match method {
             "read_pane" => reply(crate::engine::PaneText {
-                text: shown.lock().unwrap().clone(),
+                text: "  cargo test --workspace\n  Running 3 tests\n> ".to_owned(),
                 truncated: false,
             }),
             _ => reply(()),
         });
+        let shown = rows.showing("cargo test --workspace");
+        assert_eq!(
+            write_with(&running, &["esc"], &shown),
+            Err(Unwritten::Unready(SCREEN_DIFFERS))
+        );
+        assert_eq!(running.methods(), ["read_pane"]);
+        let here = menu(2, 0);
+        assert_eq!(write_with(&here, &["esc"], &shown), Ok(()));
+        assert_eq!(sent(&here), ["esc"]);
+    }
+
+    /// One key write runs in a pane at a time: another, from a second phone
+    /// or a quick key, is refused while it runs and types nothing.
+    #[test]
+    fn a_key_write_is_refused_while_another_holds_the_pane() {
+        let fake = FakeEngine::start(|_, _| reply(()));
         let engine = EngineHandle::new(fake.engine());
         let ready = || Ok(engine.clone());
         let gate = Arc::new(PaneInputGate::default());
         let open = node(None);
-        let start = choice_start("antigravity", Ask::Permission, "deny", None).unwrap();
-        let keys = ["down", "down", "down", "enter"];
-        let typed = || Typed::FromStart {
-            keys: &keys,
-            start: &start,
-        };
-        *screen.lock().unwrap() =
-            "  1. Yes, run command\n> 2. Yes, and always allow\n  4. No, cancel".into();
+        let held = gate.hold_keys("w1:p1").unwrap();
         assert_eq!(
-            write(&open, &gate, "w1:p1", "p1", typed(), &ready),
-            Err(Unwritten::Unready(HIGHLIGHT_MOVED))
+            write(&open, &gate, "w1:p1", "p1", Typed::Keys(&["down"]), &ready),
+            Err(Unwritten::Unready(IN_FLIGHT))
         );
-        assert_eq!(fake.methods(), ["read_pane"]);
+        // Words are no key write, and another pane is not held.
         assert_eq!(
-            fake.calls_of("read_pane"),
-            [serde_json::json!({"pane": "p1", "source": "visible", "lines": 0})]
+            write(&open, &gate, "w1:p1", "p1", Typed::Words("yes"), &ready),
+            Ok(())
         );
-        *screen.lock().unwrap() =
-            "> 1. Yes, run command\n  2. Yes, and always allow\n  4. No, cancel".into();
-        assert_eq!(write(&open, &gate, "w1:p1", "p1", typed(), &ready), Ok(()));
-        assert_eq!(fake.calls_of("send_keys").len(), 4);
+        assert_eq!(
+            write(&open, &gate, "w1:p2", "p2", Typed::Keys(&["down"]), &ready),
+            Ok(())
+        );
+        drop(held);
+        assert_eq!(
+            write(&open, &gate, "w1:p1", "p1", Typed::Keys(&["down"]), &ready),
+            Ok(())
+        );
+        assert_eq!(fake.methods(), ["prompt_agent", "send_keys", "send_keys"]);
     }
 
     #[test]
