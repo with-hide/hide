@@ -534,20 +534,6 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// A picture of what `display` shows, taken over a gateway socket the caller
-/// already opened (`mobile/page_shot.rs`). It is a read, so a display behind
-/// another tab is taken too; the page is attached as not selected, so no
-/// input or overlay can reach it.
-pub(crate) async fn still(
-    socket: crate::workspace_cli::WorkspaceSocket,
-    display: &str,
-) -> Result<Vec<u8>, Failure> {
-    let mut page = page::Page::attach(cdp::Cdp::new(socket), display, false).await?;
-    let outcome = actions::still(&mut page).await;
-    page.close().await;
-    outcome
-}
-
 pub fn run(env: &Env, command: Command) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -55,6 +55,12 @@ type Options = {
    * control token; the answer is the bytes and the file's size, or a reason.
    */
   externalRead?: (grant: string, file: string | null, limit: number) => Promise<{ bytes: Uint8Array; total: number } | { failure: string }>;
+  /**
+   * A phone's picture of a display's page (`BrowserViews.still`): what the
+   * page draws, in front or not, as a JPEG, or why there is none. hided alone
+   * asks, with the control token, for a display of an area the core authorized.
+   */
+  still?: (scope: CdpScope) => Promise<{ jpeg: Uint8Array } | { failure: string }>;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -392,6 +398,17 @@ export class BrowserCdpGateway {
         if ("failure" in read) { this.reply(response, 200, { failure: read.failure }); return; }
         response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": read.bytes.length, "X-Hide-Total": String(read.total), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
         response.end(Buffer.from(read.bytes.buffer, read.bytes.byteOffset, read.bytes.length));
+        return;
+      }
+      if (path === "/display-still" && request.method === "POST" && this.options.still) {
+        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        const scope = scopeOf(await this.body(request));
+        if (!scope?.display_id) { this.reply(response, 400, { error: "Invalid scope" }); return; }
+        if (this.options.incarnation(scope) === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
+        const still = await this.options.still(scope);
+        if ("failure" in still) { this.reply(response, 200, { failure: still.failure }); return; }
+        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": still.jpeg.length, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+        response.end(Buffer.from(still.jpeg.buffer, still.jpeg.byteOffset, still.jpeg.length));
         return;
       }
       if (path === "/connect" && request.method === "POST") {

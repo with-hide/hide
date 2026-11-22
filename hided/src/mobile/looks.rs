@@ -830,14 +830,14 @@ fn outside_state(reason: &str) -> &'static str {
 
 /// The reason a phone is told for a page whose picture could not be taken,
 /// when the operator can act on it: no desktop app is open, the window
-/// showing it is on another computer, or Chromium never drew the page (it
-/// was opened behind another tab and never shown). Every other reason is in
-/// the log alone.
+/// showing it is on another computer, or the app holds no drawn page for it
+/// (it let the page go, or the page drew nothing yet). Every other reason is
+/// in the log alone.
 fn page_reason(reason: &str) -> Option<&'static str> {
     match reason {
         "no_window" => Some("no_window"),
         "window_elsewhere" => Some("window_elsewhere"),
-        "display_hidden" => Some("not_drawn"),
+        "not_loaded" | "not_drawn" => Some("not_drawn"),
         _ => None,
     }
 }

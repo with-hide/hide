@@ -436,7 +436,7 @@ for (const [state, title] of [
   });
 }
 
-for (const [reason, words] of [["window_elsewhere", "It's on another computer's screen"], ["not_drawn", "This page hasn't been on the Mac's screen yet"]] as const) {
+for (const [reason, words] of [["window_elsewhere", "It's on another computer's screen"], ["not_drawn", "Open this page on the Mac again to see it here"]] as const) {
   test(`a page the computer cannot take a picture of, ${reason}, shows its address and why`, async ({ page, relay }) => {
     relay.state.look = { id: "v-page", kind: "page", name: "landing", result: "page", url: "http://localhost:5173/", reason };
     await pair(page, relay);

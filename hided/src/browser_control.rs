@@ -481,42 +481,37 @@ impl BrowserControl {
         );
         let _slot = self.acquire()?;
         let host = self.own_host()?.ok_or(NO_WINDOW)?;
-        let body = json!({"grant": grant, "file": file, "limit": limit}).to_string();
-        let mut response = match agent()
-            .post(format!("{}/external-read", host.endpoint))
-            .header("Authorization", format!("Bearer {}", host.token))
-            .header("Content-Type", "application/json")
-            .send(body.as_bytes())
-        {
-            Ok(response) => response,
-            // The window is open but its shell is not attached.
-            Err(ureq::Error::StatusCode(503)) => return Err(NO_WINDOW),
-            Err(_) => return Err(unavailable()),
+        let body = json!({"grant": grant, "file": file, "limit": limit});
+        let answer = window_bytes(&host, "/external-read", &body, limit, NO_WINDOW)?;
+        Ok(answer.and_then(|(bytes, total)| {
+            let total = total.ok_or_else(|| "no_total".to_owned())?;
+            Ok(OutsideBytes { bytes, total })
+        }))
+    }
+
+    /// A phone's picture of `display_id` of `source`'s checkout, taken by the
+    /// window that draws it (`BrowserViews.still` in the desktop host): what
+    /// the page draws, in front or behind another tab, as a JPEG of at most
+    /// `limit` bytes, or the host's reason it has none. Only this machine's
+    /// own window answers; a page in a node's window is `window_elsewhere`.
+    pub fn display_still(
+        &self,
+        source: &QueryResult,
+        display_id: &str,
+        limit: u64,
+    ) -> Result<Result<Vec<u8>, String>, Failure> {
+        const ELSEWHERE_STILL: Failure = (
+            "window_elsewhere",
+            "The page is in a window on another computer",
+        );
+        let _slot = self.acquire()?;
+        let (_, _, scope) = scope_of(source, Some(display_id))?;
+        let host = match self.window(None)? {
+            Window::Core(host) => host,
+            Window::Own(_) | Window::Elsewhere(_) => return Err(ELSEWHERE_STILL),
         };
-        let bytes_answer = response
-            .headers()
-            .get("content-type")
-            .is_some_and(|kind| kind.as_bytes() == b"application/octet-stream");
-        let total = response
-            .headers()
-            .get("x-hide-total")
-            .and_then(|total| total.to_str().ok()?.parse::<u64>().ok());
-        let body = response
-            .body_mut()
-            .with_config()
-            .limit(limit.max(MAX_ANSWER_BYTES))
-            .read_to_vec()
-            .map_err(|_| unavailable())?;
-        if bytes_answer {
-            let total = total.ok_or_else(unavailable)?;
-            if body.len() as u64 > limit {
-                return Err(unavailable());
-            }
-            return Ok(Ok(OutsideBytes { bytes: body, total }));
-        }
-        let refused: Value = serde_json::from_slice(&body).map_err(|_| unavailable())?;
-        let reason = refused["failure"].as_str().ok_or_else(unavailable)?;
-        Ok(Err(reason.chars().take(32).collect()))
+        Ok(window_bytes(&host, "/display-still", &scope, limit, unavailable())?
+            .map(|(bytes, _)| bytes))
     }
 
     /// Whether any desktop window is registered, here or on a linked node.
@@ -656,6 +651,52 @@ fn scope_of(
         scope["display_id"] = json!(id);
     }
     Ok((area_id, display_id, scope))
+}
+
+/// Asks this machine's window at `path` for bytes, with the control token:
+/// its answer is the bytes (and `X-Hide-Total` when it sends one) or, as
+/// JSON, the reason it has none (`Ok(Err)`). A window open with no shell
+/// attached is `detached`.
+fn window_bytes(
+    host: &Host,
+    path: &str,
+    body: &Value,
+    limit: u64,
+    detached: Failure,
+) -> Result<Result<(Vec<u8>, Option<u64>), String>, Failure> {
+    let mut response = match agent()
+        .post(format!("{}{path}", host.endpoint))
+        .header("Authorization", format!("Bearer {}", host.token))
+        .header("Content-Type", "application/json")
+        .send(body.to_string().as_bytes())
+    {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(503)) => return Err(detached),
+        Err(_) => return Err(unavailable()),
+    };
+    let bytes_answer = response
+        .headers()
+        .get("content-type")
+        .is_some_and(|kind| kind.as_bytes() == b"application/octet-stream");
+    let total = response
+        .headers()
+        .get("x-hide-total")
+        .and_then(|total| total.to_str().ok()?.parse::<u64>().ok());
+    let answer = response
+        .body_mut()
+        .with_config()
+        .limit(limit.max(MAX_ANSWER_BYTES))
+        .read_to_vec()
+        .map_err(|_| unavailable())?;
+    if bytes_answer {
+        if answer.len() as u64 > limit {
+            return Err(unavailable());
+        }
+        return Ok(Ok((answer, total)));
+    }
+    let refused: Value = serde_json::from_slice(&answer).map_err(|_| unavailable())?;
+    let reason = refused["failure"].as_str().ok_or_else(unavailable)?;
+    Ok(Err(reason.chars().take(32).collect()))
 }
 
 /// A revoke is asked again rather than waited on.

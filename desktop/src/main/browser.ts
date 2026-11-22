@@ -169,6 +169,10 @@ export type IdleClock = { bound: number; every: number; now: () => number };
 /** A popup window a page opened, under the page that owns it (for a popup's own popup, the same page). */
 type Popup = { window: BrowserWindow; owner: Page };
 
+/** The most pixels of a phone's still of a page; a larger one is scaled down, so it stays well under the phone's 10 MiB image cap. */
+const STILL_PIXELS = 1_500_000;
+const STILL_QUALITY = 70;
+
 export class BrowserViews {
   private readonly pages = new Map<string, Page>();
   /** Unloaded web pages by key, until their display closes or they show again. */
@@ -1380,6 +1384,27 @@ export class BrowserViews {
    * agent's next connection loads it again (B11). `none` is a display with
    * nothing to load again here: a live page, a pending one, a file.
    */
+  /**
+   * A picture of a display's page for a phone (hided `mobile/page_shot.rs`):
+   * Electron's capture of what the page draws, whether it is in front, behind
+   * another tab or laid out off screen and never shown (B32), at most
+   * `STILL_PIXELS` and as a JPEG. A read: it shows, selects, focuses and loads
+   * nothing, so a page the host unloaded has no picture (`not_loaded`). Its
+   * area must be one the core authorized, as a connection's is.
+   */
+  async still(scope: CdpScope): Promise<{ jpeg: Uint8Array } | { failure: string }> {
+    const key = scope.display_id ? viewKey(scope.workspace, scope.display_id) : null;
+    if (!key || this.cdpAreas.get(key) !== scope.area_id) return { failure: "display_missing" };
+    const page = this.pages.get(key);
+    if (!page || page.view.webContents.isDestroyed()) return { failure: "not_loaded" };
+    const image = await page.view.webContents.capturePage();
+    if (image.isEmpty()) return { failure: "not_drawn" };
+    const { width, height } = image.getSize();
+    const scale = Math.min(1, Math.sqrt(STILL_PIXELS / (width * height)));
+    const fitted = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)), quality: "good" }) : image;
+    return { jpeg: new Uint8Array(fitted.toJPEG(STILL_QUALITY)) };
+  }
+
   async cdpRevive(scope: CdpScope): Promise<"none" | "loaded" | "failed"> {
     const window = this.window;
     if (!window || !scope.display_id) return "none";

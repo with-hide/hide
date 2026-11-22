@@ -272,8 +272,8 @@ export type LookResultState =
   | "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable"
   | "not_found" | "outside_roots" | "grant_expired" | "file_replaced" | "no_window";
 
-/** Why a page's screen cannot be taken, when the operator can act on it; absent for any other reason, and a bundle from before
- * it ignores it and says the screen cannot be taken now. */
+/** Why a page's screen cannot be taken, when the operator can act on it (no desktop app, the window on another computer, a page
+ * the app let go); absent for any other reason, and a bundle from before it ignores it and says the screen cannot be taken now. */
 export type LookPageReason = "no_window" | "window_elsewhere" | "not_drawn";
 
 /**

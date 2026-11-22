@@ -1108,42 +1108,6 @@ async fn capture_image(
         .map_err(|_| Failure::new("screenshot_failed", None))
 }
 
-/// The most CSS pixels of the visible page a phone's still keeps; a larger
-/// viewport is scaled down so the picture stays well under the gateway's
-/// message cap and the phone's image cap.
-const STILL_PIXELS: f64 = 1_500_000.0;
-const STILL_QUALITY: u32 = 70;
-
-/// The visible part of the page as a JPEG, for a phone. It is the capture
-/// `hide browser screenshot` takes, without its rule that pixels come only
-/// from a display on screen: a still is a read, so a display behind another
-/// tab of its area is taken as Chromium keeps drawing it. One Chromium never
-/// drew does not answer the capture and is `display_hidden` (`unanswered`).
-/// Nothing here selects, focuses or raises anything.
-pub async fn still(page: &mut Page) -> Result<Vec<u8>, Failure> {
-    let probe = page.probe().await?;
-    let (view, scroll) = (&probe["vv"], &probe["scroll"]);
-    let read = |value: &Value, key: &str| value[key].as_f64().filter(|n| n.is_finite());
-    let (Some(width), Some(height)) = (read(view, "width"), read(view, "height")) else {
-        return Err(Failure::new("screenshot_failed", None));
-    };
-    if width < 1.0 || height < 1.0 {
-        return Err(Failure::new("screenshot_failed", None));
-    }
-    let scale = (STILL_PIXELS / (width * height)).sqrt().min(1.0);
-    let clip = json!({
-        "x": read(scroll, "x").unwrap_or(0.0) + read(view, "left").unwrap_or(0.0),
-        "y": read(scroll, "y").unwrap_or(0.0) + read(view, "top").unwrap_or(0.0),
-        "width": width, "height": height, "scale": scale,
-    });
-    capture_image(
-        page,
-        json!({"format": "jpeg", "quality": STILL_QUALITY}),
-        Some(clip),
-    )
-    .await
-}
-
 pub fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 24 || &bytes[1..4] != b"PNG" {
         return None;
@@ -1554,72 +1518,6 @@ mod tests {
     /// What a phone is sent of a page (PRD mobile-companion-ui B20, B21): the
     /// visible viewport as a bounded JPEG through the CLI's own capture, and
     /// nothing at all of a display that is not in front.
-    #[tokio::test]
-    async fn a_still_is_a_bounded_jpeg_of_the_page_shown_or_behind_and_a_never_drawn_page_gives_none() {
-        let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
-        let log = Arc::clone(&asked);
-        let script = move |request: &Value| match request["method"].as_str().unwrap() {
-            "Page.captureScreenshot" => {
-                log.lock().unwrap().push(request["params"].clone());
-                vec![reply(request, json!({"data": "/9j/4A=="}))]
-            }
-            _ => vec![reply(
-                request,
-                json!({"result": {"value": {
-                    "visibility": "visible",
-                    "vv": {"left": 0, "top": 0, "width": 2400, "height": 1500},
-                    "scroll": {"x": 10, "y": 300},
-                }}}),
-            )],
-        };
-        let mut shown = page(script).await;
-        let bytes = still(&mut shown).await.unwrap();
-        assert_eq!(bytes, [0xff, 0xd8, 0xff, 0xe0]);
-        let params = asked.lock().unwrap().remove(0);
-        assert_eq!(params["format"], "jpeg");
-        assert_eq!(params["quality"], STILL_QUALITY);
-        // A viewport past the pixel bound is scaled down to it, and the clip
-        // starts where the page is scrolled to.
-        let scale = params["clip"]["scale"].as_f64().unwrap();
-        assert!(
-            (2400.0 * 1500.0 * scale * scale - STILL_PIXELS).abs() < 1.0,
-            "{scale}"
-        );
-        assert_eq!(params["clip"]["x"], 10.0);
-        assert_eq!(params["clip"]["y"], 300.0);
-
-        // A still is a read: behind another tab of its area the page is taken
-        // as Chromium keeps drawing it, attached as not selected.
-        let hidden_probe = json!({"result": {"value": {
-            "visibility": "hidden",
-            "vv": {"left": 0, "top": 0, "width": 800, "height": 600},
-            "scroll": {"x": 0, "y": 0},
-        }}});
-        let answer = hidden_probe.clone();
-        let mut behind = super::super::fake_gateway::page(move |request: &Value| {
-            match request["method"].as_str().unwrap() {
-                "Page.captureScreenshot" => vec![reply(request, json!({"data": "/9j/4A=="}))],
-                _ => vec![reply(request, answer.clone())],
-            }
-        })
-        .await
-        .behind_another_tab();
-        assert_eq!(still(&mut behind).await.unwrap(), [0xff, 0xd8, 0xff, 0xe0]);
-
-        // A page Chromium never drew does not answer the capture, and the
-        // probe after it finds the page hidden: `display_hidden`.
-        let mut never_drawn = super::super::fake_gateway::page(move |request: &Value| {
-            match request["method"].as_str().unwrap() {
-                "Page.captureScreenshot" => Vec::new(),
-                _ => vec![reply(request, hidden_probe.clone())],
-            }
-        })
-        .await
-        .behind_another_tab();
-        let failure = still(&mut never_drawn).await.unwrap_err();
-        assert_eq!(failure.reason, "display_hidden");
-    }
-
     #[tokio::test]
     async fn a_wait_for_a_frame_element_never_reads_a_silent_frame_as_gone() {
         let silent = Frames {

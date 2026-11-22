@@ -285,13 +285,13 @@ it("says why a file outside the project cannot be read, with nothing to retry, a
   }
 });
 
-it("says why a page's screen cannot be taken when the operator can act on it: no desktop app, another computer, never on screen", async () => {
+it("says why a page's screen cannot be taken when the operator can act on it: no desktop app, another computer, a page the app let go", async () => {
   const { container, serve, last, press, unmount } = await openLooks();
   try {
     for (const [reason, words] of [
       ["no_window", "The Hide app isn't open on the Mac"],
       ["window_elsewhere", "It's on another computer's screen"],
-      ["not_drawn", "This page hasn't been on the Mac's screen yet"],
+      ["not_drawn", "Open this page on the Mac again to see it here"],
       // A reason a later computer sends that this bundle does not know is the plain sentence.
       ["a_later_reason", "The screen can't be fetched right now"],
     ] as const) {

@@ -1,21 +1,22 @@
 //! A page View's screenshot for the phone (PRD mobile-companion-ui B20-B22,
-//! D-11): what the desktop app has drawn of the page, taken by the same
-//! page-control path `hide browser screenshot` uses.
+//! D-11): what the desktop app's page draws, taken by the window that holds
+//! it.
 //!
-//! The chain is the CLI's, without a pane to start from: the core lists the
-//! View's checkout (a checkout caller, never a pane) to find the View,
-//! `BrowserControl::relay` opens the desktop window's gateway, and
-//! `browser_page::still` attaches and takes the picture. Unlike the CLI's
-//! screenshot, a still is a read: a page behind another tab of its area is
-//! taken too, as Chromium last drew it and kept drawing it while hidden.
-//! Nothing here selects a View, moves keyboard focus or raises a window
-//! (B22), so a page Chromium never drew (opened behind another tab and never
-//! shown) has no picture, and the capture times out as `display_hidden`.
+//! The core lists the View's checkout as a checkout caller (never a pane) to
+//! find the display and its area, and `BrowserControl::display_still` asks
+//! this machine's desktop window for its picture (`BrowserViews.still` in
+//! `desktop/src/main/browser.ts`, Electron's own capture of the page). A still
+//! is a read: a page behind another tab, or laid out off screen and never
+//! shown, is taken as it draws there. The capture `hide browser screenshot`
+//! takes through the page's debugger is not used: Chromium answers it only
+//! for a page on screen or just hidden, and never for one behind a tab for a
+//! while or never shown. Nothing here selects a View, moves keyboard focus,
+//! raises a window or loads a page (B22).
 //!
 //! Why a screenshot cannot be taken goes to one `look.page_unavailable`
 //! diagnostic with its reason; the phone is told the reasons the operator
 //! can act on (`looks.rs`, `page_reason`): no desktop app open, the window
-//! on another computer, a page never drawn.
+//! on another computer, a page the app has not drawn.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,11 +26,10 @@ use hide_core::workspace_control::{Query, checkout_caller_id};
 use serde_json::json;
 
 use super::{Mobile, now_ms};
-use crate::browser_control::Relay;
 
-/// How long a screenshot may take from the first request to the last byte.
-/// The page commands' own steps are shorter; this ends a gateway that never
-/// answers instead of holding the phone's refresh.
+/// How long a screenshot may take from the first request to the last byte:
+/// the core's view list and the window's capture, so a window that never
+/// answers ends the phone's refresh instead of holding it.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The key of the checkout caller the phone's reads run as: any letters and
@@ -47,7 +47,7 @@ pub struct Shot {
 /// Takes the screenshot of `view`, a browser View the phone is allowed to
 /// see. `Err` is the reason it cannot be taken, already logged.
 pub async fn take(mobile: &Arc<Mobile>, view: &LookView, image_cap: u64) -> Result<Shot, String> {
-    let outcome = tokio::time::timeout(DEADLINE, shoot(mobile, view))
+    let outcome = tokio::time::timeout(DEADLINE, shoot(mobile, view, image_cap))
         .await
         .unwrap_or_else(|_| Err("timeout".to_owned()))
         .and_then(|jpeg| {
@@ -74,25 +74,20 @@ pub async fn take(mobile: &Arc<Mobile>, view: &LookView, image_cap: u64) -> Resu
     }
 }
 
-async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String> {
+async fn shoot(mobile: &Arc<Mobile>, view: &LookView, image_cap: u64) -> Result<Vec<u8>, String> {
     let control = Arc::clone(mobile.browser_control());
     if !control.has_window() {
         return Err("no_window".to_owned());
     }
-    // Held for the whole screenshot, so a phone that keeps pressing refresh
-    // cannot crowd out the relays `hide browser` commands need.
-    let _relay = control
-        .acquire_relay()
-        .map_err(|(reason, _)| reason.to_owned())?;
     let (core, device, checkout) = (
         Arc::clone(mobile.core()),
         view.device_id.clone(),
         view.checkout_path.clone(),
     );
-    let (display, window) = (view.display_id.clone(), Arc::clone(&control));
+    let display = view.display_id.clone();
     // Both steps are blocking: the core answers on its owner thread, and the
-    // window's gateway over HTTP.
-    let found = tokio::task::spawn_blocking(move || {
+    // window over HTTP.
+    tokio::task::spawn_blocking(move || {
         let listed = core
             .workspace_query(
                 &device,
@@ -100,34 +95,21 @@ async fn shoot(mobile: &Arc<Mobile>, view: &LookView) -> Result<Vec<u8>, String>
                 Query::ViewList,
             )
             .map_err(|refusal| refusal.reason.to_owned())?;
-        let shown = listed
+        let kind = listed
             .views
             .as_deref()
             .and_then(|views| views.iter().find(|shown| shown.view_id == display))
             .map(|shown| shown.kind)
             .ok_or_else(|| "display_closed".to_owned())?;
-        let relay = window
-            .relay(&listed, &display, None)
-            .map_err(|(reason, _)| reason.to_owned())?;
-        Ok::<_, String>((shown, relay))
+        if kind != "browser" {
+            return Err("not_a_page".to_owned());
+        }
+        control
+            .display_still(&listed, &display, image_cap)
+            .map_err(|(reason, _)| reason.to_owned())?
     })
     .await
-    .map_err(|_| "worker_lost".to_owned())??;
-    let (kind, relay) = found;
-    if kind != "browser" {
-        return Err("not_a_page".to_owned());
-    }
-    let gateway = match relay {
-        Relay::Core(url) => crate::browser_relay::connect(&url)
-            .await
-            .map_err(|(reason, _)| reason.to_owned())?,
-        // The desktop window is on another machine: its page is not drawn by
-        // this Mac's app, which is the one a phone's picture comes from.
-        Relay::Own(_) | Relay::Through { .. } => return Err("window_elsewhere".to_owned()),
-    };
-    crate::browser_page::still(gateway, &view.display_id)
-        .await
-        .map_err(|failure| failure.reason)
+    .map_err(|_| "worker_lost".to_owned())?
 }
 
 #[cfg(test)]

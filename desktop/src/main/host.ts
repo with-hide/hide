@@ -1247,6 +1247,7 @@ export class DesktopHost {
       action: (scope, action, signal) => this.browserControlAction(scope, action, signal),
       externalOpen: (reported, page) => this.agentExternalOpen(reported, page),
       externalRead: (grant, file, limit) => this.externals.readPart(grant, file, limit),
+      still: (scope) => browsers.still(scope),
       chromeVersion,
       log: (event, fields) => this.log.event(event, fields),
     });

@@ -83,6 +83,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
   const actions: CdpAction[] = [];
   const externalOpens: { path: string; page: boolean }[] = [];
   const externalReads: { grant: string; file: string | null; limit: number }[] = [];
+  const stills: CdpScope[] = [];
   let sequence = 20;
   let incarnation: number | null = 1;
   const changed = (retirement?: CdpRetirement) => { for (const listener of listeners) listener(retirement); };
@@ -97,6 +98,10 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     externalRead: async (grant, file, limit) => {
       externalReads.push({ grant, file, limit });
       return grant === "a1".repeat(16) ? { bytes: new Uint8Array([1, 2, 3]), total: 9 } : { failure: "grant_gone" };
+    },
+    still: async (scope) => {
+      stills.push(scope);
+      return scope.display_id === "d1" ? { jpeg: new Uint8Array([0xff, 0xd8, 0xff]) } : { failure: "not_loaded" };
     },
     chromeVersion: "144.0.0.0",
     now: () => time,
@@ -142,7 +147,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     shutdown.push(async () => { client.socket.terminate(); });
     return client;
   }
-  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens, externalReads,
+  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens, externalReads, stills,
     authority: (value: boolean) => { incarnation = value ? 1 : null; changed(); },
     incarnate: (value: number) => { incarnation = value; changed(); }, advance: (milliseconds: number) => { time += milliseconds; } };
 }
@@ -856,6 +861,22 @@ describe("scoped desktop CDP public boundary", () => {
     const refused = await ask({ grant: "b2".repeat(16), file: null, limit: 3 });
     expect(await refused.json()).toEqual({ failure: "grant_gone" });
     expect(externalReads).toEqual([{ grant: "a1".repeat(16), file: "art/logo.png", limit: 3 }, { grant: "b2".repeat(16), file: null, limit: 3 }]);
+  });
+
+  it("hands hided alone a display's still for an area the core authorizes, or the reason there is none", async () => {
+    const { address, first, stills, authority } = await fixture();
+    const ask = (scope: unknown, token = address.token) => fetch(`${address.endpoint}/display-still`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(scope) });
+    const scope = { workspace: first.workspace, area_id: "a1", display_id: "d1" };
+    expect((await ask(scope, "wrong".repeat(8))).status).toBe(401);
+    expect((await ask({ workspace: first.workspace, area_id: "a1" })).status).toBe(400);
+    const still = await ask(scope);
+    expect(still.headers.get("content-type")).toBe("application/octet-stream");
+    expect(new Uint8Array(await still.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
+    expect(await (await ask({ ...scope, display_id: "d2" })).json()).toEqual({ failure: "not_loaded" });
+    // An area the core no longer authorizes is not asked for at all.
+    authority(false);
+    expect((await ask(scope)).status).toBe(409);
+    expect(stills).toEqual([scope, { ...scope, display_id: "d2" }]);
   });
 
   it("revokes everything a node's ended link authorized and stays available for the next", async () => {
