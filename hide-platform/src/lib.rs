@@ -14,6 +14,7 @@ pub mod memory;
 pub mod path;
 pub mod process;
 pub mod programs;
+pub mod sockets;
 pub mod stdio;
 pub mod time;
 pub mod user_agents;

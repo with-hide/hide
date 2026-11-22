@@ -477,6 +477,22 @@ pub struct Host {
     /// Where the host was last reached, in the order to try.
     #[serde(default)]
     pub candidates: Vec<Candidate>,
+    /// The login this machine switched the host through, when it did: a
+    /// Hide started from the programs put there over a login has no app of
+    /// its own to update it, so this machine brings it to its own build
+    /// until the account has one (PRD device-connect-iroh B23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<Login>,
+}
+
+/// An account on another machine as this one signs in to it without Hide.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Login {
+    /// An alias of this account's SSH configuration.
+    Ssh(String),
+    /// A WSL distribution of this PC.
+    Wsl(String),
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -788,6 +804,7 @@ mod tests {
             grant: "g1".into(),
             state: KnownState::Confirming,
             candidates: vec![Candidate::Relay("https://relay.example".into())],
+            started: None,
         };
         known.put(host.clone()).unwrap();
         known.set_state(&key(7), KnownState::Active).unwrap();
@@ -796,14 +813,24 @@ mod tests {
             Err(StoreError::Unknown)
         ));
 
-        let reopened = Known::open(path).unwrap();
-        assert_eq!(
-            reopened.of(&key(7)),
-            Some(&Host {
-                state: KnownState::Active,
-                ..host
-            })
+        // The login this machine started the host's Hide through is kept
+        // with it, and a record written before there was one reads as none.
+        let started = Host {
+            state: KnownState::Active,
+            started: Some(Login::Ssh("studio".into())),
+            ..host.clone()
+        };
+        known.put(started.clone()).unwrap();
+        let reopened = Known::open(path.clone()).unwrap();
+        assert_eq!(reopened.of(&key(7)), Some(&started));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(r#""started":{"ssh":"studio"}"#) || text.contains(r#""ssh": "studio""#)
         );
+        known.put(host.clone()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("started"), "{text}");
+        assert_eq!(Known::open(path).unwrap().of(&key(7)), Some(&host));
         assert!(known.remove(&key(7)).unwrap());
         assert!(!known.remove(&key(7)).unwrap());
     }

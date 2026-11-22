@@ -22,6 +22,7 @@ pub mod agent_definitions;
 mod agent_kit;
 mod agent_update;
 pub mod agents;
+pub mod app;
 mod cli;
 mod codex_trust;
 mod coordination_retirement;

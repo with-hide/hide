@@ -546,12 +546,12 @@ impl Runtime {
         )
     }
 
-    /// The app opened a window on this core: each WSL distribution that is
-    /// off or lost is tried with leave to start it (PRD wsl-device B3), and
-    /// each SSH device that stopped because signing in needed the operator
-    /// is tried with leave to ask (PRD system-ssh-device-link D-06, B10);
-    /// one whose attempt is running gets that leave for the attempt after
-    /// it, should that one need it.
+    /// The app opened a window on this core: each SSH device that stopped
+    /// because signing in needed the operator is tried with leave to ask
+    /// (PRD system-ssh-device-link D-06, B10); one whose attempt is running
+    /// gets that leave for the attempt after it, should that one need it.
+    /// A WSL distribution that is off stays off: the app opening starts
+    /// none ([`Self::wake_opened_device`]).
     pub(super) fn wake_devices_for_app(&mut self) -> bool {
         let woken: Vec<String> = self
             .snapshot
@@ -559,12 +559,11 @@ impl Runtime {
             .device_registrations
             .iter()
             .filter(|registration| {
-                registration.origin.wsl_distro().is_some()
-                    || registration.origin.ssh_alias().is_some()
-                        && self.device_hosts.get(&registration.id).is_some_and(|host| {
-                            matches!(host.phase, HostPhase::Connecting)
-                                || host.problem == Some(SshProblem::SignInNeeded)
-                        })
+                registration.origin.ssh_alias().is_some()
+                    && self.device_hosts.get(&registration.id).is_some_and(|host| {
+                        matches!(host.phase, HostPhase::Connecting)
+                            || host.problem == Some(SshProblem::SignInNeeded)
+                    })
             })
             .map(|registration| registration.id.clone())
             .collect();
@@ -577,6 +576,26 @@ impl Runtime {
             changed |= self.start_device_host(&device_id, HostAttempt::AppOpened);
         }
         changed
+    }
+
+    /// The operator opened `device_id`'s tile: a WSL distribution of this PC
+    /// that is off or lost is tried with leave to start it, and so is a
+    /// paired machine, which a distribution with its own Hide is (hided
+    /// knows which machine is one, `peer_dial`). Nothing Hide does on its
+    /// own starts a distribution, not the app opening and not a retry (PRD
+    /// device-connect-iroh B43, narrowing wsl-device B3); one whose attempt
+    /// is running gets that leave for the attempt after it.
+    pub(super) fn wake_opened_device(&mut self, device_id: &str) -> bool {
+        let wakes = self.link_origin(device_id).is_some_and(|origin| {
+            origin.wsl_distro().is_some() || matches!(origin, LinkOrigin::Peer { .. })
+        });
+        if !wakes {
+            return false;
+        }
+        if self.device_host_ended(device_id) {
+            self.device_host_retries.remove(device_id);
+        }
+        self.start_device_host(device_id, HostAttempt::Operator)
     }
 
     /// Takes the node a node that dialed this core brought: its link is up
