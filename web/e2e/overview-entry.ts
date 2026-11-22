@@ -22,7 +22,16 @@ export async function projectRow(page: Page, label: string) {
   // A resting project with nothing to clean up is folded under `Quiet projects N` (B50).
   const quiet = page.locator('[data-projects-quiet][aria-expanded="false"]');
   await expect(row.or(quiet).first()).toBeVisible({ timeout: 20_000 });
-  if (!(await row.isVisible())) await quiet.click();
+  if (!(await row.isVisible())) {
+    // The project can leave the quiet group by itself while this looks (a read
+    // it waited on lands, such as a merged pull request): the toggle then goes
+    // and the row shows without it. The one click races that, so the helper
+    // never waits on a toggle that is gone; a click still pending afterwards can
+    // only open a quiet fold, which hides no row, and its end is not awaited.
+    const opened = quiet.click();
+    opened.catch(() => undefined);
+    await Promise.race([opened, row.waitFor({ state: "visible", timeout: 20_000 })]);
+  }
   await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
 }
