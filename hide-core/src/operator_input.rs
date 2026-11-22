@@ -122,9 +122,12 @@ impl Attach {
                 .as_ref()
                 .map_err(|_| "device_unreachable")?;
             let cancelled = std::sync::atomic::AtomicBool::new(false);
-            let files =
-                crate::terminal_attachments::read_sources(self.own_node.as_ref(), paths, &cancelled)
-                    .map_err(|_| "attachment_failed")?;
+            let files = crate::terminal_attachments::read_sources(
+                self.own_node.as_ref(),
+                paths,
+                &cancelled,
+            )
+            .map_err(|_| "attachment_failed")?;
             crate::terminal_attachments::stage(link.as_ref(), request_id, &files, &cancelled)
                 .map_err(|_| "attachment_failed")?
         } else {

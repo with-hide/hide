@@ -2563,21 +2563,22 @@ mod tests {
             ("later", json!("5"), &asking_projection("approval", 6)),
             ("moved-on", json!("5"), &sleeping_projection(None)),
         ] {
-            let answer = input(&mobile, "phone-a", &ask(request, turn), listed).await;
+            let answer = input(&mobile, 0, "phone-a", &ask(request, turn), listed).await;
             assert_eq!(
                 (answer["ok"].as_bool(), reason(&answer)),
                 (Some(false), Some("stale")),
                 "{request}"
             );
         }
-        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting).await;
+        let wrong_type = input(&mobile, 0, "phone-a", &ask("number", json!(5)), &waiting).await;
         assert_eq!(reason(&wrong_type), Some("invalid_request"));
         // The matching turn passes the check and goes on to the write, which these tests do not wire.
-        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting).await;
+        let matching = input(&mobile, 0, "phone-a", &ask("same", json!("5")), &waiting).await;
         assert_ne!(reason(&matching), Some("stale"));
         // The phone screen's own input carries no turn and is not held to one.
         let own = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("own", json!({"text": "yes"})),
             &waiting,
@@ -2611,6 +2612,7 @@ mod tests {
         ] {
             let answer = input(
                 &mobile,
+                0,
                 "phone-a",
                 &input_message(request, fields),
                 &waiting,
@@ -2622,6 +2624,7 @@ mod tests {
         // The matching turn and a choice Claude Code's screen takes go on to the write, which these tests do not wire.
         let matching = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("allow", json!({"choice": "deny", "turn": "5"})),
             &waiting,
@@ -2650,11 +2653,12 @@ mod tests {
             sleeping_projection(None),
             asking_projection("none", 7),
         ] {
-            let again = input(&mobile, "phone-a", &ask("sent"), &listed).await;
+            let again = input(&mobile, 0, "phone-a", &ask("sent"), &listed).await;
             assert_eq!((again["ok"].as_bool(), reason(&again)), (Some(true), None));
         }
         let gone = input(
             &mobile,
+            0,
             "phone-a",
             &ask("sent"),
             &super::super::projection::project(&json!({"navigator": {"agents": []}}), "test-node"),
@@ -2667,6 +2671,7 @@ mod tests {
         // A claim does not turn a new id into `ok`: the same ask moved on is still `stale`.
         let other = input(
             &mobile,
+            0,
             "phone-a",
             &ask("new"),
             &asking_projection("approval", 6),
@@ -2682,6 +2687,7 @@ mod tests {
             mobile.settle_input("phone-a", id, Some(state));
             let answer = input(
                 &mobile,
+                0,
                 "phone-a",
                 &ask(id),
                 &asking_projection("approval", 6),
@@ -3091,7 +3097,7 @@ mod tests {
                     }),
                     "test-node",
                 );
-                input(&writer, "phone-a", &json!({"type": "input", "request_id": "retry", "device_id": "mini", "pane_id": "remote:mini:pane:w1:p1", "text": "yes"}), &listed).await
+                input(&writer, 0, "phone-a", &json!({"type": "input", "request_id": "retry", "device_id": "mini", "pane_id": "remote:mini:pane:w1:p1", "text": "yes"}), &listed).await
             });
             let permission = tokio::time::timeout(Duration::from_secs(5), pending.recv())
                 .await
@@ -3134,6 +3140,7 @@ mod tests {
         // The agent is awake: the write is attempted.
         let answer = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("awake", json!({"text": "yes"})),
             &listed_awake,
@@ -3147,7 +3154,14 @@ mod tests {
             ("reply", json!({"text": "echo R11-PHONE-SHELL"})),
             ("key", json!({"key": "enter"})),
         ] {
-            let answer = input(&mobile, "phone-a", &input_message(id, body), &listed_awake).await;
+            let answer = input(
+                &mobile,
+                0,
+                "phone-a",
+                &input_message(id, body),
+                &listed_awake,
+            )
+            .await;
             assert_eq!(answer["ok"], false, "{id}");
             assert_eq!(reason(&answer), Some("asleep"), "{id}");
             assert!(
@@ -3160,6 +3174,7 @@ mod tests {
         gate.set_closed(&std::collections::HashSet::new());
         let answer = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("back", json!({"text": "yes"})),
             &listed_awake,
@@ -3191,6 +3206,7 @@ mod tests {
         gate.close("w1:p1");
         let written = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("written", json!({"text": "yes"})),
             &listed,
@@ -3202,6 +3218,7 @@ mod tests {
         );
         let uncertain = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("uncertain", json!({"text": "yes"})),
             &listed,
@@ -3214,6 +3231,7 @@ mod tests {
         // Only a new request is refused.
         let fresh = input(
             &mobile,
+            0,
             "phone-a",
             &input_message("fresh", json!({"text": "yes"})),
             &listed,
@@ -4098,15 +4116,27 @@ mod tests {
     fn upload(mobile: &Mobile, connection: u64, stage: &str, name: &str, bytes: &[u8]) {
         let frame = |kind: &str, fields: Value| {
             let mut frame = json!({"type": kind, "stage": stage});
-            frame.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+            frame
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
             super::super::uploads::handle(mobile.attachments(), connection, kind, &frame).unwrap()
         };
         use base64::Engine as _;
-        assert_eq!(frame("attach_begin", json!({"name": name, "size": bytes.len()})), None);
+        assert_eq!(
+            frame("attach_begin", json!({"name": name, "size": bytes.len()})),
+            None
+        );
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        assert_eq!(frame("attach_chunk", json!({"seq": 0, "data": data}))
-            .and_then(|ack| ack.get("seq").cloned()), Some(json!(0)));
-        assert_eq!(frame("attach_end", json!({})).and_then(|ack| ack.get("done").cloned()), Some(json!(true)));
+        assert_eq!(
+            frame("attach_chunk", json!({"seq": 0, "data": data}))
+                .and_then(|ack| ack.get("seq").cloned()),
+            Some(json!(0))
+        );
+        assert_eq!(
+            frame("attach_end", json!({})).and_then(|ack| ack.get("done").cloned()),
+            Some(json!(true))
+        );
     }
 
     /// A reply that attaches files types each one's path, quoted in the
@@ -4143,7 +4173,11 @@ mod tests {
         };
         assert_eq!(
             words,
-            format!("{} {} 차이 나는 부분 봐 줘.", quoted(&shot, "screen.jpg"), quoted(&log, "holder.log"))
+            format!(
+                "{} {} 차이 나는 부분 봐 줘.",
+                quoted(&shot, "screen.jpg"),
+                quoted(&log, "holder.log")
+            )
         );
         let again = Arc::clone(&mobile);
         let stages = vec![shot.clone(), log.clone()];
@@ -4165,10 +4199,19 @@ mod tests {
     fn a_replys_stages_are_checked_before_anything_is_written() {
         let stage = |n: usize| format!("{n:08}-0123-4123-8123-0123456789ab");
         assert_eq!(stages_of(&json!({})), Ok(Vec::new()));
-        assert_eq!(stages_of(&json!({"stages": [stage(1)]})), Ok(vec![stage(1)]));
-        assert_eq!(stages_of(&json!({"stages": ["../x"]})), Err("invalid_request"));
+        assert_eq!(
+            stages_of(&json!({"stages": [stage(1)]})),
+            Ok(vec![stage(1)])
+        );
+        assert_eq!(
+            stages_of(&json!({"stages": ["../x"]})),
+            Err("invalid_request")
+        );
         assert_eq!(stages_of(&json!({"stages": "x"})), Err("invalid_request"));
-        assert_eq!(stages_of(&json!({"stages": [stage(1), stage(1)]})), Err("invalid_request"));
+        assert_eq!(
+            stages_of(&json!({"stages": [stage(1), stage(1)]})),
+            Err("invalid_request")
+        );
         let nine: Vec<String> = (0..=operator_input::MAX_FILES).map(stage).collect();
         assert_eq!(stages_of(&json!({"stages": nine})), Err("too_many_files"));
     }

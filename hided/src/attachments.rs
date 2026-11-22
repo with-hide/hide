@@ -451,7 +451,11 @@ impl Attachments {
     /// a batch's caps: a stage this connection committed for a reply that did
     /// not land answers the same path again while its file is kept, so the
     /// reply's retry types the same files and their bytes never cross twice.
-    pub fn commit_reply(&self, connection: u64, stages: &[String]) -> Result<Vec<String>, &'static str> {
+    pub fn commit_reply(
+        &self,
+        connection: u64,
+        stages: &[String],
+    ) -> Result<Vec<String>, &'static str> {
         self.commit_files(stages, MAX_FILES, Some(connection))
     }
 

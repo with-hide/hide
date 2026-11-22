@@ -70,11 +70,19 @@ fn stage_of(message: &Value) -> Option<&str> {
 /// One upload frame of `connection`; the answer to send, if any. `None` for
 /// a frame that names no stage the phone could match an answer to: the
 /// caller records it as refused.
-pub fn handle(store: &Attachments, connection: u64, kind: &str, message: &Value) -> Result<Option<Value>, &'static str> {
+pub fn handle(
+    store: &Attachments,
+    connection: u64,
+    kind: &str,
+    message: &Value,
+) -> Result<Option<Value>, &'static str> {
     let stage = stage_of(message).ok_or("attach_stage")?;
     Ok(match kind {
         "attach_begin" => {
-            let name = message.get("name").and_then(Value::as_str).unwrap_or_default();
+            let name = message
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let Some(size) = message.get("size").and_then(Value::as_u64) else {
                 return Ok(Some(failed(stage, "invalid_request")));
             };
@@ -133,7 +141,10 @@ mod tests {
 
     fn frame(kind: &str, fields: Value) -> Value {
         let mut frame = json!({"type": kind, "stage": STAGE});
-        frame.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
         frame
     }
 
@@ -142,7 +153,12 @@ mod tests {
     }
 
     fn chunk(store: &Attachments, seq: u64, bytes: &[u8]) -> Option<Value> {
-        send(store, 1, "attach_chunk", json!({"seq": seq, "data": STANDARD.encode(bytes)}))
+        send(
+            store,
+            1,
+            "attach_chunk",
+            json!({"seq": seq, "data": STANDARD.encode(bytes)}),
+        )
     }
 
     /// A file the phone uploads in chunks is acknowledged chunk by chunk,
@@ -151,16 +167,33 @@ mod tests {
     #[test]
     fn a_phone_upload_is_acknowledged_by_chunk_and_committed_by_its_reply() {
         let (_dir, store) = store();
-        assert_eq!(send(&store, 1, "attach_begin", json!({"name": "holder.log", "size": 5})), None);
-        assert_eq!(chunk(&store, 0, b"abc"), Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 0})));
-        assert_eq!(chunk(&store, 1, b"de"), Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 1})));
+        assert_eq!(
+            send(
+                &store,
+                1,
+                "attach_begin",
+                json!({"name": "holder.log", "size": 5})
+            ),
+            None
+        );
+        assert_eq!(
+            chunk(&store, 0, b"abc"),
+            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 0}))
+        );
+        assert_eq!(
+            chunk(&store, 1, b"de"),
+            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 1}))
+        );
         assert_eq!(
             send(&store, 1, "attach_end", json!({})),
             Some(json!({"type": "attach_ack", "stage": STAGE, "done": true}))
         );
         let paths = store.commit_reply(1, &[STAGE.to_owned()]).unwrap();
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"abcde");
-        assert!(paths[0].ends_with(&format!("{STAGE}-holder.log")), "{paths:?}");
+        assert!(
+            paths[0].ends_with(&format!("{STAGE}-holder.log")),
+            "{paths:?}"
+        );
     }
 
     /// The phone's file cap is refused before any byte crosses, and a stage
@@ -169,13 +202,32 @@ mod tests {
     fn a_file_past_ten_mib_or_short_of_its_size_is_refused() {
         let (_dir, store) = store();
         assert_eq!(
-            send(&store, 1, "attach_begin", json!({"name": "trace.json", "size": FILE_BYTES + 1})),
+            send(
+                &store,
+                1,
+                "attach_begin",
+                json!({"name": "trace.json", "size": FILE_BYTES + 1})
+            ),
             Some(failed(STAGE, "too_large"))
         );
-        assert_eq!(send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 4})), None);
+        assert_eq!(
+            send(
+                &store,
+                1,
+                "attach_begin",
+                json!({"name": "a.log", "size": 4})
+            ),
+            None
+        );
         chunk(&store, 0, b"ab");
-        assert_eq!(send(&store, 1, "attach_end", json!({})), Some(failed(STAGE, "size_mismatch")));
-        assert_eq!(store.commit_reply(1, &[STAGE.to_owned()]), Err("unknown_stage"));
+        assert_eq!(
+            send(&store, 1, "attach_end", json!({})),
+            Some(failed(STAGE, "size_mismatch"))
+        );
+        assert_eq!(
+            store.commit_reply(1, &[STAGE.to_owned()]),
+            Err("unknown_stage")
+        );
     }
 
     /// A cancelled upload leaves nothing to commit, and a chunk after the
@@ -183,11 +235,21 @@ mod tests {
     #[test]
     fn a_cancelled_upload_is_gone_and_its_late_chunk_is_refused() {
         let (dir, store) = store();
-        send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 4}));
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.log", "size": 4}),
+        );
         chunk(&store, 0, b"ab");
         assert_eq!(send(&store, 1, "attach_cancel", json!({})), None);
-        assert_eq!(chunk(&store, 1, b"cd"), Some(failed(STAGE, "unknown_stage")));
-        let left = std::fs::read_dir(dir.path().join("attachments")).unwrap().count();
+        assert_eq!(
+            chunk(&store, 1, b"cd"),
+            Some(failed(STAGE, "unknown_stage"))
+        );
+        let left = std::fs::read_dir(dir.path().join("attachments"))
+            .unwrap()
+            .count();
         assert_eq!(left, 0, "the cancelled stage's file went with it");
     }
 
@@ -196,13 +258,29 @@ mod tests {
     #[test]
     fn a_lost_connection_releases_its_open_uploads() {
         let (_dir, store) = store();
-        send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 2}));
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.log", "size": 2}),
+        );
         chunk(&store, 0, b"ab");
         send(&store, 1, "attach_end", json!({}));
         store.release(1);
-        assert_eq!(store.commit_reply(1, &[STAGE.to_owned()]), Err("unknown_stage"));
+        assert_eq!(
+            store.commit_reply(1, &[STAGE.to_owned()]),
+            Err("unknown_stage")
+        );
         // The same stage may be uploaded again once it was released.
-        assert_eq!(send(&store, 2, "attach_begin", json!({"name": "a.log", "size": 2})), None);
+        assert_eq!(
+            send(
+                &store,
+                2,
+                "attach_begin",
+                json!({"name": "a.log", "size": 2})
+            ),
+            None
+        );
     }
 
     /// A reply that did not land may be sent again naming the same stages:
@@ -211,14 +289,25 @@ mod tests {
     #[test]
     fn the_same_reply_again_commits_the_same_paths_on_its_connection_only() {
         let (_dir, store) = store();
-        send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 2}));
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.log", "size": 2}),
+        );
         chunk(&store, 0, b"ab");
         send(&store, 1, "attach_end", json!({}));
         let first = store.commit_reply(1, &[STAGE.to_owned()]).unwrap();
         assert_eq!(store.commit_reply(1, &[STAGE.to_owned()]).unwrap(), first);
-        assert_eq!(store.commit_reply(2, &[STAGE.to_owned()]), Err("unknown_stage"));
+        assert_eq!(
+            store.commit_reply(2, &[STAGE.to_owned()]),
+            Err("unknown_stage")
+        );
         // A desktop commit never names a stage again.
-        assert_eq!(store.commit(&[STAGE.to_owned()], false), Err("unknown_stage"));
+        assert_eq!(
+            store.commit(&[STAGE.to_owned()], false),
+            Err("unknown_stage")
+        );
     }
 
     /// One reply that names a stage still uploading, or one it never began,
@@ -226,12 +315,23 @@ mod tests {
     #[test]
     fn a_reply_with_one_missing_stage_commits_none() {
         let (_dir, store) = store();
-        send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 2}));
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.log", "size": 2}),
+        );
         chunk(&store, 0, b"ab");
         send(&store, 1, "attach_end", json!({}));
         let other = "11111111-1111-4111-8111-111111111111".to_owned();
-        assert_eq!(store.commit_reply(1, &[STAGE.to_owned(), other]), Err("unknown_stage"));
-        assert!(store.commit_reply(1, &[STAGE.to_owned()]).is_ok(), "the arrived stage stays");
+        assert_eq!(
+            store.commit_reply(1, &[STAGE.to_owned(), other]),
+            Err("unknown_stage")
+        );
+        assert!(
+            store.commit_reply(1, &[STAGE.to_owned()]).is_ok(),
+            "the arrived stage stays"
+        );
     }
 
     /// The largest chunk a phone sends, with a stage of the longest shape
@@ -253,7 +353,12 @@ mod tests {
             largest.len()
         );
         let (_dir, store) = store();
-        send(&store, 1, "attach_begin", json!({"name": "a.bin", "size": CHUNK}));
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.bin", "size": CHUNK}),
+        );
         let read: Value = serde_json::from_str(&largest).unwrap();
         assert_eq!(
             handle(&store, 1, "attach_chunk", &read).unwrap(),
@@ -266,12 +371,33 @@ mod tests {
     #[test]
     fn a_malformed_upload_frame_is_refused() {
         let (_dir, store) = store();
-        assert!(handle(&store, 1, "attach_begin", &json!({"stage": "../x", "name": "a", "size": 1})).is_err());
-        send(&store, 1, "attach_begin", json!({"name": "a.log", "size": 2}));
+        assert!(
+            handle(
+                &store,
+                1,
+                "attach_begin",
+                &json!({"stage": "../x", "name": "a", "size": 1})
+            )
+            .is_err()
+        );
+        send(
+            &store,
+            1,
+            "attach_begin",
+            json!({"name": "a.log", "size": 2}),
+        );
         assert_eq!(
-            send(&store, 1, "attach_chunk", json!({"seq": 0, "data": "*not base64*"})),
+            send(
+                &store,
+                1,
+                "attach_chunk",
+                json!({"seq": 0, "data": "*not base64*"})
+            ),
             Some(failed(STAGE, "invalid_request"))
         );
-        assert_eq!(chunk(&store, 1, b"ab"), Some(failed(STAGE, "unknown_stage")));
+        assert_eq!(
+            chunk(&store, 1, b"ab"),
+            Some(failed(STAGE, "unknown_stage"))
+        );
     }
 }

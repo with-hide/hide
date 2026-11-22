@@ -1351,7 +1351,10 @@ impl CoreHandle {
 
     /// Where the files a phone's reply attaches go for a pane of
     /// `device_id`; see `Core::input_attach`.
-    pub fn input_attach(&self, device_id: &str) -> Result<hide_core::operator_input::Attach, String> {
+    pub fn input_attach(
+        &self,
+        device_id: &str,
+    ) -> Result<hide_core::operator_input::Attach, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::InputAttach {

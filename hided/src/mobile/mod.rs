@@ -3345,7 +3345,9 @@ pub(super) fn test_mobile_from(
         )),
         browser_control: Arc::default(),
         device_connect: false,
-        attachments: Arc::new(crate::attachments::Attachments::new(&directory.join("state"))),
+        attachments: Arc::new(crate::attachments::Attachments::new(
+            &directory.join("state"),
+        )),
     })
 }
 
