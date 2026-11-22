@@ -3622,8 +3622,9 @@ When the screen cannot be taken (the desktop app is closed, the page is on a des
 Taking the picture never selects a tab, moves the keyboard or raises a window, so a page that is behind another tab is answered "cannot be taken now" and is not brought forward (B22).
 Without a connection the last picture stays dimmed under the unreachable line and refresh does not press (B45).
 While a View loads its place shows a spinner; a read that fails says `불러오지 못했어요` with `다시`, which starts the read again from the beginning under a new request; a View that is no longer open says `이 결과물은 이제 열려 있지 않아요`; one in a checkout on a device that is not connected says `기기가 연결되어 있지 않아요`.
+A file moved or deleted since its View opened says `이 파일은 지금 없어요` over `에이전트가 연 뒤에 옮겨지거나 지워졌어요`, and a file outside every project folder says `이 파일은 폰에서 볼 수 없어요` over `프로젝트 폴더 밖에 있어요`, each under its file icon and with no `다시`, since reading it again would fail the same way; a phone bundle from before these two shows either as a read that failed.
 A View the phone drew an answer about is seen, on the phone and on the desktop alike, through the Desk's own seen-by-id path: the dot and the eye leave both, and an agent with no View left unseen returns to its own group.
-That is its content (a change list, a document, an image) and also what it shows when it has no content to show: the name of a PDF or a video, an image over 10 MiB, a web page's picture or, when none can be taken, its address.
+That is its content (a change list, a document, an image) and also what it shows when it has no content to show: the name of a PDF or a video, an image over 10 MiB, a file gone or outside every project folder, a web page's picture or, when none can be taken, its address.
 A loading screen and a View that is closed, failed or on a device that is not connected are not seen.
 An agent with a View not seen stands in 내 차례 on the phone as on the desktop and returns to its own group when every View is seen; a notice still follows the group it would be in without it, so a View sends none.
 The reply bar is on the tab and on a View, and the quick keys are not.

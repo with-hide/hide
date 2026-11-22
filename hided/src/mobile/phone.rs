@@ -382,10 +382,14 @@ struct Open {
     /// reason as a start: the write may already be on its way and its request
     /// id must be settled. The pane call's own limits bound it.
     input: Option<tokio::task::JoinHandle<()>>,
-    /// The content of the one View the phone is looking at, sent a window of
-    /// chunks at a time. It ends with the detail or with the next request:
+    /// The content of the one View the phone is looking at, sent as the
+    /// phone confirms it. It ends with the detail or with the next request:
     /// it only reads, so nothing is owed to a request id.
     look: Option<looks::Transfer>,
+    /// What every transfer of this connection sent and the phone has not
+    /// confirmed: it outlives `look`, since a transfer that ended leaves its
+    /// frames in the relay's queue ahead of the next one's.
+    pace: Arc<looks::Pace>,
 }
 
 /// Runs one slow piece of a phone's work beside the socket loop, so the loop
@@ -1040,12 +1044,10 @@ async fn handle(
         "look_open" => look_open(mobile, phone_id, message, open, frames, projection).await,
         "look_ack" => {
             match (
-                open.look.as_ref(),
                 message.get("request_id").and_then(Value::as_str),
                 message.get("seq").and_then(Value::as_u64),
             ) {
-                (Some(transfer), Some(request_id), Some(seq)) => transfer.ack(request_id, seq),
-                (_, Some(_), Some(_)) => {}
+                (Some(request_id), Some(seq)) => open.pace.ack(request_id, seq),
                 _ => refusal_logged("scope.refused", Some(phone_id), "look_ack"),
             }
             None
@@ -1350,7 +1352,13 @@ async fn look_open(
         refusal_logged("scope.refused", Some(phone_id), "look_request");
         return Some(look_refused(message, "refused"));
     }
-    open.look = Some(looks::open(mobile, &request_id, view, frames.clone()));
+    open.look = Some(looks::open(
+        mobile,
+        &open.pace,
+        &request_id,
+        view,
+        frames.clone(),
+    ));
     None
 }
 

@@ -4419,6 +4419,21 @@ fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
     )
 }
 
+/// The boundary's refusal for a device's answer about a path: a file that is
+/// not there, or a path its root does not hold. Anything else is a read that
+/// failed.
+pub(crate) fn device_refusal(error: &hide_core::node_access::LinkError) -> Option<Refusal> {
+    use hide_node_link::ErrorCode;
+    let hide_core::node_access::LinkError::Refused(error) = error else {
+        return None;
+    };
+    match error.code {
+        ErrorCode::NotFound => Some(Refusal::NotFound),
+        ErrorCode::OutsideRoot | ErrorCode::InvalidPath => Some(Refusal::OutsideCheckout),
+        _ => None,
+    }
+}
+
 /// A `file_bytes` read of a file on an SSH device. The root has to be a
 /// checkout the core's catalog carries for that device and the path is spelled
 /// under it; the device's helper confines the read and answers one bounded
@@ -4480,7 +4495,9 @@ pub(crate) async fn stream_device_file_bytes(
         let (read_device, read_root, read_relative) =
             (device.to_owned(), root.clone(), relative.clone());
         let range = tokio::task::spawn_blocking(move || {
-            let channel = core.node_link(&read_device)?;
+            let channel = core
+                .node_link(&read_device)
+                .map_err(|message| (None, message))?;
             hide_core::node_access::read_bytes(
                 channel.as_ref(),
                 &read_root,
@@ -4488,14 +4505,24 @@ pub(crate) async fn stream_device_file_bytes(
                 cursor,
                 wanted,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| (device_refusal(&error), error.to_string()))
         })
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| (None, error.to_string()))
         .and_then(|result| result);
         let range = match range {
             Ok(range) => range,
-            Err(message) => {
+            // The device judged the path as this Mac's boundary would: the
+            // same refusal, whichever machine holds the file.
+            Err((Some(refusal), _)) => {
+                return frames
+                    .send(Message::Text(
+                        refused("file_bytes", &path, refusal).to_string().into(),
+                    ))
+                    .await
+                    .map_err(|_| ());
+            }
+            Err((None, message)) => {
                 eprintln!(
                     "{}",
                     json!({
