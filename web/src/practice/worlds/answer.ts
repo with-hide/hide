@@ -1,4 +1,4 @@
-// Flow 9's world: one invented project with an agent that asks which way to
+// Flow 10's world: one invented project with an agent that asks which way to
 // go, and the learner's phone beside the screen, open on that agent's
 // conversation. The phone's choice is answered as the computer answers it:
 // the agent's own screen takes the keys for the choice (↓ to its row, then

@@ -2812,7 +2812,7 @@ A practice screen cannot run an outside AI, so its world stages the join: a few 
 Settings closed, the rail shows `nightly` in its own space and no tile for `hermes`, and a few seconds after the join (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing, disconnecting and a mode change are not answered, so the chapter keeps both bots.
 Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
 
-Flow 9 (폰에서 답하기, `chapters/answer.ts`, since 1.3.0) shows an agent's question answered from the phone.
+Flow 10 (폰에서 답하기, `chapters/answer.ts`, since 1.3.0) shows an agent's question answered from the phone.
 A practice screen has no phone and no relay, so the chapter's world draws one beside the screen (`PracticeWorld.phone`, `PracticePhone.tsx`), standing at the window's foot and open on the asking agent's conversation, from the phone's own parts: its message rows, its activity line and its ask card (`AskCardView`), which the phone's detail draws too.
 The learner sees the agent's row in 내 차례, the same question on the phone with what the agent wrote under each choice, marks `Split into two PRs` (`practice_phone_pick`, which only marks it), and sends it with 답하기 (`practice_phone_answer`); the agent's own screen moves its highlight to that row, and a moment later (a `wait` step) takes Enter, leaves 내 차례 and runs a command, which the phone says by the clock under its conversation.
 

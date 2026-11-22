@@ -1,4 +1,4 @@
-// Flow 9: answering from the phone. An agent asks which way to go while the
+// Flow 10: answering from the phone. An agent asks which way to go while the
 // learner is away from the desk; its row waits in 내 차례, and the same
 // question stands on the learner's phone beside the screen, each choice with
 // what the agent wrote under it. The learner marks a choice, sends it with
@@ -12,7 +12,7 @@ const PHONE = "[data-practice-phone]";
 
 export default chapter<AnswerModel>({
   id: "answer",
-  number: 9,
+  number: 10,
   version: 1,
   since: "1.3.0",
   world: ANSWER_WORLD,
