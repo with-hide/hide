@@ -42,7 +42,8 @@ export function PageHead({ back, lead, title, line, action, children, ...data }:
         <Button variant="ghost" size="icon" aria-label={back.label} className="-ml-md size-(--size-touch-target) shrink-0 text-foreground" data-phone-back={back.tag} onClick={back.onClick}>
           <ChevronLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
         </Button>
-        {lead ? <span className="flex shrink-0 items-center gap-xs self-start pt-xxs">{lead}</span> : null}
+        {/* One title line tall, so the marks sit on the title's first line however the title wraps. */}
+        {lead ? <span className="flex h-lh shrink-0 items-center gap-xs self-start text-title">{lead}</span> : null}
         <div className="flex min-w-0 flex-1 flex-col">
           <h1 className="min-w-0 break-keep text-title font-semibold text-foreground wrap-anywhere">{title}</h1>
           {line ? <div className="flex min-w-0 flex-wrap items-center gap-x-xs text-body text-muted-foreground">{line}</div> : null}

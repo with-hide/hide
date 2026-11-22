@@ -1,5 +1,6 @@
 // The phone list's rows (PRD mobile-companion-ui B1-B7): a group's top rows,
-// a parent's children under it with a rail, and the folds. hided decides the
+// each a two-line row (Doop 01), a parent's children under it with a rail,
+// opened by the children chip, and the folds. hided decides the
 // tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 

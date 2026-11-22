@@ -62,8 +62,8 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
               ) : <span className="break-keep wrap-anywhere">{stateWord}</span>}
             </span>
             {stepsOmitted > 0 ? null : <span className="shrink-0">· {t("mobile.mission.progress", { done, total })}</span>}
-            {/* Where the results go as the desktop's head names it, only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
-            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch /> : null}
+            {/* Where the results go as the desktop's head names it, in the line's own text (Doop 14), only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
+            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch className="border-none px-none text-body" /> : null}
           </>
         }
         action={

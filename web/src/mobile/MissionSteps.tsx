@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import { useElapsed } from "../components/elapsed";
 import { MissionNodeMark } from "../components/mission-node-mark";
+import { StatusMark } from "../components/status-mark";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
@@ -47,7 +48,7 @@ export function MissionSteps({ mission }: { mission: PhoneMission }) {
 /**
  * One step (Doop 14): a step that waits on the operator stands in the hold band with why and `내 차례`; a worked one names its
  * worker's task, its state and, from a Mac that sends when it went to work, for how long; the rest say where their work goes.
- * A press opens the worker's conversation while the phone's list holds it (B36).
+ * Its lead is the step's mark, or the operator's turn mark while it waits on them. A press opens the worker's conversation while the phone's list holds it (B36).
  */
 function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionNode }) {
   const { t } = useInterfaceTranslation();
@@ -72,11 +73,13 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
     ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain"))
     : pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep")
       : look === "working" ? statusText(t, "working") : t(`mission.look.${look}`);
+  // A step nobody has started yet is its title alone (Doop 14).
   const text = turn
     ? [why ?? word, t("agents.mark.turn")].join(" · ")
-    : look === "working" ? [agent?.title, word, elapsed].filter(Boolean).join(" · ")
-      : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
-        : result ? resultLineWords(result, t) : look === "waiting" ? null : word;
+    : look === "waiting" ? null
+      : look === "working" ? [agent?.title, word, elapsed].filter(Boolean).join(" · ")
+        : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
+          : result ? resultLineWords(result, t) : word;
   const pr = branch?.pr ? { label: linePrLabel(branch.pr), look: branch.mark in PR_LOOK ? PR_LOOK[branch.mark as PrState] : null } : null;
   const Icon = pr?.look?.icon;
   return (
@@ -89,7 +92,7 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
       onClick={() => { if (agent) openDetail({ device_id: agent.device_id, pane_id: agent.pane_id }); }}
     >
       <TwoLineRow
-        lead={<MissionNodeMark look={look} pace={pace} label={word} hint={false} />}
+        lead={turn ? <StatusMark mark="turn" /> : <MissionNodeMark look={look} pace={pace} label={word} hint={false} />}
         head={
           <>
             <span className={cn("min-w-0 flex-1 truncate text-title", look === "waiting" ? "text-subtle-foreground" : "text-foreground")}>{node.title}</span>

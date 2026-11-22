@@ -1,7 +1,8 @@
 // The phone's automations tab (PRD automations B34, B35, D-20): every
-// automation this computer's core runs, each row with its unseen dot, name,
-// schedule and next run, and [▶ 지금 실행] [⏸ 멈춤], or [▶ 다시 켜기] on a
-// paused one; a row opens its page with the runs. Making, editing and
+// automation this computer's core runs, each a two-line row (Doop 15) with its
+// unseen dot and name, then its schedule and next run; only a row that stopped
+// for a person carries [다시 켜기], and a row opens its page, where running,
+// pausing and the runs are. Making, editing and
 // removing stay with an agent, so the tab has no button for them. An
 // automation that stopped for a person is also its own line of the agent
 // list's 내 차례 (D-12, B23), drawn here too. How a schedule and a next run

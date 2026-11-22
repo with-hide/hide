@@ -49,7 +49,7 @@ function Page({ automation }: { automation: PhoneAutomation }) {
         {automation.records.length === 0 ? (
           <p className="py-sm text-body text-subtle-foreground" data-phone-automation-records-state="empty">{t("mobile.automations.noRuns")}</p>
         ) : (
-          <ul className="-mx-lg divide-y divide-border border-y border-border [&>li]:px-lg">
+          <ul className="-mx-lg divide-y divide-border border-b border-border [&>li]:px-lg">
             {automation.records.map((record) => (
               <li key={recordKey(record)}>
                 <Record record={record} />
