@@ -175,11 +175,10 @@ impl Runtime {
                         .filter(|machine| {
                             *machine != mission.device_id && self.device_answers(machine)
                         });
-                    if let (Some(machine), Some(repository)) =
-                        (elsewhere, github.issues.repository_id.as_deref())
-                        && let Some(project) = self.github_projects_on(machine).find(|project| {
-                            project.issues.repository_id.as_deref() == Some(repository)
-                        })
+                    if let (Some(machine), Some(repository)) = (elsewhere, github.repository_id())
+                        && let Some(project) = self
+                            .github_projects_on(machine)
+                            .find(|project| project.repository_id() == Some(repository))
                     {
                         places.push((machine.to_owned(), project.root_path.clone()));
                     }

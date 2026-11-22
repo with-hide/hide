@@ -134,18 +134,37 @@ fn run_coordinator(
     let mut worktree_reader = context
         .node()
         .map(|node| crate::worktrees::WorktreeReader::new(Arc::clone(node)));
-    // `gh` runs here with the operator's login, for this machine's projects
-    // and, by repository name, for those of a node that dials this core.
+    // Each code host's read runs here with the operator's login, for this
+    // machine's projects and, by repository name, for those of a node that
+    // dials this core.
+    let code_hosts = context
+        .runtime
+        .upgrade()
+        .and_then(|runtime| runtime.lock().ok().map(|guard| guard.code_hosts))
+        .unwrap_or(crate::code_host::CodeHosts::STANDARD);
     let mut github_reader = context
         .login()
-        .map(|node| crate::github::GithubReader::new(Arc::clone(node)));
-    // The advisory poll asks GitHub each minute whether a list behind a pull
+        .map(|node| crate::code_host::read::CodeHostReader::new(Arc::clone(node), code_hosts));
+    // A host's watch asks it each minute whether a list behind a pull
     // request mark changed, and only says so (`github_poll`); this machine's
-    // projects only, through the same login.
-    let mut github_poll_reader = context
+    // projects only, through the same login, one watch per host that offers
+    // one.
+    let mut watch_readers: Vec<(
+        crate::code_host::Host,
+        Box<dyn crate::code_host::WatchReader>,
+    )> = context
         .login()
         .filter(|_| matches!(context.target, SessionSyncTarget::Local { .. }))
-        .map(|node| crate::github_poll::GithubPollReader::new(Arc::clone(node)));
+        .map(|node| {
+            code_hosts
+                .hosts()
+                .filter_map(|host| {
+                    host.watch()
+                        .map(|watch| (host, watch.reader(Arc::clone(node))))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // Sizes are measured on the machine the folders are on: this one's by
     // its own node, a node that dials this core through its link.
     let mut disk_reader = context
@@ -400,8 +419,8 @@ fn run_coordinator(
                 }
             }
 
-            if let Some(reader) = github_poll_reader.as_mut() {
-                let Some(request) = read_github_poll_request(&context) else {
+            for (host, reader) in &mut watch_readers {
+                let Some(request) = read_github_poll_request(&context, *host) else {
                     return;
                 };
                 if let Some(poll) = reader.read_if_due(request)
@@ -1378,7 +1397,9 @@ fn read_worktrees_request(
 }
 
 /// The GitHub read due now.
-fn read_github_request(context: &SessionSyncContext) -> Option<crate::github::GithubRequest> {
+fn read_github_request(
+    context: &SessionSyncContext,
+) -> Option<crate::code_host::read::GithubRequest> {
     let runtime = context.runtime.upgrade()?;
     let request = {
         let mut guard = runtime.lock().ok()?;
@@ -1399,16 +1420,17 @@ fn read_github_request(context: &SessionSyncContext) -> Option<crate::github::Gi
     Some(request)
 }
 
-/// What the advisory poll reads now: this machine's projects with open pull
-/// requests, built from the last answers under the lock and read after it is
-/// released.
+/// What `host`'s watch reads now: this machine's projects on it with open
+/// pull requests, built from the last answers under the lock and read after
+/// it is released.
 fn read_github_poll_request(
     context: &SessionSyncContext,
-) -> Option<crate::github_poll::PollRequest> {
+    host: crate::code_host::Host,
+) -> Option<crate::code_host::WatchRequest> {
     let runtime = context.runtime.upgrade()?;
     let request = {
         let mut guard = runtime.lock().ok()?;
-        guard.github_poll_request()
+        guard.github_poll_request(host)
     };
     drop(runtime);
     Some(request)
@@ -1416,7 +1438,7 @@ fn read_github_poll_request(
 
 /// Hands the projects the poll saw change to the runtime, which asks the full
 /// read for them by the rule a look follows. False when the core is gone.
-fn ingest_github_poll(context: &SessionSyncContext, poll: crate::github_poll::PollAnswer) -> bool {
+fn ingest_github_poll(context: &SessionSyncContext, poll: crate::code_host::WatchAnswer) -> bool {
     let Some(runtime) = context.runtime.upgrade() else {
         return false;
     };
@@ -1607,7 +1629,10 @@ fn publish_worktrees(
     Some(changed)
 }
 
-fn publish_github(context: &SessionSyncContext, answer: crate::github::GithubAnswer) -> bool {
+fn publish_github(
+    context: &SessionSyncContext,
+    answer: crate::code_host::read::GithubAnswer,
+) -> bool {
     let Some(runtime) = context.runtime.upgrade() else {
         return false;
     };

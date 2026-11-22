@@ -16,6 +16,7 @@ pub mod branch;
 pub mod browse;
 pub mod bytes;
 pub mod catalog;
+pub mod change_request;
 pub mod cleanup;
 pub mod clone;
 pub mod device;

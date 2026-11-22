@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
+import { REMOTE_VIEWER_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import type { HostLog } from "./log";
 import { MAX_SEND_BYTES, pageAddress } from "./remotePage";
 import { HAND_WITHIN_MS } from "../../../web/src/remoteView";
@@ -105,7 +105,7 @@ afterEach(async () => {
 });
 
 /** A host with the fakes above, its daemon at `server`'s port. */
-function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }, now?: () => number): RemoteScreens {
+function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }, now?: () => number, language: () => "ko" | "ja" = () => "ko"): RemoteScreens {
   const window = {
     isDestroyed: () => false,
     isFocused: () => false,
@@ -117,6 +117,7 @@ function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }, now?:
     daemon: () => ({ origin: `http://127.0.0.1:${port}`, token: "t" }),
     registry: () => [],
     background: "#000000",
+    language,
     log: log as unknown as HostLog,
     now,
   });
@@ -139,7 +140,7 @@ describe("a remote screen's socket", () => {
     const held = new Promise<WebSocket>((resolve) => server!.once("connection", (socket) => resolve(socket)));
     const log = { event: vi.fn() };
     const screens = screensOn((server.address() as AddressInfo).port, log);
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     const view = views.at(-1)!;
     const page = fromPage(view);
 
@@ -179,14 +180,14 @@ describe("a remote screen's socket", () => {
     const log = { event: vi.fn() };
     const screens = screensOn((server.address() as AddressInfo).port, log);
 
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     const earlier = views.at(-1)!;
     ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(fromPage(earlier));
     await until("the first key's socket", () => asked.length === 1);
     expect(asked).toEqual([`/peer-screen/${DEVICE}/ws?key=${KEY}`]);
     screens.show(null);
 
-    screens.show({ device: DEVICE, key: REPLACEMENT, rect: RECT });
+    screens.show({ device: DEVICE, key: REPLACEMENT, rect: RECT, name: null });
     const later = views.at(-1)!;
     expect(later).not.toBe(earlier);
     expect(earlier.webContents.closed).toBe(true);
@@ -228,7 +229,7 @@ describe("an ask of a remote screen", () => {
 
   it("reaches the page once it loaded, and at once when it already has", async () => {
     const screens = screensOn(9, { event: vi.fn() });
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work });
     const view = views.at(-1)!;
     expect(handed(view)).toEqual([]);
@@ -240,18 +241,34 @@ describe("an ask of a remote screen", () => {
     expect(handed(view)).toEqual([work, start]);
   });
 
+  it("tells a loaded page what the window calls its machine and the window's language, and again when either changes", async () => {
+    let language: "ko" | "ja" = "ko";
+    const screens = screensOn(9, { event: vi.fn() }, undefined, () => language);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: "build-box" });
+    const view = views.at(-1)!;
+    const said = () => (view.webContents as unknown as { sent: { channel: string; value: unknown }[] }).sent.filter((sent) => sent.channel === REMOTE_VIEWER_CHANNEL).map((sent) => sent.value);
+    expect(said()).toEqual([]);
+    await loaded(1);
+    expect(said()).toEqual([{ language: "ko", name: "build-box" }]);
+    language = "ja";
+    screens.languageChanged();
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: "build-box" });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: "Build box" });
+    expect(said()).toEqual([{ language: "ko", name: "build-box" }, { language: "ja", name: "build-box" }, { language: "ja", name: "Build box" }]);
+  });
+
   it("drops an ask made under another key or that waited past its bound", async () => {
     let clock = 1_000;
     const log = { event: vi.fn() };
     const screens = screensOn(9, log, () => clock);
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: REPLACEMENT, work });
     await loaded(1);
     expect(handed(views.at(-1)!)).toEqual([]);
     expect(log.event).toHaveBeenCalledWith("remote.work_dropped", { device: DEVICE, reason: "key_changed" });
 
     screens.closeAll();
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work });
     clock += HAND_WITHIN_MS + 1;
     await loaded(2);
@@ -263,13 +280,13 @@ describe("an ask of a remote screen", () => {
   // window that handed it gives the operator's words back.
   it("answers the shell for each start that never reached its page", async () => {
     const screens = screensOn(9, { event: vi.fn() });
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: REPLACEMENT, work: start("r-1") });
     await loaded(1);
     expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "not_shown" }]);
 
     screens.closeAll();
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work: start("r-2") });
     screens.go({ device: DEVICE, key: KEY, work: start("r-3") });
     screens.closeAll();
@@ -282,7 +299,7 @@ describe("an ask of a remote screen", () => {
   // Only the page a start was handed to says how it ended, once.
   it("passes on a page's answer only for a start handed to that page", async () => {
     const screens = screensOn(9, { event: vi.fn() });
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work: start("r-1") });
     await loaded(1);
     const view = views.at(-1)!;
@@ -303,7 +320,7 @@ describe("an ask of a remote screen", () => {
   it("passes on an agent still starting and then its end, and forgets the starts of a page that went", async () => {
     const log = { event: vi.fn() };
     const screens = screensOn(9, log);
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work: start("r-1") });
     await loaded(1);
     const view = views.at(-1)!;
@@ -320,7 +337,7 @@ describe("an ask of a remote screen", () => {
     view.webContents.handlers.get("did-start-navigation")!({ isMainFrame: true, isSameDocument: false });
     screens.go({ device: DEVICE, key: KEY, work: start("r-3") });
     view.webContents.handlers.get("render-process-gone")!();
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     screens.go({ device: DEVICE, key: KEY, work: start("r-4") });
     await loaded(2);
     screens.closeAll();
@@ -337,7 +354,7 @@ describe("an ask of a remote screen", () => {
 
   it("answers the oldest owed start unconfirmed past the cap", async () => {
     const screens = screensOn(9, { event: vi.fn() });
-    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT, name: null });
     await loaded(1);
     for (let n = 0; n <= 16; n += 1) screens.go({ device: DEVICE, key: KEY, work: start(`r-${n}`) });
     expect(answers()).toEqual([{ device: DEVICE, request: "r-0", outcome: "unconfirmed" }]);

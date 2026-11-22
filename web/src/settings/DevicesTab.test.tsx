@@ -233,6 +233,26 @@ it("shows a paired machine once, as its pairing's row, and an SSH device beside 
   await unmount();
 });
 
+// Operator review 2026-11-22: this computer, the paired Hides and the SSH devices stand in their own groups, and one Add window adds a Hide by its link or a machine over SSH.
+it("lists this computer, the paired Hides and the SSH devices in three groups, and adds either kind from one window", async () => {
+  const { q, unmount } = await mount(state([remote("mini")]));
+  const sections = [...document.querySelectorAll("[data-device-section]")].map((section) => section.getAttribute("data-device-section"));
+  expect(sections).toEqual(["this", "hides", "ssh"]);
+  expect(q('[data-device-section="this"] [data-device-row="local"]')).not.toBeNull();
+  expect(q('[data-device-section="ssh"] [data-device-row="mini"]')).not.toBeNull();
+  expect(q('[data-device-section="hides"] [data-pair-share-make]')?.textContent).toBe("Share this computer");
+  expect(q('[data-device-section="hides"]')?.textContent).toContain("No computer yet.");
+  await act(async () => { q("[data-device-add-open]")?.click(); });
+  const dialog = () => document.body.querySelector("[data-add-device-dialog]");
+  // It opens on a Hide's link; the other choice is the SSH list.
+  expect(dialog()?.querySelector("[data-add-by-link]")).not.toBeNull();
+  expect(dialog()?.querySelector('[data-ssh-hosts-state]')).toBeNull();
+  await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-kind-choice="ssh"]')?.click(); });
+  expect(dialog()?.querySelector("[data-add-by-link]")).toBeNull();
+  expect(dialog()?.querySelector("[data-ssh-hosts-state]")).not.toBeNull();
+  await unmount();
+});
+
 it("opens Add device from one button above the list, and shows the Add dialog only then (B50)", async () => {
   const { q, unmount } = await mount(state([remote("mini")]));
   expect(q("[data-add-device]")).toBeNull();

@@ -17,6 +17,7 @@ mod changes;
 mod checkout_git;
 mod checkout_owner;
 mod checkout_start;
+mod code_host;
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
@@ -122,8 +123,8 @@ pub use model::{
     SnapshotDeltaWire,
 };
 pub use model::{
-    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
-    SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
+    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, InterfaceLanguage,
+    LinkOrigin, SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
 pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;

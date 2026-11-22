@@ -115,7 +115,7 @@ impl Runtime {
                         head_sha: head_sha.as_deref(),
                         root_path,
                     });
-                crate::agent_state::work::linked_pull_requests(row, place, github)
+                crate::agent_state::work::linked_pull_requests(row, place, github, self.code_hosts)
             })
             .collect();
         crate::agent_state::work::assign_duty(&ranked, &mut linked);

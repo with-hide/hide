@@ -5,6 +5,7 @@
 //! like any other, and the confirmation closes those panes before it removes.
 //! All inspection and filesystem effects run on the existing action-worker
 //! path, never under the runtime lock.
+use crate::disk;
 use crate::engine::SharedEngine;
 use crate::handle::ChangeNotifier;
 use crate::live::{CONTROL_WAIT, failed};
@@ -12,7 +13,6 @@ use crate::model::ListeningPortSnapshot;
 use crate::node_access::{NodeLink, call_as};
 use crate::runtime::Runtime;
 use crate::worktree_control::GhPlace;
-use crate::{disk, github};
 use hide_node_link::cleanup::{
     CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState, RepositoryDirs,
     WalkAllowance,
@@ -715,12 +715,11 @@ fn inspect(
                     .as_ref()
                     .map_err(|why| format!("GitHub merge proof is unavailable: {why}"))?;
                 let base = base.ok_or("No default branch is known to judge a merge against")?;
+                let proof = github.place.host().merge_proof().ok_or_else(|| {
+                    "GitHub merge proof is unavailable: the code host proves no merge".to_owned()
+                })?;
                 Ok(heads_into(
-                    github::merged_pull_request_proofs(
-                        github.node.as_ref(),
-                        &github.place,
-                        branch,
-                    )?,
+                    proof.merged_heads(github.node.as_ref(), &github.place, branch)?,
                     base,
                 ))
             })?;
@@ -756,7 +755,7 @@ fn merge_proof(
 
 /// The heads of the pull requests that merged into `base`; one merged into
 /// a stacked parent branch proves nothing about `base`.
-fn heads_into(proofs: Vec<github::MergedPullRequestProof>, base: &str) -> BTreeSet<String> {
+fn heads_into(proofs: Vec<crate::code_host::MergedHead>, base: &str) -> BTreeSet<String> {
     proofs
         .into_iter()
         .filter(|proof| proof.base_ref == base)
@@ -1995,7 +1994,7 @@ mod tests {
         fn review_against(
             &self,
             base: Option<&str>,
-            proofs: Vec<github::MergedPullRequestProof>,
+            proofs: Vec<crate::code_host::MergedHead>,
         ) -> CleanupSnapshot {
             inspect_with_merge_proofs(
                 &node(),
@@ -2012,7 +2011,7 @@ mod tests {
         fn review_with_proofs(
             &self,
             current: &Path,
-            proofs: Vec<github::MergedPullRequestProof>,
+            proofs: Vec<crate::code_host::MergedHead>,
         ) -> CleanupSnapshot {
             inspect_with_merge_proofs(
                 &node(),
@@ -2328,8 +2327,8 @@ mod tests {
         git(&f.main, &["update-ref", "refs/remotes/origin/main", oid]).unwrap();
     }
 
-    fn proof(head_oid: &str, base_ref: &str) -> github::MergedPullRequestProof {
-        github::MergedPullRequestProof {
+    fn proof(head_oid: &str, base_ref: &str) -> crate::code_host::MergedHead {
+        crate::code_host::MergedHead {
             head_oid: head_oid.into(),
             base_ref: base_ref.into(),
         }

@@ -1217,7 +1217,7 @@ pub(super) struct PrMergePayload {
     pub(super) pr_number: u32,
     pub(super) head: String,
     #[serde(default)]
-    pub(super) method: Option<hide_node_link::gh::PrMergeMethod>,
+    pub(super) method: Option<hide_node_link::change_request::PrMergeMethod>,
 }
 
 /// `pr_update_branch`: brings a BEHIND pull request's branch up to its base,

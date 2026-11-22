@@ -51,21 +51,45 @@ async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_pane
 
 const last = (events: Parameters<DispatchFn>[0][]) => events.at(-1);
 
-it("makes a link on a press and shows it with the time it has left (B1)", async () => {
+it("makes a link when the share window opens, walks its steps, and allows a pasted link in its last step (B1, B2)", async () => {
   vi.useFakeTimers({ now: 19_000, toFake: ["Date"] });
   const idleScreen = await mount(idle);
-  expect(idleScreen.q("[data-pair-share]")?.dataset.pairShare).toBe("idle");
+  expect(idleScreen.q("[data-pair-share]"), "the window opens on a press").toBeNull();
   await idleScreen.press("[data-pair-share-make]");
   expect(last(idleScreen.events)).toMatchObject({ kind: "pairing_share", payload: { language: "en" } });
+  expect(idleScreen.q("[data-pair-share]")?.dataset.pairShare).toBe("making");
   await idleScreen.unmount();
 
-  const shared = await mount({ ...idle, offer: { link: "hide://pair#v=1&id=ab&s=cd", expires_unix_ms: 9 * 60_000 } });
+  const offer = { link: "hide://pair#v=1&id=ab&s=cd", expires_unix_ms: 9 * 60_000 };
+  const shared = await mount({ ...idle, offer });
+  await shared.press("[data-pair-share-make]");
+  // A link already shared is shown again, not made again.
+  expect(shared.events.filter((event) => event.kind === "pairing_share")).toHaveLength(0);
   expect(shared.q("[data-pair-link]")?.textContent).toBe("hide://pair#v=1&id=ab&s=cd");
   expect(shared.q("[data-pair-share]")?.textContent).toContain("8:41 left · works once");
-  expect(shared.q("[data-pair-share-make]")).toBeNull();
-  await shared.press("[data-pair-share-end]");
-  expect(last(shared.events)).toMatchObject({ kind: "pairing_end_share" });
+  const steps = () => [...document.body.querySelectorAll("[data-pair-step]")].map((step) => step.getAttribute("data-pair-step-state"));
+  expect(steps()).toEqual(["on", "later", "later"]);
+  expect(shared.q('[data-pair-step="2"]')?.textContent).toContain("Settings › Devices › Add device › A computer with Hide");
+
+  // A machine pastes the link: its words show in the last step, and the allow window stays out of the way.
+  const ask = { id: 7, key: "cd".repeat(32), device: "macbook", name: "MacBook", kind: "link" as const, words: WORDS, expires_unix_ms: 2 * 60_000 };
+  await act(async () => useShellStore.setState({ pairing: { ...idle, asks: [ask] } }));
+  expect(shared.q("[data-pair-share]")?.dataset.pairShare).toBe("words");
+  expect(steps()).toEqual(["done", "done", "on"]);
+  expect(shared.q('[data-pair-step="3"] [data-pair-words]')?.getAttribute("data-pair-words")).toBe(WORDS.join(" "));
+  expect(shared.q("[data-pair-allow]")).toBeNull();
+  await shared.press("[data-pair-allow-go]");
+  expect(last(shared.events)).toMatchObject({ kind: "pairing_answer", payload: { ask: 7, allow: true } });
+  expect(shared.q("[data-pair-share]"), "allowing closes the window").toBeNull();
   await shared.unmount();
+
+  // Ending the link from the window.
+  const ending = await mount({ ...idle, offer });
+  await ending.press("[data-pair-share-make]");
+  await ending.press("[data-pair-share-end]");
+  expect(last(ending.events)).toMatchObject({ kind: "pairing_end_share" });
+  expect(ending.q("[data-pair-share]")).toBeNull();
+  await ending.unmount();
 });
 
 it("lists a paired machine with its state, its direction and the one action its state offers (B21, B24, B50)", async () => {
@@ -81,7 +105,7 @@ it("lists a paired machine with its state, its direction and the one action its 
   // An ask names the machine by its connection id, never by the device id it says of itself.
   expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: lost.key } });
   // The machine that opens this one is asked to be opened too.
-  expect(q('[data-peer-request-go="macbook"]')?.textContent).toBe("Open MacBook too");
+  expect(q('[data-peer-request-go="macbook"]')?.textContent).toBe("Ask to open MacBook");
   await press('[data-peer-request-go="macbook"]');
   expect(last(events)).toMatchObject({ kind: "pairing_request", payload: { device: guest.key } });
   expect(q('[data-peer-request-go="windows-pc"]')).toBeNull();
@@ -122,7 +146,7 @@ it("lists the paired machines and offers nothing on a screen that is not this co
   const { q, unmount } = await mount(null, [guest, lost]);
   expect(q('[data-peer-row="macbook"]')?.textContent).toContain("MacBook");
   expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Not connected");
-  expect(q("[data-pair-share]")).toBeNull();
+  expect(q("[data-pair-share-make]")).toBeNull();
   expect(document.body.querySelector("[data-peer-row] button")).toBeNull();
   await unmount();
 });
@@ -241,6 +265,7 @@ it("asks Windows once for the firewall rules when this PC is shared, and a no le
   const shared = await mount({ ...idle, offer: { link: "hide://pair#v=1&id=ab&s=cd", expires_unix_ms: Date.now() + 60_000 } });
   await act(async () => {});
   expect(shared.q("[data-pair-firewall]")?.textContent).toContain("The firewall blocks direct connections");
+  await shared.press("[data-pair-share-make]");
   await shared.press("[data-pair-share-end]");
   await shared.unmount();
 

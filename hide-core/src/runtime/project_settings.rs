@@ -144,7 +144,7 @@ impl Runtime {
                 .get(&id)
                 .cloned()
                 .unwrap_or_else(|| ProjectSettings::new(&payload.device_id, &payload.root))
-                .patched(payload.patch.clone())?;
+                .patched(payload.patch.clone(), self.code_hosts)?;
             // The base branch protection guards a branch the project names:
             // the one chosen, or the repository's default for Auto (B17).
             if (payload.patch.guardrails.is_some() || payload.patch.base_branch.is_some())

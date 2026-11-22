@@ -304,6 +304,9 @@ type UiStore = {
    */
   remoteScreen: string | null;
   setRemoteScreen: (device: string | null) => void;
+  /** The share window is open, and shows the allow step a pasted link asks for in place of the allow window. */
+  sharing: boolean;
+  setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
   /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
@@ -539,6 +542,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
   remoteScreen: null,
   setRemoteScreen: (remoteScreen) => set({ remoteScreen }),
+  sharing: false,
+  setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
   deskLane: DESK_LANE_CLOSED,

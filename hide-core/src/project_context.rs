@@ -704,6 +704,7 @@ mod tests {
 
     fn settled_pull_request(badge: PullRequestBadge) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Default::default(),
             title: "Settled".to_owned(),
             checks: Default::default(),

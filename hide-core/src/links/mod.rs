@@ -405,6 +405,9 @@ pub struct LinkedPr {
     pub branch: String,
     pub title: String,
     pub url: String,
+    /// `url` as its host's unit names it, which the screen compares and
+    /// opens it by.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub created_at_unix_ms: Option<u64>,
     pub closed_at_unix_ms: Option<u64>,
     pub merged_at_unix_ms: Option<u64>,
@@ -456,15 +459,6 @@ pub fn issue_key(key: &str) -> String {
     } else {
         key.to_owned()
     }
-}
-
-/// `owner/name` from a GitHub pull request address, lower case.
-pub fn repository_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://github.com/")?;
-    let mut parts = rest.split('/');
-    let owner = parts.next().filter(|part| !part.is_empty())?;
-    let name = parts.next().filter(|part| !part.is_empty())?;
-    Some(format!("{owner}/{name}").to_ascii_lowercase())
 }
 
 /// A session's cwd lies in `path` or below it. The filesystem root holds

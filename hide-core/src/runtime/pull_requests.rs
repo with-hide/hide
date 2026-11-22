@@ -367,10 +367,17 @@ impl Runtime {
                 let spawned = self.spawn_issue_worker(
                     "pr-issue-create",
                     move || {
-                        let created =
-                            crate::github::create_issue(node.as_ref(), &place, &title, &body);
+                        let created = place
+                            .host()
+                            .issues()
+                            .ok_or_else(|| "The project's host keeps no issues".to_owned())
+                            .and_then(|issues| {
+                                issues
+                                    .create(node.as_ref(), &place, &title, &body)
+                                    .map_err(crate::code_host::CreateFailure::reason)
+                            });
                         let written = created.as_ref().ok().map(|issue| {
-                            crate::github::write_closing_line(
+                            write_closing_line(
                                 node.as_ref(),
                                 &place,
                                 number,
@@ -529,7 +536,7 @@ impl Runtime {
         let node = self.own_node();
         let spawned = self.spawn_issue_worker(
             "pr-body-write",
-            move || crate::github::write_closing_line(node.as_ref(), &place, number, issue),
+            move || write_closing_line(node.as_ref(), &place, number, issue),
             move |runtime, written| runtime.finish_pr_body(&request_id, &reference, written),
         );
         if let Err(message) = spawned {
@@ -600,8 +607,9 @@ impl Runtime {
             ..link
         });
         if let Ok((_, workspace, pull_request)) = &target
-            && crate::links::repository_of(&pull_request.url).as_deref()
-                == Some(reference.repository.as_str())
+            && pull_request
+                .sighting_key(self.code_hosts)
+                .is_some_and(|(repository, _)| repository == reference.repository)
         {
             self.link_pr_branch(workspace, pull_request, &reference);
         }
@@ -721,7 +729,13 @@ impl Runtime {
         let node = self.own_node();
         if let Err(message) = self.spawn_issue_worker(
             "pr-feedback",
-            move || crate::github::pr_feedback(node.as_ref(), &place, number),
+            move || {
+                place
+                    .host()
+                    .handover()
+                    .ok_or_else(|| "The project's host hands no feedback over".to_owned())?
+                    .feedback(node.as_ref(), &place, number)
+            },
             move |runtime, answer| runtime.ingest_pr_feedback(&answered, answer),
         ) {
             self.ingest_pr_feedback(&request_id, Err(message));
@@ -732,7 +746,7 @@ impl Runtime {
     pub(crate) fn ingest_pr_feedback(
         &mut self,
         request_id: &str,
-        answer: Result<crate::github::PrFeedback, String>,
+        answer: Result<crate::code_host::Feedback, String>,
     ) -> bool {
         let Some(slot) = self
             .snapshot
@@ -803,7 +817,10 @@ impl Runtime {
                 }
             };
         let pre_check = if payload.intent == Some(super::events::PrDelegateIntent::Review) {
-            match (&payload.request_id, repository_of_url(&pull_request.url)) {
+            let repository = pull_request
+                .named(self.code_hosts)
+                .map(|(repository, _)| repository.path.to_ascii_lowercase());
+            match (&payload.request_id, repository) {
                 (Some(request_id), Some(repo_name)) => Some((request_id.clone(), repo_name)),
                 // Without either the session cannot be told apart: it is
                 // still started, and its line reads as worked.
@@ -978,7 +995,7 @@ impl Runtime {
         let node = self.own_node();
         if let Err(message) = self.spawn_issue_worker(
             "pr-card",
-            move || crate::github::card::read(node.as_ref(), &place, number),
+            move || place.host().card(node.as_ref(), &place, number),
             move |runtime, answer| runtime.ingest_pr_card(&answered, number, answer),
         ) {
             self.ingest_pr_card(&workspace_id, number, Err(message));
@@ -990,7 +1007,7 @@ impl Runtime {
         &mut self,
         workspace_id: &str,
         number: u32,
-        answer: Result<crate::github::card::CardRead, String>,
+        answer: Result<crate::code_host::CardRead, String>,
     ) -> bool {
         let Some(card) = self.existing_pr_card(workspace_id, number) else {
             return false;
@@ -1051,10 +1068,8 @@ impl Runtime {
             payload.workspace_id,
             number,
             write,
-            crate::github::card::Write::Merge {
-                number,
+            CardWrite::Merge {
                 method: payload.method,
-                head: payload.head,
             },
         )
     }
@@ -1069,15 +1084,7 @@ impl Runtime {
             phase: "working",
             reason: None,
         };
-        self.start_pr_write(
-            payload.workspace_id,
-            number,
-            write,
-            crate::github::card::Write::UpdateBranch {
-                number,
-                head: payload.head,
-            },
-        )
+        self.start_pr_write(payload.workspace_id, number, write, CardWrite::UpdateBranch)
     }
 
     fn start_pr_write(
@@ -1085,7 +1092,7 @@ impl Runtime {
         workspace_id: String,
         number: u32,
         write: PrWriteSnapshot,
-        request: crate::github::card::Write,
+        request: CardWrite,
     ) -> bool {
         let action = write.action;
         let (machine, project, pull_request) = match self.open_pull_request(&workspace_id, number) {
@@ -1126,6 +1133,7 @@ impl Runtime {
             self.reread_pull_request(machine.as_deref(), &project.path, &workspace_id, number);
             return true;
         }
+        let write_head = write.head.clone();
         card.write = Some(write);
         crate::diagnostic!(serde_json::json!({
             "component": "pull_requests", "kind": "pr_write.requested",
@@ -1134,9 +1142,10 @@ impl Runtime {
         let root = project.path;
         let (answered, answered_machine) = (workspace_id.clone(), machine);
         let node = self.own_node();
+        let head = write_head;
         let spawned = self.spawn_issue_worker(
             "pr-write",
-            move || crate::github::card::run_write(node.as_ref(), &place, &request),
+            move || run_card_write(node.as_ref(), &place, number, &request, &head),
             {
                 let root = root.clone();
                 let machine = answered_machine.clone();
@@ -1151,7 +1160,7 @@ impl Runtime {
                 number,
                 answered_machine.as_deref(),
                 &root,
-                Err(crate::github::card::WriteFailure {
+                Err(crate::code_host::WriteFailure {
                     reason: "failed",
                     detail: message,
                 }),
@@ -1166,7 +1175,7 @@ impl Runtime {
         number: u32,
         machine: Option<&str>,
         root: &str,
-        answer: Result<(), crate::github::card::WriteFailure>,
+        answer: Result<(), crate::code_host::WriteFailure>,
     ) -> bool {
         let Some(card) = self.existing_pr_card(workspace_id, number) else {
             return false;
@@ -1233,12 +1242,84 @@ impl Runtime {
     }
 }
 
-/// `owner/name`, lowercase, of a pull request's GitHub address
-/// (`https://<host>/<owner>/<name>/pull/<n>`), as the link record keys it.
-fn repository_of_url(url: &str) -> Option<String> {
-    let path = url.split_once("://")?.1.split_once('/')?.1;
-    let mut parts = path.split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    (parts.next() == Some("pull") && !owner.is_empty() && !name.is_empty())
-        .then(|| format!("{owner}/{name}").to_ascii_lowercase())
+/// One write asked from a card; the head it names is the write's own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CardWrite {
+    Merge {
+        method: Option<hide_node_link::change_request::PrMergeMethod>,
+    },
+    UpdateBranch,
+}
+
+/// Runs one card write through its host's operation for it.
+fn run_card_write(
+    node: &dyn crate::node_access::NodeLink,
+    place: &crate::code_host::Place,
+    number: u32,
+    write: &CardWrite,
+    head: &str,
+) -> Result<(), crate::code_host::WriteFailure> {
+    let unsupported = || crate::code_host::WriteFailure {
+        reason: "failed",
+        detail: "the project's host does not offer this write".to_owned(),
+    };
+    match *write {
+        CardWrite::Merge { method } => place
+            .host()
+            .merge()
+            .ok_or_else(unsupported)?
+            .merge(node, place, number, method, head),
+        CardWrite::UpdateBranch => place
+            .host()
+            .update_branch()
+            .ok_or_else(unsupported)?
+            .update_branch(node, place, number, head),
+    }
+}
+
+/// Writes the line that closes `issue` into the change request's body
+/// through its host's operation for it.
+fn write_closing_line(
+    node: &dyn crate::node_access::NodeLink,
+    place: &crate::code_host::Place,
+    number: u32,
+    issue: u32,
+) -> Result<bool, String> {
+    place
+        .host()
+        .edit_body()
+        .ok_or_else(|| "The project's host does not edit a body".to_owned())?
+        .write_closing_line(node, place, number, issue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node that must not be asked anything.
+    struct NoCall;
+
+    impl crate::node_access::NodeLink for NoCall {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            panic!("a host without the operation was asked: {call:?}");
+        }
+    }
+
+    /// A card write its host does not offer is refused before anything is
+    /// sent.
+    #[test]
+    fn a_card_write_its_host_does_not_offer_is_refused_with_nothing_sent() {
+        let place = crate::code_host::tests::BOTH
+            .place_of("code.example/acme/app")
+            .unwrap();
+        for write in [CardWrite::Merge { method: None }, CardWrite::UpdateBranch] {
+            let refused = run_card_write(&NoCall, &place, 3, &write, "abc").unwrap_err();
+            assert_eq!(refused.reason, "failed", "{write:?}");
+        }
+        assert!(write_closing_line(&NoCall, &place, 3, 7).is_err());
+    }
 }

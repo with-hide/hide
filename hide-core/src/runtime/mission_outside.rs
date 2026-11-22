@@ -475,7 +475,7 @@ impl Runtime {
         device: &str,
         project: &str,
         asks: &[Ask],
-    ) -> (Result<crate::github::Where, String>, Bases) {
+    ) -> (Result<crate::code_host::Place, String>, Bases) {
         let machine = (device != self.node.as_str()).then_some(device);
         let mut bases = Bases {
             default: self.project_default_branch(device, project),
@@ -838,7 +838,7 @@ struct Main {
 fn read_all(
     node: &dyn NodeLink,
     root: &str,
-    github: &Result<crate::github::Where, String>,
+    github: &Result<crate::code_host::Place, String>,
     bases: &Bases,
     asks: Vec<Ask>,
 ) -> Vec<(Ask, Found)> {
@@ -936,7 +936,7 @@ fn resolve_mains(git: &Git, main: &str) -> Result<Vec<Main>, String> {
 fn read_one(
     node: &dyn NodeLink,
     git: &Git,
-    github: &Result<crate::github::Where, String>,
+    github: &Result<crate::code_host::Place, String>,
     against: Option<Against>,
     head: Option<Result<String, String>>,
     watch: &Watch,
@@ -947,11 +947,16 @@ fn read_one(
     } = watch
     {
         let place = github.as_ref().map_err(Clone::clone)?;
-        return crate::github::pr_standing(node, place, *number).map(|standing| match standing {
-            crate::github::PrStanding::Open => Found::Open,
-            crate::github::PrStanding::Closed => Found::Closed,
-            crate::github::PrStanding::Merged => Found::InMain(None),
-        });
+        let by_number = place.host().by_number().ok_or_else(|| {
+            "The project's code host reads no change request by its number".to_owned()
+        })?;
+        return by_number
+            .standing(node, place, *number)
+            .map(|standing| match standing {
+                crate::code_host::Standing::Open => Found::Open,
+                crate::code_host::Standing::Closed => Found::Closed,
+                crate::code_host::Standing::Merged => Found::InMain(None),
+            });
     }
     let head = head.ok_or("The node names no branch")??;
     let against = against.ok_or("The project's default branch is not known yet")?;

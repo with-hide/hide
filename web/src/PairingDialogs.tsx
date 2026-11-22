@@ -15,12 +15,15 @@ import { joinFailureKey, timeLeft, type PairAsk, type PairJoin } from "./pairing
 import { askForFirewallOnce } from "./settings/firewall";
 import { PairWords, useNow } from "./settings/PairingRows";
 import { useShellStore } from "./store";
+import { useUiStore } from "./ui";
 
 export function PairingDialogs({ actions }: { actions: Actions }) {
   // One at a time: the oldest machine that waits, then the next.
   const ask = useShellStore((s) => s.pairing?.asks[0] ?? null);
   const join = useShellStore((s) => s.pairing?.join ?? null);
-  if (ask) return <AllowDialog key={ask.id} ask={ask} actions={actions} />;
+  // The share window answers a pasted link in its own last step.
+  const sharing = useUiStore((s) => s.sharing);
+  if (ask && !(sharing && ask.kind === "link")) return <AllowDialog key={ask.id} ask={ask} actions={actions} />;
   if (join) return <JoinDialog key={join.id} join={join} actions={actions} />;
   return null;
 }
