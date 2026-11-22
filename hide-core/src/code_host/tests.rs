@@ -561,6 +561,18 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         in_checkout(BOTH, "github", &["acme/app"], false),
         "an older node's name no unit reads beside one GitHub reads"
     );
+    // The registry as it ships, with gitlab.com's unit registered.
+    let gitlab = "git@gitlab.com:acme/sub/app.git";
+    assert_eq!(
+        by_address(CodeHosts::STANDARD, &[github, gitlab]),
+        in_checkout(CodeHosts::STANDARD, "github", &["acme/app"], true),
+        "a gitlab.com remote is read by its own unit: beside a GitHub one the list is complete"
+    );
+    assert_eq!(
+        by_address(CodeHosts::STANDARD, &[gitlab]),
+        CodeHosts::STANDARD.place_of("gitlab.com/acme/sub/app"),
+        "a gitlab.com remote alone is read by its name"
+    );
 }
 
 fn hosts_place(hosts: CodeHosts, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {

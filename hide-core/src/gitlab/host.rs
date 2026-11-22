@@ -78,6 +78,17 @@ impl CodeHost for Gitlab {
         format!("{}/{}", repository.authority, repository.path)
     }
 
+    /// gitlab.com finds a group, subgroup and project by its path in any
+    /// case and keeps no two paths that differ only in case, so the whole
+    /// path is folded, as GitHub's.
+    fn repository_key(&self, repository: &RepositoryRef) -> String {
+        format!(
+            "{}/{}",
+            repository.authority,
+            repository.path.to_ascii_lowercase()
+        )
+    }
+
     fn resolves_checkout(&self) -> bool {
         false
     }

@@ -400,6 +400,7 @@ fn parse_list(output: &str, known: &KnownChecks) -> Result<Listed, HostFailure> 
         .ok_or_else(|| unreadable(format!("gitlab.com named a project path Hide cannot read: {}", project.full_path)))?;
     let identity = RepositoryIdentity {
         name: project.full_path.clone(),
+        url: Some(unit.repository_url(&repository)),
         repository: Some(repository.clone()),
         id: Some(project.id),
         public: project.visibility.as_deref().map(|visibility| visibility == "public"),

@@ -33,28 +33,41 @@ IMPLEMENTATION = (
     "hide-node-link/src/gh.rs",
     "hide-host/src/gh.rs",
     "hide-host/src/serve.rs",
+    "hide-core/src/gitlab.rs",
+    "hide-core/src/gitlab/",
+    # The node side of gitlab.com's CLI: its allowlist and the runner.
+    "hide-node-link/src/glab.rs",
+    "hide-host/src/glab.rs",
 )
 
 RUST_ROOTS = ("hide-core/src", "hided/src")
 WEB_ROOTS = ("web/src",)
 
 RUST_RULES = (
-    ("a host's CLI call", re.compile(r"\bCall::Gh\b")),
-    ("a host's failure or place type", re.compile(r"\bGhFailure\b|\bgithub::Where\b")),
+    ("a host's CLI call", re.compile(r"\bCall::(Gh|Glab)\b")),
+    ("a host's failure or place type", re.compile(r"\bGhFailure\b|\bgithub::Where\b|\bGlabAnswer\b")),
     (
         "a host's address",
-        re.compile(r"github\.com|/(pull|issues|commit)/(\{|\"|\d)|/checks\"|/files\""),
+        re.compile(
+            r"github\.com|gitlab\.com|/-/merge_requests/|/(pull|issues|commit)/(\{|\"|\d)"
+            r"|/checks\"|/files\"|/pipelines\"|/diffs\""
+        ),
     ),
     (
         "a branch on a host's key",
-        re.compile(r"==\s*\"github\"|\"github\"\s*(=>|==)|\.host\(\"github\"\)"),
+        re.compile(
+            r"==\s*\"(github|gitlab)\"|\"(github|gitlab)\"\s*(=>|==)|\.host\(\"(github|gitlab)\"\)"
+        ),
     ),
 )
 
 WEB_RULES = (
     (
         "a host's address",
-        re.compile(r"github\\?\.com|\\?/(pull|issues)\\?/|[`\"]/checks[`\"]|/checks`|[`\"]/files[`\"]|/files`"),
+        re.compile(
+            r"github\\?\.com|gitlab\\?\.com|\\?/-\\?/merge_requests|\\?/(pull|issues)\\?/"
+            r"|[`\"]/checks[`\"]|/checks`|[`\"]/files[`\"]|/files`"
+        ),
     ),
 )
 

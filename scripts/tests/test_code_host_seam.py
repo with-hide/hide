@@ -53,6 +53,20 @@ class CodeHostSeam(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(check.main(), 1)
 
+    def test_common_code_that_spells_gitlab_com_is_refused(self):
+        check = self.tree({
+            'hide-core/src/caller.rs': 'fn page(n: u32) -> String { format!("https://gitlab.com/a/b/-/merge_requests/{n}") }\n'
+                                       'fn ask() { let _ = Call::Glab { args: vec![] }; }\n'
+                                       'fn pick(key: &str) -> bool { key == "gitlab" }\n',
+            'web/src/open.ts': 'export const page = (n: number) => `${base}/-/merge_requests/${n}`;\n',
+            'hide-core/src/gitlab/host.rs': 'const HOST: &str = "gitlab.com";\n',
+            'hide-node-link/src/glab.rs': 'const HOST: &str = "gitlab.com";\n',
+        })
+        found = self.found(check)
+        self.assertEqual(len(found), 4, found)
+        self.assertTrue(any('caller.rs:2: a host\'s CLI call' in line for line in found), found)
+        self.assertTrue(any('caller.rs:3: a branch on a host\'s key' in line for line in found), found)
+
     def test_a_hosts_unit_its_tests_and_hides_own_pages_may_spell_it(self):
         check = self.tree({
             'hide-core/src/github/host.rs': 'const SERVER: &str = "github.com";\n',
