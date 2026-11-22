@@ -1751,8 +1751,8 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
-/// Whether a page command, the CLI's or a phone's picture
-/// (`mobile/page_shot.rs`), may act on `view`. A View on a desk does only as
+/// Whether a page command of the CLI may act on `view` (a phone's picture
+/// is a read and does not ask, `mobile/page_shot.rs`). A View on a desk does only as
 /// its area's selected View, so one behind another tab is refused before
 /// anything is sent; a page on no desk is on no screen for an action to be
 /// drawn over, so every one of them does (PRD lane-desk-pair-view B32).

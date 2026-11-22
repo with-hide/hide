@@ -2756,6 +2756,7 @@ mod tests {
             url: Some("http://localhost:5173/".to_owned()),
             committed: None,
             output: None,
+            external: None,
             unseen: true,
             at_unix_ms: 1,
         };
@@ -2763,10 +2764,8 @@ mod tests {
             .await
             .err()
             .expect("no window, no picture");
-        assert!(
-            !reason.is_empty(),
-            "the refusal names its reason for the log"
-        );
+        // The phone says why: no desktop app is open to draw the page.
+        assert_eq!(reason, "no_window");
     }
 
     #[tokio::test]
