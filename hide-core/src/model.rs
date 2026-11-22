@@ -7050,6 +7050,10 @@ pub enum MergeQueuePlace {
     NotQueued,
     /// From 1.
     At(u32),
+    /// The host has no merge queue Hide reads (gitlab.com's merge trains),
+    /// so no pull request waits on a place: told apart from `Unknown`,
+    /// which leaves a pull request unjudged.
+    Unsupported,
 }
 
 /// The questions a project's pull request read asks beside the list itself

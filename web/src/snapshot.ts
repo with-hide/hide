@@ -517,7 +517,7 @@ export type PullRequestWork = {
   /** Disjoint counts from the open head's GitHub rollup; absent until read. */
   check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
-  queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
+  queue: { state: "unknown" | "not_queued" | "unsupported" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
   /** Each reviewer and where they stand, approvals and change requests first; null while unknown (never "nobody"). Settled pull requests have none (PRD pr-review-status). */
   reviewers?: PrReviewer[] | null;

@@ -31,7 +31,7 @@ use crate::code_host::{CardRead, DueRead, HostFailure, HostReads, Place, Reposit
 use crate::model::{
     GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, MergeQueuePlace,
     MergeState, PR_REVIEWER_LIMIT, PartRead, PrCardFile, PrCardThread, PrCheckCounts,
-    PrFailedCheck, PrReviewer, PrReviewerState, PullRequestBadge, PullRequestChecks,
+    PrFailedCheck, PrReviewer, PrReviewerState, PullRequestChecks,
     PullRequestSnapshot, PullRequestWork, RepositoryIdentity, ReviewAsk, ReviewDecision,
     ReviewRequest, ReviewRequestKind,
 };
@@ -326,7 +326,6 @@ struct Interaction {
 
 #[derive(Deserialize)]
 struct Pipeline {
-    sha: Option<String>,
     status: String,
     #[serde(default)]
     jobs: Option<Connection<Job>>,
@@ -461,7 +460,7 @@ fn pull_request(
         _ => "OPEN",
     };
     let checks = if open {
-        Checks::of(listed.head_pipeline.as_ref(), head_oid.as_deref())
+        Checks::of(listed.head_pipeline.as_ref())
     } else {
         Checks {
             verdict: head_oid
@@ -499,11 +498,12 @@ fn pull_request(
         reviewers: reviewers.map(|(reviewers, _)| reviewers),
         ..PullRequestWork::default()
     };
+    let verdict = checks.verdict;
     checks.apply(&mut work);
     Ok(PullRequestSnapshot {
         closing_issues: Vec::new(),
         title: listed.title,
-        checks: checks.verdict,
+        checks: verdict,
         number,
         head_branch: listed.source_branch,
         base_branch: listed.target_branch,
@@ -570,20 +570,17 @@ pub(crate) fn pipeline_verdict(status: Option<&str>) -> PullRequestChecks {
 }
 
 impl Checks {
-    fn of(pipeline: Option<&Pipeline>, head: Option<&str>) -> Self {
+    /// `headPipeline` is gitlab.com's own pipeline for the merge request's
+    /// head: one whose commit or source commit is the head, so a merged
+    /// results pipeline, which runs on a merge commit of its own, is the
+    /// head's too. Its commit is therefore not compared with the head here.
+    fn of(pipeline: Option<&Pipeline>) -> Self {
         let Some(pipeline) = pipeline else {
             return Self {
                 verdict: PullRequestChecks::None,
                 ..Self::default()
             };
         };
-        // A pipeline of an older head says nothing of this one's checks.
-        if pipeline.sha.as_deref() != head || head.is_none() {
-            return Self {
-                verdict: PullRequestChecks::Unknown,
-                ..Self::default()
-            };
-        }
         let status = pipeline.status.as_str();
         let mut checks = Self {
             verdict: pipeline_verdict(Some(status)),
@@ -616,6 +613,9 @@ impl Checks {
                     });
                 }
                 "SKIPPED" => counts.skipped += 1,
+                // An optional manual job is an action anyone may take, not
+                // a check the pipeline waits on.
+                "MANUAL" if job.allow_failure => counts.skipped += 1,
                 "MANUAL" => {
                     counts.waiting += 1;
                     checks.pending += 1;
@@ -652,17 +652,20 @@ impl Checks {
     }
 }
 
-/// The review that stands on an open merge request: a reviewer's change
-/// request first, then GraphQL `approved`, then review still required
+/// The review that stands on an open merge request: a change request
+/// first, then GraphQL `approved`, then review still required
 /// (`approvalsRequired` above zero); with nothing required and nobody
 /// having approved, none.
 fn review_decision(listed: &MergeRequest) -> Option<ReviewDecision> {
-    let changes_requested = listed.reviewers.as_ref().is_some_and(|reviewers| {
-        reviewers
-            .nodes
-            .iter()
-            .any(|reviewer| review_state(reviewer) == Some("REQUESTED_CHANGES"))
-    });
+    // gitlab.com also says so in the merge status when someone who is no
+    // longer listed as a reviewer asked for changes.
+    let changes_requested = listed.detailed_merge_status.as_deref() == Some("REQUESTED_CHANGES")
+        || listed.reviewers.as_ref().is_some_and(|reviewers| {
+            reviewers
+                .nodes
+                .iter()
+                .any(|reviewer| review_state(reviewer) == Some("REQUESTED_CHANGES"))
+        });
     if changes_requested {
         Some(ReviewDecision::ChangesRequested)
     } else if listed.approved == Some(true) {
@@ -957,4 +960,4 @@ fn parse_commit_checks(
 }
 
 #[cfg(test)]
-// mod tests; (scene table tests: next)
+mod tests;
