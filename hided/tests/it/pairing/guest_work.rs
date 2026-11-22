@@ -308,6 +308,17 @@ pub(super) async fn types_at(machine: &Machine, pane: &str, line: &str, grid: (u
             json!({"pane_id": pane, "rows": grid.0, "cols": grid.1, "new_view": true}),
         )
         .await;
+    // As the web shell does (`web/src/terminals.ts`, `sendGrid`): the grid
+    // goes to the core as a resize too, except for another machine's pane
+    // on its host, which its own node sizes from the view through the tap.
+    if !pane.starts_with("guest:") {
+        window
+            .send(
+                "terminal_resize",
+                json!({"pane_id": pane, "rows": grid.0, "cols": grid.1}),
+            )
+            .await;
+    }
     window
         .frame("the pane drawn on the screen", |frame| {
             frame["type"] == "terminal"
