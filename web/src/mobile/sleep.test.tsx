@@ -141,3 +141,30 @@ it("keeps the reply bar for an agent that is awake, and names a refusal that sti
     await unmount();
   }
 });
+
+// Doop 02 and 09: an awake agent's detail says where it stands under its head from the row the phone already has, and while it
+// works the foot of its conversation says it thinks, counted on the phone from its last word; no new frame field carries either.
+it("draws the state strip from the row and a thinking line while the agent works, which goes once it stops", async () => {
+  const now = Date.now();
+  const working = agent({ group: "working", mark: "going", status_code: "working", changed_at_unix_ms: now - 60_000, line: { text: "Reading holder.log", mode: "news", tone: "subtle" } });
+  const { container, serve, unmount } = await openDetail(working);
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", before: null, messages: [
+      { id: 1, who: "you", text: "Compare the logs", truncated: false, at_ms: now - 30_000 },
+      { id: 2, who: "agent", text: "Reading them now.", truncated: false, at_ms: now - 4_000 },
+    ] });
+    const strip = container.querySelector("[data-phone-status-strip]")!;
+    expect(strip.getAttribute("data-phone-status-strip")).toBe("Working");
+    expect(strip.querySelector("[data-phone-status-line]")!.textContent).toBe("Reading holder.log");
+    expect(strip.textContent).toContain("1m");
+    // The thinking line counts from the agent's last word, not the row's older change.
+    expect(container.querySelector('[data-phone-activity="Thinking"]')!.textContent).toBe("Thinking·4s");
+    // The operator's words stand right, in a bubble.
+    expect(container.querySelector('[data-phone-message="you"]')!.className).toContain("items-end");
+    await serve({ type: "agents", groups: [{ group: "done", count: 1, rows: [{ kind: "agent", ...working, group: "done", mark: "done", status_code: "done", changed_at_unix_ms: now }] }], devices: [], interface_language: "en", color_theme: null });
+    expect(container.querySelector("[data-phone-activity]")).toBeNull();
+    expect(container.querySelector("[data-phone-status-strip]")!.getAttribute("data-phone-status-strip")).toBe("Done");
+  } finally {
+    await unmount();
+  }
+});

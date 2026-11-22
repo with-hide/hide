@@ -3,8 +3,8 @@
 // tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 
-import { useMemo } from "react";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
 import { chipWords, missionStalled, missionToneOf } from "../missions";
 import { CLOSED_DIM, PR_LOOK, prCountsSummary, prMarkParts } from "../prMark";
@@ -12,9 +12,9 @@ import { cn } from "../lib/utils";
 import { agentLinks, type AgentLinks } from "./missionModel";
 import { useElapsed } from "../components/elapsed";
 import { StatusMark } from "../components/status-mark";
-import { SubagentLine, SubagentMark, SubagentMoreLine, subagentsOf } from "../components/subagent-row";
+import { SubagentLine, SubagentMoreLine, subagentsOf } from "../components/subagent-row";
 import { Button } from "../components/ui/button";
-import { RowButton } from "../components/ui/row-button";
+import { RowButton, RowOverlayButton } from "../components/ui/row-button";
 import { agentProductName } from "../agentAdapters";
 import { lineText, markWords, rowDimmed } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -23,7 +23,9 @@ import { actOnSleepingSession, openDetail } from "./connection";
 import type { GatheredRow } from "./gather";
 import { hostLink } from "./hosts";
 import { humanTurnText } from "../humanTurn";
-import { AgentHead, DeviceTag, LIST_INSET, PhoneHumanTurn, Place } from "./parts";
+import { AgentStatusMark, AgentTitle, DeviceTag, PhoneHumanTurn, PlaceParts } from "./parts";
+import { ROW_INSET, TwoLineRow } from "./layout";
+import { TreeChipFace } from "../components/tree-chip";
 import { keyTag, type AgentGroup, type GroupRow, type PhoneAgent, type PhoneSleepingSession } from "./protocol";
 import { foldKey, openFold, setChildrenOpen, usePhone } from "./store";
 
@@ -34,7 +36,7 @@ export function GroupRows({ group }: { group: AgentGroup }) {
   const opened = usePhone((s) => s.foldsOpen[key] === true);
   const more = group.more ?? [];
   return (
-    <ul className="divide-y divide-border border-b border-border">
+    <ul>
       {[...group.rows, ...(opened ? more : [])].map((row) => <TopRow key={rowKey(row)} row={row} />)}
       {more.length > 0 && !opened ? (
         <li>
@@ -74,9 +76,10 @@ export function FoldButton({ label, note, onOpen, ...rest }: { label: string; no
  * this phone chose otherwise (B2, B3), and after them the subagents its agent
  * runs inside its own session, as the desktop's opened row lists them: the
  * first five, dimmed and with nothing to press, and the rest as one line
- * (docs/UI_BEHAVIOR.md, Subagents).
+ * (docs/UI_BEHAVIOR.md, Subagents). `nested` is a child's row, whose project
+ * is its parent's.
  */
-function AgentItem({ agent }: { agent: PhoneAgent }) {
+function AgentItem({ agent, nested = false }: { agent: PhoneAgent; nested?: boolean }) {
   const { t } = useInterfaceTranslation();
   const tag = keyTag(agent);
   const kids = agent.children ?? [];
@@ -90,13 +93,12 @@ function AgentItem({ agent }: { agent: PhoneAgent }) {
     <li data-phone-item={tag}>
       {/* Only the row itself dims: its children keep their own state. */}
       <div className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined} data-phone-row={tag}>
-        <AgentRow agent={agent} />
-        <PhoneHumanTurn agent={agent} inset={`${LIST_INSET} pb-md`} />
-        <Descendants agent={agent} count={kids.length + more.length} open={open} onToggle={opens ? () => setChildrenOpen(agent, !open) : null} />
+        <AgentRow agent={agent} nested={nested} chip={<TreeChip agent={agent} open={open} onToggle={opens ? () => setChildrenOpen(agent, !open) : null} />} />
+        <PhoneHumanTurn agent={agent} inset={`${ROW_INSET} pb-md`} />
       </div>
       {opens && open ? (
         <ul className="ml-[calc(var(--size-agent-mark)/2)] border-l border-border pl-md" data-phone-children={tag}>
-          {[...kids, ...(moreOpened ? more : [])].map((child) => <AgentItem key={keyTag(child)} agent={child} />)}
+          {[...kids, ...(moreOpened ? more : [])].map((child) => <AgentItem key={keyTag(child)} agent={child} nested />)}
           {more.length > 0 && !moreOpened ? (
             <li><FoldButton label={t("mobile.more", { count: more.length })} note={null} data-phone-fold={foldKeyOf} onOpen={() => openFold(foldKeyOf)} /></li>
           ) : null}
@@ -109,49 +111,42 @@ function AgentItem({ agent }: { agent: PhoneAgent }) {
 }
 
 /**
- * A parent's pills (asking, working, finished) and `자식 N ● 서브에이전트 M ⌄`,
- * which opens or closes its children and its subagents (B2); a part with none
- * is left out.
+ * The desktop pane header's children chip at the head of a parent's second line (`≡ ● 2 · • 3 ⌄`, operator decision 2026-11-22,
+ * D): the first child's mark, how many children, the subagents after a dot. It opens or closes the children and the subagents
+ * (B2), and its name spells out every count; a parent whose children the list cannot open shows the chip with nothing to press.
  */
-function Descendants({ agent, count, open, onToggle }: { agent: PhoneAgent; count: number; open: boolean; onToggle: (() => void) | null }) {
+function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean; onToggle: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
-  const counts = agent.descendants;
+  const kids = agent.children ?? [];
+  const count = kids.length + (agent.more_children?.length ?? 0);
   const subagents = agent.subagents ?? 0;
-  if (!counts && !onToggle) return null;
-  const pills = (
-    <span className="flex min-w-0 items-center gap-md text-body text-subtle-foreground">
-      {counts?.asking ? <Pill mark="turn" count={counts.asking} words={t("mobile.descendants.asking", { count: counts.asking })} /> : null}
-      {counts?.working ? <Pill mark="going" count={counts.working} words={t("mobile.descendants.working", { count: counts.working })} /> : null}
-      {counts?.done ? <Pill mark="done" count={counts.done} words={t("mobile.descendants.done", { count: counts.done })} /> : null}
+  const counts = agent.descendants;
+  if (count === 0 && subagents === 0 && !counts) return null;
+  const first = kids.find((child) => child.mark !== "unknown") ?? null;
+  const label = [
+    count > 0 ? t("agentSessions.tree.children", { count }) : null,
+    counts?.asking ? t("mobile.descendants.asking", { count: counts.asking }) : null,
+    counts?.working ? t("mobile.descendants.working", { count: counts.working }) : null,
+    counts?.done ? t("mobile.descendants.done", { count: counts.done }) : null,
+    subagents > 0 ? t("agents.subagents.working", { count: subagents }) : null,
+  ].filter(Boolean).join(" · ");
+  const face = (
+    <span className={cn("flex items-center gap-xxs rounded-full border bg-secondary px-sm py-xxs font-normal text-subtle-foreground", counts?.asking ? "border-warning/60" : "border-transparent")}>
+      <TreeChipFace mark={first ? <StatusMark mark={first.mark} human={first.human_turn != null} data-phone-tree-mark={first.mark} /> : null} count={count} subagents={subagents} icon="size-(--size-icon-sm)" />
     </span>
   );
-  if (!onToggle) return <div className={`flex min-h-(--size-touch-target) items-center ${LIST_INSET}`}>{pills}</div>;
-  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
+  if (!onToggle) return <span role="img" aria-label={label} className="flex shrink-0" data-phone-tree-chip={keyTag(agent)}>{face}</span>;
   return (
     <Button
       variant="ghost"
+      aria-label={label}
       aria-expanded={open}
-      className={`h-auto min-h-(--size-touch-target) w-full justify-between gap-sm rounded-none py-xs pr-none text-body font-normal ${LIST_INSET}`}
+      className="pointer-events-auto -my-sm h-auto min-h-(--size-touch-target) shrink-0 px-none py-none text-body hover:bg-transparent"
       data-phone-children-toggle={keyTag(agent)}
       onClick={onToggle}
     >
-      {pills}
-      <span className="flex shrink-0 items-center gap-xs text-subtle-foreground">
-        {count > 0 ? t("mobile.children", { count }) : null}
-        {/* The subagent mark sets the two counts apart; a `·` beside it would read as a second dot. */}
-        {subagents > 0 ? <><SubagentMark /><span data-phone-subagent-count={subagents}>{t("agents.subagents.section", { count: subagents })}</span></> : null}
-        <Chevron aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />
-      </span>
+      {face}
     </Button>
-  );
-}
-
-function Pill({ mark, count, words }: { mark: "turn" | "going" | "done"; count: number; words: string }) {
-  return (
-    <span role="img" aria-label={words} className="flex items-center gap-xs">
-      <StatusMark mark={mark} />
-      <span aria-hidden="true" className="font-mono">{count}</span>
-    </span>
   );
 }
 
@@ -194,8 +189,11 @@ function RowMarks({ links }: { links: AgentLinks }) {
   );
 }
 
-/** The row's own button: it opens the agent, never its children (B2). */
-function AgentRow({ agent }: { agent: PhoneAgent }) {
+/**
+ * The row (Doop 01): its mark, title, the desktop row's marks and the time on the first line; the children chip, the project
+ * and the request or news on the second. The row's press opens the agent; the chip, in front of it, only opens its children (B2).
+ */
+function AgentRow({ agent, nested, chip }: { agent: PhoneAgent; nested: boolean; chip: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const elapsed = useElapsed(agent.changed_at_unix_ms);
   // Opening a row on the phone does not wake it, so the desktop's "wakes when opened" is not said here.
@@ -207,31 +205,38 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
     ...links.missions.map(({ mission }) => `${t("mobile.tab.missions")} ${mission.title}`),
   ];
   const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.tool, agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
+  // A person's turn says itself under the row, with Done (PRD ask-human B19).
+  const line = agent.line && !agent.human_turn ? agent.line : null;
   return (
-    <RowButton
-      aria-label={label}
-      data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
-      className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
-      // The eye row opens on 볼 것; a question, an approval or any other row on the conversation as before (B11).
-      onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id }, agent.mark === "look" ? "looks" : "conversation")}
-    >
-      <span className="flex w-full items-center gap-sm">
-        <span className="min-w-0 flex-1">
-          <AgentHead agent={agent} large={false} />
-        </span>
-        <RowMarks links={links} />
-        <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </span>
-      <Place agent={agent} inset={LIST_INSET} />
-      {/* A person's turn says itself under the row, with Done (PRD ask-human B19). */}
-      {agent.line && !agent.human_turn ? (
-        <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
-          {/* A Mac that predates wait counts sends no `wait_count`; its working descendants are the children count. */}
-          {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line)}
-        </span>
-      ) : null}
-    </RowButton>
+    <div className="relative">
+      <RowOverlayButton
+        aria-label={label}
+        hover={false}
+        data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
+        className="active:bg-accent"
+        // The eye row opens on 볼 것; a question, an approval or any other row on the conversation as before (B11).
+        onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id }, agent.mark === "look" ? "looks" : "conversation")}
+      />
+      <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center py-md">
+        <TwoLineRow
+          lead={<AgentStatusMark agent={agent} />}
+          head={<><AgentTitle agent={agent} /><RowMarks links={links} /></>}
+          end={elapsed}
+          line={
+            <>
+              {chip}
+              <PlaceParts agent={nested ? { ...agent, place: null, project: undefined } : agent} project />
+              {line ? (
+                <span className={cn("min-w-0 flex-1 truncate", LINE_TONE[line.tone])} data-phone-line={line.mode}>
+                  {/* A Mac that predates wait counts sends no `wait_count`; its working descendants are the children count. */}
+                  {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, line)}
+                </span>
+              ) : null}
+            </>
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -251,7 +256,7 @@ export function SleepingRow({ session }: { session: PhoneSleepingSession }) {
         <span className="flex size-(--size-agent-mark) shrink-0 items-center justify-center"><StatusMark mark="asleep" data-phone-mark="asleep" /></span>
         <span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}<span className="sr-only">, {agentProductName(session.agent_kind)}{lineShown ? null : `, ${caption}`}</span></span>
       </div>
-      <div className={`flex min-w-0 items-center justify-between gap-sm ${LIST_INSET}`}>
+      <div className={`flex min-w-0 items-center justify-between gap-sm ${ROW_INSET}`}>
         <span className="min-w-0 break-words text-subhead text-muted-foreground" role={failed ? "status" : undefined}>
           {failed ? t("panes.sleep.requestFailed") : lineShown ? caption : null}
         </span>
@@ -301,25 +306,27 @@ function GatheredAgentRow({ agent, item }: { agent: PhoneAgent; item: GatheredRo
     <RowButton
       aria-label={label}
       data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
-      className={cn("min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
+      className={cn("min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       onClick={open}
     >
-      <span className="flex w-full items-center gap-sm">
-        <span className="min-w-0 flex-1">
-          <AgentHead agent={agent} large={false} />
-        </span>
-        <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </span>
-      <Place agent={agent} inset={LIST_INSET} computer={item.host.name} />
-      {/* A person's turn says what it waits on; its Done is on the row's own computer. */}
-      {turn ? (
-        <span className={`line-clamp-2 ${LIST_INSET} text-body text-warning`} data-phone-line="human_turn">{turn}</span>
-      ) : agent.line ? (
-        <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
-          {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line)}
-        </span>
-      ) : null}
+      <TwoLineRow
+        lead={<AgentStatusMark agent={agent} />}
+        head={<AgentTitle agent={agent} />}
+        end={elapsed}
+        line={
+          <>
+            <PlaceParts agent={agent} project computer={item.host.name} />
+            {/* A person's turn says what it waits on; its Done is on the row's own computer. */}
+            {turn ? (
+              <span className="min-w-0 flex-1 truncate text-warning" data-phone-line="human_turn">{turn}</span>
+            ) : agent.line ? (
+              <span className={cn("min-w-0 flex-1 truncate", LINE_TONE[agent.line.tone])} data-phone-line={agent.line.mode}>
+                {lineText(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line)}
+              </span>
+            ) : null}
+          </>
+        }
+      />
     </RowButton>
   );
 }
@@ -330,18 +337,14 @@ function GatheredSleepingRow({ session, item }: { session: PhoneSleepingSession;
   return (
     <RowButton
       aria-label={[session.title, item.host.name, agentProductName(session.agent_kind), caption].join(", ")}
-      className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
+      className="min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent"
       onClick={() => window.location.assign(hostLink(item.host, undefined, true))}
     >
-      <span className="flex w-full min-w-0 items-center gap-sm">
-        <span className="flex size-(--size-agent-mark) shrink-0 items-center justify-center"><StatusMark mark="asleep" data-phone-mark="asleep" /></span>
-        <span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </span>
-      <span className={`flex min-w-0 items-center gap-sm ${LIST_INSET} text-body text-muted-foreground`}>
-        <DeviceTag label={item.host.name} computer />
-        <span className="min-w-0 truncate">{caption}</span>
-      </span>
+      <TwoLineRow
+        lead={<StatusMark mark="asleep" data-phone-mark="asleep" />}
+        head={<span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}</span>}
+        line={<><DeviceTag label={item.host.name} computer /><span className="min-w-0 truncate text-muted-foreground">{caption}</span></>}
+      />
     </RowButton>
   );
 }

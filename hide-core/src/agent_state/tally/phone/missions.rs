@@ -252,6 +252,12 @@ pub struct PhoneNode {
     /// its worker's row and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work: Option<PhoneWork>,
+    /// When the step last went to work, its start or back from a finish
+    /// (`MissionNode::worked_at_unix_ms`, else its start): the step list's
+    /// `작업 중 · N분` counts from here on the phone. Absent before it
+    /// started and from a core before it, where the line has no time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<u64>,
     /// The agent kind of the node's worker.
     pub worker_agent: Option<String>,
     /// The worker's row in the phone's list, when it has one, so the step opens it (B36).
@@ -468,6 +474,10 @@ struct NodeIn {
     agent_runtime: Option<String>,
     #[serde(default)]
     work: Option<PhoneWork>,
+    #[serde(default)]
+    started_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    worked_at_unix_ms: Option<u64>,
     #[serde(default)]
     worker: Option<WorkerIn>,
     #[serde(default)]
@@ -709,6 +719,7 @@ fn phone_mission(
                 landing: source.landing,
                 agent_runtime: source.agent_runtime,
                 work: source.work,
+                started_at_unix_ms: source.worked_at_unix_ms.or(source.started_at_unix_ms),
                 worker_agent: source.worker.map(|worker| worker.agent),
                 agent: pane.and_then(listed),
                 escalation,
@@ -971,6 +982,39 @@ mod tests {
             "the cause stays on the Mac"
         );
         assert!(!sent.contains("since_unix_ms"), "the phone draws no time");
+    }
+
+    #[test]
+    fn a_step_carries_when_it_went_to_work_and_one_not_started_carries_none() {
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    // Back at work after a finish: its time counts from the return.
+                    node("a", json!({"started_at_unix_ms": 20, "worked_at_unix_ms": 40})),
+                    // A core before the return stamp: its start.
+                    node("b", json!({"started_at_unix_ms": 30})),
+                    node("c", json!({"status": "planned"})),
+                ],
+            )],
+            json!({}),
+        );
+        let missions = projected(&rest);
+        let started: Vec<Option<u64>> = missions.items[0]
+            .nodes
+            .iter()
+            .map(|node| node.started_at_unix_ms)
+            .collect();
+        assert_eq!(started, [Some(40), Some(30), None]);
+        let sent = serde_json::to_value(&missions).unwrap();
+        let unstarted = &sent["items"][0]["nodes"][2];
+        assert!(
+            unstarted.get("started_at_unix_ms").is_none(),
+            "a step not started sends no time, as a core before the field sends none"
+        );
+        assert!(sent.to_string().find("worked_at").is_none());
     }
 
     #[test]

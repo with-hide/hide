@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInterfaceI18n } from "./i18n/instance";
-import { lastResult, nextRunText, recentSpendText, recordText, scheduleText, spendText, whenText } from "./automationWords";
+import { lastResult, lineTime, nextRunText, recentSpendText, recordText, scheduleText, spendText, whenText } from "./automationWords";
 import type { Automation, AutomationRecord } from "./snapshot";
 
 // PRD automations B3, B6, B20, B22: what the table, the detail and the phone
@@ -76,6 +76,17 @@ describe("an automation's words", () => {
   it("folds the times missed while Hide was off into one line", () => {
     const missed: AutomationRecord = { kind: "missed", first_unix_ms: Date.UTC(2026, 10, 18, 1, 0), last_unix_ms: Date.UTC(2026, 10, 18, 23, 0), count: 24, reason: "core_off" };
     expect(recordText(missed, NOW, SEOUL, "ko", ko).text).toBe("어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음");
+  });
+
+  it("says one time missed at its own time, never as a range from that time to itself", () => {
+    // Friday 2026-11-20 09:00 in Seoul, the one time the computer slept through (Doop 16).
+    const once: AutomationRecord = { kind: "missed", first_unix_ms: Date.UTC(2026, 10, 20, 0, 0), last_unix_ms: Date.UTC(2026, 10, 20, 0, 0), count: 1, reason: "asleep" };
+    const later = Date.UTC(2026, 10, 22, 3, 0);
+    expect(recordText(once, later, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "놓침 · 컴퓨터가 잠들어 있었음" });
+    expect(recordText(once, later, SEOUL, "en", en).text).not.toContain("~");
+    expect(whenText(lineTime(once)!, later, SEOUL, "ko", ko)).toBe("금 11-20 09:00");
+    // Several times keep their span in the words and no time of their own.
+    expect(lineTime({ ...once, count: 2, last_unix_ms: Date.UTC(2026, 10, 20, 1, 0) })).toBeNull();
   });
 
   it("takes the newest finished run or skipped time as the last result, never the run going", () => {
