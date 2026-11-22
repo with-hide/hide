@@ -534,7 +534,7 @@ fn each_host_caps_and_clocks_its_own_projects() {
         .map(|(name, _)| name)
         .collect();
     assert_eq!(kept, ["p1", "g1", "p2", "none", "g2"]);
-    let many = (0..70).map(|index| Some(github));
+    let many = (0..70).map(|_| Some(github));
     assert_eq!(BOTH.within_limits(many, |host| *host).len(), 64);
 
     let clock = github.read_clock();

@@ -217,8 +217,10 @@ impl Runtime {
             changed |= project_tasks(
                 workspace,
                 None,
-                public,
-                keeps_issues.get(&workspace.path).copied().flatten(),
+                HostIssues {
+                    public,
+                    keeps_issues: keeps_issues.get(&workspace.path).copied().flatten(),
+                },
                 choice,
                 store,
                 None,
@@ -1901,10 +1903,12 @@ impl Runtime {
             project_tasks(
                 workspace,
                 Some(issues),
-                found
-                    .and_then(|found| found.repository.as_ref())
-                    .and_then(|identity| identity.public),
-                keeps_issues,
+                HostIssues {
+                    public: found
+                        .and_then(|found| found.repository.as_ref())
+                        .and_then(|identity| identity.public),
+                    keeps_issues,
+                },
                 choice,
                 &self.local_issues,
                 Some(target),
@@ -2205,6 +2209,15 @@ fn chain_link(
     }
 }
 
+/// What a project's host says about its issues: whether the repository is
+/// public (`None` until its host said) and whether the host keeps issues at
+/// all (`None` when no registered host reads the project).
+#[derive(Clone, Copy)]
+struct HostIssues {
+    public: Option<bool>,
+    keeps_issues: Option<bool>,
+}
+
 /// A project's task list from the source it reads, and each checkout's task
 /// by its key, for this machine's project (`node` is `None`) and a node's
 /// alike. `issues` is the project's GitHub list when its row does not carry
@@ -2214,8 +2227,7 @@ fn chain_link(
 fn project_tasks(
     workspace: &mut crate::model::WorkspaceSnapshot,
     issues: Option<&crate::issues::ProjectIssuesSnapshot>,
-    public: Option<bool>,
-    keeps_issues: Option<bool>,
+    host: HostIssues,
     choice: Option<&str>,
     store: &Result<crate::local_issues::LocalIssueStore, String>,
     node: Option<&str>,
@@ -2246,12 +2258,12 @@ fn project_tasks(
     }
     if workspace.is_git
         && (issues.repository.is_some()
-            || crate::tasks::source_kind(None, true, keeps_issues, issues, &status)
+            || crate::tasks::source_kind(None, true, host.keeps_issues, issues, &status)
                 == crate::tasks::SourceKind::Github)
     {
         let github = crate::tasks::github_tasks(
             issues,
-            public,
+            host.public,
             &status,
             choice == Some(crate::tasks::GITHUB),
         );

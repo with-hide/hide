@@ -112,6 +112,7 @@ fn run(rows: &mut [SidebarAgentSnapshot], branches: &[(&str, &str)], github: &Gi
             })
         },
         github,
+        crate::code_host::CodeHosts::STANDARD,
         &Default::default(),
         &mut BTreeMap::new(),
         2_000_000,
@@ -615,6 +616,7 @@ fn an_opened_result_rests_until_another_pull_request_settles() {
                 })
             },
             github,
+            crate::code_host::CodeHosts::STANDARD,
             &Default::default(),
             verbs,
             now,
@@ -871,6 +873,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut idle,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &Default::default(),
         &mut verbs,
         10
@@ -879,6 +882,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut idle,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &Default::default(),
         &mut verbs,
         20
@@ -889,6 +893,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut working,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &Default::default(),
         &mut verbs,
         30
@@ -917,6 +922,7 @@ fn a_merged_pull_request_of_a_reused_branch_name_is_not_a_rows_result() {
                 })
             },
             &github(vec![merged.clone()]),
+            crate::code_host::CodeHosts::STANDARD,
             &Default::default(),
             &mut BTreeMap::new(),
             2_000_000,
@@ -1068,6 +1074,7 @@ fn the_card_shows_the_answer_and_the_letters_since_the_request() {
         &mut shown,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &index,
         &mut BTreeMap::new(),
         ASKED + 4_000,
@@ -1132,6 +1139,7 @@ fn a_letters_peer_goes_by_its_registered_name_then_its_title_then_its_runtime() 
         &mut shown,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &crate::delivery::correspondence::Correspondence::of(&ledger),
         &mut BTreeMap::new(),
         ASKED + 1_000,
@@ -1177,6 +1185,7 @@ fn a_working_turn_has_no_answer_and_an_unjudged_one_reads_no_whole() {
         &mut shown,
         |_| None,
         &GithubSnapshot::default(),
+        crate::code_host::CodeHosts::STANDARD,
         &Default::default(),
         &mut BTreeMap::new(),
         ASKED + 10,
