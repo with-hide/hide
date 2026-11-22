@@ -786,10 +786,9 @@ async fn read_outside(
 ) -> Result<Read, &'static str> {
     let control = Arc::clone(mobile.browser_control());
     let (grant, file) = (grant.to_owned(), file.map(str::to_owned));
-    let answer = tokio::task::spawn_blocking(move || {
-        control.external_read(&grant, file.as_deref(), cap)
-    })
-    .await;
+    let answer =
+        tokio::task::spawn_blocking(move || control.external_read(&grant, file.as_deref(), cap))
+            .await;
     let reason = match answer {
         Ok(Ok(Ok(read))) => {
             if refuse_past_cap && read.total > cap {
@@ -912,7 +911,8 @@ async fn chunks(
         Shown::Page => "page",
         Shown::Html => "html",
         // The desktop's own rule for what a Markdown file is, so the two draw alike.
-        _ if hide_host::document::language_for(std::path::Path::new(file_name(view))).as_deref()
+        _ if hide_host::document::language_for(std::path::Path::new(file_name(view)))
+            .as_deref()
             == Some("markdown") =>
         {
             "markdown"
@@ -1682,6 +1682,23 @@ mod tests {
         }
     }
 
+    /// The page reasons a phone is told are the three the operator can act
+    /// on, each the host's or the browser control's own word, and no other.
+    #[test]
+    fn a_page_is_told_only_the_reasons_the_operator_can_act_on() {
+        for (reason, told) in [
+            ("no_window", Some("no_window")),
+            ("window_elsewhere", Some("window_elsewhere")),
+            ("not_drawn", Some("not_drawn")),
+            ("not_loaded", Some("not_drawn")),
+            ("capture_timeout", None),
+            ("browser_control_busy", None),
+            ("display_closed", None),
+        ] {
+            assert_eq!(page_reason(reason), told, "{reason}");
+        }
+    }
+
     /// Doop 10: a file outside every checkout is read through the desktop
     /// window that granted it, now, on each open, and drawn like any other
     /// file; an HTML page has the files of its folder that it names folded
@@ -1738,15 +1755,27 @@ mod tests {
         let frames = answered(&mobile, outside('a', "shot.png", ExternalKind::Image)).await;
         assert_eq!(frames[0]["mode"], "image");
         assert_eq!(frames[0]["total"], PNG.len());
-        assert_eq!(STANDARD.decode(frames[1]["data"].as_str().unwrap()).unwrap(), PNG);
+        assert_eq!(
+            STANDARD
+                .decode(frames[1]["data"].as_str().unwrap())
+                .unwrap(),
+            PNG
+        );
         assert_eq!(frames.last().unwrap()["type"], "look_end");
         // Each open reads again: nothing was kept from the first.
         answered(&mobile, outside('a', "shot.png", ExternalKind::Image)).await;
         let asked = bodies.lock().unwrap().clone();
         assert_eq!(asked.len(), 2);
-        assert_eq!(asked[0], json!({"grant": "a".repeat(32), "file": null, "limit": IMAGE_CAP}));
+        assert_eq!(
+            asked[0],
+            json!({"grant": "a".repeat(32), "file": null, "limit": IMAGE_CAP})
+        );
 
-        for (grant, reason) in [('b', "grant_expired"), ('c', "file_replaced"), ('d', "not_found")] {
+        for (grant, reason) in [
+            ('b', "grant_expired"),
+            ('c', "file_replaced"),
+            ('d', "not_found"),
+        ] {
             let looked = outside(grant, "notes.txt", ExternalKind::Text);
             assert_eq!(state(&answered(&mobile, looked).await), reason, "{grant}");
         }

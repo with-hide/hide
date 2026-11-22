@@ -286,8 +286,9 @@ it("says why a file outside the project cannot be read, with nothing to retry, a
 });
 
 it("says why a page's screen cannot be taken when the operator can act on it: no desktop app, another computer, a page the app has not drawn", async () => {
-  const { container, serve, last, press, unmount } = await openLooks();
+  const { container, serve, last, press, socket, unmount } = await openLooks();
   try {
+    const seen = () => socket.sent.filter((message) => message.type === "look_seen").map((message) => message.view_id);
     for (const [reason, words] of [
       ["no_window", "The Hide app isn't open on the Mac"],
       ["window_elsewhere", "It's on another computer's screen"],
@@ -301,6 +302,8 @@ it("says why a page's screen cannot be taken when the operator can act on it: no
       const body = container.querySelector('[data-phone-look-state="page"]')!;
       expect(body.querySelector("[data-phone-look-address]")!.textContent).toBe("http://localhost:5173/");
       expect(body.querySelector('[role="status"]')!.textContent).toBe(words);
+      // A page with a reason has nothing drawn yet that the Mac could not give later, so it stays unseen; the plain sentence is seen, as before.
+      expect(seen()).toEqual(reason === "a_later_reason" ? ["v4"] : []);
     }
   } finally {
     await unmount();

@@ -29,7 +29,9 @@ use super::{Mobile, now_ms};
 
 /// How long a screenshot may take from the first request to the last byte:
 /// the core's view list and the window's capture, so a window that never
-/// answers ends the phone's refresh instead of holding it.
+/// answers ends the phone's refresh instead of holding it. The window's
+/// answer is bounded sooner, by the browser control's 8 s request, and the
+/// host's capture by its own 5 s (`STILL_WAIT_MS` in `desktop/src/main/browser.ts`).
 const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The key of the checkout caller the phone's reads run as: any letters and

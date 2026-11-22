@@ -499,8 +499,10 @@ impl BrowserControl {
             Window::Core(host) => host,
             Window::Own(_) | Window::Elsewhere(_) => return Err(ELSEWHERE_STILL),
         };
-        Ok(window_bytes(&host, "/display-still", &scope, limit, unavailable())?
-            .map(|(bytes, _)| bytes))
+        Ok(
+            window_bytes(&host, "/display-still", &scope, limit, unavailable())?
+                .map(|(bytes, _)| bytes),
+        )
     }
 
     /// Whether any desktop window is registered, here or on a linked node.
@@ -1138,6 +1140,99 @@ mod tests {
             }
         });
         (endpoint, bodies)
+    }
+
+    /// A window that answers `/display-still` for `browser-a` with a JPEG's
+    /// bytes and for any other display with the host's reason, keeping each
+    /// path and body it was asked with.
+    fn scripted_still_window() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut raw = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                let (path, body) = loop {
+                    let read = stream.read(&mut chunk).unwrap_or(0);
+                    raw.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|n| n.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length || read == 0 {
+                            let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+                            break (path, body.to_owned());
+                        }
+                    }
+                };
+                let body: Value = serde_json::from_str(&body).unwrap();
+                let (kind, bytes) = if body["display_id"] == "browser-a" {
+                    ("application/octet-stream", b"\xff\xd8\xffjpeg".to_vec())
+                } else {
+                    ("application/json", br#"{"failure":"not_drawn"}"#.to_vec())
+                };
+                seen.lock().unwrap().push((path, body));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(&bytes);
+            }
+        });
+        (endpoint, asked)
+    }
+
+    /// A phone's still is asked of this machine's own window for the
+    /// display's checkout and area, and is its bytes or the host's reason.
+    #[test]
+    fn a_phone_still_is_the_own_windows_capture_of_the_display_or_why_not() {
+        let registry = BrowserControl::default();
+        let mut source = source();
+        let mut other = source.views.as_ref().unwrap()[0].clone();
+        other.view_id = "browser-b".into();
+        other.selected = false;
+        source.views.as_mut().unwrap().push(other);
+        // No window registered anywhere: nothing to ask.
+        assert!(registry.display_still(&source, "browser-a", 1024).is_err());
+
+        let (endpoint, asked) = scripted_still_window();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        assert_eq!(
+            registry.display_still(&source, "browser-a", 1024).unwrap(),
+            Ok(b"\xff\xd8\xffjpeg".to_vec())
+        );
+        // A page behind another tab is asked for the same way, and the host's
+        // reason it has none comes back as it was given.
+        assert_eq!(
+            registry.display_still(&source, "browser-b", 1024).unwrap(),
+            Err("not_drawn".to_owned())
+        );
+        // More bytes than the caller's cap is no picture.
+        assert!(registry.display_still(&source, "browser-a", 4).is_err());
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked[0].0, "/display-still");
+        assert_eq!(asked[0].1["display_id"], "browser-a");
+        assert_eq!(asked[0].1["area_id"], "area-a");
+        // A display the checkout does not list is never asked about.
+        assert!(registry.display_still(&source, "browser-z", 1024).is_err());
+        assert_eq!(asked.len(), 3);
     }
 
     #[test]

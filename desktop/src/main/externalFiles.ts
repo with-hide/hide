@@ -298,15 +298,7 @@ export class ExternalFiles {
    */
   inside(id: string, file: string): boolean {
     const held = this.grants.get(id);
-    if (!held) return false;
-    let real = file;
-    try {
-      real = realpathSync.native(file);
-    } catch {
-      // A file that is not there answers 404 inside the folder it names.
-    }
-    const relative = path.relative(held.folder, real);
-    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    return held ? within(held, file) !== null : false;
   }
 
   /**
@@ -330,7 +322,9 @@ export class ExternalFiles {
    * name with `/` between its parts) of a file in its folder that its page
    * names, and the file's whole size: a phone's read, made now each time it
    * opens the agent's View, so nothing is copied or kept (`hided/src/mobile/looks.rs`).
-   * Neither the file nor a folder file may be reached through a link.
+   * A folder file is only an HTML grant's, reached by the rule its desktop
+   * page's files are (`within`, links resolved); the granted file itself must
+   * still be its own physical spelling, so one swapped for a link is refused.
    *
    * The grant is this process's own memory on every system: the host is not
    * sandboxed on macOS (no app-sandbox entitlement, so no security-scoped
@@ -344,8 +338,10 @@ export class ExternalFiles {
     let target = held.real;
     if (file !== null) {
       const parts = file.split("/");
-      if (parts.some((part) => part === "" || part === "." || part === ".." || /[\\\0]/u.test(part))) return { failure: "outside_folder" };
-      target = path.join(held.folder, ...parts);
+      if (held.kind !== "html" || parts.some((part) => part === "" || /[\\\0]/u.test(part))) return { failure: "outside_folder" };
+      const reached = within(held, path.join(held.folder, ...parts));
+      if (reached === null) return { failure: "outside_folder" };
+      target = reached;
     }
     const read = await this.readFile(held, target, (stat) => Math.min(stat.size, limit));
     if ("total" in read) return read;
@@ -395,6 +391,23 @@ export class ExternalFiles {
       await handle.close();
     }
   }
+}
+
+/**
+ * `file` with its links resolved when that is inside the folder of `held`,
+ * else null: the one rule for which of a grant's folder files a page may
+ * read, on the desktop and on a phone. A file that is not there keeps its
+ * own spelling, so its read answers that it is missing.
+ */
+function within(held: Grant, file: string): string | null {
+  let real = file;
+  try {
+    real = realpathSync.native(file);
+  } catch {
+    // Not there: answered as missing inside the folder it names.
+  }
+  const relative = path.relative(held.folder, real);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? real : null;
 }
 
 /** An HTML grant's page session: in memory, never two live grants' at once (PRD outside-path-in-hide B4). */

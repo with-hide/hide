@@ -180,12 +180,26 @@ describe("ExternalFiles", () => {
     expect(await files.readPart("0".repeat(32), null, 1024)).toEqual({ failure: "grant_gone" });
   });
 
-  it.skipIf(process.platform === "win32")("refuses a phone's read of a folder file reached through a link", async () => {
+  it.skipIf(process.platform === "win32")("reads a phone's folder file by the desktop page's rule: a link inside the folder is followed, one out of it is refused", async () => {
     const files = new ExternalFiles(vi.fn());
     const page = file("linked/mock.html", "<p>hi</p>");
+    file("linked/build/assets/app.css", "p{}");
+    fs.symlinkSync(path.join(root, "linked/build/assets"), path.join(root, "linked/assets"));
     fs.symlinkSync(file("linked-secret.txt", "secret"), path.join(root, "linked/leak.txt"));
     const { id } = files.grant(page, "html")!;
-    expect(await files.readPart(id, "leak.txt", 1024)).toEqual({ failure: "not_physical" });
+    expect(await files.readPart(id, "assets/app.css", 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("p{}")), total: 3 });
+    expect(files.inside(id, path.join(root, "linked/assets/app.css"))).toBe(true);
+    expect(await files.readPart(id, "leak.txt", 1024)).toEqual({ failure: "outside_folder" });
+    expect(files.inside(id, path.join(root, "linked/leak.txt"))).toBe(false);
+  });
+
+  it("reads no folder file for a grant that is not a page: an image or text grant reaches its own file alone", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const note = file("notes/todo.md", "# todo");
+    file("notes/secret.md", "secret");
+    const { id } = files.grant(note, "text")!;
+    expect(await files.readPart(id, null, 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("# todo")), total: 6 });
+    expect(await files.readPart(id, "secret.md", 1024)).toEqual({ failure: "outside_folder" });
   });
 
   it("lets an HTML page's files come from its folder alone, links resolved, while the grant lasts (D-03)", () => {
