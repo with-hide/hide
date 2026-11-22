@@ -1,6 +1,7 @@
-// The phone a chapter about answering from the phone puts beside the screen:
-// one agent's conversation as the phone draws it, from the phone's own parts
-// (`MessageItem`, `ActivityLine`, `AskCardView`), standing at the window's
+// The phone a chapter about the phone puts beside the screen: one agent's
+// conversation as the phone draws it, from the phone's own parts
+// (`MessageItem`, `ActivityLine`, `AskCardView`, and for a reply's files
+// `ComposerFiles`, `SentFiles` and the reply bar), standing at the window's
 // foot like a phone held beside the computer. Its presses go to the world as
 // the computer would take them (`world.ts`, `PracticePhoneScreen`); nothing
 // leaves the page, and there is no relay or phone behind it.
@@ -10,7 +11,8 @@ import { AgentLogo } from "../components/agent-logo";
 import { useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { AskCardView } from "../mobile/AskCard";
-import { ActivityLine } from "../mobile/layout";
+import { AttachButton, ComposerFiles, FileNoticeLine } from "../mobile/Attachments";
+import { ActivityLine, Composer } from "../mobile/layout";
 import { MessageItem } from "../mobile/messages";
 import type { CoreEvent, PracticePhoneScreen } from "./world";
 
@@ -31,7 +33,7 @@ export function PracticePhone({ screen, send }: { screen: PracticePhoneScreen; s
       <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden px-lg py-md">
         <ol aria-label={t("mobile.tab.conversation")} className="flex flex-col gap-md">
           {screen.said.map((said, index) => (
-            <MessageItem key={index} message={{ id: index, who: said.who, text: said.text, truncated: false, at_ms: 0 }} timed={false} />
+            <MessageItem key={index} message={{ id: index, who: said.who, text: said.text, truncated: false, at_ms: 0 }} timed={false} files={screen.attached?.[index]} />
           ))}
         </ol>
         {screen.running !== null ? <ActivityLine word={t("mobile.runningCommand")} since={screen.running} clock /> : null}
@@ -49,6 +51,23 @@ export function PracticePhone({ screen, send }: { screen: PracticePhoneScreen; s
           />
         ) : null}
       </div>
+      {screen.reply ? (
+        <div className="px-lg pb-md">
+          <ComposerFiles files={screen.reply.files} onRemove={(id) => send({ kind: "practice_phone_remove", payload: { id } })} onRetry={() => {}} />
+          <FileNoticeLine notice={screen.reply.notice} />
+          <Composer
+            value={screen.reply.text}
+            onChange={() => {}}
+            onSubmit={() => send({ kind: "practice_phone_send", payload: {} })}
+            placeholder={t("mobile.replyPlaceholder")}
+            disabled={false}
+            sendDisabled={!screen.reply.sendable}
+            lines
+            lead={<AttachButton onPick={() => send({ kind: "practice_phone_attach", payload: {} })} disabled={false} />}
+            send={{ "data-phone-send": "true" }}
+          />
+        </div>
+      ) : null}
     </aside>
   );
 }
