@@ -3203,7 +3203,12 @@ pub(super) fn test_mobile_with(
     desktop: Arc<crate::desktop_notices::DesktopNotices>,
 ) -> Arc<Mobile> {
     // These tests drive the phone boundary directly, never a network supervisor.
-    test_mobile_from(directory, gate, tokio::sync::watch::channel(false).1, desktop)
+    test_mobile_from(
+        directory,
+        gate,
+        tokio::sync::watch::channel(false).1,
+        desktop,
+    )
 }
 
 /// `test_mobile` over a core whose opening the test decides (`open`).
