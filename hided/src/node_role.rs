@@ -1896,6 +1896,7 @@ mod tests {
                 release: false,
                 direct: None,
                 relay: None,
+                relay_only: false,
                 wsl: None,
                 device_connect,
             },
