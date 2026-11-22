@@ -1238,6 +1238,38 @@ mod tests {
         assert_eq!(asked.len(), 3);
     }
 
+    /// A page whose only window is a linked node's is `window_elsewhere`,
+    /// answered without asking anything; once this machine has its own
+    /// window, that window is asked instead.
+    #[test]
+    fn a_phone_still_of_a_page_in_a_nodes_window_is_window_elsewhere() {
+        let registry = BrowserControl::default();
+        registry
+            .announce("mini", RemoteHost::detached("mini"), vec![4242])
+            .unwrap();
+        assert_eq!(
+            registry
+                .display_still(&source(), "browser-a", 1024)
+                .unwrap_err()
+                .0,
+            "window_elsewhere"
+        );
+
+        let (endpoint, asked) = scripted_still_window();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        assert_eq!(
+            registry.display_still(&source(), "browser-a", 1024).unwrap(),
+            Ok(b"\xff\xd8\xffjpeg".to_vec())
+        );
+        assert_eq!(asked.lock().unwrap().len(), 1);
+    }
+
     #[test]
     fn a_caller_on_another_machine_is_not_handed_the_cores_own_window_urls() {
         let (endpoint, bodies) = scripted_gateway();
