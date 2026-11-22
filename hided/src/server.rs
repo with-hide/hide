@@ -1460,6 +1460,9 @@ async fn screen_loop(
                             Ok(ClientAction::Automation(event)) => {
                                 crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
                             }
+                            Ok(ClientAction::Access(event)) => {
+                                crate::access_screen::spawn(&state.core, event, device_frames_tx.clone());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -2793,6 +2796,9 @@ enum ClientAction {
     /// A window's call on the automations that waits for the core's answer
     /// (`automation_screen`).
     Automation(Value),
+    /// Settings › Bots' call whose answer carries a made bot's code
+    /// (`access_screen`), from this machine's own window only.
+    Access(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2867,6 +2873,16 @@ fn handle_client_text(
             return Ok(ClientAction::NodeAsk(event));
         }
         Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
+        // A made bot's code lets a program in, so, like a pairing link, it
+        // reaches this machine's own window alone: a linked node's screen
+        // is a window too, but another machine's.
+        Some("access_call") if !own_screen => {
+            return Err(
+                "access_call is for this machine's own window: another machine's screen lists the bots but makes none"
+                    .to_owned(),
+            );
+        }
+        Some("access_call") => return Ok(ClientAction::Access(event)),
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {

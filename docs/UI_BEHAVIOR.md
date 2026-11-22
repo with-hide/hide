@@ -886,7 +886,7 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 
 ### Work an external tool keeps
 
-A bot the operator approved in its own space (자기 공간) in Settings › 봇 starts agents for its own purposes, and while it stays connected in its own space those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
+A bot the operator made or approved in its own space (봇 공간) in Settings › 봇 starts agents for its own purposes, and while it stays connected in its own space those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
 `docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws, with-hide/hide-private `docs/tasks-and-pr-list.md`, The sidebar's 태스크 list, how the 태스크 list draws it, and with-hide/hide-private `docs/missions.md`, A mission a bot conducts, what such a mission gives the operator.
 
 Each bot connected in its own space has a cell of its own on the device rail, after the devices ([Device rail](#device-rail)), and its work is drawn there and in no device's cell (PRD hide-external-control D-45, operator decision 2026-11-14).
@@ -2448,13 +2448,12 @@ Every tile is a button reached with Tab and chosen with Enter or Space, named fo
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents stay on it, and the rail stays.
 
-Each bot (an external tool, Settings › 봇) connected in either mode has a tile after `+`, under a short line, one per bot in the order the bots were approved, and only the bots of this window's core (PRD hide-external-control D-50, D-51; mission-87).
+Each bot (an external tool, Settings › 봇) connected in its own space has a tile after `+`, under a short line, one per bot in the order the bots connected, and only the bots of this window's core (PRD hide-external-control D-50, D-51; mission-87).
+A 전체 bot has no tile: it works as the operator, so its work is in the operator's lists, and Settings › 봇 lists it (operator decision 2026-11-22).
 A bot's tile is the size of a device's and draws the bot's owl on its tile colour, both chosen from its name (`botLook` in `web/src/bots.ts`: one of seven owls and one of seven `--bot-*` colours), so the same bot looks the same on the rail, in Settings, in a menu and on its agents' marks, and never reads as a machine.
-A 전체 bot, which also works in the operator's workspaces, wears a lime ring (`--primary`); a bot in its own space (자기 공간) wears none.
-Its hint is `<name> · 봇 · 전체` or `<name> · 봇 · 자기 공간`, with `봇 차례 N` while something waits on the bot.
+Since every tile is a bot in its own space, the tile marks no mode; its hint is `<name> · 봇 · 봇 공간`, with `봇 차례 N` while something waits on the bot.
 Its one mark is a grey pill (`--muted-foreground`) with the number of what waits on the bot's answer, `9+` from 10, and no Needs You, app badge or notice of the operator's counts it (B39, B41).
-A bot with nothing waiting has no mark, and a 전체 bot never has one, since its work is the operator's and is counted where the operator's is.
-A 전체 bot keeps no cell, so its tile opens Settings › 봇, where its mode is changed; a bot in its own space opens its cell as follows.
+A bot with nothing waiting has no mark; its tile opens its cell as follows.
 Selecting an own-space bot's tile shows the tool's Overview as the center's page, never as a layer over the Workspace, and its cell in the sidebar ([Work an external tool keeps](#work-an-external-tool-keeps)), with This Mac in front under it, so the center no longer keeps This Mac's agent panes as if nothing had changed (PRD hide-external-control D-54, B47) and a tool that leaves Act, and its tile with it, leaves the window on This Mac (B44).
 The selected tile, a device's or a tool's, follows what the center shows: landing on a pane of a tool's agent by any path selects the tool's tile, and landing on any other pane selects that pane's device.
 A device's tile takes the center back to that device's Workspace; from a tool's cell, to the Workspace as the core holds it unless the pane it focuses is the tool's, else to that device's pane the keyboard was in last that no tool keeps, else to the device's Overview, so the press never lands back on the tool's work.
@@ -2807,10 +2806,10 @@ The agent step ends on whichever agent the switcher stopped on and the project s
 The `project` chapter, the project at a glance (`chapters/project.ts`, kept until the Overview flow takes it over), starts on the sidebar's pin: its world lists a second project, the pin waits for the pointer at the start of a project row's buttons, and pressing it (`workspace_pin_set`) moves that project to the top of the list with a line under the pinned ones, as the core lists them; it then opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its count line and its 최근 7일, whose invented cost wears the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) Hide AI on its Memory tab with the project's Memory cards (its rail icon would open the 제안 tab), and ⌘E puts the lane away.
 A tool step ends when the lane shows that tool, whether by its chord or its rail icon, and the closing step when the lane is no longer drawn, by ⌘E or by the tool's ×; the world answers the pin too, and nothing opens from a tile, a row or a file, which the bubbles say.
 
-Flow 8 (봇, `chapters/bots.ts`, since 1.3.0) shows a program outside Hide becoming a bot.
-A practice screen cannot run an outside program, so its world stages the request: `nightly` waits in Settings › 봇 from the start, as it would once it ran `hide access request`, beside `hermes`, already connected as 전체.
-The learner opens Settings (`settings`), its 봇 page, reads the request's owl and the two modes, and approves it; the world answers `access_approve` and `access_mode` as the core does, so the request leaves, the bot is listed in the mode picked and its owl lands on the device rail.
-Settings closed, the rail is read, and a few seconds after the approval (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing or disconnecting is not answered, so the chapter keeps both bots.
+Flow 8 (봇, `chapters/bots.ts`, since 1.3.0) shows an AI outside Hide becoming a bot the learner made.
+The learner opens Settings (`settings`) and its 봇 page, presses 봇 만들기, types the name `nightly` into the make dialog (a step that types into a dialog's field names the button that opens it again, `PracticeTyping.open`, so ⏎ brings back a dialog Esc closed), reads the two modes and makes the bot; the world answers `access_call` as the core does, with an invented code, and the learner copies the sentence for the AI and closes it.
+A practice screen cannot run an outside AI, so its world stages the join: a few seconds after the learner starts waiting (a `wait` step that tells the world it began), the bot leaves 연결 기다리는 봇 and is listed in the mode picked, beside `hermes`, already connected as 전체 with the person in its owl's corner.
+Settings closed, the rail shows `nightly` in its own space and no tile for `hermes`, and a few seconds after the join (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing, disconnecting and a mode change are not answered, so the chapter keeps both bots.
 Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
 
 Flow 7 (집중 모드, `chapters/focus.ts`, new in 1.2.11 and the chapter the What's new window's focus mode feature opens with `체험하기`) is five steps on a project with two agents side by side in one tab, one of them building a small page and having opened it as a View on its desk: `집중 모드 켜기` (the ◧ on that agent's pane head, which only an agent with a View wears, or ⌘., the `pair_view` command) draws its terminal on the left under the band and the page beside it; a look at the band, which says the mode is on and that the page the agent opened comes up beside it by itself; a step that waits about three seconds after the mode was first entered, in which the agent changes the page's heading and the page beside the terminal changes with it (`PracticeWorld.later`, whether or not the learner is still in the mode); `옆 화면 숨기기`, the desk's `✕` or ⌘E, which folds the desk so the terminal takes the width, ⌘E again standing it; and `집중 모드 나가기` (the band's `원래 화면으로` or ⌘. again), which puts both agents back side by side.
@@ -3513,21 +3512,30 @@ Each connected computer that may open this one is told once too: its window show
 ### Settings > Bots
 
 Bots (봇) is a page of Settings' machine group, after Mobile, drawn from the core's `access` section (`web/src/settings/ExternalToolsTab.tsx`, `web/src/externalTools.ts`).
-A bot is a program outside Hide's panes that ran `hide access request --name <name>`, and this page is the only place it is approved: a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command approves, refuses, changes or disconnects a bot.
+A bot is an AI or a program outside Hide's panes that works in Hide under a name, and this page is the only place one is made or approved: a bot waiting or a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command makes, approves, refuses, changes or disconnects a bot.
 Every bot runs on the core's machine, so each line names that machine the way Settings names it.
-Each bot is drawn as its owl on its tile colour, the same as its rail tile, with the lime ring while it is 전체.
+Each bot is drawn as its owl on its tile colour, the same as its rail tile; a 전체 bot's owl wears a small lime square with a person in its lower corner, and a bot in its own space none.
+Making a bot and the bots waiting for their AI are this machine's own window's alone: another machine's view of this one and the phone list the connected bots and make none.
 
-승인 대기 (with its count) leads the page while a request waits, one row per request: the owl the bot will get and the name it asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
-Under them two choices with one line each, 자기 공간 · 자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요 and 전체 · 내가 쓰는 작업공간과 에이전트까지, 연결된 기기 전부에서 다뤄요, with 자기 공간 chosen, the narrower.
-The approve button names the choice, 자기 공간으로 승인 or 전체로 승인, in the secondary grey beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
+봇 만들기, in the secondary grey at the head of 연결된 봇, opens the make dialog: the name the AI will use in Hide (영문·숫자·`. _ -`, 64자까지) with the owl it gets drawn beside the field as it is typed, and the two modes with one line each, 봇 공간 · 봇이 띄운 일은 봇 칸에 따로 모이고, 질문도 봇이 받아요. 내 작업은 못 건드려요 and 전체 · 봇이 띄운 일도 내 목록에 들어오고, 질문은 나에게 와요. 내 작업도 다룰 수 있어요, with 봇 공간 chosen, the narrower.
+만들기 is off until the name is one the core takes; a name the core refuses says why under the field (같은 이름의 봇이 이미 있어요, the 16 bots full, four bots already waiting).
+The core answers with the bot and a one-time code, and the dialog gives way to the sentence for the AI that will use it, `Hide의 <name> 봇으로 일해 주세요. <machine>에서 \`hide access join <code>\` 명령을 실행하고, 연결되면 \`hide guide\`의 Bots 부분을 읽고 그대로 따라 주세요.`, where the machine is the core's by its own name, never This Mac, since the reader is on another machine's screen; 복사 copies it, and the note says 코드는 10분 안에 한 번만 쓸 수 있어요.
+The sentence closes on its own once its bot no longer waits: joined, taken back, or gone with a restart.
+
+연결 기다리는 봇 (with its count) lists the bots made here whose AI has not joined yet, at most four: the owl dimmed, the name with its mode as a pill, and `n분 남음` from the code's expiry; 문장 복사 reads the live code again from the core and copies the sentence, and 취소 takes the bot back.
+A bot whose code ran out keeps its row and its name, holds none of the 16 places, and says 코드 만료 with 새 코드, which opens the sentence with a new code and ten more minutes.
+The bot moves to 연결된 봇 when its AI runs `hide access join` with the code; the codes live in the daemon's memory only, so a restart drops the bots still waiting.
+
+승인 대기 (with its count) lists the requests a program put up itself with `hide access request --name <name>`, one row per request: the owl the bot will get and the name it asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
+Under them the same two modes, with 봇 공간 chosen; the approve button names the choice, 봇 공간으로 승인 or 전체로 승인, in the secondary grey beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
 
 연결된 봇 · n / 16 lists the approved bots in the order they were approved.
-Each row shows the owl, the bot's name with its mode as a pill (자기 공간 or 전체), and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; 모드 바꾸기, a menu of the two modes whose other one changes the mode from the bot's next command; and 끊기, which disconnects at once with no confirmation.
+Each row shows the owl, the bot's name with its mode as a pill (봇 공간 or 전체), and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; 모드 바꾸기, a menu of the two modes whose other one changes the mode from the bot's next command; and 끊기, which disconnects at once with no confirmation.
 A bot in its own space that started agents or missions also says 끊으면 이 봇이 하던 일은 내 것이 돼요 under its line; a 전체 bot's work is already the operator's, so it does not.
-With no bot connected the list holds 연결된 봇이 없어요 and the command that asks, `hide access request --name <이름>`.
+With no bot connected the list holds 연결된 봇이 없어요 alone.
 
 A row opens nothing: the counts are the whole of what it says about the bot's work, which the operator finds in the bot's cell on the device rail, by ⌘K and by the pane head's bot name (operator decision 2026-11-14).
-The gallery draws the page from invented bots at `?scene=external-tools&state=pending|connected|empty`, and the rail's bot tiles alone at `state=rail`.
+The gallery draws the page from invented bots at `?scene=external-tools&state=pending|connected|invites|empty`, where making a bot answers with an invented code, and the rail's bot tiles alone at `state=rail`.
 
 ### The phone app
 

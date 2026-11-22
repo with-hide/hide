@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::Handle;
+use crate::path::win32_rewrites;
 
 /// The identity a filesystem keeps for a file: the volume it lives on and its
 /// number there. Two names are one file exactly when their ids are equal, and
@@ -266,29 +267,6 @@ pub(crate) fn short_verbatim(path: &str) -> Option<String> {
         format!(r"\\{stripped}")
     } else {
         stripped.to_owned()
-    })
-}
-
-/// Whether Win32 would read a name as something other than itself outside a
-/// `\\?\` path: a trailing space or dot it drops, a device name, or a `/` it
-/// takes as a separator.
-pub(crate) fn win32_rewrites(component: &str) -> bool {
-    component.ends_with([' ', '.']) || component.contains('/') || reserved_device(component)
-}
-
-/// Whether Win32 would read the component as a device (`CON`, `NUL`, `COM1`,
-/// ...), with or without an extension.
-fn reserved_device(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or_default();
-    let upper = stem.trim_end().to_ascii_uppercase();
-    matches!(
-        upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        upper.strip_prefix(prefix).is_some_and(|digit| {
-            matches!(digit, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-                || matches!(digit, "¹" | "²" | "³")
-        })
     })
 }
 

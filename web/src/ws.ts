@@ -3,6 +3,7 @@ import { configureAttachments, receiveAttachmentRefusal } from "./attachments";
 import type { AgentNotice } from "./generated/hided-ws";
 import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./connection";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
+import { receiveAccessResult, refuseWaitingAccessCalls } from "./accessCall";
 import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
 import { movesOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
@@ -134,6 +135,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   const clearSocketState = () => {
     clearPending("socket_closed");
     refuseWaitingAutomationCalls();
+    refuseWaitingAccessCalls();
     resetBrowserComments();
   };
 
@@ -215,6 +217,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       }
       if (frame.type === "automation_result") {
         receiveAutomationResult(frame.payload as unknown as { request_id: string; ok: boolean; value?: unknown; code?: string });
+        return;
+      }
+      if (frame.type === "access_result") {
+        receiveAccessResult(frame.payload as unknown as { request_id: string; ok: boolean; value?: unknown; code?: string });
         return;
       }
       if (frame.type === "file_bytes_error") {

@@ -148,8 +148,14 @@ async function render(rest: SnapshotRest, tool: string | null, screen: Screen = 
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
-  // The rail draws a bot's tile from the core's access section; this one works in its own space.
-  const access = { machine: "local", limit: 16, pending: [], connections: [{ id: TOOL.connection, name: TOOL.name, mode: { kind: "own" as const }, program: "/bin/hoyeon", created_ms: 0, last_used_ms: 0, agent_count: 2, mission_count: 0 }] };
+  // The rail draws a bot's tile from the core's access section: this one works in its own space, and a 전체 bot beside it has no tile.
+  const access = {
+    machine: "local", limit: 16, pending: [], invites: [],
+    connections: [
+      { id: TOOL.connection, name: TOOL.name, mode: { kind: "own" as const }, program: "/bin/hoyeon", created_ms: 0, last_used_ms: 0, agent_count: 2, mission_count: 0 },
+      { id: FULL_BOT, name: "operator-twin", mode: { kind: "all" as const }, program: "/bin/twin", created_ms: 0, last_used_ms: 0, agent_count: 0, mission_count: 0 },
+    ],
+  };
   useShellStore.setState({ rest, agents: rest.navigator?.agents ?? AGENTS, access, connection: "live", focusedPaneId: null });
   useUiStore.setState({ screen, overviewOpen: false });
   sent = [];
@@ -340,6 +346,15 @@ async function coreFocuses(checkoutId: string, paneId: string) {
     useUiStore.getState().setScreen({ kind: "workspace" });
   });
 }
+
+const FULL_BOT = "f011f011f011f011";
+
+// A 전체 bot works as the operator: its work is in the operator's lists, so the rail gives it no tile and Settings › 봇 lists it.
+it("gives a bot in its own space a rail tile and a 전체 bot none", async () => {
+  const container = await render(inFront(snapshot("projects"), "alpha-main", "mine"), null, { kind: "workspace" });
+  expect(container.querySelector(`[data-rail-tool="${TOOL.connection}"]`)).not.toBeNull();
+  expect(container.querySelector(`[data-rail-tool="${FULL_BOT}"]`)).toBeNull();
+});
 
 const railSelected = (container: HTMLElement) => [...container.querySelectorAll('[data-device-rail] [aria-pressed="true"]')].map((tile) => tile.getAttribute("data-rail-tile") ?? `tool:${tile.getAttribute("data-rail-tool")}`);
 const listCell = (container: HTMLElement) => container.querySelector("[data-sidebar-content] [data-tool-cell]")?.getAttribute("data-tool-cell") ?? null;
