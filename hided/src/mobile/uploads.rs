@@ -234,6 +234,33 @@ mod tests {
         assert!(store.commit_reply(1, &[STAGE.to_owned()]).is_ok(), "the arrived stage stays");
     }
 
+    /// The largest chunk a phone sends, with a stage of the longest shape
+    /// and a sequence number past any a 10 MiB file reaches, is one phone
+    /// message: hided reads it rather than dropping it unread.
+    #[test]
+    fn the_largest_chunk_frame_fits_one_phone_message() {
+        let largest = json!({
+            "type": "attach_chunk",
+            "stage": STAGE,
+            "seq": u32::MAX,
+            "data": STANDARD.encode(vec![0xff_u8; CHUNK]),
+        })
+        .to_string();
+        assert!(FILE_BYTES.div_ceil(CHUNK as u64) < u64::from(u32::MAX));
+        assert!(
+            largest.len() <= super::super::phone::MAX_FRAME,
+            "{} bytes",
+            largest.len()
+        );
+        let (_dir, store) = store();
+        send(&store, 1, "attach_begin", json!({"name": "a.bin", "size": CHUNK}));
+        let read: Value = serde_json::from_str(&largest).unwrap();
+        assert_eq!(
+            handle(&store, 1, "attach_chunk", &read).unwrap(),
+            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": u32::MAX}))
+        );
+    }
+
     /// A frame that names no stage of the phone's shape is not an upload's
     /// to answer, and a chunk that is not base64 drops its stage.
     #[test]
