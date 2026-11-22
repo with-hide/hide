@@ -251,7 +251,7 @@ fn unacknowledged_save_keeps_consumers_on_confirmed_repository() {
         runtime.snapshot.ui_state.project_settings_writes[&id].state,
         WriteState::Pending
     );
-    assert_eq!(runtime.github_request().projects[0].repository, None);
+    assert_eq!(asked_repository(&runtime), None);
     let saved = runtime.ui_state_to_save();
     assert!(
         !runtime.acknowledge_project_settings_save(&UiStateSnapshot::default(), true),
@@ -263,13 +263,22 @@ fn unacknowledged_save_keeps_consumers_on_confirmed_repository() {
     );
     assert!(runtime.acknowledge_project_settings_save(&saved, true));
     assert_eq!(
-        runtime.github_request().projects[0].repository.as_deref(),
+        asked_repository(&runtime).as_deref(),
         Some("example/second")
     );
     assert_eq!(
         runtime.snapshot.ui_state.project_settings_writes[&id].state,
         WriteState::Saved
     );
+}
+
+/// The repository the first project's read names, when it names one rather
+/// than the checkout.
+fn asked_repository(runtime: &Runtime) -> Option<String> {
+    runtime.github_request().projects[0]
+        .place
+        .as_ref()
+        .and_then(crate::code_host::Place::stored_name)
 }
 
 #[test]
@@ -286,7 +295,7 @@ fn repository_change_clears_old_success_and_rejects_old_generation() {
                 available: true,
                 ..Default::default()
             },
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
             pull_requests_read: true,
             ..Default::default()
         }],
@@ -370,6 +379,7 @@ fn old_pr_body_answer_cannot_link_same_number_in_new_repository() {
                 ..Default::default()
             },
             pull_requests: vec![crate::model::PullRequestSnapshot {
+                reference: None,
                 number: 3,
                 url: "https://github.com/example/second/pull/3".into(),
                 head_branch: "7-task".into(),

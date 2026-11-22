@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::latest_file::{LatestFile, read_capped};
-use crate::model::{GithubProjectSnapshot, GithubSnapshot};
+use crate::model::{GithubProjectSnapshot, GithubSnapshot, PartRead, RepositoryIdentity};
 
 const SCHEMA_VERSION: u32 = 2;
 
@@ -114,7 +114,41 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
             ));
         }
         project.pull_requests_read = true;
-        project.issues_read = true;
+        // A saved answer's issues read as read, stale like the rest, unless
+        // its host offers none.
+        if project.issues_read != PartRead::Unsupported {
+            project.issues_read = PartRead::Read;
+        }
+        // A file from before the identity was saved names the repository
+        // only in its issues, and every such file is GitHub's.
+        if project.repository.is_none() {
+            project.repository = project
+                .issues
+                .repository
+                .as_deref()
+                .and_then(|name| crate::code_host::CodeHosts::STANDARD.repository(name))
+                .map(|(_, repository)| RepositoryIdentity {
+                    repository,
+                    id: None,
+                    public: None,
+                    default_branch: None,
+                });
+        }
+        // A file from before references were saved: each pull request is the
+        // read repository's, named by its host's unit.
+        if let Some(identity) = &project.repository
+            && let Some(host) = crate::code_host::CodeHosts::STANDARD.of(&identity.repository)
+        {
+            for pull_request in &mut project.pull_requests {
+                if pull_request.reference.is_none() {
+                    pull_request.reference = Some(crate::code_host::change_request(
+                        host.unit(),
+                        identity.repository.clone(),
+                        pull_request.number,
+                    ));
+                }
+            }
+        }
         project.status.stale = true;
         project.status.loading = false;
         projects.push(project);
@@ -195,6 +229,7 @@ mod tests {
                 ..Default::default()
             },
             pull_requests: vec![PullRequestSnapshot {
+                reference: None,
                 closing_issues: Vec::new(),
                 title: "Fix".to_owned(),
                 checks: PullRequestChecks::Failed,
@@ -214,7 +249,7 @@ mod tests {
                 work: Default::default(),
             }],
             pull_requests_read: true,
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
             ..Default::default()
         }
     }
@@ -228,6 +263,49 @@ mod tests {
         GithubStore::new(path).restore()
     }
 
+    /// A file from before references were saved names each pull request by
+    /// the read repository and its number alone; the host's unit names it
+    /// again on the way back, and a saved reference comes back as it was.
+    #[test]
+    fn a_pull_request_saved_before_references_comes_back_with_its_hosts_reference() {
+        let mut sent = answer("/repo", Some(100));
+        sent.repository = crate::code_host::CodeHosts::STANDARD
+            .repository("ghe.example.com/acme/app")
+            .map(|(_, repository)| RepositoryIdentity {
+                repository,
+                id: None,
+                public: None,
+                default_branch: None,
+            });
+        let number = sent.pull_requests[0].number;
+        let restored = saved_then_restored(GithubSnapshot {
+            projects: vec![sent.clone()],
+        })
+        .expect("the file is restored");
+        let reference = restored.projects[0].pull_requests[0]
+            .reference
+            .clone()
+            .expect("named again");
+        assert_eq!(
+            (reference.label, reference.files_url),
+            (
+                format!("#{number}"),
+                format!("https://ghe.example.com/acme/app/pull/{number}/files")
+            )
+        );
+
+        let mut kept = restored.projects[0].clone();
+        kept.status.last_success_at_unix_ms = Some(100);
+        let again = saved_then_restored(GithubSnapshot {
+            projects: vec![kept.clone()],
+        })
+        .expect("the file is restored");
+        assert_eq!(
+            again.projects[0].pull_requests[0].reference,
+            kept.pull_requests[0].reference
+        );
+    }
+
     #[test]
     fn a_saved_answer_comes_back_stale_with_every_pull_request_field() {
         let sent = GithubSnapshot {
@@ -238,7 +316,8 @@ mod tests {
         assert!(project.status.stale && !project.status.loading);
         assert_eq!(project.status.last_success_at_unix_ms, Some(100));
         assert_eq!(project.pull_requests, sent.projects[0].pull_requests);
-        assert!(project.pull_requests_read && project.issues_read);
+        assert!(project.pull_requests_read);
+        assert_eq!(project.issues_read, crate::model::PartRead::Read);
     }
 
     #[test]

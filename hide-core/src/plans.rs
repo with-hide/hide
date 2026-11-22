@@ -861,7 +861,7 @@ pub struct PlanProof {
     /// Where the project's pull requests are read: its checkout on this
     /// machine, or its `owner/name` for a device's; why not, while that name
     /// is not known, which only a pull request's proof needs.
-    pub(crate) github: Result<crate::github::Where, String>,
+    pub(crate) github: Result<crate::code_host::Place, String>,
     /// The session's checkout, as its machine spells it.
     pub(crate) root: String,
     /// The branches the session's plan children were started on.
@@ -924,13 +924,21 @@ impl PlanProof {
                 let head = self
                     .github
                     .as_ref()
-                    .map_err(|reason| crate::github::PrHeadFailure::Unread(reason.clone()));
-                let proof = match head
-                    .and_then(|place| crate::github::pr_head(self.own.as_ref(), place, *number))
-                {
+                    .map_err(|reason| crate::code_host::ChangeHeadFailure::Unread(reason.clone()));
+                let proof = match head.and_then(|place| {
+                    place
+                        .host()
+                        .by_number()
+                        .ok_or_else(|| {
+                            crate::code_host::ChangeHeadFailure::Unread(
+                                "The code host reads no change request by its number".to_owned(),
+                            )
+                        })?
+                        .head(self.own.as_ref(), place, *number)
+                }) {
                     Ok(head) if head.cross_repository => PrProof::NotYours,
                     Ok(head) if branches.contains(&head.branch) => PrProof::Yours {
-                        repo: head.repository,
+                        repo: head.repository.path,
                     },
                     // Any branch of the checkout's own is the session's too,
                     // such as one it opened a pull request from and left:
@@ -947,13 +955,13 @@ impl PlanProof {
                         PROOF_CALL,
                     ) {
                         Ok(_) => PrProof::Yours {
-                            repo: head.repository,
+                            repo: head.repository.path,
                         },
                         Err(hide_node_link::LinkError::Refused(_)) => PrProof::NotYours,
                         Err(error) => unconfirmed(error.to_string()),
                     },
-                    Err(crate::github::PrHeadFailure::Missing) => PrProof::NotYours,
-                    Err(crate::github::PrHeadFailure::Unread(reason)) => unconfirmed(reason),
+                    Err(crate::code_host::ChangeHeadFailure::Missing) => PrProof::NotYours,
+                    Err(crate::code_host::ChangeHeadFailure::Unread(reason)) => unconfirmed(reason),
                 };
                 proofs.prs.insert(*number, proof);
             }
@@ -1859,7 +1867,9 @@ mod tests {
         let proof = PlanProof {
             link: Arc::new(Checkout),
             own: Arc::new(CoreGh),
-            github: Ok(crate::github::Where::Repository("acme/app".into())),
+            github: Ok(crate::code_host::CodeHosts::STANDARD
+                .place_of("acme/app")
+                .unwrap()),
             root: "/work/app".into(),
             branches: BTreeSet::from(["child-branch".to_owned()]),
             asks: Asks {

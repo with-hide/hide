@@ -243,6 +243,7 @@ pub(crate) fn apply<'a>(
     rows: &mut [SidebarAgentSnapshot],
     place: impl Fn(&str) -> Option<RowPlace<'a>>,
     github: &GithubSnapshot,
+    hosts: crate::code_host::CodeHosts,
     letters: &crate::delivery::correspondence::Correspondence,
     verbs: &mut BTreeMap<String, VerbRecord>,
     now_unix_ms: u64,
@@ -253,7 +254,7 @@ pub(crate) fn apply<'a>(
         .collect();
     let mut linked: Vec<Vec<Linked<'_>>> = rows
         .iter()
-        .map(|row| linked_pull_requests(row, place(&row.pane_id), github))
+        .map(|row| linked_pull_requests(row, place(&row.pane_id), github, hosts))
         .collect();
     assign_duty(rows, &mut linked);
     let mut verbs_changed = false;

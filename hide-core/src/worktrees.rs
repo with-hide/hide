@@ -1274,6 +1274,7 @@ mod tests {
             GithubProjectSnapshot, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
         };
         let pull = |head: char, base: &str, badge| PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: String::new(),
             checks: PullRequestChecks::Unknown,

@@ -653,6 +653,7 @@ mod tests {
         checks: PullRequestChecks,
     ) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("PR {number}"),
             checks,

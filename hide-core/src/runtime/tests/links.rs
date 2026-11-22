@@ -520,6 +520,7 @@ fn rejecting_a_child_missed_action_keeps_the_displayed_parent_record_and_retry_t
 
 fn pull_request(number: u32, branch: &str, closes: &[u32]) -> PullRequestSnapshot {
     PullRequestSnapshot {
+        reference: None,
         closing_issues: closes
             .iter()
             .map(|number| IssueReference {
@@ -564,13 +565,10 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {
-                public: None,
                 repository: Some("Acme/Project".into()),
                 issues: Vec::new(),
                 overflow: false,
                 dependencies_failure: None,
-                repository_id: Some("R_kgDO".into()),
-                default_branch: None,
             },
             status: crate::model::GithubStatusSnapshot {
                 available: true,
@@ -579,7 +577,18 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             },
             pull_requests,
             pull_requests_read: read,
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
+            // The identity is read on its own: the record keys on it, not
+            // on the issues answer.
+            repository: Some(crate::model::RepositoryIdentity {
+                repository: crate::code_host::CodeHosts::STANDARD
+                    .repository("Acme/Project")
+                    .unwrap()
+                    .1,
+                id: Some("R_kgDO".into()),
+                public: None,
+                default_branch: None,
+            }),
         });
     runtime
 }

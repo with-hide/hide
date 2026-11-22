@@ -737,7 +737,7 @@ impl Runtime {
                         self.device_github
                             .get(target)
                             .and_then(|github| github.project(root))
-                            .and_then(|project| project.issues.default_branch.clone()),
+                            .and_then(|project| project.default_branch().map(str::to_owned)),
                     ),
                 )
             })

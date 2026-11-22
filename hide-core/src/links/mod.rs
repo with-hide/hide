@@ -458,15 +458,6 @@ pub fn issue_key(key: &str) -> String {
     }
 }
 
-/// `owner/name` from a GitHub pull request address, lower case.
-pub fn repository_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://github.com/")?;
-    let mut parts = rest.split('/');
-    let owner = parts.next().filter(|part| !part.is_empty())?;
-    let name = parts.next().filter(|part| !part.is_empty())?;
-    Some(format!("{owner}/{name}").to_ascii_lowercase())
-}
-
 /// A session's cwd lies in `path` or below it. The filesystem root holds
 /// every folder and so names no project's place: it matches nothing.
 pub fn within(cwd: &str, path: &str) -> bool {

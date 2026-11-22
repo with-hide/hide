@@ -2,13 +2,6 @@ use super::worktree_command::{RemovalConsent, RemovalRefused, RemovalStart};
 use super::*;
 use crate::model::GithubReadOutcome;
 
-/// How long a project's pull requests are trusted before the core asks again.
-const GITHUB_REREAD: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-
-/// How long a project waits after its first failed read; each further failure
-/// in a row doubles it, up to `GITHUB_REREAD`.
-const GITHUB_RETRY_FIRST: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// How old a good answer must be before the operator looking at its project
 /// asks for another (`read_when_looked_at`): a burst of window focuses inside
 /// it adds no read.
@@ -46,18 +39,6 @@ impl GithubClock {
             Self::Waiting { failures } | Self::Answered { failures, .. } => failures,
             Self::NoRemote => 0,
         }
-    }
-}
-
-/// The wait after an answer that came after `failures` failed reads in a row:
-/// the full re-read for a success, else 30 s doubling per failure and stopping
-/// at the full re-read.
-fn github_wait(failures: u32) -> std::time::Duration {
-    match failures {
-        0 => GITHUB_REREAD,
-        failures => GITHUB_RETRY_FIRST
-            .saturating_mul(1u32.checked_shl(failures - 1).unwrap_or(u32::MAX))
-            .min(GITHUB_REREAD),
     }
 }
 
@@ -106,11 +87,6 @@ pub(super) enum LookRead {
     /// no GitHub remote, or its last read failed and its own retry is coming.
     Never,
 }
-
-/// The most local Git projects the core reads GitHub for. Every registered one
-/// is read, and each costs `gh` calls every `GITHUB_REREAD`; a count past this
-/// is a reported shortfall, not a larger number.
-const GITHUB_PROJECT_LIMIT: usize = 64;
 
 /// How long a merge Hide saw succeed reads as merged without GitHub's list
 /// saying so.
@@ -575,7 +551,7 @@ impl Runtime {
                 remote_default: self
                     .github
                     .project(&workspace.path)
-                    .and_then(|project| project.issues.default_branch.clone()),
+                    .and_then(|project| project.default_branch().map(str::to_owned)),
                 bases: self
                     .github
                     .project(&workspace.path)
@@ -1330,12 +1306,12 @@ impl Runtime {
     }
 
     /// Every local Git project, whether or not a screen that shows its pull
-    /// requests is open: the sidebar row is such a screen. At most
-    /// `GITHUB_PROJECT_LIMIT` of them: the project in front first, then those
-    /// a screen named, then the rest, each group in path order. The chosen are
-    /// returned in path order so the request does not move when the projects'
-    /// activity order does; the second value is how many local Git projects
-    /// there are in all.
+    /// requests is open: the sidebar row is such a screen. At most each
+    /// host's `project_limit` of its projects: the project in front first,
+    /// then those a screen named, then the rest, each group in path order.
+    /// The chosen are returned in path order so the request does not move
+    /// when the projects' activity order does; the second value is how many
+    /// local Git projects there are in all.
     pub(super) fn github_projects(&self) -> (Vec<&WorkspaceSnapshot>, usize) {
         let in_front = self
             .focused_local_checkout()
@@ -1360,18 +1336,31 @@ impl Runtime {
             };
             (rank(left), &left.path).cmp(&(rank(right), &right.path))
         });
-        projects.truncate(GITHUB_PROJECT_LIMIT);
+        let mut projects = self.code_hosts.within_limits(projects, |workspace| {
+            self.github_place(None, &workspace.path)
+                .ok()
+                .map(|place| *place.host())
+        });
         projects.sort_by(|left, right| left.path.cmp(&right.path));
         (projects, total)
     }
 
-    pub fn github_request(&self) -> crate::github::GithubRequest {
-        crate::github::GithubRequest {
+    /// The read clock of a local project's host; a project no host reads has
+    /// the slowest registered one.
+    fn read_clock_of(&self, path: &str) -> crate::code_host::ReadClock {
+        self.github_place(None, path).map_or_else(
+            |_| self.code_hosts.unplaced_clock(),
+            |place| place.host().read_clock(),
+        )
+    }
+
+    pub(crate) fn github_request(&self) -> crate::code_host::read::GithubRequest {
+        crate::code_host::read::GithubRequest {
             projects: self
                 .github_projects()
                 .0
                 .into_iter()
-                .map(|workspace| crate::github::GithubProjectRequest {
+                .map(|workspace| crate::code_host::read::GithubProjectRequest {
                     links: workspace
                         .checkouts
                         .iter()
@@ -1390,33 +1379,20 @@ impl Runtime {
                         .take(crate::issues::ISSUE_LIMIT)
                         .collect(),
                     root: PathBuf::from(&workspace.path),
-                    repository: crate::project_settings::get(
-                        &self.snapshot.ui_state.project_settings,
-                        self.node.as_str(),
-                        &workspace.path,
-                    )
-                    .and_then(|record| match record.repository.as_ref() {
-                        Some(crate::project_settings::RepositoryConnection::Repository {
-                            repository,
-                        }) => Some(repository.clone()),
-                        _ => None,
-                    }),
+                    place: self.github_place(None, &workspace.path).ok(),
                     generation: self
                         .github_generations
                         .get(&workspace.path)
                         .copied()
                         .unwrap_or(0),
-                    remotes: self
-                        .catalog_paths
-                        .remotes(&workspace.path)
-                        .map(<[String]>::to_vec),
                 })
                 .collect(),
         }
     }
 
-    /// Asks again for each project whose last answer is `github_wait` old (the full
-    /// re-read after a success, sooner after a failed read),
+    /// Asks again for each project whose last answer is its host's
+    /// [`crate::code_host::ReadClock`] wait old (the full re-read after a
+    /// success, sooner after a failed read),
     /// by moving its generation; the reader re-reads exactly the projects
     /// whose generation moved. A project is not asked again while its last ask
     /// is unanswered, so a slow pass is never overtaken by the next one. A
@@ -1428,14 +1404,14 @@ impl Runtime {
             .into_iter()
             .map(|workspace| workspace.path.clone())
             .collect();
-        let over_limit = total.saturating_sub(GITHUB_PROJECT_LIMIT);
+        let over_limit = total.saturating_sub(paths.len());
         if over_limit != self.github_over_limit {
             self.github_over_limit = over_limit;
             if over_limit > 0 {
                 crate::diagnostic!(serde_json::json!({
                     "component": "github",
                     "kind": "projects.over_limit",
-                    "limit": GITHUB_PROJECT_LIMIT,
+                    "read": paths.len(),
                     "local_git_projects": total,
                     "not_read": over_limit,
                 }));
@@ -1510,7 +1486,7 @@ impl Runtime {
                         .insert(path, GithubClock::Waiting { failures: 0 });
                 }
                 Some(GithubClock::Answered { at, failures, .. })
-                    if now.duration_since(at) >= github_wait(failures) =>
+                    if now.duration_since(at) >= self.read_clock_of(&path).wait(failures) =>
                 {
                     if failures > 0 {
                         crate::diagnostic!(serde_json::json!({
@@ -1518,7 +1494,7 @@ impl Runtime {
                             "kind": "read.retry",
                             "project": path,
                             "attempt": failures,
-                            "delay_ms": github_wait(failures).as_millis(),
+                            "delay_ms": self.read_clock_of(&path).wait(failures).as_millis(),
                         }));
                     }
                     self.github_clock
@@ -1635,7 +1611,7 @@ impl Runtime {
                     project
                         .pull_requests
                         .iter()
-                        .find_map(|pull_request| pull_request_address(&pull_request.url))
+                        .find_map(|pull_request| pull_request.sighting_key(self.code_hosts))
                         .map(|(repository, _)| repository)
                 });
                 (workspace.path.clone(), repository)
@@ -3594,9 +3570,9 @@ impl Runtime {
 
     /// The repositories of node `device_id` read for GitHub, as (root,
     /// `owner/name`) in path order, so the request does not move with the
-    /// focus: those whose `origin` names one, at most `GITHUB_PROJECT_LIMIT`,
-    /// the one in front of the Overview first past it. The second value is
-    /// how many the node names in all.
+    /// focus: those whose `origin` names one, at most each host's
+    /// `project_limit` of its own, the one in front of the Overview first past
+    /// it. The second value is how many the node names in all.
     pub(super) fn node_github_repositories(
         &self,
         device_id: &str,
@@ -3635,7 +3611,11 @@ impl Runtime {
                 .cmp(&(Some(right.0.as_str()) != in_front))
                 .then_with(|| left.cmp(right))
         });
-        repositories.truncate(GITHUB_PROJECT_LIMIT);
+        let mut repositories = self
+            .code_hosts
+            .within_limits(repositories, |(_, repository)| {
+                self.code_hosts.repository(repository).map(|(host, _)| host)
+            });
         repositories.sort();
         (repositories, total)
     }
@@ -3648,9 +3628,9 @@ impl Runtime {
         &mut self,
         device_id: &str,
         now: std::time::Instant,
-    ) -> crate::github::GithubRequest {
+    ) -> crate::code_host::read::GithubRequest {
         let (repositories, total) = self.node_github_repositories(device_id);
-        let over_limit = total.saturating_sub(GITHUB_PROJECT_LIMIT);
+        let over_limit = total.saturating_sub(repositories.len());
         let logged = self
             .device_github_over_limit
             .insert(device_id.to_owned(), over_limit);
@@ -3659,7 +3639,7 @@ impl Runtime {
                 "component": "github",
                 "kind": "projects.over_limit",
                 "target": device_id,
-                "limit": GITHUB_PROJECT_LIMIT,
+                "read": repositories.len(),
                 "device_git_projects": total,
             }));
         }
@@ -3713,10 +3693,15 @@ impl Runtime {
                 let failed = answered
                     .and_then(|github| github.project(&root))
                     .is_some_and(|read| read.read_outcome() == GithubReadOutcome::Failed);
+                let place = self.code_hosts.place_of(&repository);
+                let clock = place.as_ref().map_or_else(
+                    || self.code_hosts.unplaced_clock(),
+                    |place| place.host().read_clock(),
+                );
                 let wait = if failed {
-                    GITHUB_RETRY_FIRST
+                    clock.retry_first
                 } else {
-                    GITHUB_REREAD
+                    clock.reread
                 };
                 let links = links.remove(&root).unwrap_or_default();
                 let read = self
@@ -3732,16 +3717,15 @@ impl Runtime {
                     read.asked_at = now;
                     read.links = links.clone();
                 }
-                crate::github::GithubProjectRequest {
+                crate::code_host::read::GithubProjectRequest {
                     links,
                     root: PathBuf::from(&root),
-                    repository: Some(repository),
+                    place,
                     generation: read.generation,
-                    remotes: None,
                 }
             })
             .collect();
-        crate::github::GithubRequest { projects }
+        crate::code_host::read::GithubRequest { projects }
     }
 
     /// Asks a node's repository at `root` on the next read, whatever its
@@ -3901,7 +3885,7 @@ impl Runtime {
     pub(crate) fn ingest_device_github(
         &mut self,
         device_id: &str,
-        request: &crate::github::GithubRequest,
+        request: &crate::code_host::read::GithubRequest,
         github: crate::model::GithubSnapshot,
     ) -> bool {
         // A late answer for a device removed meanwhile lands nowhere.
@@ -3918,7 +3902,13 @@ impl Runtime {
                 .unwrap_or(0);
             project.generation != generation
                 || !repositories.iter().any(|(path, repository)| {
-                    path == root.as_ref() && project.repository.as_ref() == Some(repository)
+                    path == root.as_ref()
+                        && project
+                            .place
+                            .as_ref()
+                            .and_then(crate::code_host::Place::stored_name)
+                            .as_ref()
+                            == Some(repository)
                 })
         }) {
             return false;
@@ -4153,7 +4143,7 @@ impl Runtime {
                 link_summaries.and_then(|summaries| summaries.get(&workspace.id)),
             );
         }
-        let times = pull_request_times(&github);
+        let times = pull_request_times(&github, self.code_hosts);
         if *self.pull_request_times != times {
             // A sighted address the answer now holds needs no place kept.
             self.github_sighted
@@ -5738,18 +5728,12 @@ pub(super) fn associate_pull_requests(
     changed
 }
 
-/// A pull request's lowercase `owner/name` and number, from its address.
-pub(super) fn pull_request_address(url: &str) -> Option<(String, u64)> {
-    hide_session::pull_request_addresses(url)
-        .into_iter()
-        .next()
-        .map(|(repository, number)| (repository.to_ascii_lowercase(), number))
-}
-
-/// When GitHub made each pull request read, by the address's lowercase
-/// `owner/name` and number.
+/// When its host made each pull request read, by the key a session's
+/// printed address names it by
+/// ([`crate::model::PullRequestSnapshot::sighting_key`]).
 fn pull_request_times(
     github: &crate::model::GithubSnapshot,
+    hosts: crate::code_host::CodeHosts,
 ) -> crate::labels::facts::PullRequestTimes {
     github
         .projects
@@ -5757,7 +5741,7 @@ fn pull_request_times(
         .flat_map(|project| project.pull_requests.iter())
         .filter_map(|pull_request| {
             let created = pull_request.created_at_unix_ms?;
-            Some((pull_request_address(&pull_request.url)?, created))
+            Some((pull_request.sighting_key(hosts)?, created))
         })
         .collect()
 }
@@ -5797,7 +5781,11 @@ fn keep_previous_reads(
         if (project.status.stale || project.status.unavailable_reason.is_some())
             && let Some(previous) = previous.project(&project.root_path)
         {
-            let incomplete = !project.pull_requests_read || !project.issues_read;
+            let issues_missing = matches!(
+                project.issues_read,
+                crate::model::PartRead::NotRead | crate::model::PartRead::Failed
+            );
+            let incomplete = !project.pull_requests_read || issues_missing;
             if !project.pull_requests_read
                 && (previous.pull_requests_read
                     || previous.status.last_success_at_unix_ms.is_some())
@@ -5808,11 +5796,17 @@ fn keep_previous_reads(
                 // the questions that left them unknown stay named beside it.
                 project.status.unread_queries = previous.status.unread_queries.clone();
             }
-            if !project.issues_read
-                && (previous.issues_read || previous.status.last_success_at_unix_ms.is_some())
+            if issues_missing
+                && (previous.issues_read == crate::model::PartRead::Read
+                    || previous.status.last_success_at_unix_ms.is_some())
             {
                 project.issues = previous.issues.clone();
-                project.issues_read = true;
+                project.issues_read = crate::model::PartRead::Read;
+            }
+            // The repository's identity a failed pass could not read is the
+            // one read before: the link record keys on it.
+            if project.repository.is_none() {
+                project.repository = previous.repository.clone();
             }
             if incomplete {
                 project.status.stale = true;

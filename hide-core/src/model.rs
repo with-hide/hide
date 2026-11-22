@@ -6043,7 +6043,7 @@ pub struct PrCardThread {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct PrCardMerge {
     /// The methods the repository allows, in the order Merge offers them.
-    pub methods: Vec<hide_node_link::gh::PrMergeMethod>,
+    pub methods: Vec<hide_node_link::change_request::PrMergeMethod>,
     /// The base branch has a merge queue: the button adds to it.
     pub queue: bool,
     /// The signed-in account may write to the repository.
@@ -6057,7 +6057,7 @@ pub struct PrWriteSnapshot {
     pub action: &'static str,
     /// The head commit the operator was shown.
     pub head: String,
-    pub method: Option<hide_node_link::gh::PrMergeMethod>,
+    pub method: Option<hide_node_link::change_request::PrMergeMethod>,
     /// `working`, `done` or `failed`.
     pub phase: &'static str,
     /// Why it failed, as a code the card words with what to do:
@@ -6937,6 +6937,10 @@ pub struct PullRequestSnapshot {
     /// body or a repository's own script (D-05).
     #[serde(default)]
     pub work: PullRequestWork,
+    /// The pull request as its host's unit named it when it read it; `None`
+    /// only on an answer saved or sent before references were carried.
+    #[serde(default)]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
 }
 
 /// How a pull request stands against its base, GitHub's `mergeStateStatus`
@@ -7148,6 +7152,31 @@ impl PullRequestSnapshot {
         PrState::of(self.badge, self.is_draft, self.checks, self.review)
     }
 
+    /// Its repository and number: the reference its host's unit made, or,
+    /// for an answer from before references were carried, what its host's
+    /// unit reads from its address.
+    pub(crate) fn named(
+        &self,
+        hosts: crate::code_host::CodeHosts,
+    ) -> Option<(crate::code_host::RepositoryRef, u32)> {
+        match &self.reference {
+            Some(reference) => Some((reference.repository.clone(), reference.number)),
+            None => hosts
+                .change_request_at(&self.url)
+                .map(|(_, repository, number)| (repository, number)),
+        }
+    }
+
+    /// The key a session's printed address and the link record name it by:
+    /// its repository's path in lower case and its number, on a server its
+    /// host names ([`crate::code_host::CodeHosts::on_named_server`]).
+    pub(crate) fn sighting_key(&self, hosts: crate::code_host::CodeHosts) -> Option<(String, u64)> {
+        let (repository, number) = self.named(hosts)?;
+        hosts
+            .on_named_server(&repository)
+            .then(|| (repository.path.to_ascii_lowercase(), u64::from(number)))
+    }
+
     /// Something on its head's checks has not finished: they are pending,
     /// or a workflow run or check still runs beside a failure, which ranks
     /// first (`work.checks_running`). The advisory poll watches such a head
@@ -7195,7 +7224,7 @@ impl Serialize for PullRequestSnapshot {
         // The head commit, the repository and the closed time stay off the
         // wire: only the core compares them. The created time is the card's
         // `PR 열림` milestone (PRD pr-card-and-session-record-redesign B5).
-        let mut out = serializer.serialize_struct("PullRequestSnapshot", 15)?;
+        let mut out = serializer.serialize_struct("PullRequestSnapshot", 16)?;
         out.serialize_field("closing_issues", &self.closing_issues)?;
         out.serialize_field("title", &self.title)?;
         out.serialize_field("checks", &self.checks)?;
@@ -7211,6 +7240,7 @@ impl Serialize for PullRequestSnapshot {
         out.serialize_field("updated_at_unix_ms", &self.updated_at_unix_ms)?;
         out.serialize_field("state", &self.state())?;
         out.serialize_field("work", &self.work)?;
+        out.serialize_field("reference", &self.reference)?;
         out.end()
     }
 }
@@ -7246,15 +7276,59 @@ pub struct GithubStatusSnapshot {
     pub unread_queries: Vec<ExtraQuery>,
 }
 
-/// One repository's pull requests as `gh` reported them.
+/// How one part of a project's read stands: the four answers the reader,
+/// the re-read clock and the saved answers tell apart.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartRead {
+    /// The project's host does not offer this part: nothing is asked, and
+    /// nothing is owed.
+    Unsupported,
+    /// No read of it has answered yet.
+    #[default]
+    NotRead,
+    /// Its last read failed; what was read before is kept.
+    Failed,
+    /// It was read; an empty answer is an answer.
+    Read,
+}
+
+/// The repository a project's read named, with what its host says about it.
+/// It is read beside the change requests and the issues and kept when either
+/// fails: the link record and a mission's admission key on it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+pub struct RepositoryIdentity {
+    pub repository: crate::code_host::RepositoryRef,
+    /// The host's own id of the repository, which a rename keeps: the link
+    /// record follows it (PRD link-graph D-35).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Whether the repository is public, `None` until its host said
+    /// (`공개`, PRD overview-device-tasks D-35).
+    #[serde(default)]
+    pub public: Option<bool>,
+    /// The branch the host names as the repository's default, which the
+    /// worktree reader prefers over `origin/HEAD` (PRD git-freshness D-07).
+    #[serde(default)]
+    pub default_branch: Option<String>,
+}
+
+/// One repository's pull requests as its host reported them.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct GithubProjectSnapshot {
     /// Successful component payloads, including a successful empty answer.
     /// Internal reader provenance, not a snapshot wire field.
     #[serde(skip)]
     pub pull_requests_read: bool,
-    #[serde(skip)]
-    pub issues_read: bool,
+    /// Whether the issues were read, failed, are not read yet, or are not a
+    /// part its host offers; saved with the answer, so a restart keeps a
+    /// host without issues apart from one whose issues failed.
+    #[serde(default = "PartRead::saved_before_it_was_kept")]
+    pub issues_read: PartRead,
+    /// The repository the read named; absent before the first read that
+    /// named it.
+    #[serde(default)]
+    pub repository: Option<RepositoryIdentity>,
     pub issues: crate::issues::ProjectIssuesSnapshot,
     /// The repository's main worktree, which is what identifies a project.
     pub root_path: String,
@@ -7272,7 +7346,8 @@ pub struct GithubProjectSnapshot {
 pub enum GithubReadOutcome {
     /// The pull requests and the issues were read.
     Read,
-    /// The pull requests were read and the issues were not. The re-read
+    /// The pull requests were read and the issues were not, though its host
+    /// offers them. The re-read
     /// clock backs off as from a failure, so issues that fail every time
     /// (a fork with its issues turned off) are not asked for every minute,
     /// while the pull requests the answer holds are current.
@@ -7282,6 +7357,14 @@ pub enum GithubReadOutcome {
     /// The repository has no GitHub remote: there is nothing to ask GitHub,
     /// and nothing changes that until its remotes do.
     NoRemote,
+}
+
+impl PartRead {
+    /// What a saved answer from before the part was saved says: only an
+    /// answer whose issues were read was saved then.
+    fn saved_before_it_was_kept() -> Self {
+        Self::Read
+    }
 }
 
 impl GithubReadOutcome {
@@ -7299,12 +7382,22 @@ impl GithubProjectSnapshot {
         !self.status.stale && self.pull_requests_read
     }
 
+    /// The host's own id of the repository the read named.
+    pub(crate) fn repository_id(&self) -> Option<&str> {
+        self.repository.as_ref()?.id.as_deref()
+    }
+
+    /// The branch the repository's host names as its default.
+    pub(crate) fn default_branch(&self) -> Option<&str> {
+        self.repository.as_ref()?.default_branch.as_deref()
+    }
+
     pub fn read_outcome(&self) -> GithubReadOutcome {
         if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
             GithubReadOutcome::NoRemote
         } else if !self.pull_requests_read {
             GithubReadOutcome::Failed
-        } else if !self.issues_read {
+        } else if matches!(self.issues_read, PartRead::NotRead | PartRead::Failed) {
             GithubReadOutcome::IssuesFailed
         } else {
             GithubReadOutcome::Read

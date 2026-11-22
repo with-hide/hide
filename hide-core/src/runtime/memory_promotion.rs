@@ -419,14 +419,16 @@ impl Runtime {
             agent,
             pr_number: promotion.pr_number,
             pr_url: promotion.pr_number.and_then(|number| {
-                crate::issues::IssueReference::parse(
-                    &format!("{}#{number}", promotion.repository.as_deref()?),
-                    None,
-                )
-                .ok()
-                .map(|reference| {
-                    format!("https://github.com/{}/pull/{number}", reference.repository)
-                })
+                // A repository an issue reference could name, as before
+                // hosts; its host's unit makes the address.
+                let name = promotion.repository.as_deref()?;
+                crate::issues::IssueReference::parse(&format!("{name}#{number}"), None).ok()?;
+                let (host, repository) = self.code_hosts.repository(name)?;
+                Some(host.change_request_url(
+                    &repository,
+                    u32::try_from(number).ok()?,
+                    crate::code_host::ChangeRequestPage::Overview,
+                ))
             }),
             target_path: promotion.target_path.clone(),
             github_failure: unconfirmed.flatten(),
@@ -2374,6 +2376,7 @@ pub(super) mod tests {
 
     fn pull_request(number: u32, branch: &str, created: u64) -> crate::model::PullRequestSnapshot {
         crate::model::PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("PR {number}"),
             checks: crate::model::PullRequestChecks::Failed,

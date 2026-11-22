@@ -12,29 +12,33 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 pub(crate) mod card;
+mod commits;
+pub(crate) mod host;
 pub(crate) mod runs;
 
+use crate::code_host::{
+    ChangeHead, ChangeHeadFailure, CreateFailure, DueRead, Feedback, HostFailure, HostReads,
+    MergedHead, Place, SearchTarget, Standing,
+};
 use crate::model::{
-    ExtraQuery, GithubFailureCategory, GithubProjectSnapshot, GithubSnapshot, GithubStatusSnapshot,
-    MergeState, PR_REVIEWER_LIMIT, PrFailedCheck, PrReviewer, PrReviewerState, PullRequestBadge,
-    PullRequestChecks, PullRequestSnapshot, PullRequestWork, ReviewDecision, ReviewRequest,
-    ReviewRequestKind,
+    ExtraQuery, GithubFailureCategory, GithubProjectSnapshot, GithubStatusSnapshot, MergeState,
+    PR_REVIEWER_LIMIT, PartRead, PrFailedCheck, PrReviewer, PrReviewerState, PullRequestBadge,
+    PullRequestChecks, PullRequestSnapshot, PullRequestWork, RepositoryIdentity, ReviewDecision,
+    ReviewRequest, ReviewRequestKind,
 };
 use crate::node_access::NodeLink;
-use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
     AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS,
     REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS,
     VIEWER_LOGIN, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
-use hide_node_link::git::GitCommand;
 use hide_node_link::protocol::Call;
 
 /// The node bounds one `gh` command at fifteen seconds.
@@ -46,60 +50,6 @@ use hide_node_link::gh::{
     MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS,
     PULL_REQUEST_FIELDS, VERSION,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GithubProjectRequest {
-    pub links: Vec<crate::issues::IssueReference>,
-    /// A path inside the repository.
-    pub root: PathBuf,
-    /// The GitHub repository of a checkout on another machine, whose folder
-    /// this machine cannot read: `gh` is asked about it by name, and `root`
-    /// is that machine's path, reported as it is.
-    pub repository: Option<String>,
-    /// Bumped on Git section opening and explicit header refresh.
-    /// Each repository's generation coalesces repeated requests independently.
-    pub generation: u64,
-    /// The repositories the checkout's remotes name, as its node read them
-    /// from the repository's config (`PathIndex::remotes`); `None` when it
-    /// did not say. An empty list is answered "no GitHub remote" with no `gh`
-    /// call.
-    pub remotes: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct GithubRequest {
-    pub projects: Vec<GithubProjectRequest>,
-}
-
-/// Why one project is read on this pass, stated in the read log so "did the
-/// refresh button / section opening actually
-/// re-read?" is answered afterwards without a debugger (G5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ReadReason {
-    First,
-    Generation,
-}
-
-impl ReadReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::First => "first",
-            Self::Generation => "generation",
-        }
-    }
-}
-
-/// Whether a project must be read again, given what the reader last answered
-/// for it: nothing yet or an answer for an older request. An answer for the
-/// same request is reused indefinitely, which
-/// is what keeps one project's trigger from re-reading every other project.
-fn read_reason(cached: Option<u64>, generation: u64) -> Option<ReadReason> {
-    match cached {
-        None => Some(ReadReason::First),
-        Some(read_generation) if read_generation != generation => Some(ReadReason::Generation),
-        Some(_) => None,
-    }
-}
 
 /// A pull request's check rollup as it was last read, by number and head
 /// commit. A settled pull request's checks are not asked for again, so this
@@ -115,21 +65,15 @@ type UnresolvedLinks = std::collections::BTreeMap<crate::issues::IssueReference,
 
 const UNRESOLVED_LINK_RETRY: Duration = Duration::from_secs(60 * 60);
 
-struct CachedProject {
-    generation: u64,
-    repository: Option<String>,
-    answer: GithubProjectSnapshot,
+/// What GitHub's read carries from one answer of a project to the next,
+/// while the project is read at the same place.
+struct Carried {
+    place: Place,
     /// Kept across a failed read, so a pull request that merged while GitHub
     /// was unreachable still has the checks it was last seen with.
     checks: KnownChecks,
     unresolved: UnresolvedLinks,
 }
-
-/// The last answer per requested root, kept on the worker's side so a pass
-/// re-reads only the projects that are due and hands the rest back as they
-/// were. It is the reader's own state, never the runtime's: the runtime
-/// receives a whole snapshot every time and does not know which half is new.
-type Cache = Arc<Mutex<HashMap<PathBuf, CachedProject>>>;
 
 /// The Projects fields of an issue read that GitHub refused, with `gh`'s
 /// reason, for the signed-in token that was refused (`ProjectFields`).
@@ -180,213 +124,106 @@ struct Signed {
     token: u64,
 }
 
-pub struct GithubReader {
-    inner: BackgroundRead<GithubRequest, GithubAnswer>,
+/// GitHub's read of its projects ([`HostReads`]): one `gh` sign-in check
+/// per pass, and what each project carries from one answer to the next.
+#[derive(Default)]
+pub(crate) struct GithubReads {
+    refused: RefusedProjects,
+    carried: HashMap<PathBuf, Carried>,
 }
 
-pub struct GithubAnswer {
-    pub request: GithubRequest,
-    pub snapshot: GithubSnapshot,
-}
-
-impl GithubReader {
-    /// A reader whose `gh` and git run on `node`, the core's own machine,
-    /// where the operator's GitHub login is.
-    pub fn new(node: Arc<dyn NodeLink>) -> Self {
-        let cache: Cache = Arc::default();
-        let refused = RefusedProjects::default();
-        Self {
-            inner: BackgroundRead::on_change(Duration::ZERO, move |request: &GithubRequest| {
-                GithubAnswer {
-                    request: request.clone(),
-                    snapshot: read(&cache, &refused, node.as_ref(), request),
-                }
-            }),
-        }
-    }
-
-    pub fn read_if_due(&mut self, request: GithubRequest) -> Option<GithubAnswer> {
-        self.inner.poll(request)
-    }
-}
-
-fn read(
-    cache: &Mutex<HashMap<PathBuf, CachedProject>>,
-    refused: &RefusedProjects,
-    node: &dyn NodeLink,
-    request: &GithubRequest,
-) -> GithubSnapshot {
-    // The worker is the only thread that touches the cache, and one worker
-    // runs at a time; the lock exists so the closure can be shared with it.
-    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    cache.retain(|root, _| request.projects.iter().any(|project| &project.root == root));
-    let due: Vec<(&GithubProjectRequest, ReadReason)> = request
-        .projects
-        .iter()
-        .filter_map(|project| {
-            let cached = cache
-                .get(&project.root)
-                .filter(|cached| cached.repository == project.repository)
-                .map(|cached| cached.generation);
-            read_reason(cached, project.generation).map(|reason| (project, reason))
-        })
-        .collect();
-    if !due.is_empty() {
-        // One line per pass naming each project read and why, with the
-        // generation that asked for it.
-        crate::diagnostic!(serde_json::json!({
-            "component": "github",
-            "kind": "pull_requests.read",
-            "projects": due
-                .iter()
-                .map(|(project, reason)| serde_json::json!({
-                    "project": project.root.to_string_lossy(),
-                    "generation": project.generation,
-                    "reason": reason.as_str(),
-                }))
-                .collect::<Vec<_>>(),
-        }));
+impl HostReads for GithubReads {
+    fn read(&mut self, node: &dyn NodeLink, due: &[DueRead<'_>]) -> Vec<GithubProjectSnapshot> {
         // One authentication check for the pass, not one per repository: `gh
         // auth status` is the same answer every time and it is the expensive
-        // half of an unauthenticated machine's cost. A pass that reads only
-        // repositories with no GitHub remote asks nothing.
+        // half of an unauthenticated machine's cost.
         let authentication = std::cell::OnceCell::new();
-        for (project, _) in due {
-            let cached = cache
-                .get(&project.root)
-                .filter(|cached| cached.repository == project.repository);
-            let known = cached
-                .map(|cached| cached.checks.clone())
-                .unwrap_or_default();
-            let mut unresolved = cached
-                .map(|cached| cached.unresolved.clone())
-                .unwrap_or_default();
-            let answer = read_root(
-                node,
-                (&authentication, refused),
-                project,
-                &known,
-                &mut unresolved,
-            );
-            let checks = carried_checks(&answer, known);
-            cache.insert(
-                project.root.clone(),
-                CachedProject {
-                    generation: project.generation,
-                    repository: project.repository.clone(),
-                    answer,
+        due.iter()
+            .map(|due| {
+                let carried = match self.carried.remove(due.root) {
+                    Some(carried) if carried.place == *due.place => carried,
+                    _ => Carried {
+                        place: due.place.clone(),
+                        checks: KnownChecks::default(),
+                        unresolved: UnresolvedLinks::new(),
+                    },
+                };
+                let Carried {
+                    place,
                     checks,
-                    unresolved,
-                },
-            );
-        }
+                    mut unresolved,
+                } = carried;
+                let answer = read_root(
+                    node,
+                    (&authentication, &self.refused),
+                    due,
+                    &checks,
+                    &mut unresolved,
+                );
+                let checks = carried_checks(&answer, checks);
+                self.carried.insert(
+                    due.root.to_path_buf(),
+                    Carried {
+                        place,
+                        checks,
+                        unresolved,
+                    },
+                );
+                answer
+            })
+            .collect()
     }
-    let mut projects: Vec<GithubProjectSnapshot> = Vec::new();
-    for project in &request.projects {
-        let Some(cached) = cache.get(&project.root) else {
-            continue;
-        };
-        // Two navigator entries inside one repository share its answer.
-        if cached.answer.root_path.is_empty()
-            || projects
-                .iter()
-                .any(|known| known.root_path == cached.answer.root_path)
-        {
-            continue;
-        }
-        projects.push(cached.answer.clone());
+
+    fn forget(&mut self, asked: &dyn Fn(&Path) -> bool) {
+        self.carried.retain(|root, _| asked(root));
     }
-    GithubSnapshot { projects }
 }
 
-/// One repository's answer, or an empty `root_path` when the path is not
-/// inside a git repository at all and so has nothing to report.
+/// One repository's answer.
 fn read_root(
     node: &dyn NodeLink,
     (authentication, refused): (
         &std::cell::OnceCell<Result<Signed, GhFailure>>,
         &RefusedProjects,
     ),
-    request: &GithubProjectRequest,
+    due: &DueRead<'_>,
     known: &KnownChecks,
     unresolved: &mut UnresolvedLinks,
 ) -> GithubProjectSnapshot {
     let started = Instant::now();
-    let (place, root_path) = match &request.repository {
-        Some(repository) => (
-            Where::Repository(repository.clone()),
-            hide_platform::path::to_wire_lossy(&request.root),
-        ),
-        None => {
-            let Some(main) = main_worktree(node, &request.root) else {
-                return GithubProjectSnapshot::default();
-            };
-            let root_path = hide_platform::path::to_wire_lossy(&main);
-            (Where::Checkout(main), root_path)
-        }
-    };
-    // A checkout whose remotes name no repository `gh` could read is
-    // answered from its node's config, with no `gh` call: asking only
-    // failed, and was asked again forever.
-    let no_remote = request.repository.is_none()
-        && request.remotes.as_deref().is_some_and(<[String]>::is_empty);
-    let (project, warning) = if no_remote {
-        (no_github_remote(root_path), None)
-    } else {
-        match authentication.get_or_init(|| self::authentication(node)) {
-            Err(reason) => (
-                GithubProjectSnapshot {
-                    root_path,
-                    status: GithubStatusSnapshot {
-                        available: false,
-                        unavailable_reason: Some(reason.reason.clone()),
-                        failure_category: Some(reason.category),
-                        ..GithubStatusSnapshot::default()
-                    },
-                    ..GithubProjectSnapshot::default()
-                },
-                None,
-            ),
-            Ok(signed) => read_project(
-                node,
-                &place,
+    let place = host::where_of(due.place);
+    let root_path = due.root_path.to_owned();
+    let (project, warning) = match authentication.get_or_init(|| self::authentication(node)) {
+        Err(reason) => (
+            GithubProjectSnapshot {
                 root_path,
-                (
-                    signed.viewer.as_deref(),
-                    &ProjectFields {
-                        token: signed.token,
-                        refused,
-                    },
-                ),
-                &request.links,
-                known,
-                unresolved,
+                status: GithubStatusSnapshot {
+                    available: false,
+                    unavailable_reason: Some(reason.reason.clone()),
+                    failure_category: Some(reason.category),
+                    ..GithubStatusSnapshot::default()
+                },
+                ..GithubProjectSnapshot::default()
+            },
+            None,
+        ),
+        Ok(signed) => read_project(
+            node,
+            &place,
+            root_path,
+            (
+                signed.viewer.as_deref(),
+                &ProjectFields {
+                    token: signed.token,
+                    refused,
+                },
             ),
-        }
+            due.links,
+            known,
+            unresolved,
+        ),
     };
-    // A failure and an empty answer are both stated, separately: an empty
-    // list with no reason is a repository with no pull requests. A read that
-    // answered without its Projects fields is a success, with the reason
-    // they were not read as its warning.
-    crate::diagnostic!(serde_json::json!({
-        "component": "github",
-        "kind": if project.read_outcome() == crate::model::GithubReadOutcome::NoRemote {
-            "pull_requests.no_remote"
-        } else if project.status.unavailable_reason.is_some() {
-            "pull_requests.failed"
-        } else if project.pull_requests.is_empty() {
-            "pull_requests.empty"
-        } else {
-            "pull_requests.ok"
-        },
-        "generation": request.generation,
-        "project": project.root_path,
-        "available": project.status.available,
-        "pull_requests": project.pull_requests.len(),
-        "duration_ms": started.elapsed().as_millis() as u64,
-        "message": project.status.unavailable_reason,
-        "warning": warning,
-    }));
+    crate::code_host::read::log_answer(due.generation, &project, started, warning);
     project
 }
 
@@ -509,26 +346,40 @@ fn read_project(
     let run = |arguments: &[&str]| gh_at(node, root, arguments);
     // The issues share nothing with the pull requests but the repository, so
     // they are read beside them: read one after the other, the issues held
-    // every pull request's state back by as long again.
-    let (listed, repository, issues) = std::thread::scope(|scope| {
+    // every pull request's state back by as long again. The repository's
+    // identity is read on its own, so a failed issue read never takes it.
+    let (listed, identity, issues) = std::thread::scope(|scope| {
         let issues = scope.spawn(|| read_issues(node, root, Some(fields), links, unresolved));
-        let repository = scope.spawn(|| issue_repository(node, root).map_err(GhFailure::network));
+        let identity = scope.spawn(|| read_identity(node, root));
         let listed = list_pull_requests(&run, known);
-        let repository = repository
+        let identity = identity
             .join()
             .unwrap_or_else(|_| Err(GhFailure::network("gh repository reader failed".to_owned())));
         let listed = listed.map(|mut listed| {
-            judge_head_runs(&run, repository.as_deref(), &mut listed);
+            judge_head_runs(
+                &run,
+                identity
+                    .as_ref()
+                    .map(|identity| identity.repository.path.as_str()),
+                &mut listed,
+            );
             listed.pull_requests
         });
-        (listed, repository, issues.join())
+        (listed, identity, issues.join())
     });
     let issues =
         issues.unwrap_or_else(|_| Err(GhFailure::network("gh issue reader failed".to_owned())));
+    // `OWNER/NAME` as GitHub names it, without its server, which the
+    // repository's own API paths take.
+    let repository = identity
+        .as_ref()
+        .map(|identity| identity.repository.path.clone())
+        .map_err(Clone::clone);
+    let identity = identity.ok();
     let mut pull_requests = match listed {
         Ok(value) => value,
         Err(reason) if reason.category == GithubFailureCategory::NoGithubRemote => {
-            return (no_github_remote(root_path), None);
+            return (crate::code_host::read::no_remote(root_path), None);
         }
         // The issues and the repository's identity were read beside the
         // list and stand on their own: a mission admits a worker on another
@@ -537,14 +388,15 @@ fn read_project(
         // stale (`keep_previous_reads`).
         Err(reason) => {
             let (issues, issues_read, warning) = match issues {
-                Ok((issues, warning)) => (issues, true, warning),
-                Err(_) => (Default::default(), false, None),
+                Ok((issues, warning)) => (issues, PartRead::Read, warning),
+                Err(_) => (Default::default(), PartRead::Failed, None),
             };
             return (
                 GithubProjectSnapshot {
                     root_path,
                     issues,
                     issues_read,
+                    repository: identity,
                     status: failed(reason),
                     ..GithubProjectSnapshot::default()
                 },
@@ -567,9 +419,10 @@ fn read_project(
                 root_path,
                 viewer: viewer.map(str::to_owned),
                 issues,
+                repository: identity,
                 pull_requests,
                 pull_requests_read: true,
-                issues_read: true,
+                issues_read: PartRead::Read,
                 status: GithubStatusSnapshot {
                     available: true,
                     loading: false,
@@ -586,8 +439,10 @@ fn read_project(
             GithubProjectSnapshot {
                 root_path,
                 viewer: viewer.map(str::to_owned),
+                repository: identity,
                 pull_requests,
                 pull_requests_read: true,
+                issues_read: PartRead::Failed,
                 status: GithubStatusSnapshot {
                     unread_queries,
                     ..failed(reason)
@@ -1424,14 +1279,11 @@ fn with_optional_projects<T>(
     }
 }
 
-fn read_issues(
-    node: &dyn NodeLink,
-    root: &Where,
-    fields: Option<&ProjectFields>,
-    links: &[crate::issues::IssueReference],
-    unresolved: &mut UnresolvedLinks,
-) -> Result<(crate::issues::ProjectIssuesSnapshot, Option<String>), GhFailure> {
-    let repository_json = gh_at(
+/// The repository a place names, as GitHub has it: its name, the id a
+/// rename keeps, its server (from its address), whether it is public and its
+/// default branch.
+fn read_identity(node: &dyn NodeLink, root: &Where) -> Result<RepositoryIdentity, GhFailure> {
+    let output = gh_at(
         node,
         root,
         &[
@@ -1441,25 +1293,19 @@ fn read_issues(
             hide_node_link::gh::REPOSITORY_FIELDS,
         ],
     )?;
-    let repository: serde_json::Value = serde_json::from_str(&repository_json)
+    let viewed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|error| GhFailure::network(format!("GitHub repository response: {error}")))?;
+    let text = |field: &str| viewed.get(field).and_then(serde_json::Value::as_str);
     // An empty repository has no default branch, which GitHub answers as
     // `null` or an empty name.
-    let default_branch = repository
+    let default_branch = viewed
         .get("defaultBranchRef")
         .and_then(|reference| reference.get("name"))
         .and_then(serde_json::Value::as_str)
         .filter(|name| !name.is_empty())
         .map(str::to_owned);
-    let repository_id = repository
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
     // `PUBLIC`, `PRIVATE` or `INTERNAL`; anything else is not known (D-35).
-    let public = match repository
-        .get("visibility")
-        .and_then(serde_json::Value::as_str)
-    {
+    let public = match text("visibility") {
         Some("PUBLIC") => Some(true),
         Some("PRIVATE" | "INTERNAL") => Some(false),
         other => {
@@ -1469,6 +1315,38 @@ fn read_issues(
             None
         }
     };
+    let name = text("nameWithOwner")
+        .ok_or_else(|| GhFailure::network("GitHub repository identity is missing".into()))?;
+    // `nameWithOwner` never names the server; the repository's address does.
+    let address = text("url").unwrap_or_default();
+    let repository = address
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split_once('/'))
+        .filter(|(_, path)| path.trim_end_matches('/').eq_ignore_ascii_case(name))
+        .and_then(|(server, _)| host::repository_on(server, name))
+        .ok_or_else(|| {
+            GhFailure::network(format!(
+                "GitHub named repository {name:?} at an address that is not its own: {address:?}"
+            ))
+        })?;
+    Ok(RepositoryIdentity {
+        repository,
+        id: text("id").map(str::to_owned),
+        public,
+        default_branch,
+    })
+}
+
+fn read_issues(
+    node: &dyn NodeLink,
+    root: &Where,
+    fields: Option<&ProjectFields>,
+    links: &[crate::issues::IssueReference],
+    unresolved: &mut UnresolvedLinks,
+) -> Result<(crate::issues::ProjectIssuesSnapshot, Option<String>), GhFailure> {
+    let repository = gh_at(node, root, &["repo", "view", "--json", "nameWithOwner"])?;
+    let repository: serde_json::Value = serde_json::from_str(&repository)
+        .map_err(|error| GhFailure::network(format!("GitHub repository response: {error}")))?;
     let repository = repository
         .get("nameWithOwner")
         .and_then(serde_json::Value::as_str)
@@ -1575,9 +1453,6 @@ fn read_issues(
             issues,
             overflow,
             dependencies_failure,
-            repository_id,
-            default_branch,
-            public,
         },
         warning,
     ))
@@ -1805,29 +1680,9 @@ pub(crate) fn read_linked_issue(
 /// Creates an issue in the repository `place` names (the backlog's add, and
 /// a pull request's 새 이슈 만들기), one of Hide's writes to GitHub with
 /// `write_closing_line` and `close_issue`. `gh issue create` prints the new
-/// issue's URL, which names it.
+/// issue's URL, which names it; why `gh` failed is kept, which the backlog
+/// shows.
 pub(crate) fn create_issue(
-    node: &dyn NodeLink,
-    place: &Where,
-    title: &str,
-    body: &str,
-) -> Result<crate::issues::IssueSnapshot, String> {
-    create_issue_failing(node, place, title, body).map_err(|failure| match failure {
-        CreateFailure::Gh(failure) => failure.reason,
-        CreateFailure::Unreadable(reason) => reason,
-    })
-}
-
-/// Why a create did not name its issue: `gh` failed, or it answered with no
-/// issue Hide could read, which may still have been made.
-#[derive(Clone, Debug)]
-pub(crate) enum CreateFailure {
-    Gh(GhFailure),
-    Unreadable(String),
-}
-
-/// [`create_issue`] keeping why `gh` failed, which the backlog shows.
-pub(crate) fn create_issue_failing(
     node: &dyn NodeLink,
     place: &Where,
     title: &str,
@@ -1838,7 +1693,7 @@ pub(crate) fn create_issue_failing(
         place,
         &["issue", "create", "--title", title, "--body", body],
     )
-    .map_err(CreateFailure::Gh)?;
+    .map_err(|failure| CreateFailure::Host(failure.into()))?;
     let url = output
         .lines()
         .map(str::trim)
@@ -2233,14 +2088,6 @@ impl SearchKind {
     }
 }
 
-/// A project a search may cover: where it lives, and its `owner/name` when
-/// the GitHub reader has already resolved it.
-#[derive(Clone, Debug)]
-pub(crate) struct SearchTarget {
-    pub(crate) root: std::path::PathBuf,
-    pub(crate) repository: Option<String>,
-}
-
 /// Searches pull requests and issues for `query` in each target's
 /// repository, on the caller's worker. A project the reader has not read yet
 /// is resolved here with the same `gh repo view` the reader runs, so the
@@ -2416,19 +2263,12 @@ fn parse_search(
 /// overview-lenses-prs): its body, which a new issue made from it starts
 /// with (B12), and its failed checks and the reviews still asking for
 /// changes, which an agent it is handed to starts from (D-46).
-#[derive(Debug)]
-pub(crate) struct PrFeedback {
-    pub(crate) body: String,
-    pub(crate) failed_checks: Vec<crate::model::PrFailedCheck>,
-    pub(crate) change_requests: Vec<crate::model::PrChangeRequest>,
-}
-
-/// `PrFeedback`, in one `gh pr view` at `place` on the caller's worker.
+/// `Feedback`, in one `gh pr view` at `place` on the caller's worker.
 pub(crate) fn pr_feedback(
     node: &dyn NodeLink,
     place: &Where,
     number: u32,
-) -> Result<PrFeedback, String> {
+) -> Result<Feedback, String> {
     let number = number.to_string();
     let output = gh_at(
         node,
@@ -2442,18 +2282,11 @@ pub(crate) fn pr_feedback(
 /// Where a pull request outside a mission stands (PRD
 /// mission-map-git-criteria B19, B20), in one `gh pr view` at `place` on the
 /// caller's worker.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PrStanding {
-    Open,
-    Closed,
-    Merged,
-}
-
 pub(crate) fn pr_standing(
     node: &dyn NodeLink,
     place: &Where,
     number: u32,
-) -> Result<PrStanding, String> {
+) -> Result<Standing, String> {
     #[derive(serde::Deserialize)]
     struct Viewed {
         state: String,
@@ -2468,9 +2301,9 @@ pub(crate) fn pr_standing(
     let viewed = serde_json::from_str::<Viewed>(&output)
         .map_err(|error| format!("gh pr view returned output Hide could not read: {error}"))?;
     match viewed.state.as_str() {
-        "OPEN" => Ok(PrStanding::Open),
-        "CLOSED" => Ok(PrStanding::Closed),
-        "MERGED" => Ok(PrStanding::Merged),
+        "OPEN" => Ok(Standing::Open),
+        "CLOSED" => Ok(Standing::Closed),
+        "MERGED" => Ok(Standing::Merged),
         other => Err(format!("gh pr view answered the unknown state {other:?}")),
     }
 }
@@ -2479,28 +2312,11 @@ pub(crate) fn pr_standing(
 /// hide-plan-delegate D-19): its head branch, whether that branch is in
 /// another repository, and the repository it is in, read in one `gh pr
 /// view` on the caller's worker.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PrHead {
-    pub(crate) branch: String,
-    pub(crate) cross_repository: bool,
-    /// `owner/name`, from its address.
-    pub(crate) repository: String,
-}
-
-/// Why a pull request's head could not be read.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PrHeadFailure {
-    /// The repository has no pull request of that number.
-    Missing,
-    /// GitHub could not be asked, or answered something Hide cannot read.
-    Unread(String),
-}
-
 pub(crate) fn pr_head(
     node: &dyn NodeLink,
     place: &Where,
     number: u32,
-) -> Result<PrHead, PrHeadFailure> {
+) -> Result<ChangeHead, ChangeHeadFailure> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Viewed {
@@ -2522,39 +2338,32 @@ pub(crate) fn pr_head(
             .to_ascii_lowercase()
             .contains("could not resolve to a pullrequest")
         {
-            PrHeadFailure::Missing
+            ChangeHeadFailure::Missing
         } else {
-            PrHeadFailure::Unread(failure.reason)
+            ChangeHeadFailure::Unread(failure.reason)
         }
     })?;
     let viewed = serde_json::from_str::<Viewed>(&output).map_err(|error| {
-        PrHeadFailure::Unread(format!(
+        ChangeHeadFailure::Unread(format!(
             "gh pr view returned output Hide could not read: {error}"
         ))
     })?;
-    let repository = viewed
-        .url
-        .split_once("/pull/")
-        .and_then(|(base, _)| {
-            let mut names = base.rsplit('/');
-            let name = names.next()?;
-            let owner = names.next()?;
-            (!owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}"))
-        })
+    let repository = host::change_request_of(&viewed.url)
+        .map(|(repository, _)| repository)
         .ok_or_else(|| {
-            PrHeadFailure::Unread(format!(
+            ChangeHeadFailure::Unread(format!(
                 "gh pr view named no repository in {:?}",
                 viewed.url
             ))
         })?;
-    Ok(PrHead {
+    Ok(ChangeHead {
         branch: viewed.head_ref_name,
         cross_repository: viewed.is_cross_repository,
         repository,
     })
 }
 
-fn parse_pr_feedback(output: &str) -> Result<PrFeedback, String> {
+fn parse_pr_feedback(output: &str) -> Result<Feedback, String> {
     #[derive(serde::Deserialize)]
     struct Person {
         login: String,
@@ -2606,7 +2415,7 @@ fn parse_pr_feedback(output: &str) -> Result<PrFeedback, String> {
             body: review.body.trim().to_owned(),
         })
         .collect();
-    Ok(PrFeedback {
+    Ok(Feedback {
         body: viewed.body,
         failed_checks: failed,
         change_requests: requests,
@@ -2805,21 +2614,6 @@ fn parse_linked_issues(output: &str) -> Result<Vec<crate::issues::IssueSnapshot>
         .map_err(GhFailure::network)
 }
 
-/// A repository with nothing GitHub can answer for: an answer, not a failure
-/// (design principle 13), so it is neither stale nor retried, and the screen
-/// draws no GitHub state for it.
-fn no_github_remote(root_path: String) -> GithubProjectSnapshot {
-    GithubProjectSnapshot {
-        root_path,
-        status: GithubStatusSnapshot {
-            available: true,
-            failure_category: Some(GithubFailureCategory::NoGithubRemote),
-            ..GithubStatusSnapshot::default()
-        },
-        ..GithubProjectSnapshot::default()
-    }
-}
-
 fn failed(reason: GhFailure) -> GithubStatusSnapshot {
     GithubStatusSnapshot {
         available: true,
@@ -2900,14 +2694,6 @@ struct GhIssueReference {
     url: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MergedPullRequestProof {
-    pub head_oid: String,
-    /// The branch the pull request merged into. Only `main` proves anything
-    /// about main; a stacked pull request merged into its parent branch does not.
-    pub base_ref: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhMergedPullRequestProof {
@@ -2925,7 +2711,7 @@ pub(crate) fn merged_pull_request_proofs(
     node: &dyn NodeLink,
     place: &Where,
     branch: &str,
-) -> Result<Vec<MergedPullRequestProof>, String> {
+) -> Result<Vec<MergedHead>, String> {
     let listed = gh_at(
         node,
         place,
@@ -2952,12 +2738,12 @@ pub(crate) fn merged_pull_request_proofs(
     parse_merged_pull_request_proofs(&listed)
 }
 
-fn parse_merged_pull_request_proofs(output: &str) -> Result<Vec<MergedPullRequestProof>, String> {
+fn parse_merged_pull_request_proofs(output: &str) -> Result<Vec<MergedHead>, String> {
     let listed: Vec<GhMergedPullRequestProof> = serde_json::from_str(output)
         .map_err(|error| format!("gh pr list returned merge proof Hide could not read: {error}"))?;
     Ok(listed
         .into_iter()
-        .map(|proof| MergedPullRequestProof {
+        .map(|proof| MergedHead {
             head_oid: proof.head_ref_oid,
             base_ref: proof.base_ref_name,
         })
@@ -3221,7 +3007,11 @@ fn count_checks(checks: &[GhCheck]) -> crate::model::PrCheckCounts {
 
 fn project(listed: GhPullRequest) -> Result<PullRequestSnapshot, String> {
     let review = review_decision(listed.review_decision.as_deref());
+    let reference = host::change_request_of(&listed.url).map(|(repository, number)| {
+        crate::code_host::change_request(&host::GITHUB, repository, number)
+    });
     Ok(PullRequestSnapshot {
+        reference,
         closing_issues: listed
             .closing_issues_references
             .into_iter()
@@ -3473,20 +3263,6 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The main worktree of the repository `path` is in, from its node's git;
-/// `None` when `path` is in no repository.
-fn main_worktree(node: &dyn NodeLink, path: &Path) -> Option<PathBuf> {
-    let call = Call::Git {
-        root: path.to_string_lossy().into_owned(),
-        command: GitCommand::CommonDir,
-    };
-    let common: String = crate::node_access::call_as(node, call, GH_CALL_TIMEOUT).ok()?;
-    if common.is_empty() {
-        return None;
-    }
-    PathBuf::from(common).parent().map(Path::to_path_buf)
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct GhFailure {
     pub(crate) category: GithubFailureCategory,
@@ -3507,6 +3283,15 @@ pub(crate) fn close_issue(
         &["issue", "close", &number.to_string(), "--repo", repository],
     )
     .map(|_| ())
+}
+
+impl From<GhFailure> for HostFailure {
+    fn from(failure: GhFailure) -> Self {
+        Self {
+            category: failure.category,
+            reason: failure.reason,
+        }
+    }
 }
 
 impl GhFailure {
@@ -3683,17 +3468,20 @@ mod tests {
 
         /// One pass's read, with what earlier passes learned.
         fn read_with(&self, refused: &RefusedProjects) -> GithubProjectSnapshot {
-            let request = GithubProjectRequest {
-                links: Vec::new(),
-                root: PathBuf::from("/repo"),
-                repository: Some("acme/project".to_owned()),
+            let place = crate::code_host::CodeHosts::STANDARD
+                .place_of("acme/project")
+                .unwrap();
+            let due = DueRead {
+                root: Path::new("/repo"),
+                place: &place,
+                root_path: "/repo",
+                links: &[],
                 generation: 1,
-                remotes: None,
             };
             read_root(
                 self,
                 (&std::cell::OnceCell::new(), refused),
-                &request,
+                &due,
                 &KnownChecks::default(),
                 &mut UnresolvedLinks::new(),
             )
@@ -3742,7 +3530,7 @@ mod tests {
                 ["issue", ..] | ["pr", "list", "--state", "open", ..] => output("[]"),
                 ["api", "user", ..] => output("example-user"),
                 ["repo", ..] => output(
-                    r#"{"nameWithOwner":"acme/project","id":"R1","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#,
+                    r#"{"nameWithOwner":"acme/project","id":"R1","url":"https://github.com/acme/project","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#,
                 ),
                 ["pr", "list", "--state", "all", ..] if self.list_fails => GhAnswer::Failed {
                     category: GithubFailureCategory::NetworkOrRateLimit,
@@ -3772,7 +3560,8 @@ mod tests {
         let current = Repository::new("gh version 2.72.0 (2025-04-30)\n", false);
         let project = current.read();
         assert_eq!(project.status.failure_category, None);
-        assert!(project.pull_requests_read && project.issues_read);
+        assert!(project.pull_requests_read);
+        assert_eq!(project.issues_read, PartRead::Read);
     }
 
     #[test]
@@ -3781,7 +3570,8 @@ mod tests {
         let project = repository.read();
         assert_eq!(project.status.failure_category, None);
         assert_eq!(project.status.unavailable_reason, None);
-        assert!(project.pull_requests_read && project.issues_read);
+        assert!(project.pull_requests_read);
+        assert_eq!(project.issues_read, PartRead::Read);
     }
 
     #[test]
@@ -3802,8 +3592,9 @@ mod tests {
             crate::model::GithubReadOutcome::Failed
         );
         assert!(project.status.unavailable_reason.is_some());
-        assert!(project.issues_read);
-        assert_eq!(project.issues.repository_id.as_deref(), Some("R1"));
+        assert_eq!(project.issues_read, PartRead::Read);
+        assert_eq!(project.repository_id(), Some("R1"));
+        assert_eq!(project.default_branch(), Some("main"));
     }
 
     /// A token without `read:project` is refused the issues' Projects
@@ -3828,7 +3619,8 @@ mod tests {
                 .count()
         };
         let (first, records) = crate::diagnostics::capture(|| repository.read_with(&refused));
-        assert!(first.pull_requests_read && first.issues_read);
+        assert!(first.pull_requests_read);
+        assert_eq!(first.issues_read, PartRead::Read);
         assert_eq!(first.status.unavailable_reason, None);
         assert_eq!(first.status.failure_category, None);
         let outcome: Vec<_> = records
@@ -3859,7 +3651,7 @@ mod tests {
 
         for _ in 0..3 {
             let again = repository.read_with(&refused);
-            assert!(again.issues_read);
+            assert_eq!(again.issues_read, PartRead::Read);
             assert_eq!(again.status.unavailable_reason, None);
         }
         assert_eq!(
@@ -3990,6 +3782,7 @@ mod tests {
                     issues,
                     ..Default::default()
                 },
+                None,
                 &GithubStatusSnapshot::default(),
                 false,
             )
@@ -4236,11 +4029,33 @@ mod tests {
     }
 
     #[test]
-    fn a_project_is_read_first_then_only_when_its_generation_moves() {
-        assert_eq!(read_reason(None, 0), Some(ReadReason::First));
-        assert_eq!(read_reason(Some(0), 1), Some(ReadReason::Generation));
-        assert_eq!(read_reason(Some(1), 1), None);
-        assert_eq!(read_reason(Some(1), 1), None);
+    fn a_listed_pull_request_carries_the_reference_githubs_unit_made_from_its_address() {
+        let parsed = |url: &str| {
+            let listed = listed(7, "b", "OPEN", None, false, "2026-09-01T10:00:00Z")
+                .replace("https://example.invalid/7", url);
+            parse_pull_requests(&format!("[{listed}]"))
+                .unwrap()
+                .remove(0)
+                .reference
+        };
+        let reference = parsed("https://ghe.example.com:8443/Acme/App/pull/7").unwrap();
+        assert_eq!(
+            (
+                reference.repository.authority.as_str(),
+                reference.repository.path.as_str(),
+                reference.number,
+                reference.label.as_str(),
+                reference.checks_url.as_str(),
+            ),
+            (
+                "ghe.example.com:8443",
+                "Acme/App",
+                7,
+                "#7",
+                "https://ghe.example.com:8443/Acme/App/pull/7/checks",
+            )
+        );
+        assert_eq!(parsed("https://example.invalid/7"), None);
     }
 
     fn listed(
@@ -5413,11 +5228,11 @@ mod tests {
         assert_eq!(
             proofs,
             vec![
-                MergedPullRequestProof {
+                MergedHead {
                     head_oid: "branch-head".into(),
                     base_ref: "main".into(),
                 },
-                MergedPullRequestProof {
+                MergedHead {
                     head_oid: "other-head".into(),
                     base_ref: "ci/platform-completion".into(),
                 },
@@ -5662,6 +5477,9 @@ mod tests {
     #[test]
     fn an_unread_project_is_resolved_by_the_search_and_an_unreadable_one_fails_it() {
         let target = |root: &str, repository: Option<&str>| SearchTarget {
+            host: crate::code_host::CodeHosts::STANDARD
+                .host("github")
+                .unwrap(),
             root: root.into(),
             repository: repository.map(str::to_owned),
         };

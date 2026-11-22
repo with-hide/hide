@@ -19,7 +19,7 @@ use crate::session_excerpt::{EVENT_CHARS, Extent, Located, ReadFailure, SESSION_
 use super::super::ledger::SessionRef;
 use super::super::policy;
 use super::reads::{Excerpt, ReadRefused, ReadTools, SearchHit, SessionWindow};
-use crate::github::Where;
+use crate::code_host::{HostFailure, Place};
 use crate::node::NodeId;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -32,8 +32,8 @@ pub struct NodeReads {
     /// The checkout the reads run in, as the node spells it.
     root: String,
     project: hide_project::ProjectIdentity,
-    /// Where `gh` reads the Project's repository, when it is known.
-    github: Option<Where>,
+    /// Where the Project's code host reads its repository, when it is known.
+    github: Option<Place>,
     /// The Project's sessions, read once a run.
     sessions: Option<Vec<ProjectSession>>,
 }
@@ -43,7 +43,7 @@ impl NodeReads {
         node: Arc<dyn NodeLink>,
         root: String,
         project: hide_project::ProjectIdentity,
-        github: Option<Where>,
+        github: Option<Place>,
     ) -> Self {
         Self {
             node,
@@ -86,7 +86,7 @@ pub(crate) struct Checkout {
     pub node: NodeId,
     pub link: Arc<dyn NodeLink>,
     pub root: String,
-    pub github: Option<Where>,
+    pub github: Option<Place>,
 }
 
 /// The read tools of one Project, whose checkout is found the first time a
@@ -192,14 +192,6 @@ fn shown(index: usize, event: &ConversationEvent) -> String {
     )
 }
 
-/// The job a GitHub Actions check's page names
-/// (`…/actions/runs/<run>/job/<job>`).
-fn actions_job(url: &str) -> Option<u64> {
-    let (_, rest) = url.split_once("/actions/runs/")?;
-    let (_, job) = rest.split_once("/job/")?;
-    job.split(['/', '?', '#']).next()?.parse().ok()
-}
-
 impl ReadTools for NodeReads {
     fn session(
         &mut self,
@@ -254,8 +246,8 @@ impl ReadTools for NodeReads {
     }
 
     fn ci_log(&mut self, pr: u32, check: &str) -> Result<Excerpt, ReadRefused> {
-        use hide_node_link::gh::GithubFailureCategory as Category;
-        let unavailable = |error: crate::github::GhFailure| {
+        use crate::model::GithubFailureCategory as Category;
+        let unavailable = |error: HostFailure| {
             ReadRefused::Unavailable(
                 match error.category {
                     Category::NotInstalled => "github_not_installed",
@@ -271,7 +263,11 @@ impl ReadTools for NodeReads {
             .github
             .as_ref()
             .ok_or_else(|| ReadRefused::Unavailable("github_repository_unknown".into()))?;
-        let feedback = crate::github::pr_feedback(&*self.node, github, pr)
+        let feedback = github
+            .host()
+            .handover()
+            .ok_or_else(|| ReadRefused::Unavailable("github_unreadable".into()))?
+            .feedback(&*self.node, github, pr)
             .map_err(|_| ReadRefused::Unavailable("github_unreadable".into()))?;
         let url = feedback
             .failed_checks
@@ -286,10 +282,17 @@ impl ReadTools for NodeReads {
             .ok_or(ReadRefused::NotFound)?
             .url
             .ok_or_else(|| ReadRefused::Unavailable("check_has_no_page".into()))?;
-        let job = actions_job(&url)
+        let logs = github
+            .host()
+            .failed_log()
             .ok_or_else(|| ReadRefused::Unavailable("check_not_on_github_actions".into()))?;
-        let log = crate::github::failed_job_log(&*self.node, github, job).map_err(unavailable)?;
-        let lines: Vec<&str> = log.lines().collect();
+        let job = logs
+            .job_of(&url)
+            .ok_or_else(|| ReadRefused::Unavailable("check_not_on_github_actions".into()))?;
+        let log = logs
+            .failed_log(&*self.node, github, job)
+            .map_err(unavailable)?;
+        let lines: Vec<&str> = log.text.lines().collect();
         let start = lines.len().saturating_sub(policy::CI_LOG_LINES);
         Ok(Excerpt {
             text: lines[start..]
@@ -297,7 +300,7 @@ impl ReadTools for NodeReads {
                 .map(|line| cut(line, policy::READ_LINE_CHARS))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            truncated: start > 0 || log.len() >= hide_node_link::gh::JOB_LOG_TAIL_BYTES,
+            truncated: start > 0 || log.cut,
             span: Some(format!(
                 "last {} lines of the failed steps",
                 lines.len() - start
@@ -384,23 +387,6 @@ impl ReadTools for NodeReads {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_check_page_names_its_actions_job_or_none() {
-        assert_eq!(
-            actions_job("https://github.com/o/r/actions/runs/123/job/456"),
-            Some(456)
-        );
-        assert_eq!(
-            actions_job("https://github.com/o/r/actions/runs/123/job/456?pr=7"),
-            Some(456)
-        );
-        assert_eq!(
-            actions_job("https://app.circleci.com/pipelines/gh/o/r/1"),
-            None
-        );
-        assert_eq!(actions_job("https://github.com/o/r/actions/runs/123"), None);
-    }
-
     fn git(root: &std::path::Path, arguments: &[&str]) {
         let status = std::process::Command::new("git")
             .arg("-C")
@@ -441,7 +427,12 @@ mod tests {
                 device_id: "local".into(),
                 kind: hide_project::ProjectKind::Git,
             },
-            Some(Where::Checkout(root.to_path_buf())),
+            Some(Place::Checkout {
+                host: crate::code_host::CodeHosts::STANDARD
+                    .host("github")
+                    .unwrap(),
+                root: root.to_path_buf(),
+            }),
         );
 
         let file = reads.file("scripts/test.sh", 2, 5).unwrap();

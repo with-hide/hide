@@ -930,7 +930,14 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
     let mut runtime = shared.lock().unwrap();
     let request = runtime.device_github_request(NODE, std::time::Instant::now());
     assert_eq!(request.projects.len(), 1);
-    assert_eq!(request.projects[0].repository.as_deref(), Some("acme/app"));
+    assert_eq!(
+        request.projects[0]
+            .place
+            .as_ref()
+            .and_then(crate::code_host::Place::stored_name)
+            .as_deref(),
+        Some("acme/app")
+    );
     assert_eq!(
         request.projects[0]
             .links
@@ -956,7 +963,8 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
             projects: vec![crate::model::GithubProjectSnapshot {
                 viewer: None,
                 pull_requests_read: true,
-                issues_read: true,
+                issues_read: crate::model::PartRead::Read,
+                repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
                     issues: vec![
@@ -1275,7 +1283,8 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
                 projects: vec![crate::model::GithubProjectSnapshot {
                     viewer: None,
                     pull_requests_read: true,
-                    issues_read: true,
+                    issues_read: crate::model::PartRead::Read,
+                    repository: None,
                     issues: crate::issues::ProjectIssuesSnapshot {
                         repository: Some("acme/app".to_owned()),
                         ..Default::default()
@@ -1646,7 +1655,15 @@ fn a_device_this_core_dials_has_its_pull_requests_read_with_this_machine_s_login
         request
             .projects
             .iter()
-            .map(|project| (project.root.clone(), project.repository.clone()))
+            .map(|project| {
+                (
+                    project.root.clone(),
+                    project
+                        .place
+                        .as_ref()
+                        .and_then(crate::code_host::Place::stored_name),
+                )
+            })
             .collect::<Vec<_>>(),
         [(
             std::path::PathBuf::from(&repo.root),
@@ -2097,7 +2114,8 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
             projects: vec![crate::model::GithubProjectSnapshot {
                 viewer: None,
                 pull_requests_read: true,
-                issues_read: true,
+                issues_read: crate::model::PartRead::Read,
+                repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
                     issues: vec![github_issue("acme/app", 12, "Fix login")],
@@ -2110,6 +2128,7 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
                     ..Default::default()
                 },
                 pull_requests: vec![crate::model::PullRequestSnapshot {
+                    reference: None,
                     closing_issues: Vec::new(),
                     title: "Fix login".to_owned(),
                     checks: crate::model::PullRequestChecks::Failed,
@@ -2448,7 +2467,8 @@ fn ingest_node_issues(runtime: &mut Runtime, repo: &Repo, numbers: &[u32]) {
             projects: vec![crate::model::GithubProjectSnapshot {
                 viewer: None,
                 pull_requests_read: true,
-                issues_read: true,
+                issues_read: crate::model::PartRead::Read,
+                repository: None,
                 issues: crate::issues::ProjectIssuesSnapshot {
                     repository: Some("acme/app".to_owned()),
                     issues: numbers

@@ -22,10 +22,6 @@ pub(super) struct UnconfirmedIssueToken {
     pub observed: bool,
 }
 
-/// Most repositories one GitHub search covers: each is one more `--repo` on
-/// the two `gh search` calls, and the cap bounds the projects resolved too.
-const SEARCH_REPOSITORY_LIMIT: usize = crate::github::SEARCH_REPOSITORY_LIMIT;
-
 /// Longest request id a search echoes back.
 const SEARCH_REQUEST_ID_LIMIT: usize = 128;
 
@@ -97,6 +93,7 @@ impl Runtime {
         );
         let settings = self.snapshot.ui_state.project_settings.clone();
         let sources = self.snapshot.ui_state.project_issue_sources.clone();
+        let keeps_issues = self.local_keeps_issues();
         let mut local_links = BTreeMap::new();
         for workspace in &mut self.snapshot.navigator.workspaces {
             if workspace.remote_target_id.is_some() || !workspace.is_git {
@@ -118,6 +115,7 @@ impl Runtime {
             let local_source = crate::tasks::source_kind(
                 choice,
                 workspace.is_git,
+                keeps_issues.get(&workspace.path).copied().flatten(),
                 &workspace.home_issues,
                 &status,
             ) == crate::tasks::SourceKind::Local;
@@ -197,7 +195,9 @@ impl Runtime {
         let mut changed = false;
         let sources = &self.snapshot.ui_state.project_issue_sources;
         let settings = &self.snapshot.ui_state.project_settings;
+        let keeps_issues = self.local_keeps_issues();
         let store = &self.local_issues;
+        let github = &self.github;
         for workspace in &mut self.snapshot.navigator.workspaces {
             if workspace.remote_target_id.is_some() {
                 // A device's projects are not this machine's; a node's are
@@ -210,9 +210,15 @@ impl Runtime {
                 self.node.as_str(),
                 &workspace.path,
             );
+            let public = github
+                .project(&workspace.path)
+                .and_then(|project| project.repository.as_ref())
+                .and_then(|identity| identity.public);
             changed |= project_tasks(
                 workspace,
                 None,
+                public,
+                keeps_issues.get(&workspace.path).copied().flatten(),
                 choice,
                 store,
                 None,
@@ -672,6 +678,8 @@ impl Runtime {
             .first()
             .map(|checkout| checkout.github.clone())
             .unwrap_or_default();
+        let node =
+            (workspace.device_id != self.node.as_str()).then_some(workspace.device_id.as_str());
         crate::tasks::source_kind(
             crate::project_settings::issue_choice(
                 &self.snapshot.ui_state.project_settings,
@@ -680,9 +688,35 @@ impl Runtime {
                 &workspace.path,
             ),
             workspace.is_git,
+            self.keeps_issues(node, &workspace.path),
             &workspace.home_issues,
             &status,
         )
+    }
+
+    /// Whether the host of the project at `path` (on `node`, or this
+    /// machine) offers issues; `None` when no registered host reads it.
+    pub(super) fn keeps_issues(&self, node: Option<&str>, path: &str) -> Option<bool> {
+        self.github_place(node, path)
+            .ok()
+            .map(|place| place.host().issues().is_some())
+    }
+
+    /// [`Runtime::keeps_issues`] for each of this machine's projects, by
+    /// path, read before a pass that holds the projects mutably.
+    fn local_keeps_issues(&self) -> HashMap<String, Option<bool>> {
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.remote_target_id.is_none())
+            .map(|workspace| {
+                (
+                    workspace.path.clone(),
+                    self.keeps_issues(None, &workspace.path),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn local_project_by_id(&self, workspace_id: &str) -> Option<WorkspaceSnapshot> {
@@ -727,14 +761,18 @@ impl Runtime {
         })
     }
 
-    /// Where `gh` reads a project's repository: in its checkout on this
-    /// machine, or, for a node's project, by the name the node read from its
-    /// `origin` (D-16); never in a folder of this machine at the node's path.
+    /// Where a project's host reads and writes its repository: the
+    /// repository the operator connected it to; for a node's project, the
+    /// name the node read from its `origin` (D-16), never a folder of this
+    /// machine at the node's path; else this machine's checkout, placed by
+    /// the remotes its node read ([`crate::code_host::CodeHosts::place_of_checkout`]).
+    /// Reads and writes take the same place, so a project read on one host
+    /// is never written on another.
     pub(super) fn github_place(
         &self,
         node: Option<&str>,
         root: &str,
-    ) -> Result<crate::github::Where, String> {
+    ) -> Result<crate::code_host::Place, String> {
         if let Some(crate::project_settings::RepositoryConnection::Repository { repository }) =
             crate::project_settings::get(
                 &self.snapshot.ui_state.project_settings,
@@ -743,17 +781,29 @@ impl Runtime {
             )
             .and_then(|record| record.repository.as_ref())
         {
-            return Ok(crate::github::Where::Repository(repository.clone()));
+            return self.code_hosts.place_of(repository).ok_or_else(|| {
+                format!(
+                    "No code host reads the repository {repository:?} the project is connected to"
+                )
+            });
         }
         let Some(node) = node else {
-            return Ok(crate::github::Where::Checkout(PathBuf::from(root)));
+            return self
+                .code_hosts
+                .place_of_checkout(Path::new(root), self.catalog_paths.remotes(root))
+                .ok_or_else(|| "The project has no remote a code host reads".to_owned());
         };
-        self.device_worktrees
+        let repository = self
+            .device_worktrees
             .get(node)
             .and_then(|listed| listed.projects.get(root))
             .and_then(|project| project.repository.clone())
-            .map(crate::github::Where::Repository)
-            .ok_or_else(|| "The node has not named this project's GitHub repository yet".to_owned())
+            .ok_or_else(|| {
+                "The node has not named this project's GitHub repository yet".to_owned()
+            })?;
+        self.code_hosts.place_of(&repository).ok_or_else(|| {
+            format!("No code host reads the repository {repository:?} the node named")
+        })
     }
 
     /// Shows a change to a project's issues made here: this machine's
@@ -1073,12 +1123,11 @@ impl Runtime {
             "issue-detail",
             move || {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::github::issue_detail(
-                        own.as_ref(),
-                        &place,
-                        &reference,
-                        worker_after.as_deref(),
-                    )
+                    place
+                        .host()
+                        .issues()
+                        .ok_or_else(|| "The project's host keeps no issues".to_owned())?
+                        .detail(own.as_ref(), &place, &reference, worker_after.as_deref())
                 }))
                 .unwrap_or_else(|_| Err("The issue detail reader stopped".to_owned()))
             },
@@ -1197,14 +1246,16 @@ impl Runtime {
     }
 
     /// The projects a search covers: this Mac's registered projects whose
-    /// source is GitHub, in the catalog's order, once each by `owner/name`
-    /// when the reader has resolved it (GitHub names ignore case); a project
-    /// it has not read yet is resolved by the search's own worker. The cap
+    /// source is GitHub and whose host searches, in the catalog's order, once
+    /// each by its stored name when the reader has resolved it (names ignore
+    /// case); a project it has not read yet is resolved by the search's own
+    /// worker. Each host's cap ([`crate::code_host::Search::repository_limit`])
     /// leaves some out with the note to say so.
     pub(super) fn github_search_targets(
         &self,
-    ) -> (Vec<crate::github::SearchTarget>, Option<String>) {
-        let mut targets: Vec<crate::github::SearchTarget> = Vec::new();
+    ) -> (Vec<crate::code_host::SearchTarget>, Option<String>) {
+        let mut targets: Vec<crate::code_host::SearchTarget> = Vec::new();
+        let mut capped = false;
         // A node's GitHub projects are searched by the name the node read,
         // with this machine's login (D-16); one not named yet is left out,
         // since its folder is not on this machine to resolve it in.
@@ -1224,6 +1275,10 @@ impl Runtime {
                 || crate::tasks::source_kind(
                     None,
                     workspace.is_git,
+                    self.keeps_issues(
+                        on_node.then_some(workspace.device_id.as_str()),
+                        &workspace.path,
+                    ),
                     &workspace.home_issues,
                     &workspace
                         .checkouts
@@ -1235,35 +1290,45 @@ impl Runtime {
                 continue;
             }
             let node = on_node.then_some(workspace.device_id.as_str());
-            let repository = match self.github_place(node, &workspace.path) {
-                Ok(crate::github::Where::Repository(repository)) => Some(repository),
-                Ok(crate::github::Where::Checkout(_)) => workspace.home_issues.repository.clone(),
-                Err(_) => None,
-            }
-            .filter(|repository| crate::issues::is_repository(repository));
+            // A project no registered host reads has nothing to search.
+            let Ok(place) = self.github_place(node, &workspace.path) else {
+                continue;
+            };
+            let host = *place.host();
+            let Some(search) = host.unit().search() else {
+                continue;
+            };
+            let repository = place
+                .stored_name()
+                .or_else(|| workspace.home_issues.repository.clone())
+                .filter(|repository| crate::issues::is_repository(repository));
             if on_node && repository.is_none() {
                 continue;
             }
             if let Some(repository) = &repository
                 && targets.iter().any(|known| {
-                    known
-                        .repository
-                        .as_deref()
-                        .is_some_and(|name| name.eq_ignore_ascii_case(repository))
+                    known.host == host
+                        && known
+                            .repository
+                            .as_deref()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(repository))
                 })
             {
                 continue;
             }
-            targets.push(crate::github::SearchTarget {
+            if targets.iter().filter(|known| known.host == host).count()
+                >= search.repository_limit()
+            {
+                capped = true;
+                continue;
+            }
+            targets.push(crate::code_host::SearchTarget {
+                host,
                 root: std::path::PathBuf::from(&workspace.path),
                 repository,
             });
         }
-        if targets.len() <= SEARCH_REPOSITORY_LIMIT {
-            return (targets, None);
-        }
-        targets.truncate(SEARCH_REPOSITORY_LIMIT);
-        (targets, Some("github_search.partial".to_owned()))
+        (targets, capped.then(|| "github_search.partial".to_owned()))
     }
 
     /// `github_search`: pull requests and issues of this Mac's GitHub
@@ -1285,13 +1350,15 @@ impl Runtime {
         }
         let query = payload.query.trim();
         let query_chars = query.chars().count();
+        // With no host that searches, any query finds nothing.
+        let query_limit = self.code_hosts.search_query_limit().unwrap_or(usize::MAX);
         crate::diagnostic!(serde_json::json!({
             "component": "issues", "kind": "github_search.requested",
             "request_id": request_id, "query_chars": query_chars,
         }));
         let refused = if query.is_empty() {
             Some("github_search.query_empty")
-        } else if query_chars > crate::github::SEARCH_QUERY_LIMIT {
+        } else if query_chars > query_limit {
             Some("github_search.query_too_long")
         } else {
             None
@@ -1299,10 +1366,7 @@ impl Runtime {
         if let Some(message) = refused {
             // The refusal is the latest request, so one waiting is stale.
             self.github_search.pending = None;
-            let echoed = query
-                .chars()
-                .take(crate::github::SEARCH_QUERY_LIMIT)
-                .collect();
+            let echoed = query.chars().take(query_limit).collect();
             self.snapshot.issue_work.search = Some(crate::model::GithubSearchSnapshot::failed(
                 request_id, echoed, message,
             ));
@@ -1348,7 +1412,7 @@ impl Runtime {
         if note.is_some() {
             crate::diagnostic!(serde_json::json!({
                 "component": "issues", "kind": "github_search.capped",
-                "request_id": request.request_id, "limit": SEARCH_REPOSITORY_LIMIT,
+                "request_id": request.request_id, "targets": targets.len(),
             }));
         }
         if targets.is_empty() {
@@ -1378,7 +1442,7 @@ impl Runtime {
                 // A worker that unwound would leave the one search slot taken
                 // for good, so a panic is a failed search like any other.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::github::search(node.as_ref(), &targets, &query)
+                    search_hosts(node.as_ref(), &targets, &query)
                 }))
                 .unwrap_or_else(|_| Err("the search worker panicked".to_owned()))
             },
@@ -1734,10 +1798,10 @@ impl Runtime {
         let (read, _) = self.node_github_repositories(target);
         let unread = crate::issues::ProjectIssuesSnapshot::default();
         for workspace in &mut session.workspaces {
-            let effective_repository = match self.github_place(Some(target), &workspace.path) {
-                Ok(crate::github::Where::Repository(repository)) => Some(repository),
-                _ => None,
-            };
+            let effective_repository = self
+                .github_place(Some(target), &workspace.path)
+                .ok()
+                .and_then(|place| place.stored_name());
             let asked_repository = effective_repository.as_ref();
             let found = github
                 .and_then(|github| github.project(&workspace.path))
@@ -1783,9 +1847,11 @@ impl Runtime {
                 target,
                 &workspace.path,
             );
+            let keeps_issues = self.keeps_issues(Some(target), &workspace.path);
             let local = crate::tasks::source_kind(
                 choice,
                 workspace.is_git,
+                keeps_issues,
                 &workspace.home_issues,
                 &status,
             ) == crate::tasks::SourceKind::Local;
@@ -1835,6 +1901,10 @@ impl Runtime {
             project_tasks(
                 workspace,
                 Some(issues),
+                found
+                    .and_then(|found| found.repository.as_ref())
+                    .and_then(|identity| identity.public),
+                keeps_issues,
                 choice,
                 &self.local_issues,
                 Some(target),
@@ -1842,6 +1912,35 @@ impl Runtime {
             );
         }
     }
+}
+
+/// One search over every target, each host asked for its own targets in the
+/// order they came; a host that fails fails the search, as one host's single
+/// read would.
+fn search_hosts(
+    node: &dyn crate::node_access::NodeLink,
+    targets: &[crate::code_host::SearchTarget],
+    query: &str,
+) -> Result<Vec<crate::model::GithubSearchResult>, String> {
+    let mut hosts: Vec<crate::code_host::Host> = Vec::new();
+    for target in targets {
+        if !hosts.contains(&target.host) {
+            hosts.push(target.host);
+        }
+    }
+    let mut results = Vec::new();
+    for host in hosts {
+        let Some(search) = host.unit().search() else {
+            continue;
+        };
+        let mine: Vec<crate::code_host::SearchTarget> = targets
+            .iter()
+            .filter(|target| target.host == host)
+            .cloned()
+            .collect();
+        results.extend(search.search(node, &mine, query)?);
+    }
+    Ok(results)
 }
 
 /// A checkout's issue as the link chain names it.
@@ -2115,6 +2214,8 @@ fn chain_link(
 fn project_tasks(
     workspace: &mut crate::model::WorkspaceSnapshot,
     issues: Option<&crate::issues::ProjectIssuesSnapshot>,
+    public: Option<bool>,
+    keeps_issues: Option<bool>,
     choice: Option<&str>,
     store: &Result<crate::local_issues::LocalIssueStore, String>,
     node: Option<&str>,
@@ -2145,11 +2246,15 @@ fn project_tasks(
     }
     if workspace.is_git
         && (issues.repository.is_some()
-            || crate::tasks::source_kind(None, true, issues, &status)
+            || crate::tasks::source_kind(None, true, keeps_issues, issues, &status)
                 == crate::tasks::SourceKind::Github)
     {
-        let github =
-            crate::tasks::github_tasks(issues, &status, choice == Some(crate::tasks::GITHUB));
+        let github = crate::tasks::github_tasks(
+            issues,
+            public,
+            &status,
+            choice == Some(crate::tasks::GITHUB),
+        );
         tasks.sources.extend(github.sources);
         if choice != Some(crate::tasks::LOCAL) {
             tasks.source = github.source;

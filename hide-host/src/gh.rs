@@ -574,12 +574,13 @@ esac"#,
     #[test]
     #[ignore = "needs the minimum gh release named in HIDE_TEST_GH_BIN"]
     fn every_command_line_parses_on_the_oldest_gh_hide_supports() {
+        use hide_node_link::change_request::PrMergeMethod;
         use hide_node_link::gh::{
             AUTH_STATUS, BranchPushRead, ChecksList, GhVersion, ISSUE_DETAIL_FIELDS,
             MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS,
             OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_FIELDS,
-            PrMergeMethod, REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH,
-            SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
+            REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
+            SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
         };
         const REPOSITORY: &str = "acme/app";
         const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";

@@ -4632,10 +4632,10 @@ impl Runtime {
         }
         let repository = self
             .github_project_on(&mission.device_id, &mission.project)
-            .and_then(|project| project.issues.repository_id.as_deref());
+            .and_then(crate::model::GithubProjectSnapshot::repository_id);
         let held = repository.is_some_and(|id| {
             self.github_projects_on(machine)
-                .any(|project| project.issues.repository_id.as_deref() == Some(id))
+                .any(|project| project.repository_id() == Some(id))
         });
         if !held {
             // A GitHub read that failed says why the repository is unknown,
@@ -4645,7 +4645,7 @@ impl Runtime {
                 .github_project_on(&mission.device_id, &mission.project)
                 .into_iter()
                 .chain(self.github_projects_on(machine))
-                .filter(|project| project.issues.repository_id.is_none())
+                .filter(|project| project.repository_id().is_none())
                 .find_map(|project| project.status.failure_category)
                 .and_then(crate::github::unread_action);
             return Err(match unread {

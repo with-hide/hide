@@ -130,7 +130,7 @@ fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_ren
     );
     assert!(runtime.ingest_checkout_git((request.clone(), Ok(facts.clone())), Instant::now()));
     assert_eq!(
-        runtime.checkout_ci_request().unwrap().repository,
+        runtime.checkout_ci_request().unwrap().repository.path,
         "example/fixture"
     );
     let public = serde_json::to_value(

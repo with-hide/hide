@@ -1626,6 +1626,7 @@ fn pull(
     review: Option<ReviewDecision>,
 ) -> PullRequestSnapshot {
     PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: format!("PR {number}"),
         checks: PullRequestChecks::Passing,
@@ -9622,7 +9623,15 @@ fn repository_read(root: &str, id: Option<&str>) -> GithubSnapshot {
         root_path: root.into(),
         ..Default::default()
     };
-    project.issues.repository_id = id.map(str::to_owned);
+    project.repository = Some(crate::model::RepositoryIdentity {
+        repository: crate::code_host::CodeHosts::STANDARD
+            .repository("acme/project")
+            .unwrap()
+            .1,
+        id: id.map(str::to_owned),
+        public: None,
+        default_branch: None,
+    });
     GithubSnapshot {
         projects: vec![project],
     }
