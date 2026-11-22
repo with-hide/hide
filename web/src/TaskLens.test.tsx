@@ -441,6 +441,24 @@ it("draws the first step when the device has no project, and New agent when it h
   expect(idle.container.querySelector("[data-tasks-empty]")?.textContent).toContain("진행 중인 태스크 없음");
 });
 
+// PRD device-connect-iroh B10, B49: a computer with no project of its own still lists the work another machine runs on it and a connected machine's own Needs You, in place of the first step.
+it("lists another machine's panes and its own Needs You on a computer that has no project", async () => {
+  const KEY = "ab".repeat(32);
+  const bare = snapshot([], []);
+  const hosting = (extra: Record<string, unknown>) => ({ ...bare, navigator: { ...bare.navigator, workspaces: [], peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: true }], ...extra } }) as unknown as SnapshotRest;
+  const guests = await render(hosting({ guest_panes: [{ device_id: "macbook", key: KEY, panes: [{ id: "guest:macbook:pane:w1:p1", pane: "w1:p1", since_unix_ms: 1, folder: "/work/web-app" }] }] }), []);
+  expect(guests.container.querySelector("[data-tasks-no-project]")).toBeNull();
+  expect(guests.container.querySelector("[data-guest-group='macbook'] [data-guest-row]")?.textContent).toContain("web-app");
+  await cleanup?.();
+  const asks = await render(hosting({ peer_work: [{ device_id: "macbook", key: KEY, needs_you: 1, done: 0, rows: [{ id: "w1:p1", group: "needs_you", title: "Fix login", agent_kind: "claude", mark: "turn", status_code: "question" }] }] }), []);
+  expect(asks.container.querySelector("[data-tasks-no-project]")).toBeNull();
+  expect(asks.container.querySelector("[data-peer-section='needs_you'] [data-peer-row='macbook:w1:p1']")?.textContent).toContain("Fix login");
+  await cleanup?.();
+  // Nothing of another machine's: the first step, as before.
+  const none = await render(hosting({}), []);
+  expect(none.container.querySelector("[data-tasks-no-project]")).not.toBeNull();
+});
+
 // A task row draws the row's own mark and line, as the sidebar's (status-marks D-12, D-22, D-24, B16, B33, B35).
 it("draws each task's row mark and line as the sidebar does, counts no folded children or raises, and dims only an unknown row", async () => {
   const waits = row("waits", { mark: "waiting", status_code: "waiting", wait: "checks", activity: "stopped" });

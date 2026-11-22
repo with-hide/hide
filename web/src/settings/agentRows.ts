@@ -7,6 +7,7 @@ import { AGENT_ADAPTERS, agentAdapter } from "../agentAdapters";
 import type { AgentUpdate, Device, KitAgent, KitPiece, RemoteStatus } from "../snapshot";
 import { deviceState, kitPartNeedsReinstall } from "../settings";
 import { hostBridge } from "../host";
+import { listedDevices } from "../pairing";
 
 /** The supported order and trusted vendor links come from this build's contract. */
 export const SUPPORTED_AGENTS = AGENT_ADAPTERS.map((row) => row.id);
@@ -94,8 +95,14 @@ export type AgentMachine = {
   unlisted: boolean;
 };
 
+/**
+ * The machines whose agents this Settings holds: this computer and the
+ * devices it runs. A paired machine runs its own Hide and keeps its own
+ * Settings (PRD device-connect-iroh, Settings per machine), so it is none of
+ * them.
+ */
 export function agentMachines(devices: readonly Device[], remote?: readonly RemoteStatus[]): AgentMachine[] {
-  return devices.map((device) => {
+  return listedDevices(devices).map((device) => {
     const kit = device.kit;
     const agents = supportedAgents(kit?.agents);
     // A device that is not ready answers nothing, so its last list is not a fact to act on (B11).

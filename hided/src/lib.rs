@@ -583,7 +583,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // The desktop windows' gateways, shared by `hide browser` and the phone's
     // screenshot of a page.
     let browser_control = Arc::new(browser_control::BrowserControl::default());
-    let desktop_notices = Arc::new(desktop_notices::DesktopNotices::default());
+    let desktop_notices = Arc::new(desktop_notices::DesktopNotices::new(env.device_connect));
     seat.starting("core.mobile");
     let mobile = mobile::Mobile::start(mobile::Config {
         state_dir: env.state_dir.clone(),
@@ -652,10 +652,19 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // other machine's work: no guest's stream is handled, no guest node is
     // started again from the folders a development build left, and the two
     // cores' stream (D-72) is neither handled nor opened, so no letter, read
-    // or start reaches another machine's core or comes from one.
+    // or start reaches another machine's core or comes from one, and nothing
+    // of what two machines show of each other's work (D-50, D-60) runs: no
+    // list of its own Needs You and Done is told or kept, no seat is told,
+    // and no notice is handed to another computer or taken from one.
     if env.device_connect {
         guests.serve(&peers, shutdown.clone());
-        peer_core::PeerCore::serve(&core, &peers, shutdown.clone());
+        peer_core::PeerCore::serve(
+            &core,
+            &peers,
+            &desktop_notices,
+            mobile.subscribe_projection(),
+            shutdown.clone(),
+        );
     }
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
@@ -685,6 +694,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     if env.device_connect {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
+        let guests = Arc::clone(&guests);
         tokio::spawn(async move {
             match peers.start().await {
                 // Paired with something: dial every known host and go on
@@ -772,6 +782,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         mobile: Arc::clone(&mobile),
         peers: Arc::clone(&peers),
         pairing: Arc::clone(&pairing),
+        guests: Arc::clone(&guests),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),

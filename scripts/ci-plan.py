@@ -255,9 +255,11 @@ READERS = (
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
-    # hide-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
-    # by hand (`gen:types`) and committed, so no web lane reads it.
-    ("contracts/hided-ws.schema.json", {"rust"}, {"hide-core"}),
+    # hide-core's memory_hook test reads the WebSocket schema, and hided's
+    # desktop notices test holds a handed notice's codes and length to it.
+    # The web shell's types are generated from it by hand (`gen:types`) and
+    # committed, so no web lane reads it.
+    ("contracts/hided-ws.schema.json", {"rust"}, {"hide-core", "hided"}),
     # hide-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
     # prMark.test.ts.
     ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"hide-core"}),

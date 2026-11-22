@@ -51,6 +51,7 @@
       "agent",
       "pane"
     ],
+    "max_clear_tags": 64,
     "messages": {
       "call": {
         "fields": [
@@ -95,8 +96,56 @@
           "recipient"
         ],
         "since": 1
+      },
+      "notice": {
+        "fields": [
+          "id",
+          "notice"
+        ],
+        "since": 1
+      },
+      "notice_answer": {
+        "fields": [
+          "id",
+          "taken"
+        ],
+        "since": 1
+      },
+      "notice_clear": {
+        "fields": [
+          "tags"
+        ],
+        "since": 1
+      },
+      "seat": {
+        "fields": [
+          "input_ms",
+          "phone_ms",
+          "shows"
+        ],
+        "since": 1
+      },
+      "work": {
+        "fields": [
+          "work"
+        ],
+        "since": 1
       }
     },
+    "notice_fields": [
+      "detail",
+      "device_id",
+      "pane_id",
+      "place",
+      "state",
+      "status_code",
+      "subject",
+      "title"
+    ],
+    "notice_states": [
+      "needs_you",
+      "done"
+    ],
     "party_fields": [
       "id",
       "item",
@@ -479,6 +528,7 @@
     ],
     "pane_fields": [
       "cols",
+      "folder",
       "pane",
       "rows",
       "since_unix_ms"
@@ -613,8 +663,10 @@
   "tap": {
     "cap_bytes": 4194304,
     "magic": "HIDETAP1",
+    "max_folder_bytes": 4096,
     "max_frame_bytes": 4195328,
     "to_host": {
+      "folder": "0x93",
       "gone": "0x92",
       "output": "0x90",
       "pane": "0x91",
