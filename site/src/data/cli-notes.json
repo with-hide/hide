@@ -467,7 +467,7 @@
     "example": "hide view move browser-3 --area area-2 --index 0"
   },
   "links pr": {
-    "line": "Shows the projects and sessions Hide has linked to a pull request.",
+    "line": "Shows the projects and sessions Hide has linked to a pull request, or a gitlab.com merge request written `!12` or as its address.",
     "example": "hide links pr 2389 --all-projects"
   },
   "links issue": {
