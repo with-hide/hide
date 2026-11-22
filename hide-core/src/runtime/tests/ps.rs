@@ -305,6 +305,7 @@ fn mission(
             branch: None,
             pr_state: None,
             pr_url: None,
+            pr_reference: None,
             stage: None,
             attempts: 0,
             line: None,

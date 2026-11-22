@@ -43,11 +43,27 @@ pub struct RepositoryRef {
 pub struct ChangeRequestRef {
     pub repository: RepositoryRef,
     pub number: u32,
+    /// The name every reference to this change request shares, folded the
+    /// way its host folds names ([`CodeHost::repository_key`]): two
+    /// references name the same change request exactly when their keys are
+    /// equal.
+    ///
+    /// This and the fields below are what the unit makes from the repository
+    /// and number; one saved before the unit made one of them reads it empty,
+    /// and restore has the unit make them again.
+    #[serde(default)]
+    pub key: String,
     /// How the host writes its number (`#12`).
+    #[serde(default)]
     pub label: String,
+    /// Its own page.
+    #[serde(default)]
+    pub url: String,
     /// Its checks page.
+    #[serde(default)]
     pub checks_url: String,
     /// Its changed files page.
+    #[serde(default)]
     pub files_url: String,
 }
 
@@ -59,7 +75,9 @@ pub(crate) fn change_request(
     number: u32,
 ) -> ChangeRequestRef {
     ChangeRequestRef {
+        key: format!("{}#{number}", unit.repository_key(&repository)),
         label: unit.number_label(number),
+        url: unit.change_request_url(&repository, number, ChangeRequestPage::Overview),
         checks_url: unit.change_request_url(&repository, number, ChangeRequestPage::Checks),
         files_url: unit.change_request_url(&repository, number, ChangeRequestPage::Files),
         repository,
@@ -216,12 +234,15 @@ pub(crate) enum Place {
     /// A checkout on the core's machine, whose remote its host resolves
     /// itself ([`CodeHost::resolves_checkout`]), as `gh` does in a folder.
     /// `remotes` are the repositories its remotes name that the registry
-    /// gives this host, as data for the host's unit; empty when its node did
-    /// not list them.
+    /// gives this host, as data for the host's unit; `remotes_complete` says
+    /// whether every remote of the checkout is known, read by this host or by
+    /// another registered unit (whose remotes are left out). It is false when
+    /// the node did not list them, or listed one no registered unit reads.
     Checkout {
         host: Host,
         root: PathBuf,
         remotes: Vec<RepositoryRef>,
+        remotes_complete: bool,
     },
 }
 
@@ -278,6 +299,11 @@ pub(crate) trait CodeHost: Sync {
     /// The name a reference of this host is stored and shown by: the inverse
     /// of [`CodeHost::repository`].
     fn stored_name(&self, repository: &RepositoryRef) -> String;
+
+    /// The name every reference to `repository` shares, folded the way the
+    /// host folds names (GitHub reads a repository's path in any case), so
+    /// common code and the screen compare references by equality alone.
+    fn repository_key(&self, repository: &RepositoryRef) -> String;
 
     /// Whether the host finds a checkout's repository itself from the
     /// checkout's remotes, so a checkout whose remotes Hide does not know is
@@ -447,6 +473,14 @@ impl CodeHosts {
         Some((host, repository, number))
     }
 
+    /// The reference the unit of the host an address is on makes for it:
+    /// only for an address Hide holds without one (a session's record, a
+    /// mission node's or a promotion's saved address).
+    pub(crate) fn reference_at(self, url: &str) -> Option<ChangeRequestRef> {
+        let (host, repository, number) = self.change_request_at(url)?;
+        Some(change_request(host.unit(), repository, number))
+    }
+
     /// Whether `repository` is on a server its host is known by name
     /// (github.com for GitHub): where a session's printed address
     /// (`hide_session::sightings`) and the link record have always found
@@ -554,44 +588,50 @@ impl CodeHosts {
         root: &Path,
         remotes: CheckoutRemotes<'_>,
     ) -> Option<Place> {
-        let in_checkout = |host: Host, named: &[(Host, RepositoryRef)]| Place::Checkout {
-            host,
-            root: root.to_path_buf(),
-            remotes: named
-                .iter()
-                .filter(|(named, _)| *named == host)
-                .map(|(_, repository)| repository.clone())
-                .collect(),
-        };
-        let resolving = |named: &[(Host, RepositoryRef)]| {
+        let in_checkout =
+            |host: Host, named: &[(Host, RepositoryRef)], complete: bool| Place::Checkout {
+                host,
+                root: root.to_path_buf(),
+                remotes: named
+                    .iter()
+                    .filter(|(named, _)| *named == host)
+                    .map(|(_, repository)| repository.clone())
+                    .collect(),
+                remotes_complete: complete,
+            };
+        let resolving = |named: &[(Host, RepositoryRef)], complete: bool| {
             self.hosts()
                 .find(|host| host.resolves_checkout())
-                .map(|host| in_checkout(host, named))
+                .map(|host| in_checkout(host, named, complete))
         };
-        let named: Vec<(Host, RepositoryRef)> = match remotes {
-            CheckoutRemotes::Unknown => return resolving(&[]),
-            CheckoutRemotes::Addresses(addresses) => {
-                let named: Vec<_> = addresses
+        let (named, listed): (Vec<(Host, RepositoryRef)>, usize) = match remotes {
+            CheckoutRemotes::Unknown => return resolving(&[], false),
+            CheckoutRemotes::Addresses(addresses) => (
+                addresses
                     .iter()
                     .filter_map(|address| self.remote(address))
-                    .collect();
-                if named.len() < addresses.len() {
-                    return resolving(&named);
-                }
-                named
-            }
-            CheckoutRemotes::Named(names) => names
-                .iter()
-                .filter_map(|name| self.repository(name))
-                .collect(),
+                    .collect(),
+                addresses.len(),
+            ),
+            CheckoutRemotes::Named(names) => (
+                names
+                    .iter()
+                    .filter_map(|name| self.repository(name))
+                    .collect(),
+                names.len(),
+            ),
         };
+        let complete = named.len() == listed;
+        if !complete && matches!(remotes, CheckoutRemotes::Addresses(_)) {
+            return resolving(&named, false);
+        }
         let (first, rest) = named.split_first()?;
         if rest.iter().any(|(host, _)| *host != first.0) {
-            return resolving(&named);
+            return resolving(&named, complete);
         }
         let (host, repository) = first.clone();
         Some(if host.resolves_checkout() {
-            in_checkout(host, &named)
+            in_checkout(host, &named, complete)
         } else {
             Place::Repository { host, repository }
         })

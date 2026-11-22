@@ -141,6 +141,8 @@ pub(super) struct PromotionStart {
     /// reached now, and the worktree then stays for the next attempt.
     engine: Option<Arc<dyn crate::engine::Engine>>,
     node: Option<Arc<dyn crate::node_access::NodeLink>>,
+    /// The registered code hosts, which name `repository`.
+    hosts: crate::code_host::CodeHosts,
 }
 
 /// The tracker's single flight and its schedule.
@@ -364,6 +366,7 @@ impl Runtime {
             launch,
             engine: self.delivery_engine(node.as_str()),
             node: self.node_link(node.as_str()).ok(),
+            hosts: self.code_hosts,
         })
     }
 
@@ -413,23 +416,26 @@ impl Runtime {
             }
             _ => None,
         };
+        // Made by the unit of the repository's host, on a server it names,
+        // as a promotion starts only there.
+        let reference = promotion.pr_number.and_then(|number| {
+            let (host, repository) = self
+                .code_hosts
+                .repository(promotion.repository.as_deref()?)
+                .filter(|(_, repository)| self.code_hosts.on_named_server(repository))?;
+            Some(crate::code_host::change_request(
+                host.unit(),
+                repository,
+                u32::try_from(number).ok()?,
+            ))
+        });
         Some(MemoryPromotionSnapshot {
             state,
             started_at_unix_ms: promotion.started_at_unix_ms,
             agent,
             pr_number: promotion.pr_number,
-            pr_url: promotion.pr_number.and_then(|number| {
-                // A repository an issue reference could name, as before
-                // hosts; its host's unit makes the address.
-                let name = promotion.repository.as_deref()?;
-                crate::issues::IssueReference::parse(&format!("{name}#{number}"), None).ok()?;
-                let (host, repository) = self.code_hosts.repository(name)?;
-                Some(host.change_request_url(
-                    &repository,
-                    u32::try_from(number).ok()?,
-                    crate::code_host::ChangeRequestPage::Overview,
-                ))
-            }),
+            pr_url: reference.as_ref().map(|reference| reference.url.clone()),
+            pr_reference: reference,
             target_path: promotion.target_path.clone(),
             github_failure: unconfirmed.flatten(),
             branch: promotion.branch.clone(),
@@ -1853,7 +1859,13 @@ pub(super) fn start_promotion(
     // takes it too (PRD hide-ai-branch-first-apply D-09); a GitHub one is
     // kept for `PR 올리기`.
     if let Some(repository) = start.repository.as_deref() {
-        crate::issues::IssueReference::parse(&format!("{repository}#1"), None)?;
+        // A repository on a server its host names, as before hosts: an
+        // Enterprise server's takes no pull request here.
+        start
+            .hosts
+            .repository(repository)
+            .filter(|(_, named)| start.hosts.on_named_server(named))
+            .ok_or("the repository is not one a code host names")?;
         start.repository = Some(repository.to_ascii_lowercase());
     }
     let mut numbers = numbers.to_vec();

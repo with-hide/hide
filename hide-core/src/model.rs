@@ -4394,6 +4394,9 @@ pub struct MemoryPromotionSnapshot {
     pub pr_number: Option<u64>,
     /// The durable original target, absent when legacy provenance is unknown.
     pub pr_url: Option<String>,
+    /// The same pull request as its host's unit names it, which the screen
+    /// compares and opens it by; absent with `pr_url`.
+    pub pr_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The repository-relative file the card went into, once the agent said.
     pub target_path: Option<String>,
     /// Why GitHub could not say whether an `unconfirmed` attempt's pull
@@ -6943,7 +6946,9 @@ pub struct PullRequestSnapshot {
     #[serde(default)]
     pub work: PullRequestWork,
     /// The pull request as its host's unit named it when it read it; `None`
-    /// only on an answer saved or sent before references were carried.
+    /// only on an answer saved or sent before references were carried. On
+    /// restore its unit makes it again from the repository and number it
+    /// names (`github_store`).
     #[serde(default)]
     pub reference: Option<crate::code_host::ChangeRequestRef>,
 }
@@ -7335,25 +7340,35 @@ pub struct RepositoryIdentity {
     /// worktree reader prefers over `origin/HEAD` (PRD git-freshness D-07).
     #[serde(default)]
     pub default_branch: Option<String>,
+    /// The repository's own page, made by its host's unit; the screen opens
+    /// it and never spells a host's address. `None` while the server is not
+    /// known. A saved one is made again on restore.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 impl RepositoryIdentity {
-    /// The identity as a key that matches repositories, which needs the
-    /// server: `None` while the server is not known, so a bare name or id
-    /// never joins another server's repository.
-    pub(crate) fn as_key(&self) -> Option<&Self> {
-        self.repository.as_ref().map(|_| self)
-    }
-
-    /// A repository whose server is known, with nothing else read about it.
-    pub(crate) fn of(repository: crate::code_host::RepositoryRef) -> Self {
+    /// `repository` as its host's `unit` names it, before the host said
+    /// anything more about it.
+    pub(crate) fn named(
+        unit: &dyn crate::code_host::CodeHost,
+        repository: crate::code_host::RepositoryRef,
+    ) -> Self {
         Self {
+            url: Some(unit.repository_url(&repository)),
             name: repository.path.clone(),
             repository: Some(repository),
             id: None,
             public: None,
             default_branch: None,
         }
+    }
+
+    /// The identity as a key that matches repositories, which needs the
+    /// server: `None` while the server is not known, so a bare name or id
+    /// never joins another server's repository.
+    pub(crate) fn as_key(&self) -> Option<&Self> {
+        self.repository.as_ref().map(|_| self)
     }
 }
 

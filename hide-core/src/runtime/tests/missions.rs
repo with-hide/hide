@@ -9625,14 +9625,12 @@ fn repository_read(root: &str, id: Option<&str>) -> GithubSnapshot {
     };
     project.repository = Some(crate::model::RepositoryIdentity {
         id: id.map(str::to_owned),
-        public: None,
-        default_branch: None,
-        ..crate::model::RepositoryIdentity::of(
-            crate::code_host::CodeHosts::STANDARD
-                .repository("acme/project")
-                .unwrap()
-                .1,
-        )
+        ..crate::code_host::CodeHosts::STANDARD
+            .repository("acme/project")
+            .map(|(host, repository)| {
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            })
+            .unwrap()
     });
     GithubSnapshot {
         projects: vec![project],

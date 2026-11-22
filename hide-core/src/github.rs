@@ -1430,12 +1430,21 @@ fn identity_on(
 ) -> RepositoryIdentity {
     let server = match place {
         Place::Repository { repository, .. } => Some(repository.authority.clone()),
-        Place::Checkout { remotes, .. } => {
-            server_of_checkout(remotes, &viewed.name, signed_in, addresses)
-        }
+        Place::Checkout {
+            remotes,
+            remotes_complete,
+            ..
+        } => server_of_checkout(
+            (remotes, *remotes_complete),
+            &viewed.name,
+            signed_in,
+            addresses,
+        ),
     };
+    let repository = server.and_then(|server| host::repository_on(&server, &viewed.name));
     RepositoryIdentity {
-        repository: server.and_then(|server| host::repository_on(&server, &viewed.name)),
+        url: repository.as_ref().map(host::repository_url),
+        repository,
         name: viewed.name,
         id: viewed.id,
         public: viewed.public,
@@ -1454,12 +1463,15 @@ fn identity_on(
 /// 4. the remotes whose path is the repository's name name one server, and
 ///    it is claimed.
 ///
+/// Steps 3 and 4 answer only from a complete remote list: a remote no unit
+/// read is an unconfirmed host, and could carry the repository's name.
+///
 /// A remote's host is claimed when it is `github.com`, or a server `auth
 /// status` names; any other (an SSH alias, a server `gh` is not signed in to,
 /// or every one but `github.com` when `auth status` names none) is
 /// unconfirmed. `remotes` hold only the remotes the registry gave GitHub.
 fn server_of_checkout(
-    remotes: &[RepositoryRef],
+    (remotes, complete): (&[RepositoryRef], bool),
     name: &str,
     signed_in: &[String],
     addresses: &[&str],
@@ -1493,6 +1505,9 @@ fn server_of_checkout(
     }
     if let [server] = one(signed_in.to_vec()).as_slice() {
         return Some(server.clone());
+    }
+    if !complete {
+        return None;
     }
     let claimed = |remote: &&RepositoryRef| {
         let host = host_name(&remote.authority);
@@ -3834,6 +3849,133 @@ mod tests {
         }
     }
 
+    /// A node whose `gh` answers each call by `answer`: `None` is a call
+    /// GitHub refused. The calls asked are kept.
+    type Answer = Box<dyn Fn(&[&str]) -> Option<String> + Send + Sync>;
+
+    struct Answering {
+        answer: Answer,
+        asked: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl Answering {
+        fn new(answer: impl Fn(&[&str]) -> Option<String> + Send + Sync + 'static) -> Self {
+            Self {
+                answer: Box::new(answer),
+                asked: Mutex::default(),
+            }
+        }
+    }
+
+    impl NodeLink for Answering {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let Call::Gh { args, .. } = call else {
+                panic!("only gh is asked");
+            };
+            self.asked.lock().unwrap().push(args.clone());
+            let words: Vec<&str> = args.iter().map(String::as_str).collect();
+            let answer = match (self.answer)(&words) {
+                Some(stdout) => GhAnswer::Output { stdout },
+                None => GhAnswer::Failed {
+                    category: GithubFailureCategory::NetworkOrRateLimit,
+                    reason: "HTTP 404: Not Found".to_owned(),
+                },
+            };
+            Ok(serde_json::to_value(answer).unwrap().into())
+        }
+    }
+
+    /// Whether the base branch takes a direct push: an unprotected branch is
+    /// judged by its rulesets alone; a protected one whose protection asks
+    /// for a pull request takes none, and its rulesets are not asked; a
+    /// protection that allows a push still has its rulesets judge; an answer
+    /// GitHub did not give, or one Hide cannot read, leaves the question open
+    /// as a code.
+    #[test]
+    fn a_base_branch_takes_a_push_only_where_its_protection_and_its_rules_both_allow_one() {
+        type Reads = (
+            Option<&'static str>,
+            Option<&'static str>,
+            Option<&'static str>,
+        );
+        let judge = |(protected, protection, rules): Reads| {
+            let node = Answering::new(move |words| match words {
+                ["repo", "view", "--json", "nameWithOwner"] => {
+                    Some(r#"{"nameWithOwner":"acme/app"}"#.to_owned())
+                }
+                ["api", "--jq", _, endpoint] if endpoint.ends_with("/protection") => {
+                    protection.map(str::to_owned)
+                }
+                ["api", "--jq", _, endpoint] if endpoint.contains("/rules/branches/") => {
+                    rules.map(str::to_owned)
+                }
+                ["api", "--jq", _, endpoint] if endpoint.contains("/branches/") => {
+                    protected.map(str::to_owned)
+                }
+                other => panic!("not a base push read: {other:?}"),
+            });
+            let verdict = base_push(&node, Path::new("/repo"), "main");
+            let asked_rules = node.asked.lock().unwrap().iter().any(|args| {
+                args.last()
+                    .is_some_and(|endpoint| endpoint.contains("/rules/"))
+            });
+            (verdict, asked_rules)
+        };
+        let push = Some("push");
+        let pr_only = Some("pr_only");
+        assert_eq!(judge((Some("false"), None, push)), (Ok(true), true));
+        assert_eq!(judge((Some("false"), None, pr_only)), (Ok(false), true));
+        assert_eq!(judge((Some("true"), pr_only, push)), (Ok(false), false));
+        assert_eq!(judge((Some("true"), push, push)), (Ok(true), true));
+        assert_eq!(judge((Some("true"), push, pr_only)), (Ok(false), true));
+        assert_eq!(
+            judge((Some("true"), None, push)).0,
+            Err("branch_push_unread".to_owned()),
+            "the protection of a repository the account does not administer"
+        );
+        assert_eq!(
+            judge((Some("maybe"), None, push)).0,
+            Err("branch_push_unreadable".to_owned())
+        );
+        assert_eq!(
+            judge((Some("false"), None, Some("later"))).0,
+            Err("branch_push_unreadable".to_owned())
+        );
+        let unnamed = Answering::new(|_| None);
+        assert_eq!(
+            base_push(&unnamed, Path::new("/repo"), "main"),
+            Err("branch_push_repository_unread".to_owned())
+        );
+    }
+
+    /// A pull request's standing is GitHub's state for it; a state Hide does
+    /// not know, or a view GitHub refused, is not a standing.
+    #[test]
+    fn a_pull_requests_standing_is_its_open_closed_or_merged_state() {
+        let standing = |state: &'static str| {
+            let node = Answering::new(move |words| match words {
+                ["pr", "view", "7", "--json", fields] if *fields == OUTSIDE_PR_FIELDS => {
+                    Some(format!(r#"{{"state":"{state}"}}"#))
+                }
+                other => panic!("not a standing read: {other:?}"),
+            });
+            pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7)
+        };
+        assert_eq!(standing("OPEN"), Ok(Standing::Open));
+        assert_eq!(standing("CLOSED"), Ok(Standing::Closed));
+        assert_eq!(standing("MERGED"), Ok(Standing::Merged));
+        assert!(standing("DRAFT").is_err());
+        let refused = Answering::new(|_| None);
+        assert_eq!(
+            pr_standing(&refused, &Where::Repository("acme/app".to_owned()), 7),
+            Err("HTTP 404: Not Found".to_owned())
+        );
+    }
+
     /// The server of a checkout `gh` read in place, row by row from the
     /// decided table of cases: the checkout's remotes as its node lists
     /// them, the servers `auth status` names, and the addresses one pass
@@ -3851,8 +3993,11 @@ mod tests {
             } else {
                 CheckoutRemotes::Addresses(&listed)
             };
-            let Some(Place::Checkout { remotes, .. }) =
-                CodeHosts::STANDARD.place_of_checkout(Path::new("/repo"), read)
+            let Some(Place::Checkout {
+                remotes,
+                remotes_complete,
+                ..
+            }) = CodeHosts::STANDARD.place_of_checkout(Path::new("/repo"), read)
             else {
                 panic!("{listed:?} is read in the checkout");
             };
@@ -3860,7 +4005,7 @@ mod tests {
                 .iter()
                 .map(|server| (*server).to_owned())
                 .collect();
-            server_of_checkout(&remotes, name, &signed_in, addresses)
+            server_of_checkout((&remotes, remotes_complete), name, &signed_in, addresses)
         };
         let at = |server: &str| Some(server.to_owned());
         let pull = "https://ghe.example/acme/app/pull/7";
@@ -3930,6 +4075,16 @@ mod tests {
                 at("github.com"),
             ),
             (
+                &[
+                    "https://github.com/old/name.git",
+                    "http://ghe.example/acme/app.git",
+                ],
+                &[],
+                "acme/app",
+                &[],
+                None,
+            ),
+            (
                 &[GITHUB, ENTERPRISE],
                 &["github.com", "ghe.example"],
                 "acme/app",
@@ -3974,6 +4129,27 @@ mod tests {
                 "{remotes:?} signed in to {signed_in:?} with {addresses:?}"
             );
         }
+        // A remote no unit reads is an unconfirmed host that could carry the
+        // repository's name: the remotes alone settle nothing beside it.
+        let unread = "http://ghe.example/acme/app.git";
+        assert_eq!(
+            server(
+                &["https://github.com/old/name.git", unread],
+                &[],
+                "acme/app",
+                &[]
+            ),
+            None
+        );
+        assert_eq!(server(&[GITHUB, unread], &[], "acme/app", &[]), None);
+        assert_eq!(
+            server(&[GITHUB, unread], &[], "acme/app", &[pull]),
+            at("ghe.example")
+        );
+        assert_eq!(
+            server(&[GITHUB, unread], &["github.com"], "acme/app", &[]),
+            at("github.com")
+        );
         // An address of another repository whose name starts the same, and
         // two addresses that differ only in the port, are taken as written.
         assert_eq!(
@@ -4020,6 +4196,7 @@ mod tests {
                 id: Some("R1".to_owned()),
                 public: Some(true),
                 default_branch: Some("main".to_owned()),
+                url: None,
             })
         );
         assert_eq!(project.default_branch(), Some("main"));
@@ -4028,6 +4205,34 @@ mod tests {
             None,
             "the id alone could be another server's repository's: no key is made"
         );
+
+        // A renamed repository's remote alone settles the server; beside a
+        // remote no unit reads it does not.
+        let renamed = ["https://github.com/old/name.git".to_owned()];
+        let mixed = [
+            renamed[0].clone(),
+            "http://ghe.example/acme/project.git".to_owned(),
+        ];
+        for (remotes, server) in [(&renamed[..], Some("github.com")), (&mixed[..], None)] {
+            let place = CodeHosts::STANDARD
+                .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(remotes))
+                .unwrap();
+            let project = fake.read_at(&place, &RefusedProjects::default());
+            let identity = project.repository.unwrap();
+            assert_eq!(
+                identity
+                    .repository
+                    .as_ref()
+                    .map(|repository| repository.authority.as_str()),
+                server,
+                "{remotes:?}"
+            );
+            assert_eq!(
+                (identity.name.as_str(), identity.id.as_deref()),
+                ("acme/project", Some("R1"))
+            );
+            assert_eq!(project.identity_read, PartRead::Read);
+        }
 
         let named = fake.read_at(
             &CodeHosts::STANDARD.place_of("acme/project").unwrap(),

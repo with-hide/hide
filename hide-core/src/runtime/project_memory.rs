@@ -2287,6 +2287,7 @@ PRAGMA user_version=16;",
             Some(MemoryPromotionSnapshot {
                 state: MemoryPromotionState::PrOpen,
                 pr_url: None,
+                pr_reference: None,
                 started_at_unix_ms: 1,
                 agent: None,
                 pr_number: Some(924),

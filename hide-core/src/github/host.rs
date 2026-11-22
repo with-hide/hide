@@ -50,6 +50,11 @@ pub(super) fn repository_on(server: &str, name: &str) -> Option<RepositoryRef> {
     }
 }
 
+/// The page of a repository on GitHub, as GitHub's unit makes it.
+pub(super) fn repository_url(repository: &RepositoryRef) -> String {
+    GITHUB.repository_url(repository)
+}
+
 /// The repository and number a GitHub pull request address names
 /// (`https://SERVER/OWNER/NAME/pull/N`, on any server), and nothing else.
 pub(super) fn change_request_of(url: &str) -> Option<(RepositoryRef, u32)> {
@@ -110,6 +115,14 @@ impl CodeHost for Github {
         } else {
             format!("{}/{}", repository.authority, repository.path)
         }
+    }
+
+    fn repository_key(&self, repository: &RepositoryRef) -> String {
+        format!(
+            "{}/{}",
+            repository.authority,
+            repository.path.to_ascii_lowercase()
+        )
     }
 
     fn resolves_checkout(&self) -> bool {

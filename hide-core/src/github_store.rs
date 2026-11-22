@@ -147,20 +147,34 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
         project.pull_requests_read = true;
         // The issues part comes back with the outcome it was saved with; a
         // file from before it was kept reads `Read` (the field's default).
-        // A saved reference is its host's unit's and comes back as saved. A
-        // file from before references were saved is GitHub's: each of its
-        // pull requests is named by GitHub's unit from its own address,
-        // server and port kept, as a fresh read names it.
+        // A saved reference names its repository and number as its host's
+        // unit made them; the unit makes the rest again (its label, pages and
+        // key), so a file saved before it made one it makes now reads like a
+        // fresh answer, and a host no unit is registered for keeps what it
+        // saved. A file from before references were saved is GitHub's: each
+        // of its pull requests is named by GitHub's unit from its own
+        // address, server and port kept, as a fresh read names it.
+        // One saved before keys were made whose host has no unit names
+        // nothing it can be compared by, and is dropped.
         for pull_request in &mut project.pull_requests {
-            if pull_request.reference.is_none()
-                && let Some((host, repository, number)) =
-                    crate::code_host::CodeHosts::STANDARD.change_request_at(&pull_request.url)
-            {
+            let named = match &pull_request.reference {
+                Some(saved) => crate::code_host::CodeHosts::STANDARD
+                    .of(&saved.repository)
+                    .map(|host| (host, saved.repository.clone(), saved.number)),
+                None => crate::code_host::CodeHosts::STANDARD.change_request_at(&pull_request.url),
+            };
+            if let Some((host, repository, number)) = named {
                 pull_request.reference = Some(crate::code_host::change_request(
                     host.unit(),
                     repository,
                     number,
                 ));
+            } else if pull_request
+                .reference
+                .as_ref()
+                .is_some_and(|saved| saved.key.is_empty())
+            {
+                pull_request.reference = None;
             }
         }
         // A file from before the identity was saved: its pull requests'
@@ -172,10 +186,20 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
                 .pull_requests
                 .iter()
                 .find_map(|pull_request| pull_request.reference.as_ref())
-                .map(|reference| RepositoryIdentity {
-                    public: legacy_public.get(&project.root_path).copied().flatten(),
-                    ..RepositoryIdentity::of(reference.repository.clone())
+                .and_then(|reference| {
+                    let host = crate::code_host::CodeHosts::STANDARD.of(&reference.repository)?;
+                    Some(RepositoryIdentity {
+                        public: legacy_public.get(&project.root_path).copied().flatten(),
+                        ..RepositoryIdentity::named(host.unit(), reference.repository.clone())
+                    })
                 });
+        }
+        // The repository's page is its unit's to make, again on restore.
+        if let Some(identity) = &mut project.repository {
+            identity.url = identity.repository.as_ref().and_then(|repository| {
+                let host = crate::code_host::CodeHosts::STANDARD.of(repository)?;
+                Some(host.unit().repository_url(repository))
+            });
         }
         project.status.stale = true;
         project.status.loading = false;
@@ -428,6 +452,50 @@ mod tests {
         })
         .expect("the file is restored");
         assert_eq!(restored.projects[0].pull_requests[0].reference, Some(made));
+    }
+
+    #[test]
+    fn a_reference_saved_in_an_older_shape_is_named_again_rather_than_refusing_the_file() {
+        let mut sent = answer("/repo", Some(100));
+        let number = sent.pull_requests[0].number;
+        sent.repository = crate::code_host::CodeHosts::STANDARD
+            .repository("acme/app")
+            .map(|(host, repository)| RepositoryIdentity::named(host.unit(), repository));
+        let mut stored: serde_json::Value = serde_json::from_slice(
+            &encode(&GithubSnapshot {
+                projects: vec![sent],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        stored["projects"][0]["pull_requests"][0]["reference"] = serde_json::json!({
+            "repository": {"host": "github", "authority": "github.com", "path": "acme/app"},
+            "number": number,
+        });
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("github-snapshot.json");
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let restored = GithubStore::new(path.clone())
+            .restore()
+            .expect("the file is restored");
+        let pull_request = &restored.projects[0].pull_requests[0];
+        let reference = pull_request.reference.as_ref().expect("named again");
+        assert_eq!(
+            reference.key,
+            format!("github.com/acme/app#{}", pull_request.number)
+        );
+
+        // One whose host no unit is registered for names nothing it can be
+        // compared by, and is dropped rather than kept with an empty key.
+        stored["projects"][0]["pull_requests"][0]["reference"] = serde_json::json!({
+            "repository": {"host": "plain", "authority": "code.example", "path": "acme/app"},
+            "number": number,
+        });
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let restored = GithubStore::new(path)
+            .restore()
+            .expect("the file is restored");
+        assert_eq!(restored.projects[0].pull_requests[0].reference, None);
     }
 
     #[test]

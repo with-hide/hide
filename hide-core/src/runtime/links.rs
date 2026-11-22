@@ -1211,6 +1211,7 @@ impl Runtime {
                         number: links.pr.number,
                         branch: links.pr.branch,
                         title: links.pr.title,
+                        reference: self.code_hosts.reference_at(&links.pr.url),
                         url: links.pr.url,
                         created_at_unix_ms: links.pr.created_at,
                         closed_at_unix_ms: links.pr.closed_at,

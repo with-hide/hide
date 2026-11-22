@@ -75,6 +75,10 @@ impl CodeHost for Plain {
         format!("{}/{}", repository.authority, repository.path)
     }
 
+    fn repository_key(&self, repository: &RepositoryRef) -> String {
+        self.stored_name(repository)
+    }
+
     fn resolves_checkout(&self) -> bool {
         false
     }
@@ -160,10 +164,8 @@ impl HostReads for PlainReads {
                     issues_read: PartRead::Unsupported,
                     identity_read: PartRead::Read,
                     repository: Some(RepositoryIdentity {
-                        id: None,
-                        public: None,
                         default_branch: Some("main".to_owned()),
-                        ..crate::model::RepositoryIdentity::of(repository.clone())
+                        ..RepositoryIdentity::named(&PLAIN, repository.clone())
                     }),
                     ..GithubProjectSnapshot::default()
                 };
@@ -304,9 +306,23 @@ fn holds_the_base_contract(host: Host, stored: &str, remotes: &[&str]) {
     );
     let reference = change_request(host.unit(), repository.clone(), 12);
     assert_eq!(
-        (reference.checks_url, reference.files_url, reference.label),
-        (pages[1].clone(), pages[2].clone(), host.number_label(12)),
+        (
+            &reference.url,
+            &reference.checks_url,
+            &reference.files_url,
+            &reference.label
+        ),
+        (&pages[0], &pages[1], &pages[2], &host.number_label(12)),
         "a carried reference holds the unit's own pages and label"
+    );
+    assert_eq!(
+        change_request(host.unit(), read.0, 12).key,
+        reference.key,
+        "the address read back names the same change request"
+    );
+    assert_ne!(
+        change_request(host.unit(), repository.clone(), 13).key,
+        reference.key
     );
     let sha = "0123456789abcdef0123456789abcdef01234567";
     let commit = host.commit_url(&repository, sha);
@@ -380,6 +396,17 @@ fn github_writes_its_own_addresses_and_number_labels() {
         github.repository_url(&enterprise),
         "https://ghe.example.com:8443/acme/app"
     );
+    // GitHub reads a repository's path in any case, so a session's address
+    // spelled `Acme/App` names the pull request the list holds as `acme/app`.
+    let spelled = github.repository("Acme/App").unwrap();
+    assert_eq!(
+        change_request(github.unit(), spelled, 7).key,
+        "github.com/acme/app#7"
+    );
+    assert_eq!(
+        change_request(github.unit(), enterprise, 7).key,
+        "ghe.example.com:8443/acme/app#7"
+    );
 }
 
 #[test]
@@ -443,8 +470,9 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     let by_name = |hosts: CodeHosts, remotes: &[&str]| {
         hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
     };
-    // Read in the checkout, with the remotes the registry gives that host.
-    let in_checkout = |hosts: CodeHosts, key: &str, remotes: &[&str]| {
+    // Read in the checkout, with the remotes the registry gives that host
+    // and whether every remote was read by a registered unit.
+    let in_checkout = |hosts: CodeHosts, key: &str, remotes: &[&str], complete: bool| {
         Some(Place::Checkout {
             host: host(hosts, key),
             root: root.to_path_buf(),
@@ -452,6 +480,7 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
                 .iter()
                 .map(|name| hosts.repository(name).unwrap().1)
                 .collect(),
+            remotes_complete: complete,
         })
     };
     let github = "https://github.com/acme/app.git";
@@ -461,7 +490,7 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     assert_eq!(by_address(BOTH, &[]), None, "no remote: no host is asked");
     assert_eq!(
         by_address(BOTH, &[github]),
-        in_checkout(BOTH, "github", &["acme/app"])
+        in_checkout(BOTH, "github", &["acme/app"], true)
     );
     assert_eq!(
         by_address(BOTH, &[nested, "git@code.example:group/sub/project.git"]),
@@ -470,27 +499,32 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     );
     assert_eq!(
         by_address(BOTH, &[nested, github]),
-        in_checkout(BOTH, "github", &["acme/app"]),
+        in_checkout(BOTH, "github", &["acme/app"], true),
         "remotes of two hosts go to the one that picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &[github, enterprise]),
-        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"]),
+        in_checkout(
+            BOTH,
+            "github",
+            &["acme/app", "ghe.example.com/acme/app"],
+            true
+        ),
         "github.com and an Enterprise server are one host, which picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &["http://github.com/acme/app.git"]),
-        in_checkout(BOTH, "github", &[]),
+        in_checkout(BOTH, "github", &[], false),
         "an address no unit reads is unknown, read in the checkout as main left it to gh"
     );
     assert_eq!(
         by_address(CodeHosts::STANDARD, &[nested]),
-        in_checkout(CodeHosts::STANDARD, "github", &[]),
+        in_checkout(CodeHosts::STANDARD, "github", &[], false),
         "with GitHub alone a nested path is no repository GitHub reads: unknown, as on main"
     );
     assert_eq!(
         hosts_place(BOTH, root, CheckoutRemotes::Unknown),
-        in_checkout(BOTH, "github", &[]),
+        in_checkout(BOTH, "github", &[], false),
         "remotes the node did not list are read in the checkout"
     );
     assert_eq!(
@@ -506,11 +540,26 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     );
     assert_eq!(
         by_name(BOTH, &["acme/app"]),
-        in_checkout(BOTH, "github", &["acme/app"])
+        in_checkout(BOTH, "github", &["acme/app"], true)
     );
     assert_eq!(
         by_name(BOTH, &["acme/app", "ghe.example.com/acme/app"]),
-        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"])
+        in_checkout(
+            BOTH,
+            "github",
+            &["acme/app", "ghe.example.com/acme/app"],
+            true
+        )
+    );
+    assert_eq!(
+        by_address(BOTH, &[github, "http://ghe.example.com/acme/app.git"]),
+        in_checkout(BOTH, "github", &["acme/app"], false),
+        "a remote no unit reads beside one GitHub reads: the list is not complete"
+    );
+    assert_eq!(
+        by_name(BOTH, &["acme/app", "not a repository"]),
+        in_checkout(BOTH, "github", &["acme/app"], false),
+        "an older node's name no unit reads beside one GitHub reads"
     );
 }
 
