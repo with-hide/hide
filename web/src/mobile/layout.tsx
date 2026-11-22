@@ -4,7 +4,7 @@
 // conversation that says what the agent does now, and the field a reply is
 // written in. Each screen composes these; none draws its own copy.
 
-import { ArrowUpIcon, ChevronLeftIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronLeftIcon, TerminalIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Elapsed, useRunningClock } from "../components/elapsed";
 import { Button } from "../components/ui/button";
@@ -91,22 +91,23 @@ export function StatusStrip({ word, tone, line, since }: { word: string; tone: s
 
 /**
  * What the agent does now, at the foot of its conversation, its time counted on the phone: `생각 중 · 4초` (Doop 09), or with
- * `clock` a running clock, `명령 실행 중 · 0:42` (Doop 02).
+ * `clock` a command's line, the terminal mark and a running clock, `>_ 명령 실행 중 · 0:42` (Doop 02).
  */
 export function ActivityLine({ word, since, clock = false, time }: { word: string; since: number; clock?: boolean; time?: string }) {
   return (
     <p className="flex items-center gap-xs pt-xs text-body" data-phone-activity={word}>
+      {clock ? <TerminalIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-agent-working opacity-(--opacity-secondary)" /> : null}
       <span className="text-agent-working opacity-(--opacity-secondary)">{word}</span>
       <span aria-hidden="true" className="text-muted-foreground">·</span>
       {/* `time` is the time a drawing plays (a What's new scene), in place of the clock. */}
-      {time !== undefined ? <span className="font-mono text-muted-foreground">{time}</span> : clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
+      {time !== undefined ? <span className="text-muted-foreground tabular-nums">{time}</span> : clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
     </p>
   );
 }
 
 function RunningClock({ since }: { since: number }) {
   const text = useRunningClock(since);
-  return text === null ? null : <span className="font-mono text-muted-foreground">{text}</span>;
+  return text === null ? null : <span className="text-muted-foreground tabular-nums">{text}</span>;
 }
 
 /** The most lines a reply field grows to before it scrolls (Doop 06). */
