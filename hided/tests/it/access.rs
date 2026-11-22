@@ -45,6 +45,7 @@ fn daemon_env(root: &Path) -> Env {
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: None,
+        peer_relay: None,
         device_connect: false,
         search_path: None,
     }

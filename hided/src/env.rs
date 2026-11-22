@@ -48,6 +48,10 @@ pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
 /// Development and tests: the one address this machine's endpoint for other
 /// Hides binds, with no relay and no local network search (`peer_host`).
 pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
+/// Development and tests: the relay this machine's endpoint for other Hides
+/// attaches to instead of the device relay, with no local network search
+/// (`peer_host`), so a run can stop and start its own relay.
+pub const HIDE_PEER_RELAY: &str = "HIDE_PEER_RELAY";
 /// Whether this build offers connections between two Hides
 /// ([`Env::device_connect`]); off in every build until that feature ships.
 pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
@@ -208,6 +212,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "The endpoint binds every interface, attaches to the device relay and finds machines on the local network; it is opened only on a machine that is paired, or is sharing itself or adding a machine",
     },
     EnvKey {
+        key: HIDE_PEER_RELAY,
+        required: false,
+        format: "an iroh relay URL for development or tests: https, or http on loopback only; no credentials, query or fragment; the endpoint binds every interface as the product's does, attaches to that relay and does no local network search; not with HIDE_PEER_DIRECT",
+        absent_behavior: "The endpoint attaches to the device relay (https://device-relay.withhide.dev)",
+    },
+    EnvKey {
         key: HIDE_DEVICE_CONNECT,
         required: false,
         format: "1 or 0, for development and tests until connections between two Hides ship",
@@ -305,6 +315,9 @@ pub struct Env {
     /// The one address the endpoint for other Hides binds, with no relay
     /// (`HIDE_PEER_DIRECT`); `None` is the product's endpoint.
     pub peer_direct: Option<SocketAddr>,
+    /// The relay the endpoint for other Hides attaches to instead of the
+    /// device relay (`HIDE_PEER_RELAY`); `None` is the device relay.
+    pub peer_relay: Option<String>,
     /// Whether this build offers connections between two Hides
     /// (`HIDE_DEVICE_CONNECT=1`): pairing, its `hide device` verbs and
     /// Settings rows, the endpoint and the login item that keeps a paired
@@ -578,6 +591,17 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             }
         },
     };
+    let peer_relay = match read(HIDE_PEER_RELAY) {
+        None => None,
+        Some(value) if valid_peer_relay(&value) && peer_direct.is_none() => Some(value),
+        Some(_) => {
+            errors.push(EnvError {
+                key: HIDE_PEER_RELAY,
+                kind: "invalid",
+            });
+            None
+        }
+    };
     let device_connect = match read(HIDE_DEVICE_CONNECT).as_deref() {
         None | Some("0") => false,
         Some("1") => true,
@@ -610,6 +634,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         tailscale_bin,
         relay_url,
         peer_direct,
+        peer_relay,
         device_connect,
         search_path,
     };
@@ -627,6 +652,22 @@ fn valid_relay_url(value: &str) -> bool {
         && uri.query().is_none()
         && (uri.scheme_str() == Some("wss")
             || (uri.scheme_str() == Some("ws")
+                && matches!(host, "localhost" | "127.0.0.1" | "[::1]")))
+}
+
+/// An iroh relay's URL as a test or a development run names its own: https
+/// anywhere, plain http only on loopback, and nothing a URL could hide in.
+fn valid_peer_relay(value: &str) -> bool {
+    let Ok(uri) = value.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    !value.contains(['@', '#'])
+        && uri.query().is_none()
+        && (uri.scheme_str() == Some("https")
+            || (uri.scheme_str() == Some("http")
                 && matches!(host, "localhost" | "127.0.0.1" | "[::1]")))
 }
 
@@ -989,6 +1030,41 @@ mod tests {
                 "{value:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_peer_relay_override_is_a_relay_url_and_never_beside_a_direct_address() {
+        let relay = |pairs: &[(&str, &str)]| {
+            let mut all = vec![(HOME, "/Users/example")];
+            all.extend_from_slice(pairs);
+            from_map(&all).map(|env| env.peer_relay)
+        };
+        assert_eq!(relay(&[]).unwrap(), None);
+        for value in ["http://127.0.0.1:3340", "https://relay.example.invalid"] {
+            assert_eq!(
+                relay(&[(HIDE_PEER_RELAY, value)]).unwrap().as_deref(),
+                Some(value)
+            );
+        }
+        for value in [
+            "",
+            "http://192.0.2.1:3340",
+            "ws://127.0.0.1:3340",
+            "https://user@relay.example.invalid",
+            "https://relay.example.invalid/?a=1",
+        ] {
+            assert_eq!(
+                relay(&[(HIDE_PEER_RELAY, value)]).unwrap_err()[0].key,
+                HIDE_PEER_RELAY,
+                "{value:?}"
+            );
+        }
+        let both = relay(&[
+            (HIDE_PEER_RELAY, "http://127.0.0.1:3340"),
+            (HIDE_PEER_DIRECT, "127.0.0.1:0"),
+        ])
+        .unwrap_err();
+        assert_eq!(both[0].key, HIDE_PEER_RELAY);
     }
 
     #[test]

@@ -1895,6 +1895,7 @@ mod tests {
                 device: "macbook".to_owned(),
                 release: false,
                 direct: None,
+                relay: None,
                 wsl: None,
                 device_connect,
             },

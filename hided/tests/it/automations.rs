@@ -44,6 +44,7 @@ fn daemon_env(root: &Path) -> Env {
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,
         peer_direct: None,
+        peer_relay: None,
         device_connect: false,
     }
 }

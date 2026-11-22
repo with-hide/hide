@@ -920,6 +920,46 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
             "a Hide was started on the account before the operator allowed it"
         );
 
+        // A device that is off when the operator allows the switch (D-34
+        // (1)): the login fails, nothing is started there and the device
+        // stays the helper's; once it is back the helper's link carries the
+        // terminal again and the same switch goes on below.
+        let helper_connected = |fixture: &Fixture| -> Result<bool> {
+            Ok(fixture
+                .snapshot()?
+                .pointer("/status/remote")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter()
+                        .any(|row| row["target_id"] == fixture::DEVICE && row["state"] == "connected")
+                }))
+        };
+        fixture.ssh.online(false)?;
+        let (_, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
+        ensure!(
+            answer["value"]["switch"] != "done",
+            "a switch to a device that is off: {answer}"
+        );
+        eprintln!("the switch to a device that is off answered {answer}");
+        let row = device_row(&fixture.snapshot()?)?;
+        ensure!(
+            row["peer_key"].is_null(),
+            "a switch that never reached the device changed it: {row}"
+        );
+        ensure!(
+            !state.join("hided.json").exists(),
+            "a switch that never reached the device started a Hide there"
+        );
+        fixture.ssh.online(true)?;
+        fixture.reconnect_device()?;
+        wait_for("the helper's link once the device is back", || {
+            Ok(helper_connected(fixture)?.then_some(()))
+        })?;
+        ensure!(
+            stand_in(fixture)? == before,
+            "the terminal did not carry on while the device was off"
+        );
+
         // The build this core's node runs from on that machine, placed in
         // the helper root as that machine's Hide would place it: a
         // development build is larger than a build may be, so it would
