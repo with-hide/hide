@@ -3494,6 +3494,7 @@ A phone is told only when an agent waits on the operator’s answer, a question,
 On a screen another machine shows of this one, the page says in one muted line that turning Mobile on or off and pairing a phone happen on that machine, then shows the relay line and the phones with 연결 해제, and no switch, method or QR: a phone pairs only from this machine's own window or its terminal, hided sends that screen no code, and it refuses that screen's switch and method, either of which would end a code shown at this machine (PRD device-connect-iroh D-53, D-70).
 Once connections between two Hides are offered (`HIDE_DEVICE_CONNECT` until that feature ships), a computer with no window pairs a phone from its terminal with `hide phone pair`, which turns Mobile on when it is off, draws the same QR in the terminal and says which phone connected; `hide phone list` and `hide phone remove <phone>` are this page's list and 연결 해제 ([INSTALL.md](INSTALL.md#connect-your-phone)).
 When a new phone pairs, each phone already paired with this computer is told once, 새 폰이 연결됐어요 under the computer's name with the new phone's, whether or not the computer is in use, so a pairing the operator did not make is seen.
+Each connected computer that may open this one is told once too: its window shows a notification titled 새 폰이 연결됐어요 with this computer's name and the phone's, whichever of its notification switches is on, even over a focused Hide window, and clicking it selects this computer's tile.
 
 ### Settings > Bots
 

@@ -132,6 +132,11 @@ pub enum CoreMessage {
     /// The notifications under `tags` are over: the receiving computer
     /// closes the ones it showed.
     NoticeClear { tags: Vec<String> },
+    /// A phone was paired with the sending computer, told once to each
+    /// connected computer that may open it, so a pairing no one there made is
+    /// seen (PRD device-connect-iroh D-70). The phone's name is all of it:
+    /// nothing of the code, the link or the phone's keys.
+    PhonePaired { phone: String },
 }
 
 /// One notification as the core that judged it worded it: data only, which
@@ -158,6 +163,9 @@ pub struct Notice {
 
 /// The most tags one [`CoreMessage::NoticeClear`] names.
 pub const MAX_CLEAR_TAGS: usize = 64;
+/// The longest phone name a [`CoreMessage::PhonePaired`] carries: a
+/// computer names a phone by its kind and a number (`iPhone 2`).
+pub const MAX_PHONE_NAME_CHARS: usize = 64;
 const MAX_TAG_BYTES: usize = 600;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_DETAIL_CHARS: usize = 400;
@@ -213,8 +221,16 @@ pub fn valid_tag(tag: &str) -> bool {
     !tag.is_empty() && tag.len() <= MAX_TAG_BYTES && !tag.chars().any(char::is_control)
 }
 
+/// Whether `phone` can be shown as a [`CoreMessage::PhonePaired`]'s name:
+/// not empty, bounded, and no control character.
+pub fn valid_phone_name(phone: &str) -> bool {
+    !phone.is_empty()
+        && phone.chars().count() <= MAX_PHONE_NAME_CHARS
+        && !phone.chars().any(char::is_control)
+}
+
 impl CoreMessage {
-    pub const TYPES: [&'static str; 10] = [
+    pub const TYPES: [&'static str; 11] = [
         "letter",
         "letter_taken",
         "letter_refused",
@@ -225,6 +241,7 @@ impl CoreMessage {
         "notice",
         "notice_answer",
         "notice_clear",
+        "phone_paired",
     ];
 
     /// `None` for a type this build does not know.
@@ -239,6 +256,30 @@ impl CoreMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D-70: a new phone crosses as its name alone, which is shown only
+    /// while it is short and has no control character.
+    #[test]
+    fn a_new_phone_is_its_name_and_a_name_past_the_bounds_is_not_shown() {
+        let paired = CoreMessage::PhonePaired {
+            phone: "iPhone 2".to_owned(),
+        };
+        let body = serde_json::to_vec(&paired).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"t": "phone_paired", "phone": "iPhone 2"})
+        );
+        assert_eq!(CoreMessage::parse(&body).unwrap(), Some(paired));
+        assert!(valid_phone_name("iPhone 2"));
+        assert!(valid_phone_name(&"폰".repeat(MAX_PHONE_NAME_CHARS)));
+        for name in [
+            String::new(),
+            "폰".repeat(MAX_PHONE_NAME_CHARS + 1),
+            "iPhone\n2".to_owned(),
+        ] {
+            assert!(!valid_phone_name(&name), "{name:?}");
+        }
+    }
 
     #[test]
     fn a_message_of_a_later_build_is_skipped_and_a_known_one_is_read() {

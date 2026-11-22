@@ -894,6 +894,16 @@ impl PeerCore {
                 }
                 None
             }
+            // A phone paired with a machine this one may open (D-70); from a
+            // machine that only opens this one it is nobody's to show here.
+            CoreMessage::PhonePaired { phone } => {
+                if self.has(&key, true) {
+                    self.desktop.show_phone_paired(&hex, &phone);
+                } else {
+                    record("peer_core.phone_paired_refused", &key, Value::Null);
+                }
+                None
+            }
         }
     }
 
@@ -1419,6 +1429,52 @@ mod tests {
                 lock(&core.works).last() == Some(&(pair.pc_key.clone(), None))
             })
             .await;
+    }
+
+    /// D-70 (security pre-review O2): a phone paired with the PC reaches
+    /// the Mac, which opens it, as a notification its window shows though no
+    /// one is at the Mac; the same message from the Mac, which the PC does
+    /// not open, shows nothing on the PC.
+    #[tokio::test]
+    async fn a_new_phone_reaches_the_computer_that_opens_its_machine_and_not_the_other_way() {
+        // A window at the Mac takes notifications; no one uses the Mac.
+        let mac_desktop = Arc::new(DesktopNotices::new(true));
+        mac_desktop.set(1, true);
+        let mut mac_windows = mac_desktop.subscribe();
+        let pair = Pair::with(Duration::from_secs(30), mac_desktop).await;
+        within("the Mac's seat on the PC", pair.pc_desktop.judge_wanted()).await;
+
+        assert_eq!(pair.pc_desktop.phone_paired("Pixel"), 1);
+        let frame: Value = serde_json::from_str(
+            &within("the new phone on the Mac", mac_windows.recv())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            frame["payload"]["phones"],
+            json!([{
+                "tag": format!("peer:{}|phone|Pixel", pair.pc_key),
+                "peer": pair.pc_key,
+                "phone": "Pixel",
+            }])
+        );
+
+        // The PC may not open the Mac. The message is followed on the same
+        // stream by a letter that is taken, so it was read.
+        let mut pc_windows = pair.pc_desktop.subscribe();
+        assert!(pair.mac_service.tell(
+            &pair.pc_key,
+            CoreMessage::PhonePaired {
+                phone: "iPhone".to_owned(),
+            }
+        ));
+        lock(&pair.mac_core.waiting).push((pair.pc_key.clone(), letter("letter-1")));
+        pair.mac_service.outbox_moved();
+        pair.pc_core
+            .until("the Mac's letter", |core| !lock(&core.taken).is_empty())
+            .await;
+        assert!(pc_windows.try_recv().is_err(), "nothing shows on the PC");
     }
 
     #[tokio::test]

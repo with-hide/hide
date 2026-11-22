@@ -433,6 +433,61 @@ mod tests {
         assert_eq!(owed.last().unwrap(), "one-more");
     }
 
+    /// D-70 (security pre-review O2): a new phone is told once to each
+    /// connected computer that may open this one, whether or not anyone is
+    /// at it, as the phone's name and nothing of the code or its keys, with
+    /// no window here and no phone paired before it to hear it.
+    #[tokio::test]
+    async fn a_new_phone_is_told_to_each_computer_that_may_open_this_one() {
+        use crate::desktop_notices::{Computers, DesktopNotices};
+        use hide_peer::protocol::core::CoreMessage;
+        #[derive(Default)]
+        struct Recording(std::sync::Mutex<Vec<(String, CoreMessage)>>);
+        impl Computers for Recording {
+            fn tell(&self, key: &str, message: CoreMessage) -> bool {
+                self.0.lock().unwrap().push((key.to_owned(), message));
+                true
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let desktop = Arc::new(DesktopNotices::new(true));
+        let computers = Arc::new(Recording::default());
+        desktop.set_computers(Arc::clone(&computers) as Arc<dyn Computers>);
+        // Two computers that may open this one told their seat; no one is at either.
+        for key in ["macbook", "studio"] {
+            desktop.peer_seat(
+                key,
+                hide_core::notice_place::Seat {
+                    input: None,
+                    shows: false,
+                    phone: None,
+                },
+            );
+        }
+        let mobile = super::super::test_mobile_with(directory.path(), &gate, desktop);
+        let (code, _) = exposed_code(&mobile);
+        let (phone, _) = mobile.pair(&code, "Pixel").unwrap();
+        mobile.tell_paired(std::slice::from_ref(&phone));
+
+        let mut told = std::mem::take(&mut *computers.0.lock().unwrap());
+        told.sort_by(|a, b| a.0.cmp(&b.0));
+        let paired = CoreMessage::PhonePaired {
+            phone: phone.name.clone(),
+        };
+        assert_eq!(
+            told,
+            [
+                ("macbook".to_owned(), paired.clone()),
+                ("studio".to_owned(), paired)
+            ]
+        );
+        // What crosses to the other computer is the name alone.
+        let wire = serde_json::to_value(&told[0].1).unwrap();
+        assert_eq!(wire, json!({"t": "phone_paired", "phone": phone.name}));
+        assert!(!wire.to_string().contains(&code));
+    }
+
     /// The loop that sends owed new-phone notices is owned to the end: with
     /// the batch it took still waiting for a blocking thread, `shutdown` does
     /// not return, and it returns once that batch and the loop have finished

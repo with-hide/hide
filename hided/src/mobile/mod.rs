@@ -286,8 +286,9 @@ struct Inner {
     /// The last code a phone paired with, by its `command::code_id`, and
     /// that phone's name: what `hide phone pair` waits for.
     paired_code: Option<(String, String)>,
-    /// New phones whose "새 폰이 연결됐어요" the phones already paired are still
-    /// owed (PRD device-connect-iroh D-70), oldest first. `observe_loop` sends
+    /// New phones whose "새 폰이 연결됐어요" the phones already paired and the
+    /// connected computers that may open this one are still owed (PRD
+    /// device-connect-iroh D-70), oldest first. `observe_loop` sends
     /// them, one batch at a time; a computer keeps no more than
     /// `phones::MAX_PHONES` phones, so no more are owed, and at that cap the
     /// oldest is dropped.
@@ -1382,9 +1383,7 @@ impl Mobile {
                     let mobile = Arc::clone(&self);
                     // One batch at a time, joined below before this owner ends.
                     pending_paired = Some(tokio::task::spawn_blocking(move || {
-                        for phone in &owed {
-                            mobile.push_phone_paired(phone);
-                        }
+                        mobile.tell_paired(&owed);
                     }));
                 }
             }
@@ -1559,6 +1558,16 @@ impl Mobile {
             &BTreeSet::new(),
         )?;
         self.send_notice(targets, &subject, &payload)
+    }
+
+    /// Tells each owed new phone (D-70): to the connected computers that may
+    /// open this one, then to the phones already paired. Blocking: it sends
+    /// the phones' pushes.
+    fn tell_paired(&self, owed: &[PhoneRecord]) {
+        for phone in owed {
+            self.config.desktop.phone_paired(&phone.name);
+            self.push_phone_paired(phone);
+        }
     }
 
     /// A new phone paired: each phone already paired hears it once, whether
@@ -3222,7 +3231,7 @@ pub(super) fn test_mobile_opened(
 }
 
 #[cfg(test)]
-fn test_mobile_from(
+pub(super) fn test_mobile_from(
     directory: &std::path::Path,
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
     open: tokio::sync::watch::Receiver<bool>,
