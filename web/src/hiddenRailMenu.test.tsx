@@ -39,7 +39,7 @@ it("lists the tools apart under the devices, and picking one selects its cell", 
   await act(async () => { container.querySelector("[data-sidebar-device-menu]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
   const items = [...document.body.querySelectorAll<HTMLElement>("[data-device-menu-item], [data-device-menu-tool]")];
   expect(items.map((item) => item.dataset.deviceMenuItem ?? `tool:${item.dataset.deviceMenuTool}`)).toEqual(["local", "tool:c0ffee00c0ffee00", "tool:beef0000beef0000"]);
-  expect(items.slice(1).map((item) => item.textContent)).toEqual(["NnightlyTool's turn 2", "WweeklyExternal tool"]);
+  expect(items.slice(1).map((item) => item.textContent)).toEqual(["nightlyBot's turn 2", "weeklyBot"]);
   await act(async () => { items[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
   expect(picked).toEqual(["c0ffee00c0ffee00"]);
   await act(async () => root.unmount());

@@ -1,6 +1,6 @@
 import { useInterfaceTranslation } from "../i18n/client";
 import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, RepeatIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
-import { tileMonogram } from "../devices";
+import { BotFace } from "./bot-mark";
 import { cn } from "../lib/utils";
 import { Kbd } from "./ui/kbd";
 import { RowButton } from "./ui/row-button";
@@ -178,7 +178,7 @@ export function HiddenRailMenu({ title, menu }: { title: { name: string; note: s
             <DropdownMenuRadioGroup value={menu.toolFront ?? ""} onValueChange={menu.onSelectTool} aria-label={t("devices.rail.tool")}>
               {menu.tools.map((tool) => (
                 <DropdownMenuRadioItem key={tool.connection} value={tool.connection} data-device-menu-tool={tool.connection}>
-                  <span aria-hidden="true" className="flex size-(--size-icon) shrink-0 items-center justify-center rounded-full border border-border text-micro font-semibold">{tileMonogram(tool.name)}</span>
+                  <BotFace name={tool.name} size="line" />
                   <span className="min-w-0 flex-1 truncate">{tool.name}</span>
                   <span className="shrink-0 text-caption text-muted-foreground">{tool.turn > 0 ? t("devices.rail.toolTurn", { count: tool.turn }) : t("devices.rail.tool")}</span>
                 </DropdownMenuRadioItem>

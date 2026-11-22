@@ -1498,19 +1498,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
     },
     /**
-     * Settings (PRD hide-external-control B3, B4, B12, B13; mission-87):
-     * the operator's answer to a bot's request and the mode or disconnect of
-     * a connected one, each one core event; the `access` section shows the
-     * outcome.
+     * Settings › 봇 (PRD hide-external-control B3, B4, B12, B13;
+     * mission-87): the operator's answer to a bot's request, with the mode it
+     * is approved in (its own space or all of Hide), and the mode or
+     * disconnect of a connected one, each one core event; the `access`
+     * section shows the outcome.
      */
-    approveAccess(id: string, mode: import("./snapshot").AccessMode) {
-      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode } });
+    approveAccess(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode: { kind: mode } } });
     },
     refuseAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
     },
-    setAccessMode(id: string, mode: import("./snapshot").AccessMode) {
-      dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode } });
+    setAccessMode(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode: { kind: mode } } });
     },
     revokeAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });

@@ -12,6 +12,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
+import { BotFace } from "./components/bot-mark";
 import { cn } from "./lib/utils";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
 import type { ProjectAccent } from "./overviewGraphLines";
@@ -42,6 +43,7 @@ function useRevealOnKeyboardFocus(id: string) {
  * does (issue 2514), or in an external tool's cell the tool, drawn with its rail tile's letters and no `+`, since
  * what the operator starts is never the tool's work (PRD hide-external-control B40).
  */
+/** `glyph` is the operator's word, or a bot's name, whose owl fills the circle. */
 export type OperatorNode = Node<{ label: string; glyph: string; tool: string | null; startLabel: string; start: (() => void) | null }, "operator">;
 /** The dashed circle where a project's next session would stand; pressing it starts one there (issue 2514). */
 export type StartSlotNode = Node<{ workspaceId: string; label: string; accent: ProjectAccent; muted: boolean; start: (workspaceId: string) => void }, "start">;
@@ -96,7 +98,7 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
 export function OperatorGraphNode({ id, data }: NodeProps<OperatorNode>) {
   const reveal = useRevealOnKeyboardFocus(id);
   // The circle is a picture; only its `+` badge on the rim is pressed.
-  return <div className="og-operator" data-graph-center={data.tool ?? "operator"}><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.glyph}</span></span>
+  return <div className="og-operator" data-graph-center={data.tool ?? "operator"}><Ports /><span role="img" aria-label={data.label} className={cn(data.tool && "size-full overflow-hidden rounded-full")}>{data.tool ? <BotFace name={data.glyph} size="tile" className="size-full rounded-full" /> : <span aria-hidden="true">{data.glyph}</span>}</span>
     {data.start ? <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag" aria-label={data.startLabel} data-graph-operator-start="true" onFocus={reveal} onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint> : null}
   </div>;
 }

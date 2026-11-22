@@ -1,32 +1,59 @@
-// Production Settings › External tools with invented tools (PRD
-// hide-external-control B2-B4, B11-B13): `state=pending`, `connected`,
-// `empty`. Approve, mode and disconnect move the invented section as the
-// core would. No daemon and no keys.
+// Production Settings › 봇 and the device rail's bot tiles with invented bots
+// (PRD hide-external-control B2-B4, B11-B13, D-50): `state=pending`,
+// `connected`, `empty`, and `rail` for the rail alone. Approve, mode and
+// disconnect move the invented section as the core would. No daemon and no
+// keys.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
+import type { BotModeKind } from "../bots";
+import { BotTileView, RailTileView } from "../components/device-rail";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { ExternalToolsTab } from "../settings/ExternalToolsTab";
-import type { AccessConnection, AccessSection } from "../snapshot";
+import type { AccessConnection, AccessMode, AccessSection } from "../snapshot";
 import { useShellStore } from "../store";
 
 const MINUTE = 60_000;
 
+const OWN: AccessMode = { kind: "own" };
+
+function connection(id: string, name: string, mode: AccessMode, agents: number, missions: number, lastUsedMinutes: number): AccessConnection {
+  const now = Date.now();
+  return { id, name, mode, program: `/usr/local/bin/${name}`, created_ms: now - 2 * 86_400_000, last_used_ms: now - lastUsedMinutes * MINUTE, agent_count: agents, mission_count: missions };
+}
+
 function fixture(state: string): AccessSection {
   const now = Date.now();
-  const busy: AccessConnection = {
-    id: "gallery-conn-1", name: "hermes-ctong", mode: { kind: "all" }, program: "/Users/me/.hermes/bin/hermes", created_ms: now - 2 * 86_400_000,
-    last_used_ms: now - 3 * MINUTE, agent_count: 2, mission_count: 1,
-  };
-  const quiet: AccessConnection = {
-    id: "gallery-conn-2", name: "nightly-cron", mode: { kind: "own" }, program: "/usr/local/bin/nightly", created_ms: now - 9 * 86_400_000,
-    last_used_ms: now - 26 * 60 * MINUTE, agent_count: 0, mission_count: 0,
-  };
   return {
     machine: "gallery", limit: 16,
-    pending: state === "pending" ? [{ id: "gallery-req-1", name: "hermes-zutongg-long-profile-name", program: "/Users/me/.hermes/profiles/zutongg/home/.local/bin/hermes-gateway", requested_ms: now - 20_000 }] : [],
-    connections: state === "empty" ? [] : [busy, quiet],
+    pending: state === "pending" ? [{ id: "gallery-req-1", name: "orca-bot", program: "/Applications/Orca.app/Contents/MacOS/orca", requested_ms: now - 20_000 }] : [],
+    connections: state === "empty" ? [] : [
+      connection("gallery-conn-1", "hermes-ctong", { kind: "all" }, 4, 1, 3),
+      connection("gallery-conn-2", "nightly", OWN, 0, 0, 26 * 60),
+      connection("gallery-conn-3", "slack-relay", OWN, 2, 0, 0),
+    ],
   };
+}
+
+/** The rail's bots, after This Mac and a short line: both modes, one waiting on two answers. */
+const RAIL: { name: string; turn: number; mode: BotModeKind }[] = [
+  { name: "hermes-ctong", turn: 2, mode: "all" },
+  { name: "nightly", turn: 0, mode: "own" },
+  { name: "slack-relay", turn: 0, mode: "own" },
+  { name: "cursor-agent", turn: 0, mode: "all" },
+  { name: "orca", turn: 1, mode: "own" },
+];
+
+function Rail({ selected }: { selected: string | null }) {
+  return (
+    <nav aria-label="rail" data-gallery-rail="true" className="flex w-(--size-rail) shrink-0 flex-col items-center gap-md self-stretch border-r border-border bg-sidebar py-md">
+      <RailTileView tile={{ id: "gallery-mac", label: "This Mac", icon: "local", core: false }} selected={selected === null} counts={{ needs_you: 2, done: 0 }} connected onSelect={() => undefined} />
+      <span aria-hidden="true" className="h-(--size-hairline) w-(--size-icon) bg-border" />
+      {RAIL.map((bot) => (
+        <BotTileView key={bot.name} name={bot.name} turn={bot.turn} connection={bot.name} mode={bot.mode} selected={bot.name === selected} onSelect={() => undefined} />
+      ))}
+    </nav>
+  );
 }
 
 export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
@@ -37,14 +64,16 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(() => createActions((event) => {
     const current = useShellStore.getState().access;
     if (!current) return true;
-    const id = (event.payload as { id?: string }).id;
+    const payload = event.payload as { id?: string; mode?: { kind: BotModeKind } };
+    const wire = (kind: BotModeKind): AccessMode => ({ kind });
+    const id = payload.id;
     if (event.kind === "access_refuse") useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id) } });
-    if (event.kind === "access_approve") {
+    if (event.kind === "access_approve" && payload.mode) {
       const request = current.pending.find((one) => one.id === id);
-      const mode = (event.payload as { mode: AccessConnection["mode"] }).mode;
-      if (request) useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id), connections: [...current.connections, { id: request.id, name: request.name, mode, program: request.program, created_ms: Date.now(), last_used_ms: Date.now(), agent_count: 0, mission_count: 0 }] } });
+      if (request) useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id), connections: [...current.connections, { ...connection(request.id, request.name, wire(payload.mode.kind), 0, 0, 0), program: request.program }] } });
     }
-    if (event.kind === "access_mode") useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, mode: (event.payload as { mode: AccessConnection["mode"] }).mode } : one) } });
+    const mode = payload.mode ? wire(payload.mode.kind) : null;
+    if (event.kind === "access_mode" && mode) useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, mode } : one) } });
     if (event.kind === "access_revoke") useShellStore.setState({ access: { ...current, connections: current.connections.filter((one) => one.id !== id) } });
     return true;
   }), []);
@@ -56,8 +85,13 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
     return () => { document.documentElement.style.removeProperty("--interface-scale"); };
   }, [state, language, theme, scale]);
   return <TooltipProvider><InterfaceLanguageBoundary />
-    <div className="w-full max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] bg-background px-lg py-lg" data-gallery-scene="external-tools" data-scene-ready="true">
-      <ExternalToolsTab actions={actions} />
+    <div className="flex bg-background" data-gallery-scene="external-tools" data-scene-ready="true">
+      <Rail selected={state === "rail" ? "hermes-ctong" : null} />
+      {state === "rail" ? null : (
+        <div className="w-full max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-lg py-lg">
+          <ExternalToolsTab actions={actions} />
+        </div>
+      )}
     </div>
   </TooltipProvider>;
 }

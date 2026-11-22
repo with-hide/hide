@@ -5,6 +5,8 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.bots.agent": "Deploy the release",
+  "whatsNewScene.bots.question": "Push the tag now?",
   "whatsNewScene.automation.finished": "{{name}} finished · {{time}}",
   "whatsNewScene.pair.tabPage": "localhost:5173",
   "whatsNewScene.skills.here": "This Mac",
@@ -67,6 +69,8 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.bots.agent": "릴리스 배포",
+  "whatsNewScene.bots.question": "지금 태그를 올릴까요?",
   "whatsNewScene.automation.finished": "{{name}} 끝났어요 · {{time}}",
   "whatsNewScene.pair.tabPage": "localhost:5173",
   "whatsNewScene.skills.here": "이 Mac",
@@ -129,6 +133,8 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.bots.agent": "部署发布",
+  "whatsNewScene.bots.question": "现在推送标签吗？",
   "whatsNewScene.automation.finished": "{{name}} 已完成 · {{time}}",
   "whatsNewScene.pair.tabPage": "localhost:5173",
   "whatsNewScene.skills.here": "这台 Mac",
@@ -191,6 +197,8 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.bots.agent": "リリースをデプロイ",
+  "whatsNewScene.bots.question": "今タグを push しますか？",
   "whatsNewScene.automation.finished": "{{name}} が終わりました · {{time}}",
   "whatsNewScene.pair.tabPage": "localhost:5173",
   "whatsNewScene.skills.here": "この Mac",
