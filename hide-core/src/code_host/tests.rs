@@ -4,10 +4,9 @@
 //! refused through the same registry and reader as GitHub.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::read::{CodeHostReader, GithubProjectRequest, GithubRequest};
+use super::read::{GithubProjectRequest, GithubRequest, Reads};
 use super::*;
 use crate::model::{
     GithubReadOutcome, GithubStatusSnapshot, PartRead, PullRequestBadge, PullRequestChecks,
@@ -613,7 +612,6 @@ fn the_four_read_outcomes_of_a_part_are_told_apart() {
 /// with no host asked.
 #[test]
 fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
-    let mut reader = CodeHostReader::new(Arc::new(NoHostAsked), BOTH);
     let project = |root: &str, place: Option<Place>| GithubProjectRequest {
         links: Vec::new(),
         root: PathBuf::from(root),
@@ -628,17 +626,11 @@ fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
             project("/none", None),
         ],
     };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let answer = loop {
-        if let Some(answer) = reader.read_if_due(request.clone()) {
-            break answer;
-        }
-        assert!(Instant::now() < deadline, "the reader answers");
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    // One pass of the reader's worker, run here: what it answers is what the
+    // background read hands the core.
+    let answer = super::read::read(&mut Reads::new(BOTH), &NoHostAsked, &request);
     let read = |root: &str| {
         answer
-            .snapshot
             .project(root)
             .unwrap_or_else(|| panic!("{root} is answered"))
     };

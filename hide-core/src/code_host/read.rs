@@ -92,9 +92,20 @@ struct Cached {
 /// The reader's own state: each host's read, and the last answer per
 /// requested root. The runtime receives a whole snapshot every time and does
 /// not know which half is new.
-struct Reads {
+/// What the reader keeps between passes: each host's own read and the
+/// cache of answers.
+pub(super) struct Reads {
     hosts: Vec<(Host, Box<dyn HostReads>)>,
     cache: HashMap<PathBuf, Cached>,
+}
+
+impl Reads {
+    pub(super) fn new(hosts: CodeHosts) -> Self {
+        Self {
+            hosts: hosts.hosts().map(|host| (host, host.reads())).collect(),
+            cache: HashMap::new(),
+        }
+    }
 }
 
 pub(crate) struct CodeHostReader {
@@ -105,10 +116,7 @@ impl CodeHostReader {
     /// A reader whose hosts run on `node`, the core's own machine, where the
     /// operator's sign-ins are.
     pub(crate) fn new(node: Arc<dyn NodeLink>, hosts: CodeHosts) -> Self {
-        let reads = std::sync::Mutex::new(Reads {
-            hosts: hosts.hosts().map(|host| (host, host.reads())).collect(),
-            cache: HashMap::new(),
-        });
+        let reads = std::sync::Mutex::new(Reads::new(hosts));
         Self {
             inner: BackgroundRead::on_change(Duration::ZERO, move |request: &GithubRequest| {
                 // The worker is the only thread that touches the state, and
@@ -137,7 +145,13 @@ struct Placed<'a> {
     root_path: String,
 }
 
-fn read(reads: &mut Reads, node: &dyn NodeLink, request: &GithubRequest) -> GithubSnapshot {
+/// One pass: what is due is read, each host's projects by its own read, and
+/// the answer holds every asked project.
+pub(super) fn read(
+    reads: &mut Reads,
+    node: &dyn NodeLink,
+    request: &GithubRequest,
+) -> GithubSnapshot {
     let asked = |root: &Path| request.projects.iter().any(|project| project.root == root);
     reads.cache.retain(|root, _| asked(root));
     for (_, host) in &mut reads.hosts {
