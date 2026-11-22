@@ -1232,6 +1232,7 @@ mod tests {
 
     fn pull(number: u32, branch: &str, badge: PullRequestBadge) -> PullRequestSnapshot {
         PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("PR {number}"),
             checks: PullRequestChecks::Passing,

@@ -301,9 +301,21 @@ fn risky_git_and_the_base_branch_are_refused_and_named() {
     assert!(reason.contains("\"Guard the base branch\""), "{reason}");
     let reason = bash("gh pr merge 12 --squash").unwrap();
     assert!(
-        reason.contains("\"Block agents from merging pull requests\""),
+        reason.contains("\"Block agents from merging pull requests and merge requests\""),
         "{reason}"
     );
+    assert!(
+        reason.contains("This call merges a pull request."),
+        "{reason}"
+    );
+    let reason = bash("glab mr merge 3").unwrap();
+    assert!(
+        reason.contains("This call merges a merge request."),
+        "{reason}"
+    );
+    let reason = bash("git push -o merge_request.auto_merge origin topic").unwrap();
+    assert!(reason.contains("GitLab push option"), "{reason}");
+    assert_eq!(bash("glab mr create --fill -d 'x y'"), None);
     assert_eq!(bash("git push origin topic"), None);
     assert_eq!(bash("git status"), None);
 

@@ -30,13 +30,10 @@ fn issue_runtime() -> Runtime {
     let mut workspace = workspace("w", "Repo", "/repo", vec![checkout]);
     workspace.is_git = true;
     workspace.home_issues = ProjectIssuesSnapshot {
-        public: None,
         repository: Some("acme/project".into()),
         issues: (1..=4).map(issue).collect(),
         overflow: false,
         dependencies_failure: None,
-        repository_id: None,
-        default_branch: None,
     };
     runtime.snapshot.navigator.workspaces = vec![workspace];
     runtime
@@ -273,6 +270,7 @@ fn a_linked_checkout_names_its_task_in_the_projects_task_list() {
     // One pull request closing the linked issue and another one.
     runtime.snapshot.navigator.workspaces[0].checkouts[0].pull_request =
         Some(crate::model::PullRequestSnapshot {
+            reference: None,
             closing_issues: vec![reference(2), reference(3), reference(99)],
             title: "Fix".into(),
             checks: crate::model::PullRequestChecks::Unknown,
@@ -328,13 +326,10 @@ fn a_pass_that_cannot_read_dependencies_keeps_the_blockers_read_before() {
             projects: vec![GithubProjectSnapshot {
                 viewer: None,
                 issues: ProjectIssuesSnapshot {
-                    public: None,
                     repository: Some("acme/project".into()),
                     issues: vec![issue(1), blocked],
                     overflow: false,
                     dependencies_failure: failure.map(str::to_owned),
-                    repository_id: None,
-                    default_branch: None,
                 },
                 root_path: "/repo".into(),
                 status: GithubStatusSnapshot {
@@ -344,7 +339,9 @@ fn a_pass_that_cannot_read_dependencies_keeps_the_blockers_read_before() {
                 },
                 pull_requests: Vec::new(),
                 pull_requests_read: true,
-                issues_read: true,
+                issues_read: crate::model::PartRead::Read,
+                identity_read: crate::model::PartRead::Read,
+                repository: None,
             }],
         }
     };

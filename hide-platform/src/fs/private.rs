@@ -737,7 +737,7 @@ mod sys {
 }
 
 #[cfg(windows)]
-pub(crate) use sys::{current_user_profile, current_user_sid};
+pub(crate) use sys::{current_user_profile, current_user_sid, process_is_current_user};
 
 #[cfg(windows)]
 mod sys {
@@ -1033,6 +1033,27 @@ mod sys {
     pub(crate) fn current_user_sid() -> io::Result<String> {
         let token = acting_token(TOKEN_QUERY)?;
         token_sid(token.0, TokenUser)?.text()
+    }
+
+    /// A process's user identity, compared through the same token reader
+    /// that owns the current account's file-permission identity.
+    pub(crate) fn process_is_current_user(pid: u32) -> io::Result<bool> {
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: the pid is only queried and the returned handle is owned.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let process = Closing(process);
+        let mut token = null_mut();
+        // SAFETY: the process handle is live and token is writable.
+        if unsafe { OpenProcessToken(process.0, TOKEN_QUERY, &mut token) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let token = Closing(token);
+        Ok(token_sid(token.0, TokenUser)?.text()? == current_user_sid()?)
     }
 
     fn account() -> io::Result<Account> {

@@ -1616,6 +1616,24 @@ pub fn image_of(pid: u32) -> io::Result<Image> {
     sys::image_of(pid)
 }
 
+/// The running program's path as the kernel names it, never its argv or
+/// changeable process name. Unlike [`image_of`], this is also available on
+/// Windows, whose kernel supplies a path but no stable image file identity.
+/// A caller binding it to a pid checks [`start_time`] before and after the
+/// read. An inaccessible or ended process is an error, never an empty path.
+pub fn image_path(pid: u32) -> io::Result<PathBuf> {
+    sys::image_path(pid)
+}
+
+/// Whether this process's account still appears in `pid`'s kernel account
+/// identity. Unix checks real, effective and saved UIDs (Linux's fs UID as
+/// well), so a setuid intermediate is not mistaken for an account boundary.
+/// Windows compares user SIDs, regardless of elevation. The caller binds
+/// this observation to [`start_time`]; an unreadable identity is an error.
+pub fn same_account(pid: u32) -> io::Result<bool> {
+    sys::same_account(pid)
+}
+
 /// Every process this account can see whose program file is `file`, read
 /// from one look at the system's process table: a process that runs the
 /// file under another path (renamed, linked or deleted since) is one of
@@ -3882,7 +3900,7 @@ mod sys {
             // A process reaped between the caller's signal 0 and this read
             // is no longer listed, and has ended too.
             Ok(None) => true,
-            Ok(Some(listed)) => listed.p_stat as u32 == libc::SZOMB,
+            Ok(Some(listed)) => listed.ended(),
             Err(_) => false,
         }
     }
@@ -3916,7 +3934,7 @@ mod sys {
         /// union whose `p_starttime` (a `timeval`) is what a listed process
         /// keeps of its start.
         #[repr(C)]
-        pub(in super::super) struct Listed {
+        struct Head {
             p_un: [usize; 2],
             p_vmspace: usize,
             p_sigacts: usize,
@@ -3924,16 +3942,25 @@ mod sys {
             pub(in super::super) p_stat: libc::c_char,
         }
 
+        pub(in super::super) struct Listed {
+            head: Head,
+            pub(in super::super) uids: [u32; 3],
+        }
+
         impl Listed {
             /// When the process started, in microseconds, as
             /// `proc_pidinfo`'s `pbi_start_tvsec` and `pbi_start_tvusec`
             /// say it: both are the kernel's `p_start`.
             pub(in super::super) fn started(&self) -> u64 {
-                let seconds = self.p_un[0] as u64;
+                let seconds = self.head.p_un[0] as u64;
                 // `tv_usec` is a 32-bit `suseconds_t` at the start of the
                 // second word.
-                let micros = u64::from(self.p_un[1] as u32);
+                let micros = u64::from(self.head.p_un[1] as u32);
                 seconds * 1_000_000 + micros
+            }
+
+            pub(in super::super) fn ended(&self) -> bool {
+                self.head.p_stat as u32 == libc::SZOMB
             }
         }
 
@@ -3976,7 +4003,20 @@ mod sys {
             // SAFETY: the buffer holds a whole `kinfo_proc`, which starts
             // with the `extern_proc` this head is a prefix of, and is aligned
             // for its words.
-            Ok(Some(unsafe { buffer.as_ptr().cast::<Listed>().read() }))
+            let head = unsafe { buffer.as_ptr().cast::<Head>().read() };
+            // sys/sysctl.h's 64-bit kinfo_proc, as for KINFO_PROC above:
+            // kp_eproc.e_pcred.{p_ruid,p_svuid} and e_ucred.cr_uid.
+            // Unlike proc_pidinfo, this public process table can identify
+            // another account's sshd without access to its task or image.
+            let uid = |offset: usize| {
+                let word = buffer[offset / 8].to_ne_bytes();
+                let at = offset % 8;
+                u32::from_ne_bytes(word[at..at + 4].try_into().expect("one UID"))
+            };
+            Ok(Some(Listed {
+                head,
+                uids: [uid(392), uid(420), uid(396)],
+            }))
         }
 
         pub(in super::super) fn error_for_missing_info() -> io::Error {
@@ -4120,6 +4160,14 @@ mod sys {
     #[cfg(target_os = "macos")]
     pub(super) fn parent_of(pid: u32) -> io::Result<u32> {
         mac::bsd_info(pid).map(|info| info.pbi_ppid)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn same_account(pid: u32) -> io::Result<bool> {
+        let info = mac::listed(pid)?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        // SAFETY: getuid takes no arguments and cannot fail.
+        let ours = unsafe { libc::getuid() };
+        Ok(info.uids.contains(&ours))
     }
 
     /// `MAX_INPUT` in `<sys/syslimits.h>`: the tty driver drops each byte
@@ -4371,7 +4419,7 @@ mod sys {
     /// file the kernel names at that path, and a region's file is the one
     /// the process mapped, so a file put at the path later is not it.
     #[cfg(target_os = "macos")]
-    pub(super) fn image_of(pid: u32) -> io::Result<super::Image> {
+    pub(super) fn image_path(pid: u32) -> io::Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
 
         let raw = system_pid(pid)?;
@@ -4384,6 +4432,15 @@ mod sys {
             return Err(mac::error_for_missing_info());
         }
         buffer.truncate(length as usize);
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn image_of(pid: u32) -> io::Result<super::Image> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = image_path(pid)?;
+        let buffer = path.as_os_str().as_bytes();
         let mut address = 0_u64;
         for _ in 0..mac::REGION_LIMIT {
             let region = mac::region_at(pid, address)?;
@@ -4401,7 +4458,7 @@ mod sys {
                 // with its sign; the region keeps the same bits unsigned.
                 let volume = stat.vst_dev as i32 as u64;
                 return Ok(super::Image {
-                    path: PathBuf::from(std::ffi::OsString::from_vec(buffer)),
+                    path,
                     file: crate::fs::identity::FileId::new(volume, u128::from(stat.vst_ino)),
                 });
             }
@@ -4637,6 +4694,27 @@ mod sys {
     }
 
     #[cfg(target_os = "linux")]
+    fn account_uids(status: &str) -> io::Result<[u32; 4]> {
+        let line = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .ok_or_else(|| io::Error::other("the process has no UIDs"))?;
+        let uids = line
+            .split_whitespace()
+            .map(|uid| uid.parse::<u32>().map_err(io::Error::other))
+            .collect::<io::Result<Vec<_>>>()?;
+        uids.try_into()
+            .map_err(|_| io::Error::other("the process has incomplete UIDs"))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn same_account(pid: u32) -> io::Result<bool> {
+        let uids = account_uids(&linux::read(pid, "status")?)?;
+        // SAFETY: getuid takes no arguments and cannot fail.
+        Ok(uids.contains(&unsafe { libc::getuid() }))
+    }
+
+    #[cfg(target_os = "linux")]
     pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
         let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|error| {
             if error.raw_os_error() == Some(libc::ESRCH) {
@@ -4658,6 +4736,11 @@ mod sys {
     #[cfg(target_os = "linux")]
     pub(super) fn cwd_of(pid: u32) -> io::Result<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd"))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn image_path(pid: u32) -> io::Result<PathBuf> {
+        image_of(pid).map(|image| image.path)
     }
 
     /// `/proc/<pid>/exe` reads as the file's present path, with ` (deleted)`
@@ -4914,6 +4997,27 @@ mod sys {
 
         use super::super::Ending;
         use super::*;
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_setuid_intermediate_keeps_its_original_account() {
+            let ours = 1000;
+            for status in [
+                "Uid:\t1000\t0\t0\t0\n",
+                "Uid:\t0\t0\t1000\t0\n",
+                "Uid:\t0\t1000\t0\t0\n",
+                "Uid:\t0\t0\t0\t1000\n",
+            ] {
+                assert!(account_uids(status).unwrap().contains(&ours));
+            }
+            assert!(
+                !account_uids("Uid:\t0\t0\t0\t0\n").unwrap().contains(&ours),
+                "the SSH daemon with none of our UIDs is an account boundary"
+            );
+            for broken in ["", "Uid: 1000", "Uid: 1000 1000 bad 1000"] {
+                assert!(account_uids(broken).is_err());
+            }
+        }
 
         const SHORT: Duration = Duration::from_millis(200);
 
@@ -6717,7 +6821,7 @@ mod sys {
     }
 
     /// The path `pid` was started from, as the system names it.
-    fn image_path(pid: u32) -> io::Result<PathBuf> {
+    pub(super) fn image_path(pid: u32) -> io::Result<PathBuf> {
         use std::os::windows::ffi::OsStringExt;
 
         let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
@@ -6775,6 +6879,10 @@ mod sys {
         ))
     }
 
+    pub(super) fn same_account(pid: u32) -> io::Result<bool> {
+        crate::fs::private::process_is_current_user(pid)
+    }
+
     pub(super) fn set_output_aside(_: &Path, _: &Path, _: u64) -> io::Result<bool> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -6813,7 +6921,8 @@ mod sys {
         // started after the child), is not shown.
         match start_time(*parent) {
             Ok(parent_started) if parent_started <= started => Ok(*parent),
-            _ => Err(io::ErrorKind::NotFound.into()),
+            Ok(_) => Err(io::Error::other("the parent pid was reused")),
+            Err(error) => Err(error),
         }
     }
 

@@ -240,6 +240,17 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
         ..Default::default()
     };
     remote.issues.repository = Some("acme/remote".into());
+    remote.repository = Some(crate::model::RepositoryIdentity {
+        id: None,
+        public: None,
+        default_branch: None,
+        ..crate::code_host::CodeHosts::STANDARD
+            .repository("acme/remote")
+            .map(|(host, repository)| {
+                crate::model::RepositoryIdentity::named(host.unit(), repository)
+            })
+            .unwrap()
+    });
     runtime.device_github.insert(
         "remote".into(),
         crate::model::GithubSnapshot {
@@ -520,6 +531,7 @@ fn rejecting_a_child_missed_action_keeps_the_displayed_parent_record_and_retry_t
 
 fn pull_request(number: u32, branch: &str, closes: &[u32]) -> PullRequestSnapshot {
     PullRequestSnapshot {
+        reference: None,
         closing_issues: closes
             .iter()
             .map(|number| IssueReference {
@@ -564,13 +576,10 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {
-                public: None,
                 repository: Some("Acme/Project".into()),
                 issues: Vec::new(),
                 overflow: false,
                 dependencies_failure: None,
-                repository_id: Some("R_kgDO".into()),
-                default_branch: None,
             },
             status: crate::model::GithubStatusSnapshot {
                 available: true,
@@ -579,9 +588,39 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             },
             pull_requests,
             pull_requests_read: read,
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
+            identity_read: crate::model::PartRead::Read,
+            // The identity is read on its own: the record keys on it, not
+            // on the issues answer.
+            repository: Some(crate::model::RepositoryIdentity {
+                id: Some("R_kgDO".into()),
+                ..crate::code_host::CodeHosts::STANDARD
+                    .repository("Acme/Project")
+                    .map(|(host, repository)| {
+                        crate::model::RepositoryIdentity::named(host.unit(), repository)
+                    })
+                    .unwrap()
+            }),
         });
     runtime
+}
+
+/// A repository whose server is not known keeps its facts in the read, and
+/// the record keys nothing on its bare name or id, which another server's
+/// repository could share.
+#[test]
+fn an_identity_whose_server_is_not_known_keys_no_record() {
+    let mut runtime = links_runtime(vec![pull_request(7, "4-task", &[3])], true);
+    let identity = runtime.github.projects[0].repository.as_mut().unwrap();
+    identity.repository = None;
+    let kept = identity.clone();
+
+    let projects = runtime.link_projects();
+    assert_eq!(projects[0].repository, None);
+    assert_eq!(projects[0].repository_id, None);
+    assert_eq!(kept.name, "Acme/Project");
+    assert_eq!(kept.id.as_deref(), Some("R_kgDO"));
+    assert_eq!(runtime.github.projects[0].repository.as_ref(), Some(&kept));
 }
 
 #[test]
@@ -2359,4 +2398,51 @@ fn a_device_workers_parent_is_named_by_its_own_devices_pane_not_a_local_one_of_t
     assert_eq!(fact.parent_device_id, "remote");
     assert_eq!(fact.parent_session_id, "lead-native");
     assert_eq!(fact.parent_name, "agent-2");
+}
+
+/// The repository a pull request's address names, as its two readers take
+/// it: the link record keys only a github.com address, by its `owner/name`
+/// in lower case and its number; a review's pre-check takes `owner/name` in
+/// lower case on any server; an address that is no pull request's names
+/// nothing to either.
+#[test]
+fn a_pull_requests_address_names_its_repository_to_the_link_record_and_the_pre_check() {
+    let hosts = crate::code_host::CodeHosts::STANDARD;
+    let at = |url: &str| PullRequestSnapshot {
+        url: url.to_owned(),
+        ..pull_request(7, "feature", &[])
+    };
+    let pre_check = |url: &str| {
+        at(url)
+            .named(hosts)
+            .map(|(repository, _)| repository.path.to_ascii_lowercase())
+    };
+    /// An address, its link record key and its pre-check repository.
+    type Case = (
+        &'static str,
+        Option<(&'static str, u64)>,
+        Option<&'static str>,
+    );
+    let cases: [Case; 4] = [
+        (
+            "https://github.com/Acme/Project/pull/7",
+            Some(("acme/project", 7)),
+            Some("acme/project"),
+        ),
+        (
+            "https://ghe.example/Acme/App/pull/7",
+            None,
+            Some("acme/app"),
+        ),
+        ("https://example.invalid/pull/7", None, None),
+        ("", None, None),
+    ];
+    for (url, link_record, check) in cases {
+        assert_eq!(
+            at(url).sighting_key(hosts),
+            link_record.map(|(repository, number)| (repository.to_owned(), number)),
+            "{url}"
+        );
+        assert_eq!(pre_check(url).as_deref(), check, "{url}");
+    }
 }

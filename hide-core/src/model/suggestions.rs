@@ -334,6 +334,9 @@ pub struct SuggestionEscalationSnapshot {
     /// The fix level now suggested: 1 a script or a check, 2 a hook.
     pub level: u8,
     pub previous_pr_url: Option<String>,
+    /// The same pull request as its host's unit names it, which the screen
+    /// compares and opens it by.
+    pub previous_pr_reference: Option<crate::code_host::ChangeRequestRef>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -357,6 +360,8 @@ pub struct SuggestionEvidenceSnapshot {
     pub session_id: Option<String>,
     pub pr_number: Option<u32>,
     pub url: Option<String>,
+    /// A pull request's `url` as its host's unit names it.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub at_unix_ms: u64,
     pub gone: bool,
     /// Where the operator's words are in the session, which an excerpt
@@ -405,6 +410,8 @@ pub struct SuggestionAttemptSnapshot {
     pub started_at_unix_ms: u64,
     pub pr_number: Option<u32>,
     pub url: Option<String>,
+    /// `url` as its host's unit names it, when it is a pull request's.
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     /// The agent's coordination id, which the runtime resolves to its pane;
     /// the shell never sees it, since no list names an agent by it.
     #[serde(skip)]

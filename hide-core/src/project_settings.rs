@@ -169,7 +169,13 @@ impl ProjectSettings {
             })
     }
 
-    pub(crate) fn patched(&self, patch: Patch) -> Result<Self, &'static str> {
+    /// `self` with `patch` applied; an explicit repository must be one
+    /// `hosts` reads ([`names_repository`]).
+    pub(crate) fn patched(
+        &self,
+        patch: Patch,
+        hosts: crate::code_host::CodeHosts,
+    ) -> Result<Self, &'static str> {
         if !readable(self.version) {
             return Err("project_settings_newer_version");
         }
@@ -179,7 +185,7 @@ impl ProjectSettings {
         }
         if let Some(repository) = patch.repository {
             if let RepositoryConnection::Repository { repository } = &repository
-                && (repository.len() > 256 || !crate::issues::is_repository(repository))
+                && (repository.len() > 256 || !names_repository(hosts, repository))
             {
                 return Err("project_settings_invalid_repository");
             }
@@ -292,6 +298,17 @@ pub enum WriteState {
 /// Catalog roots already come from the owning node's canonical Project
 /// facts. Hash those facts exactly as Memory does, without an fs read under
 /// Runtime or interpreting a remote path on this machine.
+/// Whether a project may be connected to the repository `name`: a name a
+/// registered host's unit reads, on a server that host names, written as
+/// the unit stores it. With GitHub alone that is `OWNER/NAME` and nothing
+/// else, as before hosts: `github.com/OWNER/NAME` and an Enterprise
+/// server's `HOST/OWNER/NAME` are refused.
+fn names_repository(hosts: crate::code_host::CodeHosts, name: &str) -> bool {
+    hosts.repository(name).is_some_and(|(host, repository)| {
+        hosts.on_named_server(&repository) && host.stored_name(&repository) == name
+    })
+}
+
 pub(crate) fn key(device: &str, root: &str) -> String {
     hide_project::project_id(device, Path::new(root))
 }
@@ -371,6 +388,47 @@ pub(crate) fn link_scope_key(path: &str, branch: Option<&str>, number: u32) -> S
 mod tests {
     use super::*;
 
+    impl ProjectSettings {
+        fn patched_standard(&self, patch: Patch) -> Result<Self, &'static str> {
+            self.patched(patch, crate::code_host::CodeHosts::STANDARD)
+        }
+    }
+
+    /// An explicit repository is one a registered host reads, written as its
+    /// unit stores it: with GitHub alone, `OWNER/NAME` only, as before hosts.
+    #[test]
+    fn an_explicit_repository_is_one_a_registered_host_reads_as_it_stores_it() {
+        let connect = |hosts: crate::code_host::CodeHosts, name: &str| {
+            ProjectSettings::new("node", "/repo")
+                .patched(
+                    Patch {
+                        repository: Some(RepositoryConnection::Repository {
+                            repository: name.to_owned(),
+                        }),
+                        ..Patch::default()
+                    },
+                    hosts,
+                )
+                .is_ok()
+        };
+        let github = crate::code_host::CodeHosts::STANDARD;
+        assert!(connect(github, "acme/app"));
+        assert!(connect(github, "Acme/App"));
+        for refused in [
+            "github.com/acme/app",
+            "ghe.example.com/acme/app",
+            "code.example/group/sub/project",
+            "acme",
+            "",
+        ] {
+            assert!(!connect(github, refused), "{refused}");
+        }
+        let both = crate::code_host::tests::BOTH;
+        assert!(connect(both, "code.example/group/sub/project"));
+        assert!(connect(both, "acme/app"));
+        assert!(!connect(both, "ghe.example.com/acme/app"));
+    }
+
     const RELEASED: &str = include_str!("../tests/fixtures/release-1.2.4/project-settings.json");
 
     /// The released 1.2.4 record as that build declares it: its own fields,
@@ -402,7 +460,7 @@ mod tests {
         for (name, written) in released() {
             let record: ProjectSettings = serde_json::from_value(written).unwrap();
             let patched = record
-                .patched(Patch {
+                .patched_standard(Patch {
                     agent_profiles: Some(BTreeMap::from([(
                         "claude-code".to_owned(),
                         Some("p-work".to_owned()),
@@ -420,7 +478,7 @@ mod tests {
             assert_eq!(serde_json::to_value(&old).unwrap(), new, "{name}");
             // Clearing the agent's choice writes the record as before.
             let cleared = patched
-                .patched(Patch {
+                .patched_standard(Patch {
                     agent_profiles: Some(BTreeMap::from([("claude-code".to_owned(), None)])),
                     ..Patch::default()
                 })
@@ -440,14 +498,14 @@ mod tests {
             ..Patch::default()
         };
         assert_eq!(
-            record.patched(patch("claude", "p")),
+            record.patched_standard(patch("claude", "p")),
             Err("project_settings_invalid_agent"),
             "an alias is not the agent's id"
         );
         assert_eq!(
-            record.patched(patch("claude-code", "")),
+            record.patched_standard(patch("claude-code", "")),
             Err("project_settings_invalid_profile")
         );
-        assert!(record.patched(patch("codex", "p-team")).is_ok());
+        assert!(record.patched_standard(patch("codex", "p-team")).is_ok());
     }
 }

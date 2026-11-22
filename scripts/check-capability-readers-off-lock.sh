@@ -15,7 +15,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readers=(changes ports worktrees github github_poll disk ai usage)
+# Each reader is named by its module path; the code hosts' reader is
+# `code_host::read` (hide-core/src/code_host/read.rs).
+readers=(changes ports worktrees code_host::read github_poll disk ai usage)
 
 # These readers reach the network, walk a whole tree, or start a provider CLI,
 # so they must also move the blocking part off the coordinator thread itself.
@@ -23,7 +25,7 @@ readers=(changes ports worktrees github github_poll disk ai usage)
 # probe starts a `codex app-server` child and runs `claude auth status`, and
 # the usage reader runs `claude -p /usage` for seconds; run inline, any of
 # them would be that much added latency on every pane event.
-worker_readers=(changes worktrees github github_poll disk ai usage)
+worker_readers=(changes worktrees code_host::read github_poll disk ai usage)
 
 # 1. The module that holds the mutex, its runtime submodules, and the file
 #    module it calls synchronously while holding it, execute no subprocess at
@@ -49,7 +51,7 @@ for source in "${runtime_sources[@]}" hide-core/src/files.rs; do
 done
 
 for reader in "${readers[@]}"; do
-    module="hide-core/src/${reader}.rs"
+    module="hide-core/src/${reader//:://}.rs"
     if [[ ! -f "$module" ]]; then
         printf '%s is missing; the reader it asserts no longer exists\n' "$module" >&2
         exit 1
@@ -76,6 +78,9 @@ for reader in "${readers[@]}"; do
     )"
     driver="hide-core/src/session_sync/coordinator.rs"
     [[ "$reader" == changes ]] && driver=""
+    # GitHub's watch is made by its host's unit, for the one caller of a
+    # watch's `reader`, which step 2b holds to the coordinator.
+    [[ "$reader" == github_poll ]] && driver="hide-core/src/github/host.rs"
     if [[ "$callers" != "$driver" ]]; then
         printf 'the %s reader is driven from outside %s:\n%s\n' \
             "$reader" "${driver:-its own pump}" "$callers" >&2
@@ -90,8 +95,19 @@ for reader in "${readers[@]}"; do
     fi
 done
 
+# 2b. A host's watch is started only by the coordinator.
+watch_starts="$(
+    while IFS= read -r source; do
+        awk '/^#\[cfg\(test\)\]/ { exit } /\.reader\(/ { found = 1 } END { if (found) print FILENAME }' "$source"
+    done < <(find hide-core/src -name '*.rs' -type f -not -path '*/tests/*' -not -name 'tests.rs' | sort)
+)"
+if [[ "$watch_starts" != "hide-core/src/session_sync/coordinator.rs" ]]; then
+    printf "a host's watch is started from outside the coordinator:\n%s\n" "$watch_starts" >&2
+    exit 1
+fi
+
 for reader in "${worker_readers[@]}"; do
-    module="hide-core/src/${reader}.rs"
+    module="hide-core/src/${reader//:://}.rs"
 
     # 4. The slow readers hand their subprocess to a worker thread rather than
     #    running it on the thread that applies every engine event.

@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::change_request::PrMergeMethod;
+
 /// Why a GitHub read failed, as a code the screen words (the reason stays
 /// `gh`'s own stderr, which is data).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -459,23 +461,12 @@ fn is_pr_card_query(value: &str) -> bool {
         .is_some_and(|query| query == value)
 }
 
-/// How a pull request is merged. A repository with a merge queue takes none:
-/// `gh` adds the pull request to the queue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrMergeMethod {
-    Merge,
-    Squash,
-    Rebase,
-}
-
-impl PrMergeMethod {
-    pub const fn flag(self) -> &'static str {
-        match self {
-            Self::Merge => "--merge",
-            Self::Squash => "--squash",
-            Self::Rebase => "--rebase",
-        }
+/// The `gh pr merge` flag of a merge method.
+const fn merge_flag(method: PrMergeMethod) -> &'static str {
+    match method {
+        PrMergeMethod::Merge => "--merge",
+        PrMergeMethod::Squash => "--squash",
+        PrMergeMethod::Rebase => "--rebase",
     }
 }
 
@@ -492,7 +483,7 @@ pub fn pr_merge_arguments(
     }
     let mut arguments = vec!["pr".to_owned(), "merge".to_owned(), number.to_string()];
     if let Some(method) = method {
-        arguments.push(method.flag().to_owned());
+        arguments.push(merge_flag(method).to_owned());
     }
     arguments.extend(["--match-head-commit".to_owned(), head.to_owned()]);
     Some(arguments)
@@ -533,7 +524,7 @@ fn is_pr_write(arguments: &[&str]) -> bool {
                     PrMergeMethod::Rebase,
                 ]
                 .iter()
-                .any(|method| method.flag() == *flag)
+                .any(|method| merge_flag(*method) == *flag)
         }
         ["api", "--method", "PUT", path, "-f", field] => {
             let Some(path) = path.strip_prefix("repos/") else {
@@ -1278,6 +1269,7 @@ mod tests {
             ("https://github.com/acme/app", "acme/app"),
             ("https://token@github.com/acme/app.git/", "acme/app"),
             ("ssh://git@github.com:22/acme/app.git", "acme/app"),
+            ("https://github.com:443/acme/app.git", "acme/app"),
             (
                 "git@ghe.example.com:acme/app.git",
                 "ghe.example.com/acme/app",
