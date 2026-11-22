@@ -9,7 +9,7 @@ export const issueSettingsEnglish = {
   "issueSettings.ghNotInstalled": "{{program}} isn't installed",
   "issueSettings.ghOutdated": "{{program}} is too old; update it",
   "issueSettings.ghNotLoggedIn": "Not signed in to {{program}}",
-  "issueSettings.ghNotLoggedInOn": "Not signed in to gh on {{machine}}",
+  "issueSettings.ghNotLoggedInOn": "Not signed in to {{program}} on {{machine}}",
   "issueSettings.readFailed": "Couldn't read",
   "issueSettings.sourceMenu": "Issue source",
 } as const;
@@ -23,7 +23,7 @@ const ko = {
   "issueSettings.ghNotInstalled": "{{program}} 설치 안 됨",
   "issueSettings.ghOutdated": "{{program}} 버전이 오래됐어요. 업데이트하세요",
   "issueSettings.ghNotLoggedIn": "{{program}} 로그인 안 됨",
-  "issueSettings.ghNotLoggedInOn": "{{machine}}에서 gh 로그인 안 됨",
+  "issueSettings.ghNotLoggedInOn": "{{machine}}에서 {{program}} 로그인 안 됨",
   "issueSettings.readFailed": "불러오기 실패",
   "issueSettings.sourceMenu": "이슈 출처",
 } satisfies Catalog<typeof issueSettingsEnglish>;
@@ -37,7 +37,7 @@ const zhCN = {
   "issueSettings.ghNotInstalled": "未安装 {{program}}",
   "issueSettings.ghOutdated": "{{program}} 版本过旧，请更新",
   "issueSettings.ghNotLoggedIn": "未登录 {{program}}",
-  "issueSettings.ghNotLoggedInOn": "{{machine}} 上未登录 gh",
+  "issueSettings.ghNotLoggedInOn": "{{machine}} 上未登录 {{program}}",
   "issueSettings.readFailed": "读取失败",
   "issueSettings.sourceMenu": "议题来源",
 } satisfies Catalog<typeof issueSettingsEnglish>;
@@ -51,7 +51,7 @@ const ja = {
   "issueSettings.ghNotInstalled": "{{program}}が未インストール",
   "issueSettings.ghOutdated": "{{program}} が古いため、更新してください",
   "issueSettings.ghNotLoggedIn": "{{program}}に未ログイン",
-  "issueSettings.ghNotLoggedInOn": "{{machine}}でghに未ログイン",
+  "issueSettings.ghNotLoggedInOn": "{{machine}}で{{program}}に未ログイン",
   "issueSettings.readFailed": "読み込み失敗",
   "issueSettings.sourceMenu": "Issueの取得元",
 } satisfies Catalog<typeof issueSettingsEnglish>;

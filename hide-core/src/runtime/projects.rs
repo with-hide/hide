@@ -1916,6 +1916,17 @@ impl Runtime {
             }
             newly_settled |= self.github_settled.insert(path);
         }
+        // A gitlab.com project read on this machine is the day's use of GitLab.
+        let gitlab_read = answered.iter().any(|(path, outcome)| {
+            *outcome == GithubReadOutcome::Read
+                && github.project(path).is_some_and(|project| {
+                    project.status.host.as_ref().map(|host| host.key.as_str())
+                        == Some(crate::gitlab::host::KEY)
+                })
+        });
+        if gitlab_read {
+            self.note_feature_used(crate::product_analytics::Feature::Gitlab);
+        }
         let mut merged = github;
         keep_previous_reads(&mut merged, &self.github, &requested);
         self.read_merges_made_here(&mut merged);
@@ -3962,9 +3973,13 @@ impl Runtime {
             }
         }
         let mut merged = github;
-        if let Some(previous) = self.device_github.get(device_id) {
-            keep_previous_reads(&mut merged, previous, request);
-        }
+        keep_previous_reads(
+            &mut merged,
+            self.device_github
+                .get(device_id)
+                .unwrap_or(&crate::model::GithubSnapshot::default()),
+            request,
+        );
         self.note_mission_pulls(device_id, &merged);
         if self.device_github.get(device_id) == Some(&merged) {
             return false;
@@ -5920,6 +5935,9 @@ fn keep_previous_reads(
                 }
             }
         }
+        // The screen's copy of the identity, made from whatever this pass
+        // settled on, its own read's or the one kept above.
+        project.show_repository();
     }
 }
 

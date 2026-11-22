@@ -30,6 +30,9 @@ const LOCAL = { id: "local", label: "This Mac", kind: "local", state: "local", m
 /** One PR of a row's list; a descendant's names who holds it. */
 type Pull = { repo: string; number: number; state: PrState; holders?: string[]; stale?: boolean };
 
+/** The reference the core's unit makes for `acme/<repo>` pull request `number` (`code_host::ChangeRequestRef`). */
+const ref = (repo: string, number: number) => ({ repository: { host: "github", authority: "github.com", path: `acme/${repo}` }, number, key: `github:github.com/acme/${repo}#${number}`, label: `#${number}`, url: `https://github.com/acme/${repo}/pull/${number}`, checks_url: `https://github.com/acme/${repo}/pull/${number}/checks`, files_url: `https://github.com/acme/${repo}/pull/${number}/files` });
+
 /** A working agent whose row carries `pulls`, the list the core lays on it, worst first as the core orders it. */
 function agent(pane: string, label: string, pulls: Pull[], lineage: Partial<AgentRow> = {}): AgentRow {
   const seed = legacyAgentRow({
@@ -37,7 +40,7 @@ function agent(pane: string, label: string, pulls: Pull[], lineage: Partial<Agen
     status_code: "working", changed_at_unix_ms: null, emphasized: false, unread: false, demand: "none", activity: "working", ...lineage,
   });
   const listed: SessionPull[] = pulls.map(({ repo, number, state, holders, stale }) => ({
-    url: `https://github.com/acme/${repo}/pull/${number}`, number, title: `${repo} ${number}`, state,
+    url: `https://github.com/acme/${repo}/pull/${number}`, number, title: `${repo} ${number}`, state, reference: ref(repo, number),
     own: !holders || holders.includes(label), holders: holders ?? [label], stale: stale ?? false, last_read_at_unix_ms: stale ? READ.last_success_at_unix_ms : null,
   }));
   return { ...seed, pulls: listed.length ? { pulls: listed } : null } as AgentRow;
@@ -163,7 +166,7 @@ const delegated = (stale = false) => [
   agent("pane:root", "릴리스 스킬과 로컬 검증 체계", [{ repo: "app", number: 1073, state: "pending", holders: ["검증 스크립트"], stale }], { lineage_child_pane_ids: ["pane:child"] }),
   agent("pane:child", "검증 스크립트", [{ repo: "app", number: 1073, state: "pending", stale }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
 ];
-const PULL: PullRequest = { number: 1073, title: "릴리스 검증 스크립트", url: "https://github.com/acme/app/pull/1073", badge: "open", review: null, is_draft: false, checks: "pending", state: "pending", head_branch: "feat/verify" };
+const PULL: PullRequest = { number: 1073, title: "릴리스 검증 스크립트", url: "https://github.com/acme/app/pull/1073", reference: ref("app", 1073), badge: "open", review: null, is_draft: false, checks: "pending", state: "pending", head_branch: "feat/verify" };
 const READ: GithubStatus = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: Date.UTC(2026, 9, 18, 9, 0) };
 const hover = async (container: HTMLElement, pane: string) => {
   const trigger = container.querySelector<HTMLElement>(`[data-pr-hover="${pane}"]`)!;
@@ -192,7 +195,7 @@ it("dims a root's gathered mark while GitHub cannot be read and says when it las
 // was pressed): a PR pressed on a 프로젝트 row, a parent's or a child's, opens
 // its card in the slot of that row's pane as one pr_open, never a page; the
 // browser modifier still opens it on GitHub.
-const MERGEABLE: PullRequest = { ...PULL, number: 1080, title: "루트 정리", url: "https://github.com/acme/app/pull/1080", state: "mergeable", checks: "passing", head_branch: "feat/tidy" };
+const MERGEABLE: PullRequest = { ...PULL, number: 1080, title: "루트 정리", url: "https://github.com/acme/app/pull/1080", reference: ref("app", 1080), state: "mergeable", checks: "passing", head_branch: "feat/tidy" };
 const family = () => [
   agent("pane:root", "루트", [{ repo: "app", number: 1073, state: "pending", holders: ["자식"] }, { repo: "app", number: 1080, state: "mergeable", holders: ["루트"] }], { lineage_child_pane_ids: ["pane:child"], lineage_collapsed: false }),
   agent("pane:child", "자식", [{ repo: "app", number: 1073, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),

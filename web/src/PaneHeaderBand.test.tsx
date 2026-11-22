@@ -397,14 +397,14 @@ it("opens the card of the displayed repository even when another project has the
   const url = "https://github.com/acme/other/pull/7";
   try {
     await act(async () => useShellStore.setState({rest: {navigator: {siblings_shown: 5, focused_device_id: "local", devices: [{id: "local", kind: "local"}], workspaces: [
-      {id: "here", device_id: "local", pull_requests: [{number: 7, url: "https://github.com/acme/here/pull/7"}], checkouts: []},
-      {id: "other", device_id: "local", pull_requests: [{number: 7, url}], checkouts: []},
+      {id: "here", device_id: "local", pull_requests: [{number: 7, url: "https://github.com/acme/here/pull/7", reference: {repository: {host: "github", authority: "github.com", path: "acme/here"}, number: 7, key: "github:github.com/acme/here#7", label: "#7", url: "https://github.com/acme/here/pull/7", checks_url: "", files_url: ""}}], checkouts: []},
+      {id: "other", device_id: "local", pull_requests: [{number: 7, url, reference: {repository: {host: "github", authority: "github.com", path: "acme/other"}, number: 7, key: "github:github.com/acme/other#7", label: "#7", url: "https://github.com/acme/other/pull/7", checks_url: "", files_url: ""}}], checkouts: []},
     ] as unknown as Workspace[]}} as SnapshotRest}));
-    await act(async () => actions.openSessionPullRequest({workspace_id: "here", number: 7, url}));
+    await act(async () => actions.openSessionPullRequest({workspace_id: "here", number: 7, url, reference: {repository: {host: "github", authority: "github.com", path: "acme/other"}, number: 7, key: "github:github.com/acme/other#7", label: "#7", url: "https://github.com/acme/other/pull/7", checks_url: "", files_url: ""}}));
     // One event opens the card; the fixture has no Workspace in front, so the core opens the PR's (PRD sidebar-task-lens B17).
     expect(events.filter((event) => event.kind === "pr_open")).toEqual([{schema_version: 2, kind: "pr_open", payload: {workspace_id: "other", pr_number: 7, open_workspace: true, at: "owner"}}]);
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    actions.openSessionPullRequest({workspace_id: "here", number: 7, url: "https://github.com/acme/absent/pull/7"});
+    actions.openSessionPullRequest({workspace_id: "here", number: 7, url: "https://github.com/acme/absent/pull/7", reference: {repository: {host: "github", authority: "github.com", path: "acme/absent"}, number: 7, key: "github:github.com/acme/absent#7", label: "#7", url: "https://github.com/acme/absent/pull/7", checks_url: "", files_url: ""}});
     expect(open).toHaveBeenCalledWith("https://github.com/acme/absent/pull/7", "_blank", "noopener,noreferrer");
   } finally { await unmount(); }
 });

@@ -339,6 +339,28 @@ test("the search step stays while the palette is open and moves on when it close
   });
 });
 
+// docs/UI_BEHAVIOR.md, Code hosts: a gitlab.com project's merge request is drawn by its host on the real screens, in
+// the list beside a GitHub pull request, on its card with no button gitlab.com does not offer, and in Settings' own row.
+test("the GitLab chapter draws a gitlab.com merge request by its host beside a GitHub pull request", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await playFromList(practice, "gitlab");
+    const layer = practice.locator('[data-practice-chapter="gitlab"] [data-practice-layer]');
+    await pressTo(practice, "gitlab", 3);
+    await expect(layer).toHaveAttribute("data-practice-step", "card");
+    const merge = practice.locator('[data-pr="12"][data-pr-project="shop-api"]');
+    await expect(merge.locator("[data-pr-mark]")).toHaveText("!12");
+    await expect(practice.locator('[data-pr="41"][data-pr-project="web"] [data-pr-mark]')).toHaveText("#41");
+    const card = practice.locator('[data-pr-card="12"][data-pr-card-project="shop-api"]');
+    await expect(card.locator("[data-pr-card-number] [data-pr-mark]")).toHaveText("!12");
+    await expect(card.locator("[data-pr-card-github]")).toHaveText("View on GitLab");
+    await expect(card.locator("[data-pr-card-merge]")).toHaveCount(0);
+    await expect(card).not.toContainText("GitHub");
+    await pressTo(practice, "gitlab", 7);
+    await expect(layer).toHaveAttribute("data-practice-step", "hosts");
+    await expect(practice.locator("[data-settings-host]")).toHaveText([/^GitHub/, /^GitLab/]);
+  });
+});
+
 test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
   await withPractice(page, async (practice) => {
     await playFromList(practice, "overview");

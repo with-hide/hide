@@ -212,7 +212,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   ) : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
     // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
     <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
-      {homeTurnLine(t, agent.hide_ai.turn)}
+      {homeTurnLine(t, agent.hide_ai.turn, agent.request?.pull_requests)}
     </span>
   ) : line ? (
     <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />

@@ -484,6 +484,20 @@ fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
             "{case}"
         );
         assert_ne!(project.identity_read, PartRead::Read, "{case}");
+        // The screen names and opens the repository the project keeps, and
+        // none where it keeps none.
+        let shown = kept.then(|| crate::model::RepositoryOnScreen {
+            name: "owner/a".to_owned(),
+            url: "https://github.com/owner/a".to_owned(),
+        });
+        assert_eq!(project.status.repository, shown, "{case}");
+        assert_eq!(
+            runtime.snapshot.navigator.workspaces[0].checkouts[0]
+                .github
+                .repository,
+            shown,
+            "{case}"
+        );
     }
 }
 
@@ -2155,4 +2169,65 @@ fn a_cut_list_kept_over_a_failed_read_keeps_its_cut_mark() {
     assert_eq!(kept.pull_requests.len(), 1);
     assert!(kept.status.stale);
     assert!(kept.pull_requests_cut.open);
+}
+
+/// A gitlab.com project read here counts one use of GitLab a UTC day; a
+/// GitHub project's read and a gitlab.com read that failed count nothing.
+#[test]
+fn a_gitlab_com_read_counts_a_use_of_gitlab_once_a_day() {
+    use crate::product_analytics::{Event, Feature};
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![
+        git_project("hub", "/tmp/hub", "main"),
+        git_project("lab", "/tmp/lab", "main"),
+    ];
+    let statistics = std::sync::Arc::new(RecordedStatistics::default());
+    runtime.install_product_analytics(statistics.clone());
+    let on = |mut read: GithubProjectSnapshot, host: &dyn crate::code_host::CodeHost| {
+        read.status.host = Some(crate::code_host::declaration(host));
+        read
+    };
+    // Each answer is for a pass that asked both projects again, as the clock
+    // does five minutes after the last answer.
+    let mut at = Instant::now();
+    let mut answer = |runtime: &mut Runtime, lab: GithubProjectSnapshot| {
+        let hub = on(
+            read_ok("/tmp/hub", Vec::new(), 10),
+            &crate::github::host::GITHUB,
+        );
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![hub, lab],
+            },
+            true,
+        );
+        runtime.reread_stale_github(at);
+        at += Duration::from_secs(400);
+        runtime.reread_stale_github(at);
+    };
+    answer(
+        &mut runtime,
+        on(read_failed("/tmp/lab"), &crate::gitlab::host::GITLAB),
+    );
+    assert_eq!(statistics.take(), [], "a failed read is no use");
+    answer(
+        &mut runtime,
+        on(
+            read_ok("/tmp/lab", Vec::new(), 20),
+            &crate::gitlab::host::GITLAB,
+        ),
+    );
+    answer(
+        &mut runtime,
+        on(
+            read_ok("/tmp/lab", Vec::new(), 30),
+            &crate::gitlab::host::GITLAB,
+        ),
+    );
+    assert_eq!(
+        statistics.take(),
+        [Event::FeatureUsed {
+            feature: Feature::Gitlab
+        }]
+    );
 }

@@ -13,7 +13,8 @@ import { sourceTime } from "./memoryList";
 import { lineParts, sidebarLine } from "./agentRow";
 import { BranchFileDiff } from "./BranchCard";
 import { allAgents } from "./paneAgents";
-import { catalogWorkspaces, type AgentRow, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionPlan, type SuggestionRow } from "./snapshot";
+import { pullName } from "./codeHost";
+import { catalogWorkspaces, type AgentRow, type ChangeRequestRef, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionPlan, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
 import { applyOffer, appliedSummary, attemptLine, fileName, localLine, offered, suggestionGroups, suggestionMark, suggestionReason, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
@@ -198,7 +199,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
       {row.escalated ? (
         <span className="flex min-w-0 items-center gap-xs" data-suggestion-escalated={row.escalated.level}>
           <span className="shrink-0 text-warning">{t("suggestions.escalated")}</span>
-          {row.escalated.previous_pr_url ? <PrLink project={project} actions={actions} url={row.escalated.previous_pr_url} label={previousPrLabel(t, row.escalated.previous_pr_url)} /> : null}
+          {row.escalated.previous_pr_url ? <PrLink project={project} actions={actions} url={row.escalated.previous_pr_url} reference={row.escalated.previous_pr_reference ?? null} label={row.escalated.previous_pr_reference ? t("suggestions.previousPr", { pull: pullName({ number: row.escalated.previous_pr_reference.number, reference: row.escalated.previous_pr_reference }) }) : row.escalated.previous_pr_url} /> : null}
         </span>
       ) : null}
       {row.returned_after_skip ? <span className="text-warning" data-suggestion-returned="true">{t("suggestions.returnedAfterSkip")}</span> : null}
@@ -211,12 +212,12 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
       {!offered(row) && attempt && !(attempt.branch && attempt.branch.again === null) ? (
         <span className="flex min-w-0 items-center gap-sm" data-suggestion-attempt={row.attempt?.phase} data-suggestion-failure={row.attempt?.failure ?? undefined}>
           {row.attempt?.phase === "pr_open" && row.attempt.url ? (
-            <PrLink project={project} actions={actions} url={row.attempt.url} label={attempt.text} className="min-w-0 truncate text-warning hover:text-warning" />
+            <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={attempt.text} className="min-w-0 truncate text-warning hover:text-warning" />
           ) : (
             <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
           )}
           {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging" || row.attempt.phase === "syncing") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
-          {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
+          {row.attempt?.url && row.attempt.phase !== "pr_open" && attemptLinkLabel(row.attempt, row.outcome, t) ? <PrLink project={project} actions={actions} url={row.attempt.url} reference={row.attempt.reference ?? null} label={attemptLinkLabel(row.attempt, row.outcome, t)!} /> : null}
           {/* A ready branch's line below names the agent once. */}
           {row.attempt?.phase === "ready" && row.attempt.branch ? null : <AgentLink pane={row.attempt?.agent_pane ?? null} actions={actions} />}
         </span>
@@ -239,16 +240,10 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
   );
 }
 
-function previousPrLabel(t: ReturnType<typeof useInterfaceTranslation>["t"], url: string): string {
-  const number = /\/pull\/(\d+)/.exec(url)?.[1];
-  return number ? t("suggestions.previousPr", { number }) : url;
-}
-
-/** A pull request or issue the row names: a pull request opens in the PR panel, an issue in the browser. */
-function PrLink({ project, actions, url, label, className }: { project: ProjectSuggestions; actions: Actions; url: string; label: string; className?: string }) {
-  const number = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? Number.NaN);
+/** A pull request or issue the row names: a pull request, which its host's unit named, opens in the PR panel; an issue in the browser. */
+function PrLink({ project, actions, url, reference, label, className }: { project: ProjectSuggestions; actions: Actions; url: string; reference: ChangeRequestRef | null; label: string; className?: string }) {
   return (
-    <Button variant="text-link" size="inline" className={cn("pointer-events-auto shrink-0", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
+    <Button variant="text-link" size="inline" className={cn("pointer-events-auto shrink-0", className)} title={label} onClick={() => (reference ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: reference.number, url, reference }) : actions.openLink(url, false))} data-suggestion-link={url}>
       {label}
     </Button>
   );
@@ -486,9 +481,9 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
   const device = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === project.workspace_id)?.device_id ?? null);
   const signal = t(`suggestions.signal.${evidence.signal}`);
   const session = evidence.kind === "session" && evidence.agent && evidence.session_id && device ? { device_id: device, agent: evidence.agent, session_id: evidence.session_id } : null;
-  const pull = evidence.kind === "pr" && evidence.url && evidence.pr_number !== null ? { workspace_id: project.workspace_id, number: evidence.pr_number, url: evidence.url } : null;
+  const pull = evidence.kind === "pr" && evidence.url && evidence.pr_number !== null ? { workspace_id: project.workspace_id, number: evidence.pr_number, url: evidence.url, reference: evidence.reference ?? null } : null;
   const openable = !evidence.gone && (session !== null || pull !== null);
-  const name = evidence.kind === "pr" && evidence.pr_number !== null ? t("suggestions.openPr", { number: String(evidence.pr_number) }) : t("suggestions.evidence.session");
+  const name = evidence.kind === "pr" && evidence.pr_number !== null ? pullName({ number: evidence.pr_number, reference: evidence.reference }) : t("suggestions.evidence.session");
   const said = evidence.excerpt ? (
     <p className="min-w-0 whitespace-pre-wrap break-words border-l-2 border-border pl-sm text-caption text-muted-foreground" data-suggestion-excerpt="true">{evidence.excerpt}</p>
   ) : evidence.unreadable ? (
@@ -608,4 +603,14 @@ export function BranchButtons({ row, project, actions, again, className }: { row
       <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "discard")} data-suggestion-discard={row.id}>{t("suggestions.branch.discard")}</Button>
     </div>
   );
+}
+
+/**
+ * The words of an attempt's link: the issue it opened, or its pull request as its host names it; null when the
+ * attempt carries neither a number nor a reference, so no link is drawn rather than a made-up number.
+ */
+function attemptLinkLabel(attempt: NonNullable<SuggestionRow["attempt"]>, outcome: SuggestionRow["outcome"], t: ReturnType<typeof useInterfaceTranslation>["t"]): string | null {
+  if (outcome === "issue" && attempt.pr_number === null) return t("suggestions.openIssue");
+  const number = attempt.pr_number ?? attempt.reference?.number ?? null;
+  return number === null ? null : pullName({ number, reference: attempt.reference });
 }

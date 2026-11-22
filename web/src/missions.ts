@@ -15,7 +15,8 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import { pullLabel, pullName } from "./codeHost";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -720,7 +721,7 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
  * stacks (`출발 가능 · Core 위에 쌓기`); null when it waits on nothing named.
  */
 export function plannedWait(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
-  const before = waitingFor(mission, node).map(({ node: dep, line }) => [dep.pr != null ? `#${dep.pr}` : dep.title, line].filter(Boolean).join(" "));
+  const before = waitingFor(mission, node).map(({ node: dep, line }) => [dep.pr != null ? pullLabel({ number: dep.pr, reference: dep.pr_reference }) : dep.title, line].filter(Boolean).join(" "));
   if (before.length > 0) return t("mission.line.waitsFor", { names: before.join(" ") });
   const below = node.stack && node.waiting_on?.kind === "start" ? mission.nodes.find((other) => other.key === node.stack!.on) : undefined;
   return below ? t("mission.line.stackOn", { name: below.title }) : null;
@@ -949,11 +950,11 @@ export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId
 
 /** An event in words (B20, B31): what happened, and the one line it carried. */
 /** What Hide did, in words, with the pull request it was about. */
-function hideAction(action: MissionHideAction, pr: number | null, t: TFunction<"translation">): string {
-  return t(`mission.hide.${action}`, { pr: prWords(pr, t) });
+function hideAction(action: MissionHideAction, pr: number | null, t: TFunction<"translation">, pulls?: MissionPulls): string {
+  return t(`mission.hide.${action}`, { pr: prWords(pr, t, pulls) });
 }
 
-export function eventWords(event: MissionEvent, t: TFunction<"translation">): { what: string; line: string | null } {
+export function eventWords(event: MissionEvent, t: TFunction<"translation">, pulls?: MissionPulls): { what: string; line: string | null } {
   const line = event.line ?? null;
   switch (event.kind) {
     case "planned":
@@ -965,9 +966,9 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
     case "retried":
       return { what: t("mission.event.retried", { count: event.count ?? 0 }), line: null };
     case "pr_opened":
-      return { what: t("mission.event.prOpened", { number: String(event.pr ?? "") }), line: null };
+      return { what: t("mission.event.prOpened", { pull: event.pr == null ? "" : pullName(missionPull(event.pr, pulls)) }), line: null };
     case "pr_merged":
-      return { what: t("mission.event.prMerged", { number: String(event.pr ?? "") }), line: null };
+      return { what: t("mission.event.prMerged", { pull: event.pr == null ? "" : pullName(missionPull(event.pr, pulls)) }), line: null };
     case "landed":
       return { what: t("mission.event.landed"), line: line ? shortCommit(line) : null };
     case "asked":
@@ -989,7 +990,7 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
     case "strength":
       return { what: t("mission.event.strength", { strength: event.strength ? t(`mission.strength.${event.strength}`) : "" }), line };
     case "hide":
-      return { what: event.hide ? t("mission.hide.mark", { what: hideAction(event.hide, event.pr ?? null, t) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t)} ${t(`mission.fix.${event.why}`)}` : line };
+      return { what: event.hide ? t("mission.hide.mark", { what: hideAction(event.hide, event.pr ?? null, t, pulls) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t, pulls)} ${t(`mission.fix.${event.why}`)}` : line };
     case "hide_closed":
       return { what: t("mission.hide.mark", { what: t("mission.hide.closed") }), line };
     case "raised":
@@ -1042,16 +1043,34 @@ export function nodeQuestion(mission: Mission, node: MissionNode): string | null
   return mission.decision;
 }
 
+/** A mission's pull requests by number, each with the reference its node carries: events and marks name a number only. */
+export type MissionPulls = ReadonlyMap<number, ChangeRequestRef>;
+
+/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds. */
+export function pullsByNumber(nodes: readonly { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[] }[]): MissionPulls {
+  const pulls = new Map<number, ChangeRequestRef>();
+  for (const node of nodes) {
+    for (const pr of node.prs ?? []) if (pr.reference) pulls.set(pr.number, pr.reference);
+    if (node.pr != null && node.pr_reference) pulls.set(node.pr, node.pr_reference);
+  }
+  return pulls;
+}
+
+/** Pull request `number` of a mission, named by the reference a node carries for it (`!12` on gitlab.com). */
+export function missionPull(number: number, pulls: MissionPulls | undefined): { number: number; reference: ChangeRequestRef | null } {
+  return { number, reference: pulls?.get(number) ?? null };
+}
+
 /** A pull request in words: `PR #n`, or `PR` when the record names none. */
-function prWords(pr: number | null, t: TFunction<"translation">): string {
-  return pr != null ? t("mission.attention.pr", { number: String(pr) }) : t("mission.attention.prNone");
+function prWords(pr: number | null, t: TFunction<"translation">, pulls?: MissionPulls): string {
+  return pr != null ? t("mission.attention.pr", { pull: pullName(missionPull(pr, pulls)) }) : t("mission.attention.prNone");
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0, pulls?: MissionPulls): string {
   // A refused close says how many finished nodes have a line empty when the core counted them.
   if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
-  return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
+  return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t, pulls) });
 }
 
 /**
@@ -1079,11 +1098,13 @@ export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number
 
 /** The last still-open held PR and the other open PRs, from the core's
  * merge reading. Older cores omit `prs` and keep their previous PR display. */
-export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; more: number } {
+export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state" | "pr_reference"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; reference: ChangeRequestRef | null; more: number } {
   const open = node.merge?.prs;
   const number = open === undefined ? node.pr : (open.at(-1) ?? null);
-  const state = number === node.pr ? node.pr_state : (node.prs?.find((pr) => pr.number === number)?.state ?? null);
-  return { number, state, more: Math.max(0, (open?.length ?? 1) - 1) };
+  const held = node.prs?.find((pr) => pr.number === number);
+  const state = number === node.pr ? node.pr_state : (held?.state ?? null);
+  const reference = (number === node.pr ? node.pr_reference : null) ?? held?.reference ?? null;
+  return { number, state, reference, more: Math.max(0, (open?.length ?? 1) - 1) };
 }
 
 /**
@@ -1196,8 +1217,9 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
 export function hideWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
   const mark = node.hide;
   if (!mark) return null;
-  const what = hideAction(mark.action, mark.pr ?? null, t);
-  if (mark.action === "woke") return mark.why ? `${what} · ${prWords(mark.pr ?? null, t)} ${t(`mission.fix.${mark.why}`)}` : what;
+  const pulls = pullsByNumber(mission.nodes);
+  const what = hideAction(mark.action, mark.pr ?? null, t, pulls);
+  if (mark.action === "woke") return mark.why ? `${what} · ${prWords(mark.pr ?? null, t, pulls)} ${t(`mission.fix.${mark.why}`)}` : what;
   if (mark.action !== "done") return what;
   const tally = criteriaTally(mission, node);
   const prs = node.prs.length > 0 ? t(node.prs.every((pr) => pr.state === "merged") ? "mission.hide.because.merged" : "mission.hide.because.ready") : null;

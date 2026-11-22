@@ -393,13 +393,16 @@ describe("the Hide AI tool", () => {
       suggestionRow("s1", { group: "applied", state: "watching", watch: { sessions_seen: 2, sessions_needed: 5 } }),
       suggestionRow("s2", { group: "applied", state: "effective" }),
       suggestionRow("s3", { group: "applied", state: "applied" }),
-      suggestionRow("s4", { escalated: { level: 1, previous_pr_url: "https://github.com/acme/one/pull/1720" } }),
+      suggestionRow("s4", { escalated: { level: 1, previous_pr_url: "https://github.com/acme/one/pull/1720", previous_pr_reference: { repository: { host: "github", authority: "github.com", path: "acme/one" }, number: 1720, key: `github:github.com/acme/one${"#"}1720`, label: `${"#"}1720`, url: "https://github.com/acme/one/pull/1720", checks_url: "", files_url: "" } } }),
+      suggestionRow("s5", { escalated: { level: 1, previous_pr_url: "https://gitlab.com/acme/shop/-/merge_requests/7", previous_pr_reference: { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/shop" }, number: 7, key: "gitlab:gitlab.com/acme/shop!7", label: "!7", url: "https://gitlab.com/acme/shop/-/merge_requests/7", checks_url: "", files_url: "" } } }),
     ] }));
     expect(q("[data-suggestions-fold]")?.textContent).toBe("Applied 3· worked 1");
     expect(q('[data-suggestion="s1"]')).toBeNull();
     // It came back after its fix merged: back in 고를 것 with the last PR.
     expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain("The doc didn't do it");
     expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain(`Last PR ${"#"}1720`);
+    // A gitlab.com reference is named by its host: the item word and the number form both come from it.
+    expect(q('[data-suggestion="s5"] [data-suggestion-escalated]')?.textContent).toContain("Last MR !7");
     await click("[data-suggestions-fold]");
     expect(q('[data-suggestion="s1"] [data-suggestion-watch]')?.textContent).toBe("Watching · sessions 2/5");
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')).toBeNull();

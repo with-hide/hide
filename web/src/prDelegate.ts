@@ -3,16 +3,17 @@
 // request. Pure, so the rule reads and tests on its own; the operator edits
 // the prompt before starting, and it is never cut (PRD Risks).
 
+import { pullWords } from "./codeHost";
 import type { TFunction } from "i18next";
-import type { PrFeedback } from "./snapshot";
+import type { ChangeRequestRef, PrFeedback } from "./snapshot";
 
 /**
  * Which pull request and branch to fix, then each failed check by name with
  * its link, then each change request as its reviewer wrote it. A section with
  * nothing in it is left out.
  */
-export function delegatePrompt(pr: { number: number; title: string; branch: string }, feedback: Pick<PrFeedback, "failed_checks" | "change_requests">, t: TFunction<"translation">): string {
-  const lines: string[] = [t("prWork.prompt.fix", { number: String(pr.number), branch: pr.branch, title: pr.title })];
+export function delegatePrompt(pr: { number: number; reference?: ChangeRequestRef | null; title: string; branch: string }, feedback: Pick<PrFeedback, "failed_checks" | "change_requests">, t: TFunction<"translation">): string {
+  const lines: string[] = [t("prWork.prompt.fix", { ...pullWords(pr), branch: pr.branch, title: pr.title })];
   if (feedback.failed_checks.length > 0) {
     lines.push("", t("prWork.prompt.failedChecks"));
     for (const check of feedback.failed_checks) lines.push(`- ${check.name ?? t("githubReason.unnamedCheck")}${check.url ? ` ${check.url}` : ""}`);

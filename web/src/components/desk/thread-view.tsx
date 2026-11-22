@@ -1,4 +1,5 @@
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
+import { pullLabel } from "../../codeHost";
 import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
@@ -241,7 +242,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       );
       break;
     case "pr":
-      body = <PartLine kind="pr" icon={null}><PrMark state={part.state} number={part.number} /></PartLine>;
+      body = <PartLine kind="pr" icon={null}><PrMark state={part.state} label={pullLabel(part)} /></PartLine>;
       break;
   }
   return command ? <Hint label={command} reveals contentClassName="font-mono">{body}</Hint> : body;

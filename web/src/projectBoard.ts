@@ -7,6 +7,7 @@
 import { scopeOccurrences } from "./agentScope";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
+import { pullLabel } from "./codeHost";
 import { settled } from "./prMark";
 import type { AgentRow, Checkout, PrState, PullRequest, Workspace } from "./snapshot";
 
@@ -34,13 +35,15 @@ export type BoardRow = {
  */
 export type PrChip = {
   number: number;
+  /** The number as its host writes it (`#12`, `!12`). */
+  label: string;
   url: string;
   state: PrState;
   changesRequested: boolean;
 };
 
 export function prChip(pr: PullRequest): PrChip {
-  return { number: pr.number, url: pr.url, state: pr.state, changesRequested: !settled(pr.state) && pr.review === "changes_requested" };
+  return { number: pr.number, label: pullLabel(pr), url: pr.url, state: pr.state, changesRequested: !settled(pr.state) && pr.review === "changes_requested" };
 }
 
 /** A Project the board reads: its catalog row, every agent its device reported, and the device's name when it is not this machine. */

@@ -1,4 +1,5 @@
 import { ChevronRightIcon, GitBranchIcon, GlobeIcon, ImageIcon } from "lucide-react";
+import { pullLabel } from "../../codeHost";
 import type { ReactNode } from "react";
 import type { DeskAsk, DeskJob, DeskJobFailure, DeskMission, DeskOutput } from "../../desk";
 import { AgentMark } from "../../AgentMark";
@@ -256,7 +257,7 @@ export function JobChip({ job, selectedOutput = null, onOutput, onMission }: { j
   if (job.joined) return <Badge variant="outline" data-desk-job-joined="true">{t("desk.job.joined")}</Badge>;
   if (job.outputs.length) return <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} />;
   const pr = job.pull_requests[0];
-  return pr ? <PrMark state={pr.state} number={pr.number} /> : null;
+  return pr ? <PrMark state={pr.state} label={pullLabel(pr)} /> : null;
 }
 
 /** The words at the second line's end (D-75): the one thing the operator would do, as words; a card with nothing to do has none. */
