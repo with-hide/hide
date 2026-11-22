@@ -6739,6 +6739,37 @@
                     "value": {
                         "type": "key"
                     }
+                }
+            ],
+            "command": "device update",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "update_not_asked"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
                 },
                 {
                     "name": "address",
@@ -6850,6 +6881,8 @@
                 "ssh_mac_signed_out",
                 "ssh_update_there",
                 "ssh_hide_not_running",
+                "wsl_not_reached",
+                "wsl_unavailable",
                 "device_already_connected"
             ],
             "repeats_at_most": null,
@@ -6866,6 +6899,21 @@
             "refusals": [
                 "hide_unavailable",
                 "request_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [],
+            "arguments": [],
+            "command": "device carry",
+            "hidden": true,
+            "options": [],
+            "refusals": [
+                "device_from_pane",
+                "hide_unavailable",
+                "request_timeout",
+                "peer_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9299,7 +9347,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:07969d973564f3447eff81ec4df2a9327a2b2e89cbe7d6663527278bd291d81f",
+    "digest": "sha256:93bc909d947a528e3ad587ca368d34c2a80a4f012f1a5f61c7f26964ff9a67ef",
     "envelopes": {
         "access": {
             "answer": "value",

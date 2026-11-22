@@ -439,6 +439,7 @@ pub fn shape() -> Value {
         build: String::new(),
         device: String::new(),
         contract: Some(String::new()),
+        update: true,
     };
     let ready = Ready {
         guest_node: launch::GUEST_NODE,

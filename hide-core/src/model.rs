@@ -966,7 +966,8 @@ pub enum PaneFindRoute {
     Bar,
 }
 
-/// A device an Add over SSH did not add (`NavigatorSnapshot::device_not_added`).
+/// A device an Add over SSH, or of a WSL distribution, did not add
+/// (`NavigatorSnapshot::device_not_added`).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeviceNotAddedSnapshot {
     /// The name the operator gave it.
@@ -1188,15 +1189,16 @@ pub struct DeviceSnapshot {
     /// again and closed (B36), kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_carried: Option<u32>,
-    /// Added over SSH to be switched at once (B41): its switch is asked
-    /// when it first connects, and it is not left on the helper when that
-    /// switch stops before anything was started on its machine.
+    /// Added over SSH, or as a WSL distribution, to be switched at once
+    /// (B41): its switch is asked when it first connects, and it is not
+    /// left on the helper when that switch stops before anything was
+    /// started on its machine.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub switch_first: bool,
 }
 
-/// What a machine's Hide, started over SSH, needs to stay reachable with no
-/// one at it (PRD device-connect-iroh B30).
+/// What a machine's Hide, reached over SSH or `wsl.exe`, needs to stay
+/// reachable with no one at it (PRD device-connect-iroh B30, B43).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeviceNeedsSnapshot {
     pub kind: DeviceNeeds,
@@ -1207,10 +1209,11 @@ pub struct DeviceNeedsSnapshot {
 
 impl DeviceNeedsSnapshot {
     /// Whether it is spelled as a row can draw it: a linger with its one
-    /// command line, an automatic login with none.
+    /// command line, an automatic login or an opened distribution with
+    /// none.
     pub(crate) fn valid(&self) -> bool {
         match (self.kind, self.command.as_deref()) {
-            (DeviceNeeds::AutoLogin, None) => true,
+            (DeviceNeeds::AutoLogin | DeviceNeeds::OpenDistribution, None) => true,
             (DeviceNeeds::Linger, Some(command)) => {
                 !command.is_empty()
                     && command.len() <= 256
@@ -1231,6 +1234,10 @@ pub enum DeviceNeeds {
     /// Linux: the core ends with the account's last session until an
     /// administrator turns linger on.
     Linger,
+    /// A WSL distribution with no systemd: its core lives while the
+    /// distribution runs, so after Windows restarts it is back only once
+    /// the operator opens the distribution.
+    OpenDistribution,
 }
 
 /// A helper device's switch to the connection of the Hide on its machine,
@@ -6338,7 +6345,26 @@ impl DeviceNaming {
     }
 }
 
+/// What the core dials a helper device by, whatever its id: an SSH alias
+/// or a WSL distribution of this PC ([`LinkOrigin::dialed_by`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DialedBy {
+    Ssh(String),
+    Wsl(String),
+}
+
 impl LinkOrigin {
+    /// What the core dials the device's helper by. An SSH device's id
+    /// changes at its first connection, so what is kept about a helper
+    /// device before then is kept by this.
+    pub fn dialed_by(&self) -> Option<DialedBy> {
+        match self {
+            Self::Dialed { ssh_alias, .. } => Some(DialedBy::Ssh(ssh_alias.clone())),
+            Self::Wsl { distro } => Some(DialedBy::Wsl(distro.clone())),
+            Self::Inbound | Self::Peer { .. } => None,
+        }
+    }
+
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
             Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
@@ -6385,15 +6411,16 @@ impl LinkOrigin {
 
     /// Whether the device can be switched to its machine's own connection
     /// now: one the core dials over SSH that has connected, so its id is
-    /// its machine's and the paired machine's device has it too (B35). A
-    /// device that never connected is switched once it has.
+    /// its machine's and the paired machine's device has it too (B35), or
+    /// a WSL distribution of this PC, whose id the PC names and keeps
+    /// (D-27). An SSH device that never connected is switched once it has.
     pub fn switches(&self) -> bool {
         matches!(
             self,
             Self::Dialed {
                 naming: DeviceNaming::Named,
                 ..
-            }
+            } | Self::Wsl { .. }
         )
     }
 
@@ -11409,10 +11436,14 @@ mod wire_enum_tests {
         assert_wire(&contract, "device_switch_state", &switch_states);
         checked.insert("device_switch_state");
 
-        let needs = [DeviceNeeds::AutoLogin, DeviceNeeds::Linger];
+        let needs = [
+            DeviceNeeds::AutoLogin,
+            DeviceNeeds::Linger,
+            DeviceNeeds::OpenDistribution,
+        ];
         for variant in needs {
             match variant {
-                DeviceNeeds::AutoLogin | DeviceNeeds::Linger => {}
+                DeviceNeeds::AutoLogin | DeviceNeeds::Linger | DeviceNeeds::OpenDistribution => {}
             }
         }
         assert_wire(&contract, "device_needs", &needs);
@@ -11900,10 +11931,28 @@ mod wire_enum_tests {
             assert_wire(&contract, "peer_reason", &reasons);
             checked.insert("peer_reason");
 
-            let updates = [PeerUpdate::Here, PeerUpdate::There];
+            let updates = [
+                PeerUpdate::Here,
+                PeerUpdate::There,
+                PeerUpdate::HereAsked,
+                PeerUpdate::ThereAsked,
+                PeerUpdate::Updating,
+                PeerUpdate::UpdateNotReached,
+                PeerUpdate::UpdateRolledBack,
+                PeerUpdate::UpdateBusy,
+                PeerUpdate::UpdateFailed,
+            ];
             for variant in updates {
                 match variant {
-                    PeerUpdate::Here | PeerUpdate::There => {}
+                    PeerUpdate::Here
+                    | PeerUpdate::There
+                    | PeerUpdate::HereAsked
+                    | PeerUpdate::ThereAsked
+                    | PeerUpdate::Updating
+                    | PeerUpdate::UpdateNotReached
+                    | PeerUpdate::UpdateRolledBack
+                    | PeerUpdate::UpdateBusy
+                    | PeerUpdate::UpdateFailed => {}
                 }
             }
             assert_wire(&contract, "peer_update", &updates);

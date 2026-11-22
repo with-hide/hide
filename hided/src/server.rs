@@ -97,6 +97,10 @@ pub struct AppState {
     /// `hide connect` on this machine updates the core rather than stopping
     /// it (PRD core-host-node-move Q13); `None` when no starter runs it.
     pub starter_program: Option<Arc<str>>,
+    /// The program this daemon is, reported on `/health` so a raise of a
+    /// core no starter started knows which build to keep for its way back
+    /// (PRD device-connect-iroh B23).
+    pub program: Option<Arc<str>>,
     /// Serializes a renderer count change with the `ui_attached` event it
     /// sends, so two windows coming and going at once cannot leave the core
     /// told the opposite of the final count.
@@ -530,6 +534,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "release": crate::build_order::Release::of_this_build(),
         "build": state.build.as_deref(),
         "starter": state.starter_program.as_deref().map(|program| json!({"program": program})),
+        "program": state.program.as_deref(),
         "schema_version": SCHEMA_VERSION,
         "clients": state.clients.load(Ordering::SeqCst),
         "open_handlers_in_flight": state.opener.in_flight(),

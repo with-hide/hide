@@ -11,6 +11,7 @@ mod dial;
 mod grants;
 mod pairing;
 mod pairings;
+mod pipe;
 mod raw;
 
 use std::future::Future;
@@ -145,6 +146,7 @@ pub fn pair(host: &Machine, guest: &Machine) {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: Vec::new(),
+                started: None,
             })
         })
         .unwrap();

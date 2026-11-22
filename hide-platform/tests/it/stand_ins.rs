@@ -1,8 +1,8 @@
 //! Programs a test runs against a product deadline, ready before the
 //! deadline starts (issues 813 and 824). Built only into tests: hide-platform's
-//! integration tests, and by `#[path]` hided's and hide-ai's integration tests,
-//! hide-agent-hooks' unit and integration tests and hide-kit's unit tests, so
-//! a change here plans every crate that runs it.
+//! integration tests, and by `#[path]` hide-ai's integration tests, hided's
+//! and hide-agent-hooks' unit and integration tests and hide-kit's unit
+//! tests, so a change here plans every crate that runs it.
 //!
 //! macOS checks a file the first time it is started, once per file, and the
 //! checks of every process on the machine wait in one line: on 2026-10-09 at
@@ -44,11 +44,13 @@ use hide_platform::process::OwnedChild;
 const READY_GUARD: Duration = Duration::from_secs(60);
 
 /// The most stand-ins the build keeps. A body is fixed text, so the store
-/// grows only when a body is edited, by one file per edit until the build
-/// folder is cleaned; a body that named a test's own folder would add a file
-/// on every run, and this cap fails that test instead.
+/// holds one file per body the workspace's tests use, and one more per edit
+/// of a body until the build folder is cleaned; a body that named a test's
+/// own folder would add a file on every run, and this cap fails that test
+/// instead. The workspace's own bodies reached 64, the cap until then, on
+/// 2026-11-19, when the first test past it failed in a clean build.
 #[cfg(unix)]
-const STORE_CAP: usize = 64;
+const STORE_CAP: usize = 128;
 
 /// The files this process has already started once.
 static READY: LazyLock<Mutex<HashSet<FileId>>> = LazyLock::new(Mutex::default);

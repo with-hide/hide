@@ -2,7 +2,8 @@
 //! (PRD device-connect-iroh D-49, B35, B36, B41).
 //!
 //! The steps run in hided, which reaches the machine over the device's SSH
-//! login, has a Hide put there when it has none and pairs the two. The
+//! login, or through `wsl.exe` when the device is a WSL distribution of
+//! this PC (D-27), has a Hide put there when it has none and pairs the two. The
 //! core hears each step as a `device_switch` event, sent by the daemon
 //! only: it draws the step on the device's row and, once the paired
 //! machine's grant is active, changes the registration's link in place.
@@ -48,7 +49,7 @@ pub struct DeviceSwitchSource {
     /// The device's id, which the one who asked may have named by its
     /// alias.
     pub device_id: String,
-    pub ssh_alias: String,
+    pub via: SwitchVia,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
     pub helper_root: String,
@@ -56,8 +57,20 @@ pub struct DeviceSwitchSource {
     /// spells them, which its machine's own Hide lists from then on (PRD
     /// device-connect-iroh D-48); at most [`SWITCHED_PROJECTS`].
     pub projects: Vec<String>,
-    /// Where the questions of the switch's SSH login go: the device's row.
-    pub sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
+}
+
+/// What hided reaches the machine a helper device is through.
+pub enum SwitchVia {
+    /// Over the SSH alias the device is dialed by.
+    Ssh {
+        alias: String,
+        /// Where the questions of the switch's SSH login go: the device's
+        /// row.
+        sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
+    },
+    /// Through `wsl.exe`, into this PC's distribution of that name; it asks
+    /// nothing.
+    Wsl { distro: String },
 }
 
 /// The most projects a switch hands the device's machine, which is as many
@@ -126,8 +139,9 @@ impl Runtime {
     /// What hided switches `device` from, or the code of why it is not a
     /// device that can be switched: only a device the core dials over SSH
     /// under its machine's own id, which the paired machine's device then
-    /// has too. `device` is its id, or the SSH alias it is dialed by, which
-    /// is what a terminal knows of a device it has just added.
+    /// has too, or a WSL distribution of this PC. `device` is its id, or
+    /// the SSH alias or the distribution it is dialed by, which is what a
+    /// terminal knows of a device it has just added.
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
@@ -139,17 +153,16 @@ impl Runtime {
                     .ui_state
                     .device_registrations
                     .iter()
-                    .find(|registration| registration.origin.ssh_alias() == Some(device))
+                    .find(|registration| {
+                        registration.origin.ssh_alias() == Some(device)
+                            || registration.origin.wsl_distro() == Some(device)
+                    })
             })
             .ok_or("device_unknown")?;
         let device_id = registration.id.as_str();
-        let Some(ssh_alias) = registration
-            .origin
-            .ssh_alias()
-            .filter(|_| registration.origin.switches())
-        else {
+        if !registration.origin.switches() {
             return Err("switch_unsupported");
-        };
+        }
         // The operator's press on the device's row started the switch, so
         // its login asks there, as the device's own connection attempts do
         // (D-45). A device that never had an attempt has no row state to
@@ -167,9 +180,14 @@ impl Runtime {
                     withdrawn: Arc::default(),
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
+        let via = match registration.origin.dialed_by() {
+            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias, sign_in },
+            Some(crate::model::DialedBy::Wsl(distro)) => SwitchVia::Wsl { distro },
+            None => return Err("switch_unsupported"),
+        };
         Ok(DeviceSwitchSource {
             device_id: device_id.to_owned(),
-            ssh_alias: ssh_alias.to_owned(),
+            via,
             helper_root: registration
                 .host_consent
                 .as_ref()
@@ -184,7 +202,6 @@ impl Runtime {
                 .map(|project| project.path.clone())
                 .take(SWITCHED_PROJECTS)
                 .collect(),
-            sign_in,
         })
     }
 
@@ -220,7 +237,8 @@ impl Runtime {
             let dropped = self.device_switches.remove(&device_id).is_some();
             return dropped && self.refresh_device_snapshots();
         }
-        // A device added over SSH to be switched is not left on the helper
+        // A device added over SSH, or as a WSL distribution, to be switched
+        // is not left on the helper
         // when that switch stops with nothing started on its machine (B41):
         // it is taken off again, and one line says why. Past that point its
         // machine runs a Hide from the helper's folder, or holds a grant
@@ -229,11 +247,10 @@ impl Runtime {
         if payload.step == SwitchStep::Failed {
             let fresh = self
                 .device_registration(&device_id)
-                .and_then(|registration| registration.origin.ssh_alias())
-                .filter(|alias| self.device_fresh_adds.contains(*alias))
-                .map(str::to_owned);
-            if let Some(alias) = fresh {
-                self.device_fresh_adds.remove(&alias);
+                .and_then(|registration| registration.origin.dialed_by())
+                .filter(|by| self.device_fresh_adds.contains(by));
+            if let Some(by) = fresh {
+                self.device_fresh_adds.remove(&by);
                 if payload.clean {
                     return self.take_off_fresh_add(&device_id, payload.reason.as_deref());
                 }
@@ -400,8 +417,8 @@ impl Runtime {
             return false;
         };
         self.device_switches.remove(device_id);
-        if let Some(alias) = saving.was.ssh_alias() {
-            self.device_fresh_adds.remove(alias);
+        if let Some(by) = saving.was.dialed_by() {
+            self.device_fresh_adds.remove(&by);
         }
         if let Some(needs) = saving.needs {
             self.device_needs.insert(device_id.to_owned(), needs);
