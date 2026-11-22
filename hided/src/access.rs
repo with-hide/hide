@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use hide_agent_hooks::hook_request::install::{AccessAsk, PaneRequest};
 use hide_core::access::{
-    Call, NEEDS_AGENT, NOT_OWN_WORK, OPERATOR_ONLY, SPAWN_PARENT, key_hash, valid_key, valid_name,
+    CODE_ALPHABET, CODE_LEN, Call, NEEDS_AGENT, NOT_OWN_WORK, OPERATOR_ONLY, SPAWN_PARENT,
+    key_hash, normalize_code, reservable_name, valid_key,
 };
 use hide_core::engine::EngineHandle;
 use serde_json::{Value, json};
@@ -31,6 +32,9 @@ pub const REFUSALS: &[&str] = &[
     "access_request_expired",
     "access_limit",
     "access_name_taken",
+    "access_code_invalid",
+    "access_join_pending",
+    "access_key_exists",
     "access_revoked",
     "access_ambiguous",
     "access_not_connected",
@@ -64,7 +68,16 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again"
         }
         "access_name_taken" => {
-            "A connected tool has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again"
+            "A connected bot, or one the operator made, has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again"
+        }
+        "access_code_invalid" => {
+            "The code is wrong, used or older than ten minutes; ask the operator for a new code in Settings > Bots and run hide access join with it"
+        }
+        "access_join_pending" => {
+            "This home has a join that did not finish; run the hide access join command it names again to finish it, then run this one"
+        }
+        "access_key_exists" => {
+            "This home already keeps another key under the bot's name; if that bot is no longer used run HIDE_ACCESS=<name> hide access leave, or join from another home, then run the same hide access join again"
         }
         "access_revoked" => REVOKED_NEXT_ACTION,
         "access_ambiguous" => {
@@ -138,6 +151,7 @@ pub(crate) fn answer_bootstrap(
 ) -> (Value, Option<PathBuf>) {
     let key = match ask {
         AccessAsk::Request { key, .. }
+        | AccessAsk::Join { key, .. }
         | AccessAsk::Status { key }
         | AccessAsk::Leave { key }
         | AccessAsk::Use { key, .. } => key,
@@ -155,7 +169,7 @@ pub(crate) fn answer_bootstrap(
     let key_sha256 = key_hash(key);
     let call = match ask {
         AccessAsk::Request { name, .. } => {
-            if !valid_name(name) {
+            if !reservable_name(name) {
                 return (refused("invalid_request"), None);
             }
             let Some(id) = fresh_id() else {
@@ -166,6 +180,19 @@ pub(crate) fn answer_bootstrap(
                 key_sha256,
                 program: program_of(peer),
                 id,
+            }
+        }
+        AccessAsk::Join { code, .. } => {
+            // A code is a code or nothing: a malformed one says what a
+            // spent one does, so its shape tells a guesser nothing more.
+            let Some(code) = normalize_code(code) else {
+                note("access.join_refused", None, "access_code_invalid");
+                return (refused("access_code_invalid"), None);
+            };
+            Call::Join {
+                code,
+                key_sha256,
+                program: program_of(peer),
             }
         }
         AccessAsk::Status { .. } => Call::Status { key_sha256 },
@@ -272,12 +299,26 @@ pub(crate) fn in_a_pane(
         .any(|program| program.runs() && hide_platform::process::descends_from(peer, program.pid))
 }
 
-/// A request's id, random so that nothing of the key is in it
-/// (`hide_core::access::valid_id`).
-fn fresh_id() -> Option<String> {
+/// A request's or a made bot's id, random so that nothing of the key or the
+/// code is in it (`hide_core::access::valid_id`).
+pub(crate) fn fresh_id() -> Option<String> {
     let mut bytes = [0u8; 8];
     getrandom::getrandom(&mut bytes).ok()?;
     Some(hex::encode(bytes))
+}
+
+/// A made bot's one-time code: twelve characters of Crockford's base 32,
+/// each from five random bits (32 divides 256, so every character is as
+/// likely), sixty bits in all (`hide_core::access::CODE_LEN`).
+pub(crate) fn fresh_code() -> Option<String> {
+    let mut bytes = [0u8; CODE_LEN];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(
+        bytes
+            .iter()
+            .map(|byte| char::from(CODE_ALPHABET[usize::from(byte % 32)]))
+            .collect(),
+    )
 }
 
 /// The program that ran `hide access request`, as the kernel names the

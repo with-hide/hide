@@ -271,8 +271,9 @@ pub(crate) fn short_verbatim(path: &str) -> Option<String> {
 
 /// Whether Win32 would read a name as something other than itself outside a
 /// `\\?\` path: a trailing space or dot it drops, a device name, or a `/` it
-/// takes as a separator.
-pub(crate) fn win32_rewrites(component: &str) -> bool {
+/// takes as a separator. Asked on every system of a name that becomes a file
+/// on any of them, such as a bot's key file.
+pub fn win32_rewrites(component: &str) -> bool {
     component.ends_with([' ', '.']) || component.contains('/') || reserved_device(component)
 }
 

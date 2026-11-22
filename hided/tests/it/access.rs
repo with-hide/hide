@@ -101,6 +101,28 @@ impl Window {
             .unwrap();
     }
 
+    /// Settings › Bots' `access_call`, and the `access_result` it is answered
+    /// with, or the refusal the connection gets instead.
+    async fn call(&mut self, call: Value) -> Value {
+        use futures_util::StreamExt;
+        self.send("access_call", json!({"request_id": "r1", "call": call}))
+            .await;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let frame = tokio::time::timeout(left, self.0.next())
+                .await
+                .expect("no answer came")
+                .expect("the connection closed")
+                .unwrap();
+            let Message::Text(text) = frame else { continue };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if matches!(value["type"].as_str(), Some("access_result" | "refused")) {
+                return value;
+            }
+        }
+    }
+
     /// The message of the next error the daemon answers this connection.
     async fn error(&mut self) -> String {
         use futures_util::StreamExt;
@@ -329,6 +351,86 @@ impl Tool {
     }
 }
 
+/// The operator makes a bot in Settings and an outside program takes it with
+/// the one-time code: only this machine's own window gets the code, the key
+/// is kept before it is sent so a join run again finishes with it, the code
+/// joins once, and an agent in a pane is refused before any code is read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bot_the_operator_made_is_joined_once_with_the_code_its_window_alone_was_shown() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
+    let mut window = Window::open(&running).await;
+    let tool = Tool::new(root.path(), "tool-home");
+
+    // A connection that draws no screen never makes a bot or reads a code.
+    let mut not_a_window = Window::open_as(&running, None).await;
+    let refused = not_a_window
+        .call(json!({"call": "invite", "name": "hermes", "mode": {"kind": "own"}}))
+        .await;
+    assert_eq!(refused["type"], "refused", "{refused}");
+
+    let made = window
+        .call(json!({"call": "invite", "name": "hermes", "mode": {"kind": "own"}}))
+        .await;
+    assert_eq!(made["payload"]["ok"], true, "{made}");
+    let code = made["payload"]["value"]["code"].as_str().unwrap().to_owned();
+    assert_eq!(code.len(), 14, "{code}");
+    // The name is the bot's while it waits, in any case.
+    let taken = window
+        .call(json!({"call": "invite", "name": "Hermes", "mode": {"kind": "all"}}))
+        .await;
+    assert_eq!(taken["payload"]["code"], "access_name_taken", "{taken}");
+
+    #[cfg(unix)]
+    tool.in_a_pane(&["access", "join", &code, "--json"])
+        .finish()
+        .refused("access_from_pane");
+
+    // As if a first try had kept its key and lost its answer: the join run
+    // again sends that key.
+    let kept = "7".repeat(64);
+    let folder = hide_kit::layout::access_keys(&tool.home);
+    hide_platform::fs::private::create_dir_all(&folder).unwrap();
+    hide_platform::fs::atomic::write_file(
+        &folder.join("join.pending"),
+        json!({"schema_version": 1, "code": code.replace('-', ""), "key": kept})
+            .to_string()
+            .as_bytes(),
+        hide_platform::fs::Access::Private,
+    )
+    .unwrap();
+    let joined = tool.run(&["access", "join", &code.to_lowercase(), "--json"]);
+    assert!(joined.ok, "{}", joined.out);
+    let value = &joined.json()["value"];
+    assert_eq!(
+        (value["state"].as_str(), value["name"].as_str(), &value["mode"]),
+        (Some("connected"), Some("hermes"), &json!({"kind": "own"})),
+        "{}",
+        joined.out
+    );
+    assert_eq!(value["id"], made["payload"]["value"]["id"]);
+    let key: Value =
+        serde_json::from_slice(&std::fs::read(tool.key_file("hermes", "key")).unwrap()).unwrap();
+    assert_eq!(key["key"], kept.as_str());
+    assert!(!folder.join("join.pending").exists());
+    let status = tool.run(&["access", "status", "--json"]);
+    assert_eq!(status.json()["value"]["name"], "hermes", "{}", status.out);
+
+    // The code is spent, and a code of the wrong shape says the same.
+    let other = Tool::new(root.path(), "other-home");
+    other
+        .run(&["access", "join", &code])
+        .refused("access_code_invalid");
+    other
+        .run(&["access", "join", "not-a-code"])
+        .refused("access_code_invalid");
+    assert!(
+        !hide_kit::layout::access_keys(&other.home)
+            .join("join.pending")
+            .exists()
+    );
+}
+
 /// c1: request, the window's approval, the key on the request run again;
 /// a bot of the whole Hide runs the reads and the commands of B21, letters
 /// and inbox among them; devices are the operator's to add or remove; and
@@ -366,7 +468,7 @@ async fn a_bot_asks_is_approved_for_the_whole_hide_and_runs_what_the_operator_do
     assert!(!tool.key_file("nightly", "request").exists());
     let human = tool.run(&["access", "request", "--name", "nightly"]);
     assert!(
-        human.out.contains("Connected as nightly · whole Hide"),
+        human.out.contains("Connected as nightly · Full"),
         "{}",
         human.out
     );
@@ -815,7 +917,7 @@ async fn an_own_mode_bot_is_refused_the_operators_work_and_lists_only_its_own() 
     let (bot, id) = approved(root.path(), &mut window, "keeper", json!({"kind": "own"})).await;
     let human = bot.run(&["access", "status"]);
     assert!(
-        human.out.contains("Connected as keeper · own work"),
+        human.out.contains("Connected as keeper · own space"),
         "{}",
         human.out
     );

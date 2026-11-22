@@ -58,6 +58,7 @@ import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
 import { MissionScreen } from "./MissionScreen";
 import { AutomationScreen } from "./AutomationScreen";
+import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
 import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
@@ -98,6 +99,7 @@ export function App() {
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);
     configureAutomationCalls(session.dispatch);
+    configureAccessCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {

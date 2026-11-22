@@ -1,25 +1,29 @@
-//! `hide access request|status|leave|list`: an external tool's own
+//! `hide access join|request|status|leave|list`: an external tool's own
 //! connection to Hide (PRD hide-external-control B1-B19, B32), and the key
 //! a tool's every other `hide` command runs with.
 //!
 //! A tool keeps one file per connection in its own home
 //! (`hide_kit::layout::access_keys`), private to its account: `<name>.request`
-//! while the operator has not answered, `<name>.key` once approved. Each
-//! holds the key whose hash the core keeps; the key never leaves this file
-//! and the bootstrap socket, which hands the core only its hash.
+//! while the operator has not answered, `<name>.key` once approved or joined.
+//! Each holds the key whose hash the core keeps; the key never leaves this
+//! file and the bootstrap socket, which hands the core only its hash.
+//!
+//! `hide access join <code>` keeps its key in `join.pending` before it asks,
+//! so a join whose answer was lost finishes when run again with the same
+//! code; a home keeps one unfinished join at a time.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use hide_agent_hooks::hook_request::install::AccessAsk;
-use hide_core::access::{valid_key, valid_name};
+use hide_core::access::{normalize_code, reservable_name, spaced_code, valid_key, valid_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide access request --name <name> [--no-wait] [--json]\nhide access status [--json]\nhide access leave [--json]\nhide access list [--json]";
+pub const USAGE: &str = "hide access join <code> [--json]\nhide access request --name <name> [--no-wait] [--json]\nhide access status [--json]\nhide access leave [--json]\nhide access list [--json]";
 
 const KEY_SCHEMA_VERSION: u32 = 1;
 /// A key file holds a name and a key: anything longer is not one.
@@ -31,6 +35,8 @@ const ANSWER_WAIT: Duration = Duration::from_secs(600);
 /// How often a waiting request asks the core where it stands.
 const ANSWER_POLL: Duration = Duration::from_secs(1);
 const KEY_EXTENSION: &str = "key";
+/// The one join a home has not finished: its code and the key it sent.
+const JOIN_FILE: &str = "join.pending";
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct AccessCli {
@@ -40,6 +46,10 @@ pub struct AccessCli {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Verb {
+    /// The code as it was written; [`join`] reads it.
+    Join {
+        code: String,
+    },
     /// `wait`: stays until the operator answers, up to [`ANSWER_WAIT`];
     /// `--no-wait` answers at once.
     Request {
@@ -55,23 +65,28 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<AccessCli
     let verb = args.next().map(String::as_str);
     let mut json = false;
     let mut name = None;
+    let mut code = None;
     let mut wait = true;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" if !json => json = true,
+            text if verb == Some("join") && code.is_none() && !text.starts_with("--") => {
+                code = Some(text.to_owned());
+            }
             "--no-wait" if verb == Some("request") && wait => wait = false,
             "--name" if verb == Some("request") && name.is_none() => match args.next() {
-                Some(value) if valid_name(value) => name = Some(value.clone()),
+                Some(value) if reservable_name(value) => name = Some(value.clone()),
                 _ => return Err(USAGE.to_owned()),
             },
             _ => return Err(USAGE.to_owned()),
         }
     }
-    let verb = match (verb, name) {
-        (Some("request"), Some(name)) => Verb::Request { name, wait },
-        (Some("status"), None) => Verb::Status,
-        (Some("leave"), None) => Verb::Leave,
-        (Some("list"), None) => Verb::List,
+    let verb = match (verb, name, code) {
+        (Some("join"), None, Some(code)) => Verb::Join { code },
+        (Some("request"), Some(name), None) => Verb::Request { name, wait },
+        (Some("status"), None, None) => Verb::Status,
+        (Some("leave"), None, None) => Verb::Leave,
+        (Some("list"), None, None) => Verb::List,
         _ => return Err(USAGE.to_owned()),
     };
     Ok(AccessCli { verb, json })
@@ -103,6 +118,15 @@ struct KeyFile {
     key: String,
 }
 
+/// `join.pending`: the code an unfinished join used and the key it sent.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JoinFile {
+    schema_version: u32,
+    code: String,
+    key: String,
+}
+
 /// One connection's file in the tool's home.
 struct Key {
     name: String,
@@ -117,6 +141,13 @@ struct Refusal {
 }
 
 impl Refusal {
+    fn with(code: &str, message: String) -> Self {
+        Self {
+            code: code.to_owned(),
+            message,
+        }
+    }
+
     fn new(code: &str) -> Self {
         let message = crate::access::next_action(code)
             .unwrap_or_else(|| crate::cli::request_next_action(code))
@@ -130,6 +161,7 @@ impl Refusal {
 
 pub fn run(env: &Env, cli: &AccessCli) -> Result<(), String> {
     let answer = match &cli.verb {
+        Verb::Join { code } => join(env, code),
         Verb::Request { name, wait } => request(env, name, *wait),
         Verb::Status => status(env),
         Verb::Leave => leave(env),
@@ -151,6 +183,164 @@ pub fn run(env: &Env, cli: &AccessCli) -> Result<(), String> {
             );
             Err(refusal.code)
         }
+    }
+}
+
+/// `hide access join <code>`: takes the bot the operator made in Settings
+/// with this code. The key is kept in `join.pending` before it is sent, so
+/// an answer lost on the way, or a Hide not running, loses nothing: the same
+/// command run again sends the same key, which the core then answers as the
+/// bot it already joined. A spent or wrong code takes the file away.
+fn join(env: &Env, code: &str) -> Result<Value, Refusal> {
+    refuse_in_pane(env)?;
+    let code = normalize_code(code).ok_or_else(|| Refusal::new("access_code_invalid"))?;
+    let folder = hide_kit::layout::access_keys(&env.home);
+    let key = pending_join(&folder, &code)?;
+    let answer = ask(
+        env,
+        AccessAsk::Join {
+            code,
+            key: key.clone(),
+        },
+    );
+    let value = match answer {
+        Ok(value) => value,
+        // The core answered for this key and code: nothing will finish it.
+        Err(refusal)
+            if ended(&refusal.code)
+                || matches!(
+                    refusal.code.as_str(),
+                    "access_code_invalid" | "access_from_pane" | "invalid_request"
+                ) =>
+        {
+            remove_join(&folder, &key);
+            return Err(refusal);
+        }
+        // Hide did not answer: the file keeps the key for the next try.
+        Err(refusal) => return Err(refusal),
+    };
+    let name = value["name"].as_str().filter(|name| valid_name(name));
+    let (Some("connected"), Some(name)) = (value["state"].as_str(), name) else {
+        // A key this command made is no request; the core cannot have
+        // put it up, so the answer is not one to keep.
+        remove_join(&folder, &key);
+        return Err(Refusal::new("access_unavailable"));
+    };
+    keep_joined_key(&folder, name, &key)?;
+    remove_join(&folder, &key);
+    Ok(value)
+}
+
+/// The key the join with `code` sends: the one `join.pending` keeps for it,
+/// or a new one kept there first. Two joins of one code at once in one home
+/// send the same key, since the file is put in place only where none is.
+fn pending_join(folder: &Path, code: &str) -> Result<String, Refusal> {
+    let path = folder.join(JOIN_FILE);
+    for _ in 0..2 {
+        match read_join(&path) {
+            Ok(Some(kept)) if kept.code == code => return Ok(kept.key),
+            Ok(Some(kept)) => {
+                return Err(Refusal::with(
+                    "access_join_pending",
+                    format!(
+                        "This home has a join that did not finish; run hide access join {} again to finish it, then run this one",
+                        spaced_code(&kept.code)
+                    ),
+                ));
+            }
+            // A damaged file proves nothing: it goes, as a damaged key does.
+            Err(()) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            Ok(None) => {}
+        }
+        let key = fresh_key()?;
+        let bytes = serde_json::to_vec(&JoinFile {
+            schema_version: KEY_SCHEMA_VERSION,
+            code: code.to_owned(),
+            key: key.clone(),
+        })
+        .map_err(|_| Refusal::new("access_key_unreadable"))?;
+        if put_new(folder, &path, &bytes)? {
+            return Ok(key);
+        }
+        // Another join of this home put its file first: read that one.
+    }
+    Err(Refusal::new("access_key_unreadable"))
+}
+
+/// The joined key as `<name>.key`, never over another: a file that already
+/// holds this key is this join done before, and one that holds another key,
+/// or a request of the name, is another connection's, perhaps of another
+/// Hide, so both stay and `join.pending` keeps this one for the next try.
+fn keep_joined_key(folder: &Path, name: &str, key: &str) -> Result<(), Refusal> {
+    let taken = || Refusal::new("access_key_exists");
+    for _ in 0..2 {
+        match read_key(&key_path(folder, name, Kept::Connected)) {
+            Ok(Some(kept)) if kept.key == key => return Ok(()),
+            Ok(Some(_)) | Err(()) => return Err(taken()),
+            Ok(None) => {}
+        }
+        if !matches!(read_key(&key_path(folder, name, Kept::Requested)), Ok(None)) {
+            return Err(taken());
+        }
+        let bytes = serde_json::to_vec(&KeyFile {
+            schema_version: KEY_SCHEMA_VERSION,
+            name: name.to_owned(),
+            key: key.to_owned(),
+        })
+        .map_err(|_| Refusal::new("access_key_unreadable"))?;
+        if put_new(folder, &key_path(folder, name, Kept::Connected), &bytes)? {
+            return Ok(());
+        }
+    }
+    Err(taken())
+}
+
+/// Puts `bytes` at `path` whole and private, only where no file is: false
+/// when one appeared first.
+fn put_new(folder: &Path, path: &Path, bytes: &[u8]) -> Result<bool, Refusal> {
+    let unwritable = |_| Refusal::new("access_key_unreadable");
+    hide_platform::fs::private::create_dir_all(folder).map_err(unwritable)?;
+    let mut nonce = [0u8; 8];
+    getrandom::getrandom(&mut nonce).map_err(|_| Refusal::new("access_unavailable"))?;
+    let staged = folder.join(format!(".{}.tmp", hex::encode(nonce)));
+    hide_platform::fs::atomic::write_file(&staged, bytes, hide_platform::fs::Access::Private)
+        .map_err(unwritable)?;
+    let placed = hide_platform::fs::atomic::rename_no_replace_path(&staged, path);
+    match placed {
+        Ok(()) => Ok(true),
+        Err(error) => {
+            let _ = std::fs::remove_file(&staged);
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(false)
+            } else {
+                Err(Refusal::new("access_key_unreadable"))
+            }
+        }
+    }
+}
+
+/// Reads `join.pending`: `None` when there is none, an error when it is not
+/// the account's own private file or not a join file.
+fn read_join(path: &Path) -> Result<Option<JoinFile>, ()> {
+    let Some(bytes) = read_private(path)? else {
+        return Ok(None);
+    };
+    let kept: JoinFile = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    (kept.schema_version == KEY_SCHEMA_VERSION
+        && normalize_code(&kept.code).as_deref() == Some(kept.code.as_str())
+        && valid_key(&kept.key))
+    .then_some(Some(kept))
+    .ok_or(())
+}
+
+/// Takes `join.pending` away once its join is done or can never be, and
+/// only while it still holds `key`.
+fn remove_join(folder: &Path, key: &str) {
+    let path = folder.join(JOIN_FILE);
+    if matches!(read_join(&path), Ok(Some(kept)) if kept.key == key) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -497,6 +687,18 @@ fn key_path(folder: &Path, name: &str, kept: Kept) -> PathBuf {
 /// Reads a key file: `None` when there is none, an error when it is not
 /// the account's own private file or not a key file.
 fn read_key(path: &Path) -> Result<Option<KeyFile>, ()> {
+    let Some(bytes) = read_private(path)? else {
+        return Ok(None);
+    };
+    let key: KeyFile = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    (key.schema_version == KEY_SCHEMA_VERSION && valid_name(&key.name) && valid_key(&key.key))
+        .then_some(Some(key))
+        .ok_or(())
+}
+
+/// A key folder file's bytes: `None` when there is none, an error when it is
+/// not the account's own private file or longer than a key file is.
+fn read_private(path: &Path) -> Result<Option<Vec<u8>>, ()> {
     let file = match hide_platform::fs::private::open_own_file(path, false) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -512,10 +714,7 @@ fn read_key(path: &Path) -> Result<Option<KeyFile>, ()> {
     if bytes.len() as u64 > KEY_FILE_LIMIT {
         return Err(());
     }
-    let key: KeyFile = serde_json::from_slice(&bytes).map_err(|_| ())?;
-    (key.schema_version == KEY_SCHEMA_VERSION && valid_name(&key.name) && valid_key(&key.key))
-        .then_some(Some(key))
-        .ok_or(())
+    Ok(Some(bytes))
 }
 
 /// Writes `name`'s key whole, private to this account on every system (B35).
@@ -550,8 +749,8 @@ fn fresh_key() -> Result<String, Refusal> {
 /// The mode a bot runs in, in words.
 fn mode_words(value: &Value) -> &'static str {
     match value["mode"]["kind"].as_str() {
-        Some("own") => "own work",
-        _ => "whole Hide",
+        Some("own") => "own space",
+        _ => "Full",
     }
 }
 
@@ -561,6 +760,10 @@ fn draw(verb: &Verb, value: &Value) -> String {
     let name = value["name"].as_str().unwrap_or_default();
     match (verb, state) {
         (Verb::List, _) => draw_list(value),
+        (Verb::Join { .. }, "connected") => format!(
+            "Connected to Hide as the bot {name} ({}).\nEvery hide command from this home now runs as {name}; a home that keeps several bots' keys picks one with HIDE_ACCESS=<name>.\nWhat the bot may do: hide guide, section Bots.\n",
+            mode_words(value)
+        ),
         (_, "pending") => format!(
             "Waiting for the operator to approve {name} in Settings > Bots.\n{}\n",
             value["next_action"].as_str().unwrap_or_default()
@@ -650,11 +853,24 @@ mod tests {
                 json: false
             })
         );
+        assert_eq!(
+            parse(args(&["join", "K7Q4-MZ2P-X3RD", "--json"]).iter()),
+            Ok(AccessCli {
+                verb: Verb::Join {
+                    code: "K7Q4-MZ2P-X3RD".to_owned()
+                },
+                json: true
+            })
+        );
         for verb in ["status", "leave", "list"] {
             assert!(parse(args(&[verb]).iter()).is_ok(), "{verb}");
         }
         for wrong in [
-            &["request"][..],
+            &["join"][..],
+            &["join", "A", "B"],
+            &["join", "A", "--name", "x"],
+            &["request", "--name", "con"],
+            &["request"],
             &["request", "--name", "-x"],
             &["request", "--name", "a b"],
             &["status", "--name", "x"],
@@ -688,6 +904,45 @@ mod tests {
             Kept::Connected
         );
         assert!(kept(&folder, "other").ok().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_join_keeps_its_key_first_and_a_home_finishes_one_join_at_a_time() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = hide_kit::layout::access_keys(home.path());
+        let first = pending_join(&folder, "K7Q4MZ2PX3RD").ok().unwrap();
+        assert!(hide_platform::fs::private::is_private(&folder.join(JOIN_FILE)).unwrap());
+        // Run again, the same code sends the same key.
+        assert_eq!(pending_join(&folder, "K7Q4MZ2PX3RD").ok(), Some(first.clone()));
+        let other = pending_join(&folder, "0123456789AB").err().unwrap();
+        assert_eq!(other.code, "access_join_pending");
+        assert!(other.message.contains("hide access join K7Q4-MZ2P-X3RD"), "{}", other.message);
+        // An unfinished join is no key a command runs with.
+        assert_eq!(names(&folder, false).ok().unwrap(), Vec::<String>::new());
+        remove_join(&folder, &"0".repeat(64));
+        assert!(folder.join(JOIN_FILE).exists(), "another key's join stays");
+        remove_join(&folder, &first);
+        assert!(!folder.join(JOIN_FILE).exists());
+    }
+
+    #[test]
+    fn a_joined_key_never_replaces_another_key_or_request_of_its_name() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = hide_kit::layout::access_keys(home.path());
+        let key = "a".repeat(64);
+        assert!(keep_joined_key(&folder, "hermes", &key).is_ok());
+        assert_eq!(kept(&folder, "hermes").ok().flatten().unwrap().key, key);
+        assert!(keep_joined_key(&folder, "hermes", &key).is_ok(), "the same join done before");
+        assert_eq!(
+            keep_joined_key(&folder, "hermes", &"b".repeat(64)).err().map(|refusal| refusal.code),
+            Some("access_key_exists".to_owned())
+        );
+        assert_eq!(kept(&folder, "hermes").ok().flatten().unwrap().key, key);
+        assert!(write_key(&folder, "asking", &"c".repeat(64), Kept::Requested).is_ok());
+        assert_eq!(
+            keep_joined_key(&folder, "asking", &"d".repeat(64)).err().map(|refusal| refusal.code),
+            Some("access_key_exists".to_owned())
+        );
     }
 
     #[test]
