@@ -1453,6 +1453,17 @@ impl Core {
             .map(crate::engine::EngineHandle::new)
     }
 
+    /// Where the files a phone's reply attaches go before its words are
+    /// typed into a pane of `device_id`: the same step the desktop
+    /// conversation's input takes. Only taking it is under the lock;
+    /// `Attach::words` calls the nodes off it.
+    pub fn input_attach(&self, device_id: &str) -> Option<crate::operator_input::Attach> {
+        if !check_owner_thread(self, "input_attach") {
+            return None;
+        }
+        Some(lock_recover(&self.runtime).input_attach(device_id))
+    }
+
     /// The gate a writer that bypasses a node's terminal (a phone's reply)
     /// asks at the write: it refuses a pane whose agent is ending, asleep or
     /// waking. Taken once and kept; the runtime keeps it current.

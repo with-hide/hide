@@ -244,6 +244,10 @@ enum Command {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
     },
+    InputAttach {
+        device_id: String,
+        reply: Sender<Option<hide_core::operator_input::Attach>>,
+    },
     /// Who answers a call proved only by its folder (D-55).
     FolderCall {
         folder: String,
@@ -1345,6 +1349,21 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the device connection reply".to_owned())
     }
 
+    /// Where the files a phone's reply attaches go for a pane of
+    /// `device_id`; see `Core::input_attach`.
+    pub fn input_attach(&self, device_id: &str) -> Result<hide_core::operator_input::Attach, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::InputAttach {
+                device_id: device_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the attach reply".to_owned())?
+            .ok_or_else(|| "core refused the attach off its owner thread".to_owned())
+    }
+
     /// What `device`'s switch to its machine's own connection starts from;
     /// see `Core::device_switch_source`.
     pub fn device_switch_source(
@@ -2065,6 +2084,9 @@ fn owner_loop(
             }
             Command::DeviceEngine { device_id, reply } => {
                 let _ = reply.send(core.device_engine(&device_id));
+            }
+            Command::InputAttach { device_id, reply } => {
+                let _ = reply.send(core.input_attach(&device_id));
             }
             Command::FolderCall { folder, reply } => {
                 let _ = reply.send(core.folder_call(&folder));

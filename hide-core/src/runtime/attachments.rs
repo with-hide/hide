@@ -758,6 +758,18 @@ impl Runtime {
         self.sync_async_operations();
     }
 
+    /// Where the files an input to a pane of `device` attaches go before its
+    /// words are typed (`operator_input::Attach`): the desktop
+    /// conversation's input and a phone's reply take it the same way.
+    pub(crate) fn input_attach(&self, device: &str) -> crate::operator_input::Attach {
+        let on_device = device != self.node.as_str();
+        crate::operator_input::Attach::new(
+            on_device,
+            self.own_node(),
+            on_device.then(|| self.staging_link(device)),
+        )
+    }
+
     /// The link a device pane's files are staged through (PRD wsl-device
     /// B10): the device's own node link, whichever way it opened, asked as
     /// it stands and never woken. A node that dials in takes files from its

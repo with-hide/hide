@@ -52,6 +52,24 @@ pub fn valid_request_id(value: &str) -> bool {
         })
 }
 
+/// A random version-4 UUID, the shape [`valid_request_id`] takes; `None`
+/// when the system gave no randomness.
+pub fn random_id() -> Option<String> {
+    let mut id = [0u8; 16];
+    getrandom::getrandom(&mut id).ok()?;
+    id[6] = (id[6] & 0x0f) | 0x40;
+    id[8] = (id[8] & 0x3f) | 0x80;
+    let hex: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    ))
+}
+
 /// One client-supplied name, flattened to a single relative component: a
 /// separator, a control character, or a parent segment would let the client
 /// name a path hided did not choose. Returns `None` for a shape no stage may
@@ -215,19 +233,8 @@ impl Attachments {
         if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Err("The screenshot is not a PNG image.".to_owned());
         }
-        let mut id = [0u8; 16];
-        getrandom::getrandom(&mut id).map_err(|_| "No name for the screenshot.".to_owned())?;
-        id[6] = (id[6] & 0x0f) | 0x40;
-        id[8] = (id[8] & 0x3f) | 0x80;
-        let hex: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
-        let name = format!(
-            "shot-{}-{}-{}-{}-{}.png",
-            &hex[0..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..32]
-        );
+        let id = random_id().ok_or_else(|| "No name for the screenshot.".to_owned())?;
+        let name = format!("shot-{id}.png");
         hide_host::feedback::stage_shot(&self.state_dir, &name, png)?;
         Ok(name)
     }
@@ -437,20 +444,31 @@ impl Attachments {
             }
             return Ok(Vec::new());
         }
-        self.commit_files(stages, MAX_FILES)
+        self.commit_files(stages, MAX_FILES, None)
+    }
+
+    /// The staged paths of a phone's reply, in the order it names them, with
+    /// a batch's caps: a stage this connection committed for a reply that did
+    /// not land answers the same path again while its file is kept, so the
+    /// reply's retry types the same files and their bytes never cross twice.
+    pub fn commit_reply(&self, connection: u64, stages: &[String]) -> Result<Vec<String>, &'static str> {
+        self.commit_files(stages, MAX_FILES, Some(connection))
     }
 
     /// The staged paths of a drop from the file manager, in the order the
     /// client names them: the same checks as a batch of attachments, with the
     /// count cap of one drop (`hide_node_link::mutate::IMPORT_MAX_ITEMS`).
     pub fn commit_dropped(&self, stages: &[String]) -> Result<Vec<String>, &'static str> {
-        self.commit_files(stages, hide_node_link::mutate::IMPORT_MAX_ITEMS)
+        self.commit_files(stages, hide_node_link::mutate::IMPORT_MAX_ITEMS, None)
     }
 
+    /// `again` is the connection whose committed stages may be named again
+    /// (`commit_reply`); every other commit takes open stages only.
     fn commit_files(
         &self,
         stages: &[String],
         max_files: usize,
+        again: Option<u64>,
     ) -> Result<Vec<String>, &'static str> {
         if stages.len() > max_files || stages.is_empty() {
             return Err("too_many_files");
@@ -463,23 +481,32 @@ impl Attachments {
         let mut paths = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for stage in stages {
-            let Some(upload) = state.uploads.get(stage) else {
-                return Err("unknown_stage");
-            };
             if !seen.insert(stage) {
                 return Err("unknown_stage");
             }
-            if upload.file.is_some() {
-                return Err("stage_incomplete");
-            }
-            if upload.clipboard {
-                return Err("unknown_stage");
-            }
-            total += upload.written;
+            let (path, bytes) = match state.uploads.get(stage) {
+                Some(upload) if upload.file.is_some() => return Err("stage_incomplete"),
+                Some(upload) if upload.clipboard => return Err("unknown_stage"),
+                Some(upload) => (upload.path.clone(), upload.written),
+                None => {
+                    let committed = again.and_then(|connection| {
+                        state.staged.iter().find(|entry| {
+                            entry.request_id == *stage
+                                && entry.connection == connection
+                                && entry.committed_at.is_some()
+                        })
+                    });
+                    match committed {
+                        Some(entry) => (entry.path.clone(), entry.bytes),
+                        None => return Err("unknown_stage"),
+                    }
+                }
+            };
+            total += bytes;
             if total > MAX_BATCH_BYTES {
                 return Err("batch_too_large");
             }
-            paths.push(upload.path.display().to_string());
+            paths.push(path.display().to_string());
         }
         // Committed: the files stay for the core to read, the open stage
         // entries do not, and the files are safe from eviction for a window.

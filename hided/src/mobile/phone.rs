@@ -959,6 +959,10 @@ async fn run(
     // answers them; an older bundle ignores the field.
     hello["answer"] = json!(true);
     // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // offers to attach files to a reply (`uploads.rs`) only on a computer
+    // that says it takes them; an older bundle ignores the field.
+    hello["attachments"] = json!(true);
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
     // shows the gathered view only for a computer that says it offers
     // connections between two Hides; an older bundle ignores the field.
     if mobile.device_connect() {
@@ -1194,8 +1198,19 @@ async fn handle(
                 Arc::clone(projection),
             );
             spawn_beside_loop(&mut open.input, frames, busy, async move {
-                input(&mobile, &phone_id, &message, &projection).await
+                input(&mobile, connection, &phone_id, &message, &projection).await
             })
+        }
+        // A file attached to the reply being written (Doop 08), uploaded
+        // into the store the desktop's uploads use.
+        "attach_begin" | "attach_chunk" | "attach_end" | "attach_cancel" => {
+            match super::uploads::handle(mobile.attachments(), connection, kind, message) {
+                Ok(answer) => answer,
+                Err(reason) => {
+                    refusal_logged("scope.refused", Some(phone_id), reason);
+                    None
+                }
+            }
         }
         "wake_sleeping_session" | "check_sleeping_session" => {
             Some(sleeping_session(mobile, phone_id, message, projection).await)
@@ -2117,8 +2132,67 @@ fn claim_answer(answer: &impl Fn(bool, Option<&str>) -> Value, state: InputState
     }
 }
 
+/// The stages a reply attaches (`uploads.rs`), in order; `Err` for a field of
+/// another shape, more files than one input attaches, or a stage named twice.
+fn stages_of(message: &Value) -> Result<Vec<String>, &'static str> {
+    let Some(stages) = message.get("stages") else {
+        return Ok(Vec::new());
+    };
+    let stages: Vec<String> = stages
+        .as_array()
+        .ok_or("invalid_request")?
+        .iter()
+        .map(|stage| {
+            stage
+                .as_str()
+                .filter(|stage| crate::attachments::valid_request_id(stage))
+                .map(str::to_owned)
+                .ok_or("invalid_request")
+        })
+        .collect::<Result<_, _>>()?;
+    if stages.len() > operator_input::MAX_FILES {
+        return Err("too_many_files");
+    }
+    let mut seen = std::collections::HashSet::new();
+    if !stages.iter().all(|stage| seen.insert(stage)) {
+        return Err("invalid_request");
+    }
+    Ok(stages)
+}
+
+/// The words a reply types: its attached files' paths, committed from the
+/// store and, for a pane of another machine, staged there first (the
+/// desktop conversation's own step, `operator_input::Attach`), then its text.
+fn reply_words(
+    mobile: &Mobile,
+    connection: u64,
+    device_id: &str,
+    text: &str,
+    stages: &[String],
+) -> Result<String, &'static str> {
+    if stages.is_empty() {
+        return Ok(text.to_owned());
+    }
+    let paths = mobile
+        .attachments()
+        .commit_reply(connection, stages)
+        .map_err(|reason| match reason {
+            // A stage released with a lost connection, or never closed: the
+            // phone uploads it again.
+            "unknown_stage" | "stage_incomplete" => "attachment_lost",
+            other => other,
+        })?;
+    // The machine that holds the pane names its own staging, one request
+    // per attempt.
+    let staging = crate::attachments::random_id().ok_or("unavailable")?;
+    mobile
+        .input_attach(device_id)?
+        .words(text, &paths, &staging)
+}
+
 async fn input(
     mobile: &Arc<Mobile>,
+    connection: u64,
     phone_id: &str,
     message: &Value,
     projection: &Projection,
@@ -2163,8 +2237,15 @@ async fn input(
         .get("turn")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let stages = match stages_of(message) {
+        Ok(stages) => stages,
+        Err(reason) => return answer(false, Some(reason)),
+    };
+    let files = stages.len();
     let problem = match (text, engine_key, choice) {
-        (Some(text), None, None) => operator_input::problem(text, 0),
+        (Some(text), None, None) => operator_input::problem(text, stages.len()),
+        // Only words carry files.
+        _ if !stages.is_empty() => Some("invalid_request"),
         (None, Some(key), None) => pane::engine_key(key).is_none().then_some("unknown_key"),
         (None, None, Some(choice)) => match &turn {
             Some(turn) => ask::keys(agent, turn, choice).err(),
@@ -2215,8 +2296,12 @@ async fn input(
             let chosen: (Vec<String>, Option<operator_input::Start>);
             let chosen_keys: Vec<&str>;
             let pressed;
+            let words;
             let typed = match (&text, engine_key, &choice) {
-                (Some(text), _, _) => Typed::Words(text),
+                (Some(text), _, _) => {
+                    words = reply_words(&writer, connection, &device_id, text, &stages)?;
+                    Typed::Words(&words)
+                }
                 (None, Some(key), _) => {
                     pressed = [key];
                     Typed::Keys(&pressed)
@@ -2303,10 +2388,17 @@ async fn input(
                     .core
                     .note_feature_used(hide_core::product_analytics::Feature::PhoneAnswer);
             }
+            if files > 0 {
+                mobile
+                    .config
+                    .core
+                    .note_feature_used(hide_core::product_analytics::Feature::PhoneAttachments);
+            }
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
                 "device_id": key.device_id,
                 "kind_of_input": if message.get("key").is_some() { "key" } else if message.get("choice").is_some() { "choice" } else { "reply" },
+                "files": files,
             }));
             answer(true, None)
         }
@@ -4001,5 +4093,83 @@ mod tests {
             )
         );
         mobile.shutdown().await;
+    }
+
+    fn upload(mobile: &Mobile, connection: u64, stage: &str, name: &str, bytes: &[u8]) {
+        let frame = |kind: &str, fields: Value| {
+            let mut frame = json!({"type": kind, "stage": stage});
+            frame.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+            super::super::uploads::handle(mobile.attachments(), connection, kind, &frame).unwrap()
+        };
+        use base64::Engine as _;
+        assert_eq!(frame("attach_begin", json!({"name": name, "size": bytes.len()})), None);
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        assert_eq!(frame("attach_chunk", json!({"seq": 0, "data": data}))
+            .and_then(|ack| ack.get("seq").cloned()), Some(json!(0)));
+        assert_eq!(frame("attach_end", json!({})).and_then(|ack| ack.get("done").cloned()), Some(json!(true)));
+    }
+
+    /// A reply that attaches files types each one's path, quoted in the
+    /// order the phone named them, before its words, as the desktop
+    /// conversation's input does; the same reply again on its connection
+    /// types the same paths, and another connection cannot name them.
+    #[tokio::test]
+    async fn a_reply_types_its_uploaded_files_paths_before_its_words() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let shot = "01234567-0123-4123-8123-0123456789ab".to_owned();
+        let log = "11111111-1111-4111-8111-111111111111".to_owned();
+        upload(&mobile, 7, &shot, "screen.jpg", b"jpeg");
+        upload(&mobile, 7, &log, "holder.log", b"log lines");
+        let stages = vec![shot.clone(), log.clone()];
+        let worker = Arc::clone(&mobile);
+        let words = tokio::task::spawn_blocking(move || {
+            reply_words(&worker, 7, "test-node", "차이 나는 부분 봐 줘.", &stages)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let folder = directory.path().join("state").join("attachments");
+        // Quoted for the shell as a terminal attachment pastes a path, the
+        // separators of Windows included.
+        let quoted = |stage: &str, name: &str| {
+            let path = folder.join(format!("{stage}-{name}")).display().to_string();
+            let escaped: String = path
+                .chars()
+                .flat_map(|c| "\\\"$`".contains(c).then_some('\\').into_iter().chain([c]))
+                .collect();
+            format!("\"{escaped}\"")
+        };
+        assert_eq!(
+            words,
+            format!("{} {} 차이 나는 부분 봐 줘.", quoted(&shot, "screen.jpg"), quoted(&log, "holder.log"))
+        );
+        let again = Arc::clone(&mobile);
+        let stages = vec![shot.clone(), log.clone()];
+        let retried = tokio::task::spawn_blocking(move || {
+            (
+                reply_words(&again, 7, "test-node", "차이 나는 부분 봐 줘.", &stages),
+                reply_words(&again, 8, "test-node", "", &stages),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(retried.0.as_deref(), Ok(words.as_str()));
+        assert_eq!(retried.1, Err("attachment_lost"));
+    }
+
+    /// A reply's files are named by the stages the phone made, at most as
+    /// many as one input attaches, each once, and only words carry them.
+    #[test]
+    fn a_replys_stages_are_checked_before_anything_is_written() {
+        let stage = |n: usize| format!("{n:08}-0123-4123-8123-0123456789ab");
+        assert_eq!(stages_of(&json!({})), Ok(Vec::new()));
+        assert_eq!(stages_of(&json!({"stages": [stage(1)]})), Ok(vec![stage(1)]));
+        assert_eq!(stages_of(&json!({"stages": ["../x"]})), Err("invalid_request"));
+        assert_eq!(stages_of(&json!({"stages": "x"})), Err("invalid_request"));
+        assert_eq!(stages_of(&json!({"stages": [stage(1), stage(1)]})), Err("invalid_request"));
+        let nine: Vec<String> = (0..=operator_input::MAX_FILES).map(stage).collect();
+        assert_eq!(stages_of(&json!({"stages": nine})), Err("too_many_files"));
     }
 }
