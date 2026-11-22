@@ -126,6 +126,7 @@ mod mission_worker_item;
 mod mission_worker_sleep;
 #[path = "tests/missions.rs"]
 mod missions;
+mod waits;
 #[path = "tests/named_tab.rs"]
 mod named_tab;
 #[path = "tests/node_agent_areas.rs"]

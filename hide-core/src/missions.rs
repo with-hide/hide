@@ -4092,11 +4092,12 @@ fn plan_wait(node: &mut MissionNode, input: Option<&crate::waits::WaitInput>, no
     let (Ok(target), Ok(minutes)) = (input.target(), input.minutes()) else {
         return;
     };
+    // A plan sent again keeps its deadline, so a repeated plan converges; a
+    // new target, or a `for` given once the deadline passed, starts it over.
     let same = node.wait_target.as_ref() == Some(&target);
-    if !same || input.for_span.is_some() || node.wait_until_unix_ms.is_none() {
+    let expired = node.wait_outcome == Some(crate::waits::WaitOutcome::Expired);
+    if !same || node.wait_until_unix_ms.is_none() || (expired && input.for_span.is_some()) {
         node.wait_until_unix_ms = Some(crate::waits::deadline(now, minutes));
-    }
-    if !same {
         node.wait_outcome = None;
     }
     node.wait_target = Some(target);

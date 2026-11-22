@@ -19,17 +19,17 @@ use crate::runtime::missions::AnswerHold;
 use crate::sidebar::SessionSnapshotPayload;
 use serde_json::{Value, json};
 
-const PROJECT: &str = "/checkouts/fixture";
+pub(super) const PROJECT: &str = "/checkouts/fixture";
 
-struct Fixture {
+pub(super) struct Fixture {
     _root: tempfile::TempDir,
-    runtime: Arc<Mutex<Runtime>>,
+    pub(super) runtime: Arc<Mutex<Runtime>>,
     conductor: Actor,
     _worker: Worker,
 }
 
 /// The fixture's `sender` pane conducts in the project `/checkouts/fixture`.
-fn conducting() -> Fixture {
+pub(super) fn conducting() -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let (runtime, conductor, _, path) = fixture(root.path());
     let (worker, client) =
@@ -53,7 +53,11 @@ fn conducting() -> Fixture {
     }
 }
 
-fn command(runtime: &mut Runtime, pane: &str, command: Value) -> Result<(Value, bool), String> {
+pub(super) fn command(
+    runtime: &mut Runtime,
+    pane: &str,
+    command: Value,
+) -> Result<(Value, bool), String> {
     let actor = Actor {
         pane_id: pane.into(),
         name: pane.into(),
@@ -1619,7 +1623,7 @@ fn a_cancelled_mission_is_over() {
     .unwrap();
 }
 
-fn pull(
+pub(super) fn pull(
     number: u32,
     head: &str,
     badge: PullRequestBadge,
@@ -1647,7 +1651,7 @@ fn pull(
     }
 }
 
-fn github(pulls: Vec<PullRequestSnapshot>, stale: bool) -> GithubSnapshot {
+pub(super) fn github(pulls: Vec<PullRequestSnapshot>, stale: bool) -> GithubSnapshot {
     let mut project = GithubProjectSnapshot {
         pull_requests_read: true,
         root_path: PROJECT.into(),
@@ -1763,7 +1767,12 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
 
 /// The pull request `number` at `head` with its checks at `checks`, the
 /// failed ones named `failed`.
-fn checked(number: u32, head: &str, checks: PullRequestChecks, failed: &[&str]) -> GithubSnapshot {
+pub(super) fn checked(
+    number: u32,
+    head: &str,
+    checks: PullRequestChecks,
+    failed: &[&str],
+) -> GithubSnapshot {
     let mut pull = pull(number, head, PullRequestBadge::Open, None);
     pull.checks = checks;
     pull.work.failed_checks = failed
@@ -5750,7 +5759,7 @@ fn outside_plan() -> Value {
     ]}})
 }
 
-fn node_view(runtime: &Runtime, key: &str) -> crate::runtime::missions::NodeView {
+pub(super) fn node_view(runtime: &Runtime, key: &str) -> crate::runtime::missions::NodeView {
     runtime
         .mission_view_of("mission-1")
         .unwrap()

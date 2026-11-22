@@ -364,7 +364,14 @@ impl Runtime {
         let number = target.change_request()?;
         let machine = (device != self.node.as_str()).then_some(device);
         let place = self.github_place(machine, project).ok()?;
-        let repository = place.repository()?.clone();
+        // A checkout's place names its repository once a read found it.
+        let repository = place.repository().cloned().or_else(|| {
+            self.github_project_on(device, project)?
+                .repository
+                .as_ref()?
+                .repository
+                .clone()
+        })?;
         Some(crate::code_host::change_request(
             place.host().unit(),
             repository,
