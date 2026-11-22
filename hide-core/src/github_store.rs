@@ -147,11 +147,14 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
         project.pull_requests_read = true;
         // The issues part comes back with the outcome it was saved with; a
         // file from before it was kept reads `Read` (the field's default).
-        // Each pull request is named again by the unit of the host its own
-        // address is on, server and port kept, as a fresh read names it.
+        // A saved reference is its host's unit's and comes back as saved. A
+        // file from before references were saved is GitHub's: each of its
+        // pull requests is named by GitHub's unit from its own address,
+        // server and port kept, as a fresh read names it.
         for pull_request in &mut project.pull_requests {
-            if let Some((host, repository, number)) =
-                crate::code_host::CodeHosts::STANDARD.change_request_at(&pull_request.url)
+            if pull_request.reference.is_none()
+                && let Some((host, repository, number)) =
+                    crate::code_host::CodeHosts::STANDARD.change_request_at(&pull_request.url)
             {
                 pull_request.reference = Some(crate::code_host::change_request(
                     host.unit(),
@@ -401,6 +404,32 @@ mod tests {
         let restored = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
         assert_eq!(restored.projects[0].issues_read, PartRead::Read);
         assert_eq!(restored.projects[0].identity_read, PartRead::Read);
+    }
+
+    /// A reference another host's unit made comes back as saved, even where
+    /// its address would read as a GitHub Enterprise one: the file never
+    /// moves a pull request to another host.
+    #[test]
+    fn a_saved_reference_of_another_host_comes_back_as_its_unit_made_it() {
+        let repository = crate::code_host::RepositoryRef {
+            host: "plain".to_owned(),
+            authority: "code.example".to_owned(),
+            path: "acme/app".to_owned(),
+        };
+        let mut sent = answer("/repo", Some(100));
+        let pull_request = &mut sent.pull_requests[0];
+        pull_request.url = format!("https://code.example/acme/app/pull/{}", pull_request.number);
+        let made = crate::code_host::change_request(
+            &crate::code_host::tests::PLAIN,
+            repository,
+            pull_request.number,
+        );
+        pull_request.reference = Some(made.clone());
+        let restored = saved_then_restored(GithubSnapshot {
+            projects: vec![sent],
+        })
+        .expect("the file is restored");
+        assert_eq!(restored.projects[0].pull_requests[0].reference, Some(made));
     }
 
     #[test]

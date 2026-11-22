@@ -748,7 +748,8 @@ fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
 
 /// GitHub's `gh` as GitHub's unit asks it through the node, by the
 /// repository each call names: `acme/app` lists one open pull request,
-/// `acme/quiet` refuses its issues, `acme/down` refuses its list.
+/// `acme/quiet` refuses its issues, `acme/down` refuses its list; and the
+/// node's Git, which the common reader asks for a checkout's main worktree.
 struct GithubCli;
 
 const APP_PULLS: &str = r#"[{"number":7,"title":"Add thing","headRefName":"thing","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"main","state":"OPEN","reviewDecision":"","isDraft":false,"url":"https://github.com/acme/app/pull/7","mergedAt":null,"updatedAt":"2026-10-14T01:00:00Z","createdAt":"2026-10-13T01:00:00Z","closedAt":null,"closingIssuesReferences":[],"isCrossRepository":false}]"#;
@@ -760,11 +761,15 @@ impl NodeLink for GithubCli {
         _timeout: Duration,
     ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
         use hide_node_link::gh::GhAnswer;
-        let Call::Gh {
-            args, repository, ..
-        } = call
-        else {
-            panic!("only gh is asked, yet the node was: {call:?}");
+        let (args, repository) = match call {
+            Call::Gh {
+                args, repository, ..
+            } => (args, repository),
+            // The common reader names a checkout's main worktree itself.
+            Call::Git { root, .. } => {
+                return Ok(serde_json::Value::String(format!("{root}/.git")).into());
+            }
+            other => panic!("only gh and git are asked, yet the node was: {other:?}"),
         };
         let words: Vec<&str> = args.iter().map(String::as_str).collect();
         let repository = repository.unwrap_or_default();

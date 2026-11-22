@@ -5802,7 +5802,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
 /// its list keeps it when a pull request reference it read, or the
 /// repository its place names, is that repository; a failed pass keeps it
 /// with the list and issues it keeps unless its place names another
-/// repository or host.
+/// repository or host; a project answered "no remote" keeps none.
 fn keep_previous_reads(
     answer: &mut crate::model::GithubSnapshot,
     previous: &crate::model::GithubSnapshot,
@@ -5832,7 +5832,9 @@ fn keep_previous_reads(
                 Some(repository) => !same_repository(repository, &identity.repository),
                 None => place.host().key() != identity.repository.host,
             });
-            let failed = !project.pull_requests_read;
+            // A project found to have no remote a host reads is answered,
+            // not failed: it names no repository, so nothing is kept for it.
+            let failed = project.read_outcome() == GithubReadOutcome::Failed;
             if named || referenced || (failed && !contradicted) {
                 project.repository = Some(identity.clone());
             }

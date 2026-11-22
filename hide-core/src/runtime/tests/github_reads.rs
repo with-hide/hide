@@ -404,7 +404,7 @@ fn kept_issues_keep_the_passes_own_outcome() {
 }
 
 /// A pull request at `address`, with the reference GitHub's unit makes of it.
-fn referenced(number: u32, address: &str) -> PullRequestSnapshot {
+fn referenced(address: &str) -> PullRequestSnapshot {
     let (host, repository, number) = crate::code_host::CodeHosts::STANDARD
         .change_request_at(address)
         .unwrap();
@@ -424,7 +424,8 @@ fn referenced(number: u32, address: &str) -> PullRequestSnapshot {
 /// exact repository: the same remotes can name another one (`gh repo
 /// set-default`, or an origin moved beside an upstream left as it was), and
 /// a repository at the same path on another server is another repository.
-/// A pass that read nothing keeps it with the list and issues it keeps.
+/// A pass that read nothing keeps it with the list and issues it keeps; a
+/// project answered "no remote" names no repository and keeps none.
 #[test]
 fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
     use crate::model::PartRead;
@@ -443,19 +444,21 @@ fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
     for (case, pass, kept) in [
         (
             "a pull request of the same repository",
-            unread(vec![referenced(3, "https://github.com/Owner/A/pull/3")]),
+            unread(vec![referenced("https://github.com/Owner/A/pull/3")]),
             true,
         ),
         (
             "the same path on another server",
-            unread(vec![referenced(
-                3,
-                "https://ghe.example:8443/owner/a/pull/3",
-            )]),
+            unread(vec![referenced("https://ghe.example:8443/owner/a/pull/3")]),
             false,
         ),
         ("no pull request names it", unread(Vec::new()), false),
         ("a pass that read nothing", read_failed("/tmp/a"), true),
+        (
+            "a checkout found to have no remote",
+            crate::code_host::read::no_remote("/tmp/a".to_owned()),
+            false,
+        ),
     ] {
         let mut runtime = runtime();
         runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
@@ -498,7 +501,7 @@ fn a_failed_identity_alone_keeps_the_lists_and_backs_the_clock_off() {
         identity_read: crate::model::PartRead::Failed,
         ..read_ok(
             "/tmp/a",
-            vec![referenced(3, "https://github.com/owner/a/pull/3")],
+            vec![referenced("https://github.com/owner/a/pull/3")],
             10,
         )
     };
