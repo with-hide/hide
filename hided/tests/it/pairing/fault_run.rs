@@ -338,10 +338,12 @@ fn recipient_script(folder: &Path, hide: &Path) -> String {
         r#"hide={hide}
 log={log}
 while [ ! -e {stop} ]; do
+  printf 'inbox %s\n' "$(date +%s)" > "$log.now"
   inbox=$("$hide" inbox 2>&1)
   printf 'inbox %s\n' "$(printf '%s' "$inbox" | tr '\n' ' ' | cut -c1-300)" >> "$log"
   ids=$(printf '%s' "$inbox" | grep -o 'letter-[0-9]*' | sort -u)
   for id in $ids; do
+    printf 'ack %s %s\n' "$id" "$(date +%s)" > "$log.now"
     answer=$("$hide" request ack "$id" 2>&1)
     printf 'ack %s %s\n' "$id" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)" >> "$log"
   done
@@ -652,9 +654,26 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             "not_taken_in": open_letters(&guest.terminal.state, &sender)})
     );
     let read = std::fs::read_to_string(run.join("read.log")).unwrap_or_default();
+    let hides = Command::new("ps")
+        .args(["-Ao", "pid=,etime=,command="])
+        .output()
+        .unwrap();
     eprintln!(
-        "fault_run: the recipient's last reads:\n{}",
-        read.lines().rev().take(12).collect::<Vec<_>>().join("\n")
+        "fault_run: the recipient at {} is in {}, its hide calls still running:\n{}\nits last reads:\n{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        std::fs::read_to_string(run.join("read.log.now")).unwrap_or_default(),
+        String::from_utf8_lossy(&hides.stdout)
+            .lines()
+            .filter(
+                |line| line.contains(&*at("p").join("hide").to_string_lossy())
+                    && (line.contains(" inbox") || line.contains(" ack "))
+            )
+            .collect::<Vec<_>>()
+            .join("\n"),
+        read.lines().rev().take(6).collect::<Vec<_>>().join("\n")
     );
     assert_eq!(held, wanted, "each letter the shell sent, once");
     drop(recipient);
