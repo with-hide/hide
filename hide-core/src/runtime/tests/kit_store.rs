@@ -385,6 +385,28 @@ fn a_daily_check_waits_while_a_request_is_queued_and_the_request_is_answered() {
     );
 }
 
+/// A change the operator makes counts one use of skills and MCP a UTC day;
+/// a check for new versions counts nothing.
+#[test]
+fn a_store_change_counts_a_use_and_a_check_does_not() {
+    use crate::product_analytics::{Event, Feature};
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = with_consent(Some(helper));
+    let statistics = Arc::new(RecordedStatistics::default());
+    let mut runtime = shared.lock().unwrap();
+    runtime.install_product_analytics(statistics.clone());
+    runtime.request_store_change(DEVICE, "r1".to_owned(), vec![StoreChange::CheckUpdates]);
+    assert_eq!(statistics.take(), []);
+    runtime.request_store_change(DEVICE, "r2".to_owned(), vec![switch_off_agy()]);
+    runtime.request_store_change(DEVICE, "r3".to_owned(), vec![switch_off_agy()]);
+    assert_eq!(
+        statistics.take(),
+        [Event::FeatureUsed {
+            feature: Feature::SkillsMcp
+        }]
+    );
+}
+
 #[test]
 fn a_request_whose_device_goes_before_its_pass_runs_ends_refused() {
     let helper = KitDevice::answering(Ok(report(&[])));

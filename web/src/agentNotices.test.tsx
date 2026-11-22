@@ -135,13 +135,25 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => open?.("agent:node|w1:p1"));
   expect(events.some((event) => event.kind === "focus_pane" && event.payload.pane_id === "w1:p1")).toBe(true);
 
+  // A notice another machine handed over is worded like this machine's own, and a click selects that machine's tile (PRD device-connect-iroh D-50, D-60).
+  await act(async () => {
+    useShellStore.setState({ rest: { ui_state: { desktop_notifications: true }, navigator: { devices: [], peers: [{ key: "ab12", device_id: "device-mini", name: "Mac mini" }] } } } as never);
+  });
+  await act(async () => receiveAgentNotice({ notices: [{ tag: "peer:ab12|node|w1:p1", peer: "ab12", device_id: "node", pane_id: "w1:p1", title: "Fix login", state: "needs_you", status_code: "question", detail: "Which branch?", place: "shop-api" }], clear: [] }));
+  expect(shown.at(-1)).toEqual(["agent:peer:ab12|node|w1:p1", "Fix login", "Question · Which branch? · shop-api", { unlessFocused: true }]);
+  const before = events.length;
+  await act(async () => open?.("agent:peer:ab12|node|w1:p1"));
+  expect(events.slice(before)).toEqual([{ schema_version: 2, kind: "focus_device", payload: { device_id: "device-mini" } }]);
+  await act(async () => receiveAgentNotice({ notices: [], clear: ["peer:ab12|node|w1:p1"] }));
+  expect(withdrawn.at(-1)).toEqual(["agent:peer:ab12|node|w1:p1"]);
+
   // The switch off: the window stops asking, and a late frame shows nothing.
   await act(async () => {
     useShellStore.setState({ rest: { ui_state: { desktop_notifications: false }, navigator: { devices: [] } } } as never);
   });
   expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false, needs_you: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
-  expect(shown).toHaveLength(13);
+  expect(shown).toHaveLength(14);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

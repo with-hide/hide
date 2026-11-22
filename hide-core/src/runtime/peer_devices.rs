@@ -23,11 +23,104 @@ fn held(machine: &PeerMachine) -> bool {
     )
 }
 
+/// The machines whose told work is held at once. One more is refused and
+/// recorded.
+const MAX_TOLD: usize = 16;
+
 fn active(machine: &PeerMachine) -> bool {
     machine.opens == Some(PeerOpens::Active)
 }
 
 impl Runtime {
+    /// Takes what the machine under `key` told of its own work, or forgets
+    /// it: the machine tells no more, since its stream ended (D-50). The
+    /// daemon hands on a list only from a machine it opened a stream to,
+    /// and the list lives as long as that stream; the paired machines' list
+    /// decides only whether it is shown, because it can say a connection
+    /// is up, or confirmed, after that connection's list arrived.
+    pub(super) fn take_peer_work(
+        &mut self,
+        key: &str,
+        work: Option<crate::peer_work::Told>,
+    ) -> bool {
+        let Some(told) = work else {
+            self.peer_told.remove(key);
+            return self.list_peer_work();
+        };
+        if !self.peer_told.contains_key(key) && self.peer_told.len() >= MAX_TOLD {
+            crate::diagnostic!(serde_json::json!({
+                "component": "peer_work",
+                "kind": "peer_work.refused",
+                "target": key,
+                "reason": "too many machines tell their work",
+            }));
+            return false;
+        }
+        self.peer_told.insert(key.to_owned(), told);
+        self.list_peer_work()
+    }
+
+    /// Lists what the connected machines this one opens told, in the paired
+    /// machines' order: what is held for a machine the list does not name,
+    /// has not confirmed or does not show connected is not listed until it
+    /// does. True when the snapshot's list changed.
+    pub(super) fn list_peer_work(&mut self) -> bool {
+        let listed: Vec<crate::peer_work::PeerWork> = self
+            .snapshot
+            .navigator
+            .peers
+            .iter()
+            .filter(|machine| active(machine) && machine.connected)
+            .filter_map(|machine| {
+                let told = self.peer_told.get(&machine.key)?;
+                Some(crate::peer_work::PeerWork {
+                    device_id: machine.device_id.clone(),
+                    key: machine.key.clone(),
+                    told: told.clone(),
+                })
+            })
+            .collect();
+        if self.snapshot.navigator.peer_work == listed {
+            return false;
+        }
+        self.snapshot.navigator.peer_work = listed;
+        true
+    }
+
+    /// Who answers a call made in `folder` on this machine and proved by
+    /// nothing else (D-55): a guest whose pane lives there alone, else this
+    /// core. A pane of this core's lives there when a checkout of this
+    /// machine that holds the folder has a pane.
+    pub(crate) fn folder_call(&self, folder: &str) -> crate::guest_panes::FolderCall {
+        let guests = &self.snapshot.navigator.guest_panes;
+        if guests.is_empty() {
+            return crate::guest_panes::FolderCall::Host;
+        }
+        let node = self.node.as_str();
+        let host_pane_there = self.snapshot.navigator.workspaces.iter().any(|workspace| {
+            workspace.device_id == node
+                && workspace.checkouts.iter().any(|checkout| {
+                    let root = checkout.path.trim_end_matches('/');
+                    !root.is_empty()
+                        && folder
+                            .strip_prefix(root)
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                        && checkout.tabs.iter().any(|tab| !tab.panes.is_empty())
+                })
+        });
+        let (taker, kept) = crate::guest_panes::folder_call(folder, guests, host_pane_there);
+        if let Some(reason) = kept {
+            // The path stays out of the log: the reason says which rule
+            // kept the call here.
+            crate::diagnostic!(serde_json::json!({
+                "component": "guest_panes",
+                "kind": "folder_call.kept_by_host",
+                "reason": reason,
+            }));
+        }
+        taker
+    }
+
     /// Whether the paired machine under `key` may be opened now.
     pub(super) fn peer_opens(&self, key: &str) -> bool {
         self.snapshot
@@ -162,6 +255,10 @@ impl Runtime {
             "device.registered",
             format!("Registered paired machine {}", registration.id),
         );
+        // The machine keeps its own Settings from here on.
+        if self.drop_placements_on_own_settings_machines() {
+            self.refresh_background_ai();
+        }
         self.connect_remote_device(&registration, super::hosts::HostAttempt::Background);
         true
     }

@@ -1381,6 +1381,15 @@ pub mod push {
         }
     }
 
+    /// A notice's subject as another machine sent it, when this build can
+    /// read it: a window words only a subject it knows (PRD
+    /// device-connect-iroh D-60).
+    pub fn known_subject(subject: serde_json::Value) -> Option<serde_json::Value> {
+        serde_json::from_value::<crate::model::AskSubject>(subject)
+            .ok()
+            .and_then(|subject| serde_json::to_value(subject).ok())
+    }
+
     /// The notice a root that waits on the operator says now: the person's
     /// turn `declared` while it still stands on the row, otherwise the row's
     /// own ask, so a notice held back for a moment says the row's latest state.

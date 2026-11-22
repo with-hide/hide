@@ -720,6 +720,103 @@ impl HelperGuest {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
+
+    /// The machine that took the node folder `node_dir` over, with the
+    /// helper root: none unless the record names a whole key and an
+    /// absolute root.
+    pub fn taken(node_dir: &Path) -> Option<(PeerKey, PathBuf)> {
+        let taken = Self::read(node_dir)?;
+        let key = PeerKey::from_hex(&taken.key).ok()?;
+        taken.root.is_absolute().then_some((key, taken.root))
+    }
+}
+
+/// Where one guest's node keeps its state and runs its builds from on the
+/// machine that hosts it (PRD device-connect-iroh D-49, D-75, D-77): the
+/// device helper's folders when that guest took them over
+/// ([`device_node_guest`]), and its own below its guest folder otherwise.
+/// The one place that chooses, so the daemon that runs the node, places
+/// its builds and removes them, and the `hide` a call in the guest's
+/// folder is handed to (D-55), agree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestPlace {
+    /// The node's `--guest` folder.
+    pub node: PathBuf,
+    /// The folder its builds are placed in.
+    pub install: PathBuf,
+    /// The state folder the node's process runs with, where its panes'
+    /// `hide` and hooks, and a call handed to it, find it: the host
+    /// daemon's own on the helper's folders, which the helper's panes
+    /// already name (D-49), and the node's folder otherwise.
+    pub state: PathBuf,
+    /// Whether they are the device helper's folders, which this guest took
+    /// over, and not folders of the guest's own.
+    pub helper: bool,
+}
+
+impl GuestPlace {
+    /// The folders of `guest` under the host's `state_dir`, on the account
+    /// whose home is `home`.
+    pub fn of(state_dir: &Path, home: &Path, guest: &PeerKey) -> Self {
+        Self::chosen(state_dir, home, &guest.short(), |holder| holder == guest)
+    }
+
+    /// The folders of the guest a host named by its installation
+    /// (`hide_peer_protocol::launch::install_name`, D-55), which carries
+    /// the first characters of its key as its folder does; `None` for a
+    /// name that is not a guest's, so no other text becomes a path
+    /// component.
+    pub fn of_install(state_dir: &Path, home: &Path, install: &str) -> Option<Self> {
+        let short = hide_peer_protocol::launch::guest_of_install(install)?;
+        Some(Self::chosen(state_dir, home, short, |holder| {
+            holder.short() == short
+        }))
+    }
+
+    fn chosen(
+        state_dir: &Path,
+        home: &Path,
+        short: &str,
+        holds: impl Fn(&PeerKey) -> bool,
+    ) -> Self {
+        let helper = device_node_state(home);
+        if let Some((holder, root)) = HelperGuest::taken(&helper)
+            && holds(&holder)
+        {
+            return Self {
+                node: helper,
+                install: root,
+                state: state_dir.to_path_buf(),
+                helper: true,
+            };
+        }
+        let guest = guests(state_dir).join(short);
+        let node = guest.join(hide_peer_protocol::launch::NODE_SIDE);
+        Self {
+            install: guest.join(hide_peer_protocol::launch::INSTALL_SIDE),
+            state: node.clone(),
+            node,
+            helper: false,
+        }
+    }
+
+    /// The installation's own `hide`, at the path that outlives one build.
+    pub fn cli(&self) -> PathBuf {
+        cli_of_root(&self.install)
+    }
+
+    /// The name its panes and hook entries go by.
+    pub fn install_name(&self) -> String {
+        install_of_root(&self.install)
+    }
+}
+
+/// The `hide` of the installation whose builds sit under `root`, a helper
+/// root or a guest's install root: under its `current`, which leads to the
+/// build that runs now.
+pub fn cli_of_root(root: &Path) -> PathBuf {
+    root.join(crate::CURRENT)
+        .join(if cfg!(windows) { "hide.exe" } else { "hide" })
 }
 
 /// The folder a state folder keeps its connections to other Hide machines

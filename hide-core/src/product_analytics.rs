@@ -37,6 +37,99 @@ pub enum Event {
     Active {
         surface: ActiveSurface,
     },
+    /// An automation was made, with the example its form started from.
+    AutomationCreated {
+        start: AutomationStart,
+    },
+    /// A run of an automation ended, once per run.
+    AutomationRunEnded {
+        outcome: AutomationOutcome,
+        trigger: AutomationTrigger,
+    },
+    /// A main feature was used for the first time in a UTC day
+    /// ([`ActiveDays`]).
+    FeatureUsed {
+        feature: Feature,
+    },
+}
+
+/// The example an automation's form started from; `Own` for one written
+/// from an empty form or made with `hide automation add`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationStart {
+    Report,
+    Briefing,
+    Ci,
+    Own,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationOutcome {
+    Succeeded,
+    Failed,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationTrigger {
+    Scheduled,
+    Missed,
+    Manual,
+}
+
+/// A main feature whose daily use is counted by [`Event::FeatureUsed`].
+/// A feature the What's new window names is measured by one of these or by
+/// an event of its own ([`MEASURES`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    /// Focus mode turned on.
+    Focus,
+    /// A skill or MCP server added, changed, switched or removed, from
+    /// Settings or `hide skill` / `hide mcp`.
+    SkillsMcp,
+}
+
+impl Feature {
+    const ALL: [Self; 2] = [Self::Focus, Self::SkillsMcp];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Focus => "focus",
+            Self::SkillsMcp => "skills_mcp",
+        }
+    }
+}
+
+/// What a What's new highlight may name as its `measure` in
+/// `web/src/releases.json`: an event's name, or `hide_feature_used:` and a
+/// feature's name. A test holds every highlight from 1.2.11 on to this list.
+pub fn measures() -> Vec<String> {
+    let mut measures: Vec<String> = [
+        "hide_agent_started",
+        "hide_device_connected",
+        "hide_mission_started",
+        "hide_mission_ended",
+        "hide_practice",
+        "hide_phone_paired",
+        "hide_active",
+        "hide_automation_created",
+        "hide_automation_run_ended",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    measures.extend(
+        Feature::ALL
+            .iter()
+            .map(|feature| format!("hide_feature_used:{}", feature.name())),
+    );
+    measures
+}
+
+/// What counts once per UTC day: a surface acted from, or a feature used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Daily {
+    Surface(ActiveSurface),
+    Feature(Feature),
 }
 
 /// Where the operator acted from.
@@ -51,7 +144,7 @@ pub enum ActiveSurface {
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// The UTC day, in days since the Unix epoch, on which each surface last
-/// sent [`Event::Active`]. Kept in the core state so a restart, a reload or
+/// sent [`Event::Active`] and each feature [`Event::FeatureUsed`]. Kept in the core state so a restart, a reload or
 /// a reconnect the same day sends nothing; never on the snapshot wire.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ActiveDays {
@@ -59,18 +152,23 @@ pub struct ActiveDays {
     desktop: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    focus: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skills_mcp: Option<u64>,
 }
 
 impl ActiveDays {
-    /// Records that `surface` acted at `unix_ms`; true only for the first
-    /// action of its UTC day. Any other day than the one recorded is a new
-    /// one, so a clock set back does not silence the surface until it
-    /// catches up.
-    pub(crate) fn first_of_day(&mut self, surface: ActiveSurface, unix_ms: u64) -> bool {
+    /// Records that `what` happened at `unix_ms`; true only for the first
+    /// time in its UTC day. Any other day than the one recorded is a new
+    /// one, so a clock set back does not silence it until it catches up.
+    pub(crate) fn first_of_day(&mut self, what: Daily, unix_ms: u64) -> bool {
         let day = unix_ms / DAY_MS;
-        let recorded = match surface {
-            ActiveSurface::Desktop => &mut self.desktop,
-            ActiveSurface::Phone => &mut self.phone,
+        let recorded = match what {
+            Daily::Surface(ActiveSurface::Desktop) => &mut self.desktop,
+            Daily::Surface(ActiveSurface::Phone) => &mut self.phone,
+            Daily::Feature(Feature::Focus) => &mut self.focus,
+            Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
         };
         if *recorded == Some(day) {
             return false;
@@ -88,6 +186,8 @@ pub enum AgentSource {
     Spawn,
     /// A mission node's worker.
     Mission,
+    /// An automation's run.
+    Automation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +225,9 @@ pub enum PracticeChapter {
     Agents,
     Find,
     Project,
+    Automation,
+    Focus,
+    Bots,
 }
 
 impl PracticeChapter {
@@ -135,6 +238,9 @@ impl PracticeChapter {
             "agents" => Self::Agents,
             "find" => Self::Find,
             "project" => Self::Project,
+            "automation" => Self::Automation,
+            "focus" => Self::Focus,
+            "bots" => Self::Bots,
             _ => return None,
         })
     }
@@ -228,6 +334,9 @@ impl Event {
             Self::Practice { .. } => "hide_practice",
             Self::PhonePaired { .. } => "hide_phone_paired",
             Self::Active { .. } => "hide_active",
+            Self::AutomationCreated { .. } => "hide_automation_created",
+            Self::AutomationRunEnded { .. } => "hide_automation_run_ended",
+            Self::FeatureUsed { .. } => "hide_feature_used",
         }
     }
 
@@ -245,6 +354,7 @@ impl Event {
                             AgentSource::Operator => "operator",
                             AgentSource::Spawn => "spawn",
                             AgentSource::Mission => "mission",
+                            AgentSource::Automation => "automation",
                         },
                     ));
                 }
@@ -304,6 +414,9 @@ impl Event {
                         PracticeChapter::Agents => "agents",
                         PracticeChapter::Find => "find",
                         PracticeChapter::Project => "project",
+                        PracticeChapter::Automation => "automation",
+                        PracticeChapter::Focus => "focus",
+                        PracticeChapter::Bots => "bots",
                     },
                 ),
                 (
@@ -328,6 +441,34 @@ impl Event {
                     ActiveSurface::Phone => "phone",
                 },
             )],
+            Self::AutomationCreated { start } => vec![(
+                "start",
+                match start {
+                    AutomationStart::Report => "report",
+                    AutomationStart::Briefing => "briefing",
+                    AutomationStart::Ci => "ci",
+                    AutomationStart::Own => "own",
+                },
+            )],
+            Self::AutomationRunEnded { outcome, trigger } => vec![
+                (
+                    "outcome",
+                    match outcome {
+                        AutomationOutcome::Succeeded => "succeeded",
+                        AutomationOutcome::Failed => "failed",
+                        AutomationOutcome::Stopped => "stopped",
+                    },
+                ),
+                (
+                    "trigger",
+                    match trigger {
+                        AutomationTrigger::Scheduled => "scheduled",
+                        AutomationTrigger::Missed => "missed",
+                        AutomationTrigger::Manual => "manual",
+                    },
+                ),
+            ],
+            Self::FeatureUsed { feature } => vec![("feature", feature.name())],
         }
     }
 }
@@ -407,15 +548,92 @@ mod tests {
     #[test]
     fn each_surface_counts_its_first_action_of_a_utc_day() {
         let midnight = 20_402 * DAY_MS;
+        let desktop = Daily::Surface(ActiveSurface::Desktop);
+        let phone = Daily::Surface(ActiveSurface::Phone);
+        let focus = Daily::Feature(Feature::Focus);
         let mut days = ActiveDays::default();
-        assert!(days.first_of_day(ActiveSurface::Desktop, midnight - 1));
-        assert!(!days.first_of_day(ActiveSurface::Desktop, midnight - DAY_MS + 5));
-        assert!(days.first_of_day(ActiveSurface::Desktop, midnight));
-        assert!(!days.first_of_day(ActiveSurface::Desktop, midnight + DAY_MS - 1));
-        assert!(days.first_of_day(ActiveSurface::Phone, midnight + 1));
-        assert!(!days.first_of_day(ActiveSurface::Phone, midnight + 2));
+        assert!(days.first_of_day(desktop, midnight - 1));
+        assert!(!days.first_of_day(desktop, midnight - DAY_MS + 5));
+        assert!(days.first_of_day(desktop, midnight));
+        assert!(!days.first_of_day(desktop, midnight + DAY_MS - 1));
+        assert!(days.first_of_day(phone, midnight + 1));
+        assert!(!days.first_of_day(phone, midnight + 2));
+        // A feature keeps its own day beside the surfaces.
+        assert!(days.first_of_day(focus, midnight + 3));
+        assert!(!days.first_of_day(focus, midnight + 4));
+        assert!(days.first_of_day(Daily::Feature(Feature::SkillsMcp), midnight + 4));
         // A clock set back to an earlier day counts that day again.
-        assert!(days.first_of_day(ActiveSurface::Desktop, midnight - 1));
+        assert!(days.first_of_day(desktop, midnight - 1));
+    }
+
+    fn web_file(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/src")
+            .join(path)
+    }
+
+    /// Every practice chapter the window offers sends `hide_practice`: a
+    /// chapter added under `web/src/practice/chapters/` without its name
+    /// here would count nothing (CONTRIBUTING.md, A main feature brings its
+    /// practice, its scene and its measure).
+    #[test]
+    fn every_practice_chapter_is_named() {
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(web_file("practice/chapters")).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.ends_with(".ts") || name.ends_with(".test.ts") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let id = text
+                .lines()
+                .find_map(|line| line.strip_prefix("  id: \""))
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or_else(|| panic!("{name} names no chapter id"));
+            ids.push(id.to_owned());
+        }
+        assert!(ids.len() >= 8, "{ids:?}");
+        for id in ids {
+            assert!(
+                PracticeChapter::of(&id).is_some(),
+                "practice chapter `{id}` has no name in PracticeChapter::of"
+            );
+        }
+    }
+
+    /// Every main feature the What's new window shows from 1.2.11 on names
+    /// how its use is counted (`measure`), and the measure is one this build
+    /// sends, so a main feature cannot ship without one.
+    #[test]
+    fn every_highlight_names_a_measure_this_build_sends() {
+        let text = std::fs::read_to_string(web_file("releases.json")).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let measures = measures();
+        let version = |text: &str| -> Vec<u32> {
+            text.split('.').map(|part| part.parse().unwrap()).collect()
+        };
+        let mut checked = 0;
+        for entry in file["versions"].as_array().unwrap() {
+            let name = entry["version"].as_str().unwrap();
+            if version(name) < vec![1, 2, 11] {
+                continue;
+            }
+            for highlight in entry["highlights"].as_array().unwrap() {
+                let measure = highlight["measure"].as_str().unwrap_or_else(|| {
+                    panic!(
+                        "a {name} highlight ({}) names no `measure`",
+                        highlight["drawing"]
+                    )
+                });
+                assert!(
+                    measures.iter().any(|known| known == measure),
+                    "{name}: `{measure}` is not a measure this build sends: {measures:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
     }
 
     #[test]

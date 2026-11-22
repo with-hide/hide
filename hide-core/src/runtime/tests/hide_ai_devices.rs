@@ -457,3 +457,57 @@ fn hide_ai_work_never_starts_the_link_of_a_chosen_device_that_is_down() {
         "and it is this device's"
     );
 }
+
+/// PRD device-connect-iroh, Settings per machine: a paired machine runs its
+/// own Hide and keeps its own Settings, so this core's Hide AI is never
+/// placed on it, and an item placed on the device before it was paired runs
+/// on this machine again, with the file written to say so.
+#[test]
+fn a_paired_machine_takes_no_hide_ai_item_of_this_core() {
+    const PAIRED: &str = "windows-pc";
+    let mut runtime = runtime();
+    let codex: hide_ai::Item = hide_ai::ProviderId::CODEX.into();
+    let mut placed = hide_ai::AiSettings::default();
+    placed.place(&codex, Some(PAIRED.to_owned()));
+    placed.set_runs_on(codex.clone());
+    runtime.ingest_ai_settings(placed, None);
+    assert_eq!(
+        runtime.snapshot.status.background_ai.device.as_deref(),
+        Some(PAIRED),
+        "before the pairing the item is where the file put it"
+    );
+    assert!(runtime.take_ai_settings_save().is_none());
+
+    let paired = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "peer_machines",
+        "payload": { "machines": [{
+            "key": "ab".repeat(32), "device_id": PAIRED, "name": "Windows PC",
+            "opens": "active", "opened_by": null, "connected": false,
+            "path": null, "reason": null, "update": null,
+        }] },
+    }))
+    .unwrap();
+    assert!(runtime.dispatch_json(&paired));
+    let saved = runtime
+        .take_ai_settings_save()
+        .expect("the placement is taken off and written");
+    assert_eq!(saved.machine(&codex), None);
+    assert_eq!(saved.runs_on, codex, "the item itself stays chosen");
+    assert_eq!(runtime.snapshot.status.background_ai.device, None);
+
+    // Choosing the machine's row, as an older window could, is refused.
+    runtime.dispatch_json(&ai_event(
+        serde_json::json!({"provider": "codex", "device": PAIRED}),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("ai_settings.device_keeps_its_own"),
+    );
+    assert_eq!(runtime.snapshot.status.background_ai.device, None);
+    assert!(runtime.take_ai_settings_save().is_none());
+}

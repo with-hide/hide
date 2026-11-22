@@ -148,6 +148,9 @@ pub struct AppState {
     /// Pairing this machine with other Hides, for Settings > Devices
     /// (`pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
+    /// Other machines' work on this one (`guests`): a window closes a
+    /// guest's pane through it.
+    pub guests: Arc<crate::guests::Guests>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
@@ -2928,6 +2931,30 @@ fn handle_client_text(
         // client that named them would draw machines nobody allowed.
         Some("peer_machines") => {
             return Err("peer_machines is sent by the daemon only".to_owned());
+        }
+        // What runs here for another machine and what another machine told
+        // of its own work are read from the connection: a client that named
+        // them would draw another machine's work that is not there.
+        Some(kind @ ("guest_panes" | "peer_work")) => {
+            return Err(format!("{kind} is sent by the daemon only"));
+        }
+        // The one thing a window asks of a guest's pane beside reading,
+        // typing and its size (PRD device-connect-iroh D-74, B10): the
+        // operator of this machine ends it, after the window's confirm.
+        Some("guest_pane_close") => {
+            if !renderer {
+                return Err("A guest's pane is closed in an operator window".to_owned());
+            }
+            // A build that offers no connection between two Hides hosts no
+            // guest (`Guests::serve` is not called), and says so.
+            if !state.peers.device_connect() {
+                return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
+            }
+            state
+                .guests
+                .close_pane(&payload_str(&event, "pane_id"))
+                .map_err(str::to_owned)?;
+            return Ok(ClientAction::Replies(Vec::new()));
         }
         // A device's switch is the daemon's own pairing with its machine; a
         // client that named a step would hand the device to a key nobody

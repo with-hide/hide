@@ -37,6 +37,7 @@ fn notice(pane: &str) -> push::Notice {
 fn deliver(mobile: &Arc<Mobile>, notices: Vec<push::Notice>, closed: &[&str]) {
     mobile.deliver(
         notices,
+        &BTreeSet::new(),
         closed.iter().map(|pane| key(pane)).collect(),
         &Projection::default(),
     );
@@ -177,7 +178,7 @@ async fn scenario(discard: Discard) {
             assert!(
                 inner.held[PHONE]
                     .iter()
-                    .all(|held| held.payload["tag"] != "node|b")
+                    .all(|held| held.notice.payload["tag"] != "node|b")
             );
             expected = HELD_PER_PHONE;
         }
@@ -367,6 +368,113 @@ async fn before_the_relays_first_pass() {
         .push_payload(&notice("b"), &BTreeSet::new())
         .expect("a delivery with no prepared pair makes it rather than dropping the notice");
     assert_eq!(payload["room"], json!(room(&mobile)));
+}
+
+/// PRD device-connect-iroh B71 through a hold: a notice the place rule gave
+/// the phones is held whole while the relay link is down, so the flush sends
+/// it once though a computer is still in use; a held wait of the ordinary
+/// kind still rests there, and a placed one whose root stopped waiting is
+/// withdrawn like any other.
+#[test]
+fn a_placed_notice_held_for_the_relay_goes_once_on_flush_though_a_computer_is_in_use() {
+    with_runtime(placed_through_a_hold());
+}
+
+async fn placed_through_a_hold() {
+    struct Taking;
+    impl crate::desktop_notices::Computers for Taking {
+        fn tell(&self, _: &str, _: hide_peer::protocol::core::CoreMessage) -> bool {
+            true
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    let registration = AppKey::new().registration(&"ab".repeat(32));
+    // The phones rest while a computer is in use, and the app phone has no
+    // relay link, so every send to it is a hold.
+    assert!(store::write_logged(
+        &store::settings_path(&state),
+        &json!({"enabled": true, "method": "relay", "push_mode": "app_closed"}),
+    ));
+    assert!(store::write_logged(
+        &store::phones_path(&state),
+        &json!({"phones": [{
+            "id": PHONE, "name": "Phone", "credential_sha256": "0".repeat(64),
+            "paired_at_ms": now_ms(), "last_seen_ms": now_ms(),
+            "notifications": "on", "origin": "relay",
+            "apns": {"token": registration["token"], "environment": "sandbox",
+                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"]},
+        }]}),
+    ));
+    let mobile = test_mobile_with(
+        directory.path(),
+        &Arc::default(),
+        Arc::new(crate::desktop_notices::DesktopNotices::new(true)),
+    );
+    let held = || -> Vec<String> {
+        mobile
+            .lock()
+            .held
+            .get(PHONE)
+            .map_or_else(Vec::new, |queue| {
+                queue
+                    .iter()
+                    .map(|held| held.notice.payload["tag"].as_str().unwrap().to_owned())
+                    .collect()
+            })
+    };
+    // What the follower's pass hands delivery: the notices, and which of
+    // them the place rule gave the phones.
+    let send = |panes: &[&str], placed: &[&str]| {
+        mobile.deliver(
+            panes.iter().map(|pane| notice(pane)).collect(),
+            &placed.iter().map(|pane| key(pane)).collect(),
+            BTreeSet::new(),
+            &Projection::default(),
+        );
+    };
+    let flush = || async { mobile.flush_held().unwrap().await.unwrap() };
+
+    // Nobody is at a computer: an ordinary wait goes to the phone and is held.
+    send(&["ordinary"], &[]);
+    fence().await;
+    assert_eq!(held(), ["node|ordinary"]);
+    // Someone sits down at the other computer before the link is up: the
+    // held ordinary wait rests, as it always did.
+    let desktop = &mobile.config.desktop;
+    desktop.set_computers(Arc::new(Taking));
+    desktop.peer_seat(
+        "macbook",
+        hide_core::notice_place::Seat {
+            input: Some(Duration::ZERO),
+            shows: true,
+            phone: None,
+        },
+    );
+    assert!(mobile.rests_phone());
+    assert_eq!(flush().await, Vec::<Handoff>::new());
+
+    // While that computer is in use, the place rule gives the phones two
+    // waits no computer takes; an ordinary one beside them rests at once.
+    send(&["placed", "closing", "late"], &["placed", "closing"]);
+    fence().await;
+    assert_eq!(held(), ["node|placed", "node|closing"]);
+    // One of them is seen before the link is up: withdrawn where it is held.
+    deliver(&mobile, vec![], &["closing"]);
+    assert_eq!(held(), ["node|placed"]);
+    // The link comes up while the computer is still in use: the placed
+    // notice reaches the send, once.
+    assert!(mobile.rests_phone());
+    assert_eq!(flush().await, [Handoff::Tried]);
+    assert!(mobile.flush_held().is_none(), "nothing is held again");
+
+    // A placed notice whose root stops waiting after the flush took it is
+    // withdrawn, not sent.
+    send(&["gone"], &["gone"]);
+    fence().await;
+    assert_eq!(held(), ["node|gone"]);
+    mobile.lock().live.close("node|gone");
+    assert_eq!(flush().await, [Handoff::Withdrawn]);
 }
 
 fn room(mobile: &Arc<Mobile>) -> String {
@@ -563,8 +671,8 @@ impl RestFixture {
             at,
         );
         drop(inner);
-        if let Some((notices, closed)) = judged {
-            mobile.deliver(notices, closed, projection);
+        if let Some(judged) = judged {
+            mobile.deliver(judged.notices, &judged.placed, judged.seen, projection);
         }
     }
 

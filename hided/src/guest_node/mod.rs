@@ -397,7 +397,10 @@ pub fn run(dir: &str) -> ! {
             Services {
                 terminals: Some(&*terminals),
                 heartbeat: false,
-                checkout_callers: false,
+                // A call the host handed to this guest's `hide` is in no
+                // pane: the node proves it by its folder, and the guest's
+                // core binds it to its checkout or refuses, finally (D-55).
+                checkout_callers: true,
                 opened_roots: None,
                 browser: None,
                 worktree_facts: Some(worktree_facts.clone()),

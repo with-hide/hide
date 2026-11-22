@@ -204,6 +204,7 @@ impl Runtime {
         }
         if !on {
             self.persist_workspace_views();
+            self.note_feature_used(crate::product_analytics::Feature::Focus);
         }
         self.show_pair(left, content);
         self.focus_tab_pane(&key, &pane);

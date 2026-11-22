@@ -13,6 +13,7 @@ import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
 import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeToasts } from "./Overlays";
+import { ConfirmGuestPaneClose, GuestPaneScreen } from "./GuestPaneScreen";
 import { ToastStack } from "./components/ui/toast";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
@@ -285,6 +286,7 @@ export function App() {
     ["cycle", <CycleOverlay />],
     ["confirm_close", <ConfirmClose actions={actions} />],
     ["confirm_views_close", <ConfirmViewsClose actions={actions} />],
+    ["confirm_guest_close", <ConfirmGuestPaneClose actions={actions} />],
     ["confirm_trash", <ConfirmTrash actions={actions} />],
     ["confirm_archive", <ConfirmArchive actions={actions} />],
     ["confirm_archive_delete", <ConfirmArchiveDelete actions={actions} />],
@@ -421,6 +423,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
     );
   }
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
+  if (screen.kind === "guest") return <GuestPaneScreen paneId={screen.paneId} actions={actions} />;
   // An open pressed on any other screen says here that it is on its way, or
   // why it did not come (B2, B21; issue 2505).
   return (

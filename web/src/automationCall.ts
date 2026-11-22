@@ -14,7 +14,7 @@ import type { DispatchFn } from "./ws";
 /** The calls the form makes (`hide_core::automations::Call`). */
 export type AutomationCall =
   | { call: "preview"; schedule: AutomationSchedule; name: string }
-  | { call: "add"; name: string; task: string; schedule: AutomationSchedule; agent: AutomationAgent; folder?: string; worktree?: boolean; run_now?: boolean }
+  | { call: "add"; name: string; task: string; schedule: AutomationSchedule; agent: AutomationAgent; folder?: string; worktree?: boolean; run_now?: boolean; example?: "report" | "briefing" | "ci" }
   | { call: "edit"; id: string; name?: string; task?: string; schedule?: AutomationSchedule; agent?: AutomationAgent; folder?: string | null; worktree?: boolean }
   | { call: "run_open"; id: string; run: number };
 
