@@ -29,13 +29,17 @@ relay=target/iroh-relay/bin/iroh-relay
 [ -x "$relay" ] || bash scripts/build-iroh-relay.sh
 bash scripts/verify-cargo.sh cli
 
+# The scenes run before the fault run and never beside it: a journey that
+# waits for a guest's node to end finds it by its build's name, which the
+# fault run's guest node carries too.
+
 scenes='test(=remote_delivery::an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_on)'
 scenes+=' | test(/^pairing::moved_core::/)'
 scenes+=' | test(=pairing::a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes)'
 scenes+=' | test(=pairing::a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs)'
 scenes+=' | test(/^pairing::guest_work::/)'
 HIDE_TEST_HOLDER_BIN="$PWD/target/debug/hide-holder" \
-    bash scripts/verify-cargo.sh nextest -p hided --test it -E "$scenes" --run-ignored only --no-fail-fast
+    bash scripts/verify-cargo.sh nextest -p hided --test it -E "$scenes" --run-ignored all --no-fail-fast --test-threads 2
 
 HIDE_TEST_IROH_RELAY="$PWD/$relay" HIDE_TEST_FAULT_RUN_MINUTES="$minutes" \
     bash scripts/verify-cargo.sh nextest -p hided --test it \
