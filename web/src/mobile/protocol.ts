@@ -451,8 +451,9 @@ type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.r
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
 
-export function noticeText(t: TFunction<"translation">, notice: Notice): string {
-  return "limit" in notice ? t(notice.key, { limit: notice.limit }) : t(notice.key);
+/** `words` fills a notice about one pull request with what its host calls it (`noun`). */
+export function noticeText(t: TFunction<"translation">, notice: Notice, words?: { noun: string }): string {
+  return "limit" in notice ? t(notice.key, { limit: notice.limit }) : t(notice.key, words);
 }
 
 export const GROUP_TITLE: Record<GroupId, MessageKey> = {

@@ -7,7 +7,7 @@
 // stay until an agent started, so a refusal or a lost connection never costs
 // what was edited.
 
-import { pullWords } from "../codeHost";
+import { pullHost, pullWords } from "../codeHost";
 import { Loader2Icon } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "../components/ui/button";
@@ -94,7 +94,7 @@ export function PrDelegateSheet() {
           <p className="text-body text-muted-foreground" data-phone-pr-delegate-read={reading ? "reading" : "ready"}>{t(reading ? "prWork.readingFeedback" : "prWork.feedbackPrefilled")}</p>
         )}
         <p className="text-body text-muted-foreground" data-phone-pr-delegate-stays="true">{t("mobile.prs.delegate.stays")}</p>
-        {shown ? <p role="alert" className="text-body text-destructive" data-phone-pr-delegate-error="true">{noticeText(t, shown)}</p> : null}
+        {shown ? <p role="alert" className="text-body text-destructive" data-phone-pr-delegate-error="true">{noticeText(t, shown, { noun: t(pullHost({ number, reference }).noun) })}</p> : null}
         <Button disabled={!ready} onClick={() => submitDelegate()} className="h-(--size-touch-target) w-full rounded-lg text-title font-semibold" data-phone-pr-delegate-submit="true">
           {pending ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : null}
           {t("mobile.prs.delegate.submit")}
