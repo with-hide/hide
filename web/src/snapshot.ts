@@ -2009,6 +2009,10 @@ export type ViewDisplaySnapshot = {
   card?: DetailItem;
   /** The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view B24, D-41): an agent's View its opener's, a card its owner's; absent for what the operator opened. */
   owner_pane?: string | null;
+  /** A file that is an image the operator pasted into a terminal; its tab and path line name it so (`displayName`). Absent for every other. */
+  pasted?: boolean;
+  /** A file's path below its machine's home folder as `~/<names>`, which the path line shows for a file outside the checkout; absent outside that home. */
+  home_relative?: string | null;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */

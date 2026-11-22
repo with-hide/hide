@@ -3,7 +3,10 @@
 // boards drew, from the closed rail to a narrow window whose lane stacks its
 // two columns over Agent Views; the rail has no Mission icon, missions being the page's
 // mission screen (PRD mission-screen B18). The Project tool draws its
-// week empty, partly filled and filled (PRD project-panel-results B21). No
+// week empty, partly filled and filled (PRD project-panel-results B21).
+// `outside` and `focus-outside` put an image pasted into a terminal in front
+// of a file under the home folder, on the usual screen and in focus mode, so
+// the desk's Expand and both names are drawn as the operator meets them. No
 // daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -21,7 +24,7 @@ import { memorySceneProject } from "./MemoryScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow"] as const;
+const STATES = ["closed", "overlay", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow", "outside", "focus-outside"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; documents: boolean; expanded: boolean };
@@ -38,7 +41,13 @@ const LANES: Record<LaneState, Lane> = {
   memory: { tool: "memory", documents: true, expanded: false },
   changes: { tool: "changes", documents: true, expanded: false },
   narrow: { tool: "explorer", documents: true, expanded: false },
+  outside: { tool: null, documents: true, expanded: false },
+  "focus-outside": { tool: null, documents: true, expanded: false },
 };
+
+/** A home folder and a clipboard image the core names as pasted (`pasted`, `home_relative`). */
+const HOME = "/Users/operator";
+const PASTED = "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png";
 
 const REVIEW = `# 설정 화면 검토
 
@@ -74,7 +83,14 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     const file = (relative: string, label: string, id: string): EditorTabSnapshot => ({ id, device_id: workspace.device_id, workspace_id: workspace.id, checkout_id: checkout.id, path: `${root}/${relative}`, label, kind: "file", diff_committed: null, markdown_live: true, wrap: true, dirty: false, preview: false });
     const tabs = [file("docs/설정검토.md", "설정검토.md", "t1"), file("docs/작업계획.md", "작업계획.md", "t2")];
     const display = (tab: EditorTabSnapshot, id: string): ViewDisplaySnapshot => ({ id, tab_id: tab.id, path: tab.path, label: tab.label, kind: "file", committed: null, preview: false, state: "open", reason: null });
-    const displays = lane.documents ? [display(tabs[0]!, "d1"), display(tabs[1]!, "d2")] : [];
+    const focus = state === "focus-outside";
+    const pane = checkout.tabs[0]?.panes?.[0]?.id ?? null;
+    // Files outside the checkout carry no editor tab here, so each draws its header over a loading body.
+    const outside = (path: string, label: string, id: string, named: Partial<ViewDisplaySnapshot>): ViewDisplaySnapshot => ({ id, tab_id: null, path, label, kind: "file", committed: null, preview: false, state: "open", reason: null, ...(focus && pane ? { owner_pane: pane } : {}), ...named });
+    const displays = !lane.documents ? [] : state === "outside" || focus ? [
+      outside(`${HOME}/.hide/state/TerminalClipboard/${PASTED}`, PASTED, "d1", { pasted: true, home_relative: `~/.hide/state/TerminalClipboard/${PASTED}` }),
+      outside(`${HOME}/Downloads/report.pdf`, "report.pdf", "d2", { home_relative: "~/Downloads/report.pdf" }),
+    ] : [display(tabs[0]!, "d1"), display(tabs[1]!, "d2")];
     const document: EditorDocumentSnapshot = { path: tabs[0]!.path, language: "markdown", document_kind: "markdown", contents_utf8: REVIEW, revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
     const documents: Documents = lane.documents ? { t1: document } : {};
     const listing = (folder: string, entries: [string, boolean][]): DirectoryList => ({ kind: "file_list", root_path: folder, truncated: false, entries: entries.map(([name, is_directory]) => ({ name, path: `${folder}/${name}`, is_directory })) });
@@ -90,7 +106,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };
     scene.rest.workspace_view = {
-      device_id: "local", path: root, open, tray: { tab_id: "t1", shown: lane.documents, count: 0 }, tool: lane.tool, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: root, open, tray: { tab_id: "t1", shown: lane.documents, count: 0, ...(focus && pane ? { pair: { tab_id: "t1", pane_id: pane, alone: false, shown: displays.length, folded: [] } } : {}) }, ...(focus ? { pair_mode: { on: true, ratio: null } } : {}), tool: lane.tool, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
     // The Project tool's three weeks (PRD project-panel-results B21): filled, with two worktrees left behind and the

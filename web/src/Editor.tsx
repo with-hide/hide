@@ -21,7 +21,8 @@ import { absolutePathRoot } from "./terminalLinks";
 import { RegionCommentButton } from "./ViewComments";
 import { diffNoticeText } from "./diffNotice";
 import { isVideoPath } from "./viewers/video";
-import type { ViewWorkspace } from "./viewLayout";
+import { displayName, type ViewWorkspace } from "./viewLayout";
+import type { TFunction } from "i18next";
 
 // The document surface (PRD B3-B7; S7 B4, B5, A9, A10). The core owns the
 // documents and the displays that show them; this draws one display - its
@@ -273,17 +274,24 @@ function DiffBody({ display, workspace, wrap, scale, actions }: { display: ViewD
   );
 }
 
-/** A checkout-relative path as the path row reads it (PRD right-lane B9): its folders and name, `›` between them; a path outside the checkout stays whole. */
-function crumbs(path: string): string {
-  return absolutePathRoot(path) ? path : path.split("/").filter(Boolean).join(" › ");
+/** A checkout-relative path as the path row reads it (PRD right-lane B9): its folders and name, `›` between them; a path outside the checkout stays whole, or reads `~/…` when it is under the home folder (`home`). */
+function crumbs(path: string, home: string | null = null): string {
+  return absolutePathRoot(path) ? home ?? path : path.split("/").filter(Boolean).join(" › ");
+}
+
+/** A file's path row: an image pasted into a terminal by what it is (`displayName`), else its path from the checkout in front. */
+function filePathLine(display: ViewDisplaySnapshot, root: string | null, t: TFunction<"translation">): string {
+  if (display.pasted) return displayName(display, t);
+  return crumbs(root ? relativeTo(display.path, root) : display.path, display.home_relative ?? null);
 }
 
 /** Provenance remains reachable while a document is loading or unavailable. */
 export function PendingDocumentHeader({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
   const root = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
   return <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-sm text-caption text-subtle-foreground" data-document-header="true">
     <Hint label={display.path} reveals>
-      <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{crumbs(root ? relativeTo(display.path, root) : display.path)}</bdi></span>
+      <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true"><bdi dir="ltr">{filePathLine(display, root, t)}</bdi></span>
     </Hint>
     {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
   </div>;
@@ -312,7 +320,7 @@ function EditorHeader({
     <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-sm border-b border-border pl-xs pr-md text-caption text-subtle-foreground" data-document-header="true">
       <Hint label={file ? display.path : display.committed ? t("documents.committedPath", { path: display.path }) : t("documents.uncommittedPath", { path: display.path })} reveals>
       <span className="min-w-0 flex-1 truncate text-left [direction:rtl]" data-editor-path="true">
-        <bdi dir="ltr">{file ? crumbs(path) : display.committed ? t("documents.branchDiffPath", { path: crumbs(path) }) : t("documents.workingDiffPath", { path: crumbs(path) })}</bdi>
+        <bdi dir="ltr">{file ? filePathLine(display, root, t) : display.committed ? t("documents.branchDiffPath", { path: crumbs(path) }) : t("documents.workingDiffPath", { path: crumbs(path) })}</bdi>
       </span>
       </Hint>
       {document?.dirty ? (
