@@ -580,7 +580,7 @@ esac"#,
             MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS,
             OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_FIELDS,
             REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
-            SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
+            SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN, WAIT_PR_FIELDS,
         };
         const REPOSITORY: &str = "acme/app";
         const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -709,6 +709,7 @@ esac"#,
             owned(&["pr", "view", "12", "--json", PR_FEEDBACK_FIELDS]),
             owned(&["pr", "view", "12", "--json", OUTSIDE_PR_FIELDS]),
             owned(&["pr", "view", "12", "--json", PLAN_PR_FIELDS]),
+            owned(&["pr", "view", "12", "--json", WAIT_PR_FIELDS]),
             owned(&[
                 "issue",
                 "view",
