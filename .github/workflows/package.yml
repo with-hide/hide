@@ -183,7 +183,10 @@ jobs:
           VERSION: ${{ needs.helper-identity.outputs.version }}
           SOURCE_SHA: ${{ needs.helper-identity.outputs.source-sha }}
           BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
-        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER" | tee -a "$GITHUB_STEP_SUMMARY"
+        # pipefail: a failed kit fails this step, not only the receipt that later misses it.
+        run: |
+          set -o pipefail
+          node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Keep the kits for the private publisher
         uses: actions/upload-artifact@v7
         with:

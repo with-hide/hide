@@ -322,7 +322,8 @@ A crossed memory cap names the five live processes holding the most, and the rep
 The cells an adapter declares, and its letter and wake forms, come from `contracts/agent-journey.json`, which `hide-agent-adapter` generates and its contract test keeps current ([contracts/README.md](../contracts/README.md#agent-journey)).
 Grok's letter uses the `bell` path: the bell wakes it at rest, its prompt hook recognizes that turn without printing context, and its first tool hook or Stop hook delivers the letter body.
 The journey judges its at-rest reply in that bell turn without asking the model to choose a tool.
-The busy probe exports `busy_letter` from the adapter's bell, tool-intake and turn-end capabilities, not from its name.
+The busy probe exports `busy_letter` from the adapter's bell, prompt-hook, tool-intake and turn-end capabilities, not from its name.
+A bell's turn takes the letter in its prompt hook when that hook carries context, as Claude Code's, Codex's and Antigravity's do (`bell`); only an agent whose prompt hook carries none, Grok, is handed it by a tool hook (`bell_hook`).
 A bell-owned hook handover delivers the body in the turn the bell opened; it is not a second delivery path.
 Exactly one matching bell user event must lie between this cell's held and letter answers; earlier identical bells do not belong to that interval.
 A single handover counter cannot distinguish tool intake from Stop.

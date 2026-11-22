@@ -5,6 +5,11 @@ on:
       include-macos:
         type: boolean
         default: true
+      # `pr.yml` leaves the Windows leg out of a pull request without a
+      # Windows path (`scripts/ci-plan.py`, WINDOWS_PATHS).
+      include-windows:
+        type: boolean
+        default: true
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
@@ -18,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ inputs.include-macos && fromJSON('["ubuntu-latest","windows-latest","macos-15"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+        os: ${{ fromJSON(format('["ubuntu-latest"{0}{1}]', inputs.include-windows && ',"windows-latest"' || '', inputs.include-macos && ',"macos-15"' || '')) }}
     defaults:
       run:
         shell: bash

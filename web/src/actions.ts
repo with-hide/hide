@@ -631,9 +631,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     }
   };
 
-  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
+  /**
+   * The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays.
+   * In focus mode it is ⌘E's fold of the desk beside the pane, the same event, not a lane close (D-57, D-63, D-46).
+   */
   const closeDocuments = () => {
-    if (pairBesideDesk(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    const view = workspaceViewOf(rest());
+    if (pairBesideDesk(view)) return showPairDesk(false);
     setWorkspaceView({ documents: false });
   };
 

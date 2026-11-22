@@ -324,6 +324,8 @@ test("a file a link in a shell pane opens is that pane's: its views chip lists i
   fs.writeFileSync(path.join(checkout, "linked.md"), "# linked from the shell\n");
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
+  // A window too narrow for the desk to stand beside the panes, as on CI's runner: the file's desk floats over the right shell.
+  await fitWindow(app, { width: 1024, height: 720 });
   await withProbe(page);
   await enterWorkspace(page, "fixture");
   const [left, right] = fixture.panes;
@@ -341,6 +343,9 @@ test("a file a link in a shell pane opens is that pane's: its views chip lists i
   await expect(page.locator(`[data-pane-views="${left}"]`)).toHaveCount(0);
   await expect(page.locator(`[data-pane-view="${right}"] [data-pane-pair="off"]`)).toHaveCount(1);
 
+  // ⌘E folds the floating desk off the shell, which the operator then presses; focus mode stands the desk again beside it (D-46).
+  await page.keyboard.press(chord("toggle_lane"));
+  await expect(page.locator("[data-lane-frame]")).toHaveCount(0);
   await page.locator(`[data-pane-view="${right}"] [data-terminal-host]`).click();
   await expect(page.locator(`[data-pane-view="${right}"]`)).toHaveAttribute("data-focused", "true");
   await page.keyboard.press(chord("pair_view"));

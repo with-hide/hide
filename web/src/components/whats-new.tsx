@@ -3,7 +3,7 @@
 // of a stable version whose release names main features, over the dimmed
 // shell: a large drawing of the chosen feature (its own scene,
 // `whats-new-scenes/`, else a practice card's move, `PracticePreview`), the features with a 체험하기 into the practice window
-// where a chapter teaches one, the changes and fixes folded behind 더 보기,
+// where a chapter teaches one, else a 설정에서 보기 into the Settings page that holds it, the changes and fixes folded behind 더 보기,
 // the history link and OK. The history lists every version the app knows up
 // to the one in use, newest first. What decides and what is kept is
 // `releases.ts` and the desktop host; this file draws it.
@@ -24,6 +24,7 @@ import { releaseNotesUrl } from "../updates";
 import { chooseUpdateHistoryVersion, closeUpdateHistory, openUpdateHistory, saveWhatsNew, useUpdateHistory, useWhatsNewState } from "../whatsNew";
 import type { Actions } from "../actions";
 import { cn } from "../lib/utils";
+import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
@@ -54,6 +55,9 @@ function Drawing({ drawing, playing }: { drawing: string; playing: boolean }) {
   return isMove(drawing) ? <PracticePreview kind={drawing} playing={playing} large /> : null;
 }
 const chapterKnown = (id: string | null): id is string => id !== null && CHAPTERS.some((chapter) => chapter.id === id);
+/** A Settings page a highlight names that this app has; a feature a chapter teaches offers 체험하기 instead. */
+const settingsPage = (row: { chapter: string | null; settings: string | null }): SettingsTab | null =>
+  chapterKnown(row.chapter) || row.settings === null ? null : (SETTINGS_GROUPS.flatMap((group) => group.tabs).find((tab) => tab === row.settings) ?? null);
 
 /** A drawing or chapter the release names that this app does not have: shown without it, and noted for the log (B14). */
 function noteMissing(highlight: { drawing: string; chapter: string | null }): void {
@@ -104,12 +108,13 @@ function Stage({ drawing, playing }: { drawing: string; playing: boolean }) {
  * gallery draws it this way). `auto` moves the drawing to the next feature
  * every loop until a feature is pressed.
  */
-export function WhatsNewDialogBody({ offer, language, auto = true, open: openMore = false, onTry, onHistory, onClose }: {
+export function WhatsNewDialogBody({ offer, language, auto = true, open: openMore = false, onTry, onSettings, onHistory, onClose }: {
   offer: Offer;
   language: InterfaceLanguage;
   auto?: boolean;
   open?: boolean;
   onTry: (chapter: string) => void;
+  onSettings: (tab: SettingsTab) => void;
   onHistory: () => void;
   onClose: () => void;
 }) {
@@ -150,6 +155,7 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
           {offer.highlights.map((row, at) => {
             const words = inLanguage(row.text, language);
             const tryable = chapterKnown(row.chapter);
+            const page = settingsPage(row);
             return (
               <li key={`${row.version}-${at}`} className={cn("flex items-center gap-sm rounded-md pr-sm", at === chosen && "bg-accent")}>
                 <RowButton
@@ -170,6 +176,10 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
                 {tryable ? (
                   <Button variant="practice" size="sm" className="shrink-0" onClick={() => onTry(row.chapter!)} data-whats-new-try={row.chapter}>
                     {t("whatsNew.try")}
+                  </Button>
+                ) : page ? (
+                  <Button variant="secondary" size="sm" className="shrink-0" onClick={() => onSettings(page)} data-whats-new-settings={page}>
+                    {t("whatsNew.settings")}
                   </Button>
                 ) : null}
               </li>
@@ -203,13 +213,14 @@ type HistoryRow = ReleaseEntry & { isNew: boolean };
  * draws it this way): the versions newest first on the left, the chosen
  * one's features and its changes and fixes on the right.
  */
-export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose, onTry, onLink }: {
+export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose, onTry, onSettings, onLink }: {
   rows: readonly HistoryRow[];
   appVersion: string;
   chosen: string | null;
   language: InterfaceLanguage;
   onChoose: (version: string) => void;
   onTry: (chapter: string) => void;
+  onSettings: (tab: SettingsTab) => void;
   onLink: (url: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -282,6 +293,7 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose
             <ul className="grid grid-cols-[repeat(auto-fill,minmax(var(--size-picker-popover),1fr))] gap-md">
               {entry.highlights.map((row, index) => {
                 const words = inLanguage(row.text, language);
+                const page = settingsPage(row);
                 return (
                   <li key={index} className="flex flex-col overflow-hidden rounded-lg border border-border" data-update-history-feature={index}>
                     <Drawing drawing={row.drawing} playing />
@@ -290,6 +302,8 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose
                       <span className="flex-1 break-keep text-caption text-muted-foreground">{words.line}</span>
                       {chapterKnown(row.chapter) ? (
                         <Button variant="practice" size="sm" className="mt-xs self-start" onClick={() => onTry(row.chapter!)} data-update-history-try={row.chapter}>{t("whatsNew.try")}</Button>
+                      ) : page ? (
+                        <Button variant="secondary" size="sm" className="mt-xs self-start" onClick={() => onSettings(page)} data-update-history-settings={page}>{t("whatsNew.settings")}</Button>
                       ) : null}
                     </div>
                   </li>
@@ -348,6 +362,11 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
     closeUpdateHistory();
     openPractice(chapter, true);
   };
+  const showSettings = (tab: SettingsTab) => {
+    close();
+    closeUpdateHistory();
+    actions.openSettings(tab);
+  };
 
   const rows = useMemo(() => (state ? historyRows(historyVersions(state.feed, state.appVersion), state.record) : []), [state]);
   const chosen = history.version ?? rows.find((row) => row.version === state?.appVersion)?.version ?? rows[0]?.version ?? null;
@@ -365,6 +384,7 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
             offer={offer.offer}
             language={language}
             onTry={tryChapter}
+            onSettings={showSettings}
             onHistory={() => { close(); openUpdateHistory(); }}
             onClose={close}
           />
@@ -381,6 +401,7 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
               language={language}
               onChoose={chooseUpdateHistoryVersion}
               onTry={tryChapter}
+              onSettings={showSettings}
               onLink={(url) => actions.openLink(url, true)}
             />
           </DialogContent>
