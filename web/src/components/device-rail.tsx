@@ -3,7 +3,7 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { badgeText, deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
+import { badgeText, deviceConnected, railFrontId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
 import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
 import { numberOf } from "../numbering";
@@ -51,7 +51,8 @@ const CUTOUT = "ring-2 ring-sidebar";
 export function DeviceRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const front = useShellStore((s) => frontDeviceId(s.rest));
+  const guestPane = useUiStore((s) => s.screen?.kind === "guest");
+  const front = useShellStore((s) => railFrontId(s.rest, guestPane));
   const tools = useShellStore((s) => toolCells(s.rest));
   const bots = useShellStore((s) => s.access?.connections ?? NO_BOTS);
   // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).

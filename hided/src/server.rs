@@ -154,6 +154,9 @@ pub struct AppState {
     /// Pairing this machine with other Hides, for Settings > Devices
     /// (`pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
+    /// Other machines' work on this one (`guests`): a window closes a
+    /// guest's pane through it.
+    pub guests: Arc<crate::guests::Guests>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
@@ -3028,6 +3031,22 @@ fn handle_client_text(
         // view-opener-feedback D-17, the `Window` class).
         Some("view_comment" | "view_feedback_send") => return Ok(ClientAction::Feedback(event)),
         Some("browser_comment") => return Ok(ClientAction::BrowserComment(event)),
+        // The one thing a window asks of a guest's pane beside reading,
+        // typing and its size (PRD device-connect-iroh D-74, B10): the
+        // operator of this machine ends it, after the window's confirm (the
+        // `OwnWindow` class).
+        Some("guest_pane_close") => {
+            // A build that offers no connection between two Hides hosts no
+            // guest (`Guests::serve` is not called), and says so.
+            if !state.peers.device_connect() {
+                return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
+            }
+            state
+                .guests
+                .close_pane(&payload_str(&event, "pane_id"))
+                .map_err(str::to_owned)?;
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some(kind) if kind.starts_with("pairing_") => {
             return Ok(ClientAction::Pairing(event));
         }

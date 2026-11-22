@@ -3863,7 +3863,35 @@ export type GuestPanes = {
   device_id: string;
   /** Its connection id. */
   key: string;
-  panes: { id: string; pane: string; since_unix_ms: number }[];
+  /** `folder`: the folder the pane was started in on this machine, once its node said it. */
+  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null }[];
+};
+
+/**
+ * One piece of another machine's own work that waits on a person or is done,
+ * as that machine told it (hide-core `peer_work::WorkRow`). `id` is the
+ * work's id on its own machine, never a pane of this core's.
+ */
+export type PeerWorkRow = {
+  id: string;
+  group: "needs_you" | "done";
+  title: string;
+  agent_kind: string;
+  place?: string | null;
+  mark: string;
+  status_code: string;
+  detail?: string | null;
+  read?: boolean;
+  changed_at_unix_ms?: number | null;
+};
+
+/** What one connected machine this one opens told of its own work (hide-core `peer_work::PeerWork`): its counts and the first rows. */
+export type PeerWork = {
+  device_id: string;
+  key: string;
+  needs_you: number;
+  done: number;
+  rows?: PeerWorkRow[];
 };
 
 export type SnapshotRest = {
@@ -3907,6 +3935,8 @@ export type SnapshotRest = {
     peers?: import("./pairing").Peer[];
     /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */
     guest_panes?: GuestPanes[];
+    /** Each connected machine this one opens, with its own Needs You and Done (hide-core `peer_work`); absent while none told any. */
+    peer_work?: PeerWork[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];

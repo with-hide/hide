@@ -358,6 +358,16 @@ impl Runtime {
         self.automations_changed(save);
     }
 
+    /// Whether `agent_id` is the agent of one of the automations' runs.
+    pub(super) fn automation_run_agent(&self, agent_id: &str) -> bool {
+        self.automations
+            .book
+            .automations
+            .iter()
+            .flat_map(|automation| automation.runs())
+            .any(|run| run.agent_id.as_deref() == Some(agent_id))
+    }
+
     /// The flag hided reads for its idle exit (D-19).
     pub(crate) fn automations_on(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.automations.on)
@@ -766,11 +776,27 @@ impl Runtime {
         let Some(run) = self.run_mut(key) else {
             return;
         };
+        let ended = run.state.active() && !state.active();
+        let trigger = run.trigger;
         run.state = state;
         run.ended_at_unix_ms = Some(now);
         run.reason = reason.map(reason_code);
         run.closing = close == Close::Idle;
         run.ask = None;
+        if ended && let Some(sink) = &self.product_analytics {
+            use crate::product_analytics::{AutomationOutcome, AutomationTrigger, Event};
+            let outcome = match state {
+                RunState::Succeeded => AutomationOutcome::Succeeded,
+                RunState::Stopped => AutomationOutcome::Stopped,
+                _ => AutomationOutcome::Failed,
+            };
+            let trigger = match trigger {
+                Trigger::Scheduled => AutomationTrigger::Scheduled,
+                Trigger::Missed => AutomationTrigger::Missed,
+                Trigger::Manual => AutomationTrigger::Manual,
+            };
+            sink.capture(Event::AutomationRunEnded { outcome, trigger });
+        }
         if close == Close::Now {
             self.clean_up_run(key, now);
         }
@@ -2344,6 +2370,17 @@ impl Runtime {
         });
         self.automations.book.automations.push(automation);
         self.automations.book.last_choice = Some(agent);
+        if let Some(sink) = &self.product_analytics {
+            use crate::automations::Example;
+            use crate::product_analytics::{AutomationStart, Event};
+            let start = match draft.example {
+                Some(Example::Report) => AutomationStart::Report,
+                Some(Example::Briefing) => AutomationStart::Briefing,
+                Some(Example::Ci) => AutomationStart::Ci,
+                None => AutomationStart::Own,
+            };
+            sink.capture(Event::AutomationCreated { start });
+        }
         // The operator works in the screen that said the book before was
         // lost: the line has been read.
         self.automations.book.unreadable = None;

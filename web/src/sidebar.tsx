@@ -77,6 +77,7 @@ import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
+import { GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
@@ -500,8 +501,20 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
     [tool, workspaces, inactiveFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
   );
   // The device's Needs You and Done come first, then the projects in their sections; Working and Seen are the Agents tab's.
-  const raised = useMemo(() => rows.filter((row) => row.kind === "raised"), [rows]);
+  // A connected machine's own Needs You and Done stand in the same sections (PRD device-connect-iroh D-50), which are drawn for them alone too.
+  const peerNeedsYou = usePeerRows("needs_you").length;
+  const peerDone = usePeerRows("done").length;
+  const raised = useMemo(() => {
+    const sections = rows.filter((row) => row.kind === "raised");
+    if (tool) return sections;
+    const empty = (group: "needs_you" | "done"): Extract<ProjectRow, { kind: "raised" }> => ({ kind: "raised", group, agents: [], more: [], expanded: false, asks: [] });
+    if (peerNeedsYou > 0 && !sections.some((row) => row.group === "needs_you")) sections.unshift(empty("needs_you"));
+    if (peerDone > 0 && !sections.some((row) => row.group === "done")) sections.splice(sections.findIndex((row) => row.group === "needs_you") + 1, 0, empty("done"));
+    return sections;
+  }, [rows, tool, peerNeedsYou, peerDone]);
   const listRows = useMemo(() => rows.filter((row) => row.kind !== "raised"), [rows]);
+  // The projects that draw the other machines' panes started in their folders; every other such pane stands under its machine's name (B10).
+  const guestProjects = useMemo(() => new Set(listRows.flatMap((row) => (row.kind === "workspace" && !row.workspace.remote_target_id ? [row.workspace.id] : []))), [listRows]);
   const agentRowMenu = useAgentRowMenu(actions);
   const children = useMemo(() => new Map(agents.map((agent) => [agent.pane_id, directChildren(agent, agents)])), [agents]);
   // A row Hide AI started names its task in its place line, so the place reads the agents too.
@@ -560,6 +573,7 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
         <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
+        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} /> : null}
         {/* A tool's cell with no work says so in the same place, in the tool's words (B42). */}
         {!remote && workspaces.length === 0 ? (
           <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
@@ -623,7 +637,13 @@ function rowKey(row: ProjectRow): string {
 const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
   if (row.kind === "divider") return <li role="separator" className="my-sm -mx-sm border-t border-border" />;
   if (row.kind === "raised") return <RaisedSection row={row} stack={stack} context={context} />;
-  return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
+  return (
+    <>
+      <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />
+      {/* Another machine's panes started in this project's folders stand under it, whatever the project has folded (PRD device-connect-iroh B10). */}
+      {row.workspace.remote_target_id ? null : <GuestProjectRows projectId={row.workspace.id} actions={context.actions} />}
+    </>
+  );
 });
 
 /**
@@ -641,7 +661,10 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
   const toggleFolded = useUiStore((s) => s.toggleRaisedFolded);
   const Chevron = folded ? ChevronRightIcon : ChevronDownIcon;
   const name = agentGroupTitle(row.group, t);
-  const count = row.asks.length + row.agents.length + row.more.length;
+  const tool = useContext(InToolCell);
+  const peerGroup = !tool && (row.group === "needs_you" || row.group === "done") ? row.group : null;
+  const peers = usePeerRows(peerGroup ?? "needs_you");
+  const count = row.asks.length + row.agents.length + row.more.length + (peerGroup ? peers.length : 0);
   // Pressed while stuck at the top it goes back to its rows; otherwise it folds or unfolds them.
   const press = (event: MouseEvent<HTMLElement>) => {
     const head = event.currentTarget.parentElement!;
@@ -697,6 +720,7 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
           {row.expanded
             ? row.more.map((listed) => <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />)
             : null}
+          {peerGroup ? <PeerWorkRows group={peerGroup} actions={context.actions} /> : null}
         </ul>
       )}
     </li>

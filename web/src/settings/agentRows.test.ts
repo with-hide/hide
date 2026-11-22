@@ -66,6 +66,12 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
     expect(systemName("freebsd")).toBeNull();
   });
 
+  it("leaves a paired machine out: it keeps its own Settings", () => {
+    const local = device({ id: "local", label: "mini", kind: "local", state: "local", agents: [agent("claude-code")] });
+    const paired = { ...device({ id: "windows-pc", label: "Windows PC", agents: [agent("codex")] }), peer_key: "ab".repeat(32) };
+    expect(agentMachines([local, paired]).map((row) => row.device.id)).toEqual(["local"]);
+  });
+
   it("splits each machine into the installed and the not installed, This Mac first, and says why a machine has no list", () => {
     const set = [agent("claude-code"), agent("codex", { enabled: false }), agent("pi", { availability: "not_installed", enabled: false })];
     const local = device({ id: "local", label: "mini", kind: "local", state: "local", agents: set });

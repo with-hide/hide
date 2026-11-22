@@ -35,6 +35,7 @@ import { hostChord, hostRegistry, isNumberedCommand, isPaneFocusCommand, pageKee
 import { editorFor, listedWorkspaces, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
+import { guestPaneRefuses } from "./guestWork";
 import { installWindowFocus } from "./windowFocus";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 import { composingKey } from "./keys";
@@ -251,6 +252,14 @@ export function installKeyboard(actions: Actions): () => void {
       else if (numbered.family === "devices") actions.selectComputer(target);
       else actions.openListedAgent(target);
       return;
+    }
+    // Over another machine's pane a window reads, types, sizes and closes
+    // (PRD device-connect-iroh D-74): the Workspace commands that would
+    // change its place say where they are done, and closing asks first.
+    const guest = ui().screen;
+    if (guest?.kind === "guest") {
+      if (guestPaneRefuses(id)) return actions.refuseOnGuestPane(guest.paneId);
+      if (id === "close_tab" || id === "close_pane") return actions.askCloseGuestPane(guest.paneId);
     }
     switch (id) {
       case "new_tab":

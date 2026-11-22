@@ -777,7 +777,7 @@ impl Runtime {
     }
 
     /// Who started the agent whose pane carries `session`: a mission node's
-    /// worker or checker, an agent `hide agent spawn` started (with a parent or as a
+    /// worker or checker, an automation's run, an agent `hide agent spawn` started (with a parent or as a
     /// handoff), or the operator. None when the delivery ledger cannot be
     /// read or no pane carries the session any more.
     pub(super) fn agent_start_source(
@@ -821,6 +821,8 @@ impl Runtime {
             });
         Some(if worker {
             AgentSource::Mission
+        } else if self.automation_run_agent(&record.id) {
+            AgentSource::Automation
         } else if record.parent.is_some() || (record.origin.is_some() && !record.forked) {
             AgentSource::Spawn
         } else {

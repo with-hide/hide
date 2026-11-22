@@ -2544,7 +2544,53 @@ impl Runtime {
             );
             return Err(());
         }
+        if self.keeps_own_settings(device) {
+            self.set_error(
+                "ai_settings.device_keeps_its_own",
+                format!("{device} runs its own Hide: Hide AI there is set in its own Settings"),
+                false,
+            );
+            return Err(());
+        }
         Ok(Some(device.to_owned()))
+    }
+
+    /// Whether `device` is a machine whose Settings are its own
+    /// ([`crate::model::LinkOrigin::keeps_own_settings`]).
+    fn keeps_own_settings(&self, device: &str) -> bool {
+        self.link_origin(device)
+            .is_some_and(crate::model::LinkOrigin::keeps_own_settings)
+    }
+
+    /// Takes Hide AI off every machine that keeps its own Settings: an item
+    /// placed on a device that has since become a paired machine runs on
+    /// the core's own machine again, and the file is written to say so.
+    /// Called where the settings are read and where a machine is paired, so
+    /// no placement on such a machine is ever held.
+    pub(super) fn drop_placements_on_own_settings_machines(&mut self) -> bool {
+        let Some(settings) = self.ai_settings.as_ref() else {
+            return false;
+        };
+        let placed: Vec<hide_ai::Item> = settings
+            .machines_by_item()
+            .into_iter()
+            .filter(|(_, device)| self.keeps_own_settings(device))
+            .map(|(item, _)| item)
+            .collect();
+        if placed.is_empty() {
+            return false;
+        }
+        let mut next = settings.clone();
+        for item in &placed {
+            next.place(item, None);
+        }
+        self.push_diagnostic(
+            "ai_settings.placement_dropped",
+            format!("items={}", placed.len()),
+        );
+        self.ai_settings = Some(next.clone());
+        self.pending_ai_settings_save = Some(next);
+        true
     }
 
     /// Whether the last read says `item` on `device` (`None`: the core's
@@ -2643,11 +2689,14 @@ impl Runtime {
 
     /// The registered devices whose link is up now, in their registered
     /// order: the ones Hide AI's read asks, and a first run may choose from.
+    /// A paired machine is none of them: it keeps its own Settings, so its
+    /// agents are never read or offered for this core's Hide AI.
     fn ai_connected_devices(&self) -> Vec<String> {
         self.snapshot
             .ui_state
             .device_registrations
             .iter()
+            .filter(|registration| !registration.origin.keeps_own_settings())
             .map(|registration| registration.id.clone())
             .filter(|device| device != self.node.as_str() && self.linked_node(device).is_ok())
             .collect()
@@ -2835,6 +2884,7 @@ impl Runtime {
         }
         self.ai_settings = Some(settings);
         self.snapshot.status.background_ai.unavailable_reason = unavailable_reason;
+        self.drop_placements_on_own_settings_machines();
         self.refresh_background_ai();
         true
     }

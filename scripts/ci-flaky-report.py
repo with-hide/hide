@@ -134,13 +134,17 @@ REPORT_JOBS = ("nightly report", "verify / verify")
 # Full nightly runs moved these duplicate calls under verify. Keep old issue
 # keys and green history attached to the identical suite, including build
 # failures; OS-only dispatch still uses the former job names. The Rust lane's
-# one job became its build, lint and test shards (`rust.yml`): all three keep
-# the one lane's key, so its issues match a failure in any of them and close
-# only when every one passed.
+# one job became its build, lint and test shards (`rust.yml`), and the Windows
+# lane's one job its compile, Rust tests and unit suites (`windows-check.yml`):
+# each lane's jobs keep the one lane's key, so its issues match a failure in
+# any of them and close only when every one passed.
 LANE_MOVES = {
     "verify / rust workspace / build tests": "verify / rust workspace",
     "verify / rust workspace / lint": "verify / rust workspace",
     "verify / rust workspace / tests": "verify / rust workspace",
+    "verify / windows check / compile": "verify / windows check",
+    "verify / windows check / rust tests": "verify / windows check",
+    "verify / windows check / web unit": "verify / windows check",
     "web e2e (Windows @platform) / build hided nightly-windows": "verify / windows e2e / build hided windows",
     "web e2e (Windows @platform) / web e2e nightly-windows": "verify / windows e2e / web e2e windows",
     "desktop e2e (macos full) / desktop e2e nightly-macos": "verify / desktop e2e / desktop e2e macos",

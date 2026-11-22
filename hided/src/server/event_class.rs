@@ -263,6 +263,8 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("git_worktree_set_base", Screen),
     ("github_request", Screen),
     ("github_search", Screen),
+    // A guest's pane here is ended by this machine's operator (D-74).
+    ("guest_pane_close", OwnWindow),
     ("guest_panes", Daemon),
     ("herdr_import", Screen),
     ("herdr_profiles_list", Screen),
@@ -332,6 +334,8 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("path_rename", Screen),
     ("path_trash", Screen),
     ("peer_machines", Daemon),
+    // What another machine told of its own work (D-50).
+    ("peer_work", Daemon),
     ("phone_viewing", Daemon),
     ("pr_card_read", Screen),
     ("pr_delegate", Screen),
@@ -611,6 +615,7 @@ mod tests {
                 "peer_machines",
                 "device_switch",
                 "guest_panes",
+                "peer_work",
             ] {
                 assert_eq!(admit(kind, client), Err(Refused::NotHere), "{kind}");
             }

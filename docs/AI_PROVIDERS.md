@@ -345,6 +345,7 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 `usage_limit` is a percent from 1 to 100 or `"none"`, written only when it is not the default 90; a file without it reads 90, and any other value makes the file malformed, which is reported and not guessed around.
 
 `machines` maps an agent's id to the connected device it runs on, such as `{ "claude": "wsl-ubuntu" }` (PRD wsl-device B11); an agent with no entry runs on the core's own machine, and the field is written only when an agent runs on a device, so an older file runs everything on the core's machine.
+A paired machine runs its own Hide and keeps its own Settings, so it is never such a device: its agents are not read or offered for this core's Hide AI, an event that names it is refused (`ai_settings.device_keeps_its_own`), and an entry that names a device which has since been paired is taken off, with the file written again (PRD device-connect-iroh, Settings per machine).
 One item runs on one machine, so Runs on and a fallback entry never name the same item twice; `set_runs_on` keeps the place of an item that moves from the fallback list to Runs on, and `place` sets or clears it.
 `routes_like` compares the places too, so moving an item to another machine rebuilds a held router.
 An item placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.

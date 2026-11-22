@@ -962,6 +962,22 @@ async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_t
     let refused = window.result("share").await;
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["reason"], "device_connect_unavailable", "{refused}");
+    // It hosts no other machine's work, so a window's close of a guest's
+    // pane is refused the same way, and nothing of another machine is on
+    // its screen (PRD device-connect-iroh D-50, D-74).
+    window
+        .send(
+            "guest_pane_close",
+            json!({"pane_id": "guest:macbook:pane:w1:p1"}),
+        )
+        .await;
+    let refused = window
+        .frame("the refused close", |frame| frame["type"] == "error")
+        .await;
+    assert_eq!(
+        refused["message"], "device_connect_unavailable",
+        "{refused}"
+    );
 
     // The terminal's own build refuses before it asks; one that offers
     // pairing hears the daemon's refusal, which is the same.

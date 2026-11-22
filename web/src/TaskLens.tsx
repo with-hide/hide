@@ -55,6 +55,7 @@ import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
 import { toolProjectChoice, toolTaskList } from "./toolCells";
+import { GuestMachineGroups, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
@@ -129,6 +130,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation)]), [filter, ownAsks, everyAsk, everyAutomation]);
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
   const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
+  // Another machine's rows and panes are listed with this computer's, so a list with nothing of its own, or a computer with no project yet, still draws them (PRD device-connect-iroh B10, B49).
+  const otherMachines = useShellStore((s) => (s.rest?.navigator?.guest_panes?.length ?? 0) > 0 || (s.rest?.navigator?.peer_work ?? []).some((peer) => (peer.rows?.length ?? 0) > 0));
   const noProject = rest !== null && projects.every((project) => project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
@@ -144,7 +147,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
           <span className="min-w-0 truncate">{t("taskLens.unresponsive", { device: unresponsive })}</span>
         </p>
       ) : null}
-      {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 ? <NoTasks actions={actions} /> : (
+      {rest === null || !scope ? <TaskSkeleton /> : noProject && !otherMachines ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 && !otherMachines ? <NoTasks actions={actions} /> : (
         <TaskGroups list={list} view={view} showProject={view === "status" && !filter} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
       )}
     </div>
@@ -326,8 +329,12 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         </Fragment>
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
+      {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} /></ul> : null}
     </section>
   );
+  // A state this computer has no row in is still drawn for another machine's rows, in its place among the states.
+  const peerOnly = (state: "needs_you" | "done") => (!tool && (view !== "status" || !sections.some((section) => section.group.state === state)) ? <PeerSection key={`peer:${state}`} state={state} actions={actions} /> : null);
   // One list scrolls everything: 내 차례 and 읽을 것 are its first sections, like the
   // projects tree's Needs You and Done, and scroll away with the rest. Their heads
   // stay, stacked under the ones already passed, so a scrolled list still says what
@@ -336,12 +343,34 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
       <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
+        {peerOnly("needs_you")}
+        {peerOnly("done")}
         {sections.map(drawSection)}
+        {tool ? null : <ul className="flex min-w-0 flex-col"><GuestMachineGroups actions={actions} /></ul>}
         {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
       </div>
     </div>
   );
 }, (before, after) => before.list === after.list && before.view === after.view && before.showProject === after.showProject && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
+
+/** Another machine's rows of a state this computer has none in: the state's name, their count and the rows (PRD device-connect-iroh D-50). */
+function PeerSection({ state, actions }: { state: "needs_you" | "done"; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const count = usePeerRows(state).length;
+  if (count === 0) return null;
+  const name = groupLabel(state, false, t);
+  return (
+    <section data-task-group={state} data-peer-section={state} aria-label={name}>
+      <h3 className={cn("flex h-(--size-sidebar-section-header) items-center gap-xs px-xs text-micro font-medium text-subtle-foreground", state === "needs_you" && "text-warning")}>
+        <span>{name}</span>
+        <span className="tabular-nums">{count}</span>
+      </h3>
+      <ul className="flex min-w-0 flex-col">
+        <PeerWorkRows group={state} actions={actions} />
+      </ul>
+    </section>
+  );
+}
 
 function groupName(group: TaskGroup, tool: boolean, t: TFunction<"translation">): string {
   return group.project?.label ?? (group.state ? groupLabel(group.state, tool, t) : "");

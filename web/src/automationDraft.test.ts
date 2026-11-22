@@ -35,6 +35,12 @@ describe("the automation form's values", () => {
     expect(addCall(draft, false, false)).toMatchObject({ folder: "/p", worktree: false });
   });
 
+  it("names the example the form started from, and none for an empty form", () => {
+    const draft = { ...draftOf(null, undefined), name: "n", task: "t" };
+    expect(addCall(draft, false, false, "briefing")).toMatchObject({ example: "briefing" });
+    expect(addCall(draft, false, false)).not.toHaveProperty("example");
+  });
+
   it("sends an edit with only what changed, and none when nothing did", () => {
     const before = automation();
     const draft = draftOf(before, undefined);

@@ -390,6 +390,12 @@ pub mod phone {
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct PhoneAgent {
+        /// Whose the work is between machines (`whose_work::judge`): what
+        /// reads this list (the phone bridge, the notices, the sender to
+        /// other machines) takes each row's reach from it and decides
+        /// nothing of its own (PRD device-connect-iroh D-78).
+        #[serde(skip)]
+        pub whose: crate::whose_work::Whose,
         pub device_id: String,
         /// The core's pane id: an engine pane id on this Mac, `remote:<device>:pane:<id>` on a device.
         pub pane_id: String,
@@ -1001,11 +1007,18 @@ pub mod phone {
 
     fn rows(
         agents: &[Value],
+        whose: crate::whose_work::Whose,
         device_id: &str,
         device_label: Option<&str>,
         places: &HashMap<String, String>,
         out: &mut Vec<PhoneAgent>,
     ) {
+        // The list is this core's phone list and the rows it judges a
+        // notification for: what is not this core's work is in neither.
+        let reach = whose.reach();
+        if !reach.phone && !reach.notifies {
+            return;
+        }
         let roots = roots(agents);
         for agent in agents {
             // A starred task still waits in 다시 볼 것 after it resolved itself.
@@ -1043,6 +1056,7 @@ pub mod phone {
                 group => group.to_owned(),
             };
             out.push(PhoneAgent {
+                whose,
                 device_id: device_id.to_owned(),
                 pane_id: pane_id.to_owned(),
                 root_pane_id: roots
@@ -1239,7 +1253,17 @@ pub mod phone {
             .map(Vec::as_slice)
             .unwrap_or_default();
         let local_places = places(rest.pointer("/navigator/workspaces"));
-        rows(local, node, None, &local_places, &mut agents);
+        // Every row the navigator and a device's session list is work this
+        // core answers for: the panes of another core's work on this machine
+        // are in neither (`navigator.guest_panes`).
+        rows(
+            local,
+            crate::whose_work::judge(node, node, node),
+            node,
+            None,
+            &local_places,
+            &mut agents,
+        );
         let devices = rest
             .pointer("/navigator/devices")
             .and_then(Value::as_array)
@@ -1287,6 +1311,7 @@ pub mod phone {
             let remote_places = places(session.and_then(|session| session.get("workspaces")));
             rows(
                 remote_agents,
+                crate::whose_work::judge(node, node, target),
                 target,
                 Some(label),
                 &remote_places,

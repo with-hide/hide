@@ -2438,6 +2438,7 @@ A mark's digits are `--status-foreground`, white in Light and near-black in Dark
 The counts come from the device's published `agent_scope` values; the browser does not rederive them.
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported; while the center already offers `다시 연결` for that device (its Work, Projects and Backlog body, or its Workspace's surface or stale line), the sidebar leaves its own out, so the same action is drawn once.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
+A paired machine's tile is that machine's own screen, so it counts what that machine told of its own Needs You and Done (`navigator.peer_work`) and nothing while it tells nothing; this computer's work that runs on a paired machine opens in this computer's tile with that machine's mark, so it is counted on this computer's tile, and this computer's tile is the one ringed while the center shows it (`railFrontId`, PRD device-connect-iroh D-50, D-55).
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row of its own names the device, while Needs You also lists the other connected devices' rows, each with its device's chip ([Sidebar hierarchy](#sidebar-hierarchy), operator decision 2026-11-08).
 In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the computer tile at that number, top to bottom with This Mac first, paired machines included, whether or not the rail shows and whether or not another machine's screen holds the keyboard, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 ⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
@@ -2501,6 +2502,26 @@ A window on a machine whose core runs elsewhere shows its core's state and takes
 - otherwise the shell's own connecting state.
 
 The window takes no input while its strip shows, and sends none of what was typed meanwhile once the core is back; the strip goes when the core's snapshot arrives, and a move that ends on another machine rewrites the window's address to it without a reload (`addressAfterMove`).
+
+## Another machine's work on this computer
+
+Web owner: `web/src/guestWork.ts`, `web/src/GuestWorkRows.tsx`, `web/src/GuestPaneScreen.tsx`.
+
+A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's sidebar whether or not that machine is connected (PRD device-connect-iroh B10, B68).
+A pane started in a folder one of this computer's projects holds stands right under that project's row, whatever the project has folded; every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`), and the 태스크 list, which draws no projects, lists them all so.
+The row is the folder's own name, or the pane's id on its machine when its node said no folder, with the machine's letters in the other-device colour (`MB`) and its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
+Screen copy never calls that machine a guest: it is named, or its work is `<machine>에서 시킨 일`.
+Pressing a row shows the pane in the center as the window's own page (`Screen` `guest`), since the pane is no tab of this core's: a tab strip of that machine's panes in the same place (the project, or the machine's own group), the pane's folder with the machine's chip, and its terminal.
+The operator reads it, types into it, and it follows this window's size while this window is the one typing; this computer's tile is ringed.
+Splitting, a new tab, renaming and starting an agent are drawn dimmed in its menu with `<machine>에서 할 수 있어요` under each, whether or not that machine is connected (D-74), and their shortcuts say the same line as a notice in place of acting.
+`닫기…`, ⌘W and the pane-close shortcut ask first (`이 터미널을 닫을까요?`, with what ends and that the machine is told); confirming sends `guest_pane_close`, and the page leaves for the Overview.
+A pane that left the list while its page is open says `이 터미널은 끝났어요`.
+A program's mouse reports are not sent to another machine's pane.
+
+A connected machine this computer opens tells its own Needs You and Done, and those rows follow this computer's in the same sections of both sidebar lists, each with the machine's filled chip, its mark, title and the sentence its own core chose (D-50, B49).
+A section is drawn for them alone, and its count includes them.
+Pressing one selects that machine's tile; rows of this computer's own work on another machine keep the outline chip and open in this computer's tile.
+This computer rings nothing for another machine's rows, and they leave the list when that machine is no longer connected.
 
 ## Start panel
 
@@ -2665,7 +2686,7 @@ On the first launch of a stable version whose entry the file has, once the core'
 A feature's drawing is its own scene when it has one (`web/src/components/whats-new-scenes/`): its real screen at its real size, from that screen's own parts and words, playing example work from the first press to the result, such as the automation scene, where a starting point becomes an automation, the night passes, the run's terminal reads the issues and the run ends with its ✓, the sidebar's count and the corner notice.
 A feature without one is drawn by a practice card's move.
 The drawing moves to the next feature after one loop of its own, 6 seconds for a practice move and the scene's own length for a scene; pressing a feature shows it and stops the moving; with reduced motion a practice move holds the middle of its move and a scene its last moment.
-A feature a release names among its main features brings its scene and its practice chapter in its own pull request, so both are in the build the release cuts ([CONTRIBUTING.md](../CONTRIBUTING.md#a-main-feature-brings-its-practice-and-its-scene)).
+A feature a release names among its main features brings its scene, its practice chapter and its measure, the usage-statistics event its highlight names as `measure`, in its own pull request, so all three are in the build the release cuts ([CONTRIBUTING.md](../CONTRIBUTING.md#a-main-feature-brings-its-practice-its-scene-and-its-measure)).
 A feature whose chapter is in the practice carries `Try it` (`체험하기`) in the practice's amber; it closes the window and opens the [Practice window](#practice-window) with that chapter's card open on the list, where `시작` or ⏎ plays it.
 A feature no chapter teaches whose highlight names a Settings page (`settings`, such as `skills`) carries `Open in Settings` (`설정에서 보기`) as a secondary button instead; it closes the window and opens Settings on that page, and the feature's line says it can also be asked of an agent where an agent's command does it (operator decision 2026-11-21).
 A drawing or chapter the app does not have is left out of the feature, which keeps its words, and noted in the diagnostics.
@@ -3051,6 +3072,12 @@ An existing install whose old shared switch was on migrates to both on; an old o
 Each toggle sends one event and persists through the core's existing UI-state writer; a repeated choice publishes nothing and a stale generic UI save cannot replace either choice.
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
+This computer's windows get each new notice whether or not someone is at the computer; only the phones rest, by the rule the Phone group states below.
+Where two computers that each run Hide can connect (not offered yet, `docs/INSTALL.md`, Connect another computer that runs Hide), a notice goes to one place instead (PRD device-connect-iroh D-60, B59): this computer's windows get a new one only while the computer is in use, by the same rule, and a computer that is on and not in use gets none, so the same question never rings here and on a phone.
+There a wait that began while no one was at the computer is not announced when someone returns; its row stands in Needs You.
+Between paired computers the same rule picks one of them (B59, B71): work of a machine no one is at rings on the computer in use that may open that machine, the one used last when there are several, worded as that computer's own notices are, and a click selects that machine's tile.
+A computer that does not show it within 5 s is passed over for the next one, and the phone of the work's machine rings when no computer showed it; when the operator has seen the work, the notice is taken back wherever it was shown.
+A row that arrived from another machine never rings on its own.
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
 On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later admitted phone action has taken over.
@@ -3059,7 +3086,7 @@ A new authenticated, well-formed answer, approval or wake counts as phone use ev
 Reading or opening the app, authentication or format refusals and duplicate request IDs do not count.
 Computer input reported after a pause of at least five seconds, or a return to in use, rests phone pushes again; continuous typing adds no reports to the existing one-second poll.
 Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
-This memory is lost on daemon restart and does not change desktop notifications or the switch's wording.
+This memory is lost on daemon restart and does not change the switch's wording; where two computers that each run Hide can connect, this computer's windows get no new notice while the phone is in charge.
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
 A root with no eligible pending notice sends no phone notification for a wait that begins while phone pushes rest, even when resting ends before its settle window closes.
 It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.
@@ -3239,6 +3266,7 @@ In Korean a fixed noun follows the machine's name (`Mac mini 기기로`), so no 
 Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
 This Mac comes first, as in Devices, and each machine is listed once.
+A paired machine is not one of them: it runs its own Hide, so its agents, profiles and models are set in its own Settings, and Hide AI here offers none of its agents (PRD device-connect-iroh, Settings per machine).
 `Checking this machine's agents…` shows only while a read runs or before the machine's first answer; a machine whose kit answered without listing an agent (another Hide held its account, a retirement it refused) says `Hide couldn't read this machine's agents.` with Check again.
 A device that cannot be reached shows one line and Try again above its last installed-agent and profile list, dimmed and read-only; no permission, switch, add or edit control is offered until it reconnects.
 A device connecting or switched off keeps the same read-only list below its connection state.

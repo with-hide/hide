@@ -499,6 +499,28 @@ class NightlyFailures(unittest.TestCase):
                                             issues=[issue], logs={1: "it failed"}))
                 self.assertEqual((github.opened(), github.commented()), ([], [5]))
 
+    def test_the_split_windows_lane_keeps_its_issues_under_the_one_lanes_key(self):
+        old = "verify / windows check"
+        for current, step in (("verify / windows check / compile", "Compile the workspace for Windows"),
+                              ("verify / windows check / rust tests", "Install kit, its Windows command shim and its pieces in profile accounts"),
+                              ("verify / windows check / web unit", "Web shell unit suite")):
+            with self.subTest(current=current):
+                issue = {"number": 5, "body": f"<!-- nightly-failure:{old}:step {step} -->"}
+                github = nightly(FakeGitHub([job(1, current, "failure", [(step, "failure")])],
+                                            issues=[issue], logs={1: "it failed"}))
+                self.assertEqual((github.opened(), github.commented()), ([], [5]))
+
+    def test_the_windows_lanes_old_issue_closes_only_when_its_three_jobs_pass(self):
+        lane = "verify / windows check"
+        issue = {"number": 5, "body": f"<!-- nightly-failure:{lane}:hide-core runtime::tests::x -->"}
+        names = [f"{lane} / compile", f"{lane} / rust tests", f"{lane} / web unit"]
+        for index in range(len(names)):
+            for conclusion in ("success", "failure", "cancelled", "skipped"):
+                with self.subTest(job=names[index], conclusion=conclusion):
+                    jobs = [job(n + 1, name, conclusion if n == index else "success") for n, name in enumerate(names)]
+                    github = nightly(FakeGitHub(jobs, issues=[issue], logs={index + 1: "a job failed"}))
+                    self.assertEqual(github.closed(), [5] if conclusion == "success" else [])
+
     def test_the_rust_lanes_old_issue_closes_only_when_build_lint_and_every_shard_pass(self):
         lane = "verify / rust workspace"
         issue = {"number": 5, "body": f"<!-- nightly-failure:{lane}:hide-core runtime::tests::x -->"}
