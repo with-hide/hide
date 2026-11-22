@@ -533,12 +533,19 @@ mod tests {
                 let _ = held.recv_timeout(Duration::from_secs(30));
             });
             holding.await.unwrap();
-            tokio::time::advance(super::super::OBSERVE_INTERVAL).await;
-            for _ in 0..100 {
+            // The loop may start its sleep after the clock moved, so the
+            // clock moves one interval at a time until it takes the notice.
+            for _ in 0..10 {
+                tokio::time::advance(super::super::OBSERVE_INTERVAL).await;
+                for _ in 0..100 {
+                    if mobile.lock().paired_notices.is_empty() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
                 if mobile.lock().paired_notices.is_empty() {
                     break;
                 }
-                tokio::task::yield_now().await;
             }
             assert!(
                 mobile.lock().paired_notices.is_empty(),
