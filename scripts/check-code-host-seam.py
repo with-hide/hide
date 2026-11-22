@@ -50,9 +50,12 @@ IMPLEMENTATION = (
     # The node side of gitlab.com's CLI: its allowlist and the runner.
     "hide-node-link/src/glab.rs",
     "hide-host/src/glab.rs",
+    # Each host's reading of a session's calls and printed addresses, which
+    # runs on the node that holds the session file (`hide_session::hosts`).
+    "hide-session/src/hosts/",
 )
 
-RUST_ROOTS = ("hide-core/src", "hided/src")
+RUST_ROOTS = ("hide-core/src", "hided/src", "hide-session/src")
 WEB_ROOTS = ("web/src",)
 
 # The node link's module for GitHub's program holds its argument builders,

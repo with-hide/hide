@@ -41,6 +41,7 @@ mod envelope;
 pub mod environment;
 mod file_cache;
 mod grok;
+pub mod hosts;
 mod label_owner;
 pub mod label_transcript;
 pub mod links;

@@ -1,14 +1,16 @@
-//! The pull requests a tool call named: the ones a session acted on, as
+//! The change requests a tool call named: the ones a session acted on, as
 //! opposed to an address that only passed through a tool's output.
 //!
 //! A tool's output prints whatever it lists (a browser's open tabs, `gh pr
 //! list`, a log), so an address in it says only that the session saw the
-//! pull request; that is evidence of creation when it is printed as GitHub
-//! makes the pull request, and of nothing else. A call names a pull request
-//! when it acts on that one: a `gh pr` command given its number or address,
-//! a `gh api` path under `repos/<owner>/<name>/pulls/<number>`, a command
-//! that opens or fetches its address, a tool whose argument is the address,
-//! or a GitHub tool given its owner, name and number.
+//! change request; that is evidence of creation when it is printed as its
+//! host makes the change request, and of nothing else. A call names a change
+//! request when it acts on that one: a host's command given its number or
+//! address (`gh pr view 12`, `glab mr view !12`), an API path under it, a
+//! command that opens or fetches its address, a tool whose argument is the
+//! address, or a host's tool given its repository and number. What each
+//! host's commands and addresses look like is that host's
+//! (`crate::hosts`); this module walks the call and asks them.
 //!
 //! The shell text is read by `hide-shell`, as the hooks read a call before it
 //! runs and in the syntax of the shell that ran it (`crate::call_shell`, which
@@ -17,28 +19,34 @@
 //! PowerShell `cd .\app` moves to `app`. A command hidden a layer
 //! deeper (`bash -c`, a script, an alias) is not looked for.
 //!
-//! A call that makes a pull request ([`creates_pull_request`]) is read the
+//! A call that makes a change request ([`creates_pull_request`]) is read the
 //! same way, and the address its output gives back ([`created_addresses`])
 //! is the one it made, whatever the clocks say.
 
-use crate::{pull_request_addresses, sightings::is_name};
+use crate::hosts;
 use hide_shell::Syntax;
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
-/// A pull request a tool call named.
+/// A change request a tool call named.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NamedPr {
-    /// `owner/name` when the call said which repository: an address,
-    /// `--repo`, a `repos/<owner>/<name>` path, a GitHub tool's arguments.
-    /// `None` when it named only a number, which is a pull request of the
-    /// repository the call ran in.
+    /// The repository's stored name when the call said which repository (an
+    /// address, `--repo`, an API path, a host tool's arguments): `owner/name`
+    /// on github.com, `gitlab.com/group/sub/project`. `None` when it named
+    /// only a number, which is a change request of the repository the call
+    /// ran in.
     pub repository: Option<String>,
     pub number: u64,
     /// For a number alone, the folder the call ran in when the record says
     /// it was not the session's own (a `cd` before the command, the tool's
     /// working directory); `None` is the session's folder.
     pub folder: Option<String>,
+    /// The key of the host whose command or address named it; `None` is
+    /// GitHub's, as every record and older node before hosts were named.
+    /// A number alone belongs only to a project of this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 /// How deep `$(...)` substitutions are read.
@@ -53,10 +61,7 @@ const COMMAND_KEYS: [&str; 3] = ["command", "cmd", "CommandLine"];
 /// agy's `Cwd`, Cursor's and Codex's local shell `working_directory`.
 const FOLDER_KEYS: [&str; 5] = ["workdir", "cwd", "Cwd", "working_directory", "directory"];
 
-/// The keys a GitHub tool takes a pull request's number under.
-const NUMBER_KEYS: [&str; 4] = ["pull_number", "pullNumber", "pr_number", "prNumber"];
-
-/// The pull requests one tool call's input names. `folder` is where the
+/// The change requests one tool call's input names. `folder` is where the
 /// record says the session was when it made the call, when it says so, and
 /// `syntax` the shell's that ran it.
 pub(crate) fn tool_call(input: &Value, folder: Option<&str>, syntax: Syntax) -> Vec<NamedPr> {
@@ -77,26 +82,14 @@ pub(crate) fn tool_call(input: &Value, folder: Option<&str>, syntax: Syntax) -> 
         if COMMAND_KEYS.contains(&key.as_str()) {
             continue;
         }
-        if let Some((repository, number)) = value.as_str().and_then(whole_address) {
-            found.push(Some(repository), number, None);
+        if let Some((host, repository, number)) =
+            value.as_str().and_then(hosts::change_request_address)
+        {
+            found.push(host, Some(repository), number, None);
         }
     }
-    let owner = object.get("owner").and_then(Value::as_str);
-    let name = object.get("repo").and_then(Value::as_str);
-    let number = NUMBER_KEYS
-        .iter()
-        .find_map(|key| object.get(*key))
-        .and_then(|value| match value {
-            Value::Number(number) => number.as_u64(),
-            Value::String(text) => pr_number(text),
-            _ => None,
-        });
-    if let (Some(owner), Some(name), Some(number)) = (owner, name, number)
-        && is_name(owner)
-        && is_name(name)
-        && number > 0
-    {
-        found.push(Some(format!("{owner}/{name}")), number, None);
+    for host in hosts::STANDARD {
+        host.tool_arguments(object, &mut found);
     }
     found.named
 }
@@ -139,15 +132,17 @@ fn commands(
     }
 }
 
-/// Whether a tool call makes a pull request: a shell command `gh pr
-/// create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, or a GitHub
-/// tool named for it (`create_pull_request`, as the GitHub MCP server names
-/// it, under any prefix). `name` is the tool's own name when the record
-/// keeps one, and `syntax` the shell's that ran it. A shell call with an
-/// `||` makes no claim: the command after it runs because one failed, and
-/// what it prints is no making.
+/// Whether a tool call makes a change request: a host's create command
+/// (`gh pr create`, `glab mr create`), an API POST to where its host makes
+/// one, a `git push` with an option its host makes one from, or a host's
+/// tool named for it. `name` is the tool's own name when the record keeps
+/// one, and `syntax` the shell's that ran it. A shell call with an `||`
+/// makes no claim: the command after it runs because one failed, and what it
+/// prints is no making.
 pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value, syntax: Syntax) -> bool {
-    if name.is_some_and(|name| name.to_ascii_lowercase().ends_with("create_pull_request")) {
+    if let Some(name) = name.map(str::to_ascii_lowercase)
+        && hosts::STANDARD.iter().any(|host| host.creating_tool(&name))
+    {
         return true;
     }
     let Some(object) = input.as_object() else {
@@ -171,10 +166,12 @@ pub(crate) fn runs_git_commit(input: &Value, syntax: Syntax) -> bool {
     found.commits
 }
 
-/// The pull requests a creating call's output gives back: an address alone
-/// on its line, as `gh pr create` prints the one it made, or the `html_url`
-/// of GitHub's answer to the create request. An address inside other text,
-/// a pull request body the answer echoes included, is not the one made.
+/// The change requests a creating call's output gives back: an address
+/// alone on its line, as `gh pr create` and `glab mr create` print the one
+/// they made and a push that made one prints it after git's `remote:`, or
+/// the address field of the host's answer to the create request. An address
+/// inside other text, a description the answer echoes included, is not the
+/// one made.
 pub(crate) fn created_addresses(outputs: &[&str]) -> Vec<(String, u64)> {
     let mut made: Vec<(String, u64)> = Vec::new();
     let mut keep = |address: (String, u64)| {
@@ -184,27 +181,32 @@ pub(crate) fn created_addresses(outputs: &[&str]) -> Vec<(String, u64)> {
     };
     for output in outputs {
         for line in output.lines() {
-            if let Some(address) = whole_address(line) {
-                keep(address);
+            let line = line.trim();
+            let line = line.strip_prefix("remote:").unwrap_or(line);
+            if let Some((_, repository, number)) = hosts::change_request_address(line) {
+                keep((repository, number));
             }
         }
-        if let Ok(answer) = serde_json::from_str::<Value>(output.trim())
-            && let Some(address) = answer
-                .get("html_url")
-                .and_then(Value::as_str)
-                .and_then(whole_address)
-        {
-            keep(address);
+        if let Ok(answer) = serde_json::from_str::<Value>(output.trim()) {
+            for host in hosts::STANDARD {
+                if let Some((repository, number)) = answer
+                    .get(host.made_field())
+                    .and_then(Value::as_str)
+                    .and_then(|address| host.address(address.trim()))
+                {
+                    keep((repository, number));
+                }
+            }
         }
     }
     made
 }
 
 #[derive(Default)]
-struct Found {
+pub(crate) struct Found {
     named: Vec<NamedPr>,
-    /// A command among them makes a pull request.
-    creates: bool,
+    /// A command among them makes a change request.
+    pub(crate) creates: bool,
     /// A line among them holds an `||`.
     fallback: bool,
     /// A command among them is `git commit`.
@@ -212,12 +214,21 @@ struct Found {
 }
 
 impl Found {
-    fn push(&mut self, repository: Option<String>, number: u64, folder: Option<String>) {
+    /// A change request `host` named: by its repository's stored name, or
+    /// by its number alone in `folder`.
+    pub(crate) fn push(
+        &mut self,
+        host: &'static str,
+        repository: Option<String>,
+        number: u64,
+        folder: Option<String>,
+    ) {
         let folder = folder.filter(|_| repository.is_none());
         let named = NamedPr {
             repository,
             number,
             folder,
+            host: hosts::recorded_key(host),
         };
         if !self.named.contains(&named) {
             self.named.push(named);
@@ -227,7 +238,7 @@ impl Found {
 
 /// Where a command runs, as far as the call says.
 #[derive(Clone)]
-enum Place {
+pub(crate) enum Place {
     /// The session's own folder.
     Session,
     At(PathBuf),
@@ -250,13 +261,11 @@ fn shell(text: &str, mut place: Place, depth: usize, syntax: Syntax, found: &mut
 }
 
 fn command(words: &[String], place: &mut Place, syntax: Syntax, found: &mut Found) {
-    let mut repository_variable = None;
+    let mut assignments: Vec<&str> = Vec::new();
     let mut at = 0;
     while let Some(word) = words.get(at) {
         if hide_shell::is_assignment(word) {
-            if let Some(value) = word.strip_prefix("GH_REPO=") {
-                repository_variable = repository_of(value);
-            }
+            assignments.push(word);
         } else if !hide_shell::is_prefix(word, true) {
             break;
         }
@@ -275,9 +284,12 @@ fn command(words: &[String], place: &mut Place, syntax: Syntax, found: &mut Foun
         };
         return;
     }
+    if let Some(host) = hosts::of_program(&program) {
+        host.command(args, &assignments, place, found);
+        return;
+    }
     match program.as_str() {
-        "gh" => gh(args, repository_variable, place, found),
-        "git" => found.commits |= git_subcommand(args) == Some("commit"),
+        "git" => git(args, found),
         "open" | "xdg-open" | "start" | "curl" | "wget" => addresses(args, found),
         "hide"
             if args.first().is_some_and(|word| word == "browser")
@@ -289,177 +301,85 @@ fn command(words: &[String], place: &mut Place, syntax: Syntax, found: &mut Foun
     }
 }
 
-/// The subcommand of a `git` call, past git's own options (`-C <path>`,
-/// `-c <name=value>` and the `--flag[=value]` forms).
-fn git_subcommand(args: &[String]) -> Option<&str> {
-    let mut words = args.iter();
-    while let Some(word) = words.next() {
-        match word.as_str() {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
-                words.next();
+/// `git commit`, and a `git push` whose push option makes a change request
+/// on the remote's host (`-o merge_request.create`).
+fn git(args: &[String], found: &mut Found) {
+    let Some((subcommand, rest)) = git_subcommand(args) else {
+        return;
+    };
+    match subcommand {
+        "commit" => found.commits = true,
+        "push" => {
+            let mut words = rest.iter();
+            while let Some(word) = words.next() {
+                let option = match word.as_str() {
+                    "-o" | "--push-option" => words.next().map(String::as_str),
+                    other => other
+                        .strip_prefix("--push-option=")
+                        .or_else(|| other.strip_prefix("-o").filter(|value| !value.is_empty())),
+                };
+                if option.is_some_and(|option| {
+                    hosts::STANDARD
+                        .iter()
+                        .any(|host| host.creating_push_option(option))
+                }) {
+                    found.creates = true;
+                }
             }
-            option if option.starts_with('-') => {}
-            subcommand => return Some(subcommand),
+        }
+        _ => {}
+    }
+}
+
+/// The subcommand of a `git` call and the words after it, past git's own
+/// options (`-C <path>`, `-c <name=value>` and the `--flag[=value]` forms).
+fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        match word.as_str() {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => at += 2,
+            option if option.starts_with('-') => at += 1,
+            subcommand => return Some((subcommand, &args[at + 1..])),
         }
     }
     None
 }
 
-/// Every argument that is a pull request's address.
+/// Every argument that is a change request's address.
 fn addresses(args: &[String], found: &mut Found) {
     for arg in args {
-        if let Some((repository, number)) = whole_address(arg) {
-            found.push(Some(repository), number, None);
+        if let Some((host, repository, number)) = hosts::change_request_address(arg) {
+            found.push(host, Some(repository), number, None);
         }
     }
 }
 
-/// `gh pr <verb> <target>`, `gh api <path>` and `gh browse <number>`.
-fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Found) {
-    let Some((subcommand, rest)) = args.split_first() else {
-        return;
-    };
-    let (target, repository) = match subcommand.as_str() {
-        "pr" => {
-            let Some((verb, rest)) = rest.split_first() else {
-                return;
-            };
-            if matches!(verb.as_str(), "create" | "new") {
-                found.creates = true;
-                return;
-            }
-            if !PR_VERBS.contains(&verb.as_str()) {
-                return;
-            }
-            (
-                first_positional(rest, PR_VALUE_FLAGS),
-                flag_repository(rest),
-            )
-        }
-        "browse" => (
-            first_positional(rest, BROWSE_VALUE_FLAGS),
-            flag_repository(rest),
-        ),
-        "api" => {
-            let endpoint = first_positional(rest, API_VALUE_FLAGS);
-            if let Some(endpoint) = endpoint
-                && let Some((repository, number)) = api_path(endpoint)
-            {
-                name(repository, number, place, found);
-            }
-            if endpoint.is_some_and(is_pulls_path) && api_posts(rest) {
-                found.creates = true;
-            }
-            return;
-        }
-        _ => return,
-    };
-    let Some(target) = target else {
-        return;
-    };
-    if let Some((repository, number)) = whole_address(target) {
-        found.push(Some(repository), number, None);
-    } else if let Some(number) = pr_number(target.strip_prefix('#').unwrap_or(target)) {
-        name(repository.or(variable), number, place, found);
-    }
-}
-
-/// A number with its repository, or with where the call ran when it named
-/// no repository.
-fn name(repository: Option<String>, number: u64, place: &Place, found: &mut Found) {
+/// A number `host` named with its repository, or with where the call ran
+/// when it named no repository.
+pub(crate) fn name(
+    host: &'static str,
+    repository: Option<String>,
+    number: u64,
+    place: &Place,
+    found: &mut Found,
+) {
     match (repository, place) {
-        (Some(repository), _) => found.push(Some(repository), number, None),
-        (None, Place::Session) => found.push(None, number, None),
+        (Some(repository), _) => found.push(host, Some(repository), number, None),
+        (None, Place::Session) => found.push(host, None, number, None),
         (None, Place::At(folder)) => {
-            found.push(None, number, Some(folder.to_string_lossy().into_owned()));
+            found.push(
+                host,
+                None,
+                number,
+                Some(folder.to_string_lossy().into_owned()),
+            );
         }
         (None, Place::Unknown) => {}
     }
 }
 
-/// The `gh pr` commands that act on one pull request; `list`, `status` and
-/// `create` name none.
-const PR_VERBS: [&str; 16] = [
-    "view",
-    "diff",
-    "checkout",
-    "co",
-    "review",
-    "comment",
-    "merge",
-    "edit",
-    "close",
-    "reopen",
-    "ready",
-    "checks",
-    "update-branch",
-    "lock",
-    "unlock",
-    "revert",
-];
-
-/// `gh pr` flags whose value is the next word, which a number there is not
-/// the target: the repository and the free text a command takes.
-const PR_VALUE_FLAGS: &[&str] = &[
-    "-R",
-    "--repo",
-    "-b",
-    "--body",
-    "-F",
-    "--body-file",
-    "-t",
-    "--title",
-    "--subject",
-    "-q",
-    "--jq",
-    "--json",
-    "-T",
-    "--template",
-    "-B",
-    "--base",
-    "-H",
-    "--head",
-    "--branch",
-    "--color",
-    "--match-head-commit",
-    "--author-email",
-    "--add-label",
-    "--remove-label",
-    "--add-reviewer",
-    "--remove-reviewer",
-    "--add-assignee",
-    "--remove-assignee",
-    "--add-project",
-    "--remove-project",
-    "--milestone",
-    "--reason",
-    "--interval",
-];
-
-const BROWSE_VALUE_FLAGS: &[&str] = &["-R", "--repo", "-b", "--branch", "-c", "--commit"];
-
-const API_VALUE_FLAGS: &[&str] = &[
-    "-X",
-    "--method",
-    "-f",
-    "--raw-field",
-    "-F",
-    "--field",
-    "-H",
-    "--header",
-    "-q",
-    "--jq",
-    "-t",
-    "--template",
-    "--input",
-    "--hostname",
-    "--cache",
-    "-p",
-    "--preview",
-];
-
 /// The first word that is not a flag or a value-taking flag's value.
-fn first_positional<'a>(args: &'a [String], value_flags: &[&str]) -> Option<&'a str> {
+pub(crate) fn first_positional<'a>(args: &'a [String], value_flags: &[&str]) -> Option<&'a str> {
     let mut words = args.iter();
     while let Some(word) = words.next() {
         if word == "--" {
@@ -476,84 +396,36 @@ fn first_positional<'a>(args: &'a [String], value_flags: &[&str]) -> Option<&'a 
     None
 }
 
-/// `-R owner/name`, `--repo owner/name`, `--repo=owner/name`, `-Rowner/name`.
-fn flag_repository(args: &[String]) -> Option<String> {
+/// The value of a flag given as `<short> v`, `<long> v`, `<long>=v` or
+/// `<short>v`.
+pub(crate) fn flag_value<'a>(args: &'a [String], short: &str, long: &str) -> Option<&'a str> {
     let mut words = args.iter();
     while let Some(word) = words.next() {
-        let value = match word.as_str() {
-            "-R" | "--repo" => words.next().map(String::as_str),
-            other => other
-                .strip_prefix("--repo=")
-                .or_else(|| other.strip_prefix("-R").filter(|rest| !rest.is_empty())),
+        let value = if word == short || word == long {
+            words.next().map(String::as_str)
+        } else {
+            word.strip_prefix(long)
+                .and_then(|rest| rest.strip_prefix('='))
+                .or_else(|| word.strip_prefix(short).filter(|rest| !rest.is_empty()))
         };
-        if let Some(value) = value {
-            return repository_of(value);
+        if value.is_some() {
+            return value;
         }
     }
     None
 }
 
-/// `owner/name`, `github.com/owner/name` or its address; another host is
-/// not GitHub's repository, and names nothing here.
-fn repository_of(value: &str) -> Option<String> {
-    let value = value
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let value = value.strip_prefix("github.com/").unwrap_or(value);
-    let mut parts = value.trim_end_matches('/').split('/');
-    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
-        return None;
-    };
-    let name = name.strip_suffix(".git").unwrap_or(name);
-    (is_name(owner) && is_name(name)).then(|| format!("{owner}/{name}"))
-}
-
-/// `repos/<owner>/<name>/pulls/<number>` (or `issues/<number>`, which GitHub
-/// answers for a pull request too), with `{owner}`/`{repo}` or `:owner`/
-/// `:repo` standing for the repository the call runs in.
-fn api_path(endpoint: &str) -> Option<(Option<String>, u64)> {
-    let path = endpoint
-        .strip_prefix("https://api.github.com/")
-        .unwrap_or(endpoint)
-        .trim_start_matches('/');
-    let path = path.split(['?', '#']).next()?;
-    let mut parts = path.split('/');
-    if parts.next()? != "repos" {
-        return None;
-    }
-    let (owner, name) = (parts.next()?, parts.next()?);
-    if !matches!(parts.next()?, "pulls" | "issues") {
-        return None;
-    }
-    let number = pr_number(parts.next()?)?;
-    let placeholder = |part: &str| part.starts_with('{') || part.starts_with(':');
-    if placeholder(owner) || placeholder(name) {
-        return Some((None, number));
-    }
-    (is_name(owner) && is_name(name)).then(|| (Some(format!("{owner}/{name}")), number))
-}
-
-/// `repos/<owner>/<name>/pulls`, the path a pull request is made at.
-fn is_pulls_path(endpoint: &str) -> bool {
-    let path = endpoint
-        .strip_prefix("https://api.github.com/")
-        .unwrap_or(endpoint)
-        .trim_start_matches('/');
-    let path = path.split(['?', '#']).next().unwrap_or_default();
-    let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
-    matches!(parts.as_slice(), ["repos", _, _, "pulls"])
-}
-
-/// Whether a `gh api` call sends a POST: `-X POST` or `--method POST`, or
-/// with no method named, a field or an input, which `gh api` sends as one.
-fn api_posts(args: &[String]) -> bool {
+/// Whether an API call sends a POST: `-X POST` or `--method POST`, or with
+/// no method named, one of `field_flags`, which `gh api` and `glab api`
+/// send as one.
+pub(crate) fn api_posts(args: &[String], field_flags: &[&str]) -> bool {
     let mut method = None;
     let mut fields = false;
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             "-X" | "--method" => method = words.next().map(|value| value.to_ascii_uppercase()),
-            "-f" | "--raw-field" | "-F" | "--field" | "--input" => fields = true,
+            flag if field_flags.contains(&flag) => fields = true,
             other => {
                 if let Some(value) = other
                     .strip_prefix("--method=")
@@ -567,33 +439,13 @@ fn api_posts(args: &[String]) -> bool {
     method.map_or(fields, |method| method == "POST")
 }
 
-/// A word that is a pull request's address and nothing else (a trailing
-/// `/files`, `#discussion` or query is part of the address).
-fn whole_address(word: &str) -> Option<(String, u64)> {
-    let word = word.trim();
-    if word.chars().any(char::is_whitespace) {
-        return None;
-    }
-    let host = word
-        .strip_prefix("https://")
-        .or_else(|| word.strip_prefix("http://"))
-        .unwrap_or(word);
-    let host = host.strip_prefix("www.").unwrap_or(host);
-    if !host.starts_with("github.com/") {
-        return None;
-    }
-    pull_request_addresses(word).into_iter().next()
-}
-
-fn pr_number(text: &str) -> Option<u64> {
+pub(crate) fn pr_number(text: &str) -> Option<u64> {
     (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| text.parse::<u64>().ok())
         .flatten()
         .filter(|number| *number > 0)
 }
 
-/// A command word's program name: its last path part, without Windows'
-/// `.exe`.
 /// The syntax of the shell an argv's first word names, when it is a shell
 /// that runs a script it is handed.
 fn shell_of(word: &str) -> Option<Syntax> {
@@ -665,6 +517,7 @@ mod tests {
             repository: None,
             number: 5,
             folder: Some("/work/app".into()),
+            host: None,
         }];
         for command in [
             r"cd .\app; gh pr view 5",
@@ -706,6 +559,7 @@ gh pr view 5",
             repository: None,
             number,
             folder: Some("/work/app".into()),
+            host: None,
         }
     }
 
@@ -714,6 +568,7 @@ gh pr view 5",
             repository: Some(repository.into()),
             number,
             folder: None,
+            host: None,
         }
     }
 
@@ -825,6 +680,7 @@ gh pr view 5",
                 repository: None,
                 number: 5,
                 folder: Some("/work/app-review".into()),
+                host: None,
             }]
         );
         assert_eq!(
@@ -836,6 +692,7 @@ gh pr view 5",
                 repository: None,
                 number: 5,
                 folder: Some("/work/other".into()),
+                host: None,
             }]
         );
         assert_eq!(
@@ -844,6 +701,7 @@ gh pr view 5",
                 repository: None,
                 number: 5,
                 folder: None,
+                host: None,
             }]
         );
         // A folder this reading cannot follow names no repository.
@@ -993,5 +851,94 @@ gh pr view 5",
                 "{command}"
             );
         }
+    }
+
+    fn on_gitlab(repository: Option<&str>, number: u64) -> NamedPr {
+        NamedPr {
+            repository: repository.map(str::to_owned),
+            number,
+            folder: repository.is_none().then(|| "/work/app".to_owned()),
+            host: Some("gitlab".into()),
+        }
+    }
+
+    /// `glab mr note` takes a note's id before the merge request on the
+    /// commands that act on one note; a token in an address's user part, or
+    /// a group with a dotted name, is read as `glab` reads it.
+    #[test]
+    fn a_glab_call_names_the_merge_request_and_not_a_note_or_a_credential() {
+        let project = Some("gitlab.com/acme/app");
+        for (command, expected) in [
+            ("glab mr note list 7", vec![on_gitlab(None, 7)]),
+            ("glab mr note resolve 3f2a 7", vec![on_gitlab(None, 7)]),
+            ("glab mr note draft list", vec![]),
+            ("glab mr show 7 -R acme/app", vec![on_gitlab(project, 7)]),
+            (
+                "glab mr view 7 -R git@gitlab.com:acme/app.git",
+                vec![on_gitlab(project, 7)],
+            ),
+            (
+                "glab mr view 7 -R https://oauth2:token@gitlab.com/acme/app",
+                vec![],
+            ),
+            (
+                "glab mr view 7 -R my.group/app",
+                vec![on_gitlab(Some("gitlab.com/my.group/app"), 7)],
+            ),
+            ("glab mr view 7 -R 12345", vec![]),
+            (
+                "GITLAB_HOST=https://gitlab.com glab mr view 7",
+                vec![on_gitlab(None, 7)],
+            ),
+        ] {
+            assert_eq!(shell_call(command), expected, "{command}");
+        }
+    }
+
+    #[test]
+    fn a_glab_create_and_a_merge_request_post_make_one_and_a_listing_does_not() {
+        for command in [
+            "glab mr create --fill --yes",
+            "glab mr new -f",
+            "glab mr for 3",
+            "glab api projects/:id/merge_requests -f source_branch=x -f target_branch=main -f title=x",
+            "glab api -X POST projects/acme%2Fapp/merge_requests --input body.json",
+            "git -C /work/app push -o merge_request.create origin x",
+            "git push -omr.create origin x",
+        ] {
+            assert!(
+                creates_pull_request(None, &json!({ "command": command })),
+                "{command}"
+            );
+        }
+        for command in [
+            "glab mr list",
+            "glab api projects/:id/merge_requests",
+            "glab api -X POST projects/:id/merge_requests/3/notes -f body=x",
+            "git push -o ci.skip origin x",
+            "git push origin x || glab mr view 3",
+            "git push -o merge_request.create origin x || glab mr view 3",
+        ] {
+            assert!(
+                !creates_pull_request(None, &json!({ "command": command })),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_creating_calls_output_gives_back_a_merge_request_alone_or_after_remote() {
+        let glab = "\nCreating merge request for x into main in acme/app\n\nhttps://gitlab.com/acme/sub/app/-/merge_requests/19\n";
+        assert_eq!(
+            created_addresses(&[glab]),
+            [("gitlab.com/acme/sub/app".to_owned(), 19)]
+        );
+        let answer = r#"{"iid":20,"web_url":"https://gitlab.com/acme/app/-/merge_requests/20","description":"see https://gitlab.com/acme/app/-/merge_requests/3"}"#;
+        assert_eq!(
+            created_addresses(&[answer]),
+            [("gitlab.com/acme/app".to_owned(), 20)]
+        );
+        let plain = "remote: To create a merge request for x, visit:\nremote:   https://gitlab.com/acme/app/-/merge_requests/new?merge_request%5Bsource_branch%5D=x\n";
+        assert_eq!(created_addresses(&[plain]), []);
     }
 }
