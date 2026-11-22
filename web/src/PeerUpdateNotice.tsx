@@ -12,7 +12,7 @@ import { Toast } from "./components/ui/toast";
 import { useInterfaceTranslation } from "./i18n/client";
 import { deviceConnectOffered, ownWindow, pairedMachines } from "./pairing";
 import { useShellStore } from "./store";
-import { updateNow, useAskedUpdate, useUpdateStatus } from "./updates";
+import { offersUpdate, updateNow, useAskedUpdate, useUpdateStatus } from "./updates";
 
 export function PeerUpdateNotice() {
   const { t } = useInterfaceTranslation();
@@ -28,8 +28,7 @@ export function PeerUpdateNotice() {
   const peer = waiting[0];
   if (!peer || peer.key === closed) return null;
   const phase = status?.phase.kind;
-  // A development build, or an app that is not where it can replace itself, takes no update.
-  const offers = phase !== "off" && phase !== "checking" && phase !== "downloading";
+  const offers = offersUpdate(status);
   return (
     <Toast
       level="important"
