@@ -480,9 +480,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await phone.locator('[data-phone-key="up"]').tap();
     // Up is CSI A, or SS3 A in the application cursor mode a TUI may set.
     await expect.poll(() => ["\u001b\u001b[A", "\u001b\u001bOA"].includes(fs.readFileSync(fixture.inputLogs[0], "utf8").slice(logLength))).toBe(true);
-    // B27: a reply over the limit is named before it is sent.
-    await phone.locator('[data-phone-reply="true"]').fill("x".repeat(2001));
-    await expect(phone.locator('[data-phone-input-error="true"]')).toContainText("up to 2,000 characters");
+    // B27: a reply past one phone message is named before it is sent.
+    await phone.locator('[data-phone-reply="true"]').fill("x".repeat(17_000));
+    await expect(phone.locator('[data-phone-input-error="true"]')).toContainText("too long to send at once");
     await expect(phone.locator('[data-phone-send="true"]')).toBeDisabled();
     await phone.locator('[data-phone-reply="true"]').fill("");
     await scrollback.evaluate((element) => {

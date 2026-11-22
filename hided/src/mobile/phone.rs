@@ -32,7 +32,8 @@ use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
 use super::looks;
-use super::pane::{self, Input, PaneError};
+use super::pane::{self, PaneError};
+use hide_core::operator_input::{self, Typed};
 use super::projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use super::prs;
 use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
@@ -845,6 +846,11 @@ async fn run(
             _ => "unasked",
         },
     });
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // sends a reply of several lines, draws the open detail's question card
+    // and running line and picks a choice only on a computer that says it
+    // answers them; an older bundle ignores the field.
+    hello["answer"] = json!(true);
     // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
     // shows the gathered view only for a computer that says it offers
     // connections between two Hides; an older bundle ignores the field.
@@ -2040,7 +2046,7 @@ async fn input(
     let text = message.get("text").and_then(Value::as_str);
     let engine_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, engine_key) {
-        (Some(text), None) => pane::reply_problem(text),
+        (Some(text), None) => operator_input::problem(text, 0),
         (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
         _ => Some("invalid_request"),
     };
@@ -2080,58 +2086,64 @@ async fn input(
         request_id: request_id.to_owned(),
         state: Some(InputState::Uncertain),
     };
-    let (certain, result) = tokio::task::spawn_blocking(move || {
-        let (attempted, result) = (|| {
-            let input = match (&text, engine_key) {
-                (Some(text), _) => Input::Reply(text),
-                (None, Some(key)) => Input::Key(key),
+    let result = tokio::task::spawn_blocking(move || {
+        let result = (|| {
+            let engine = writer.engine(&device_id).map_err(|error| match error {
+                PaneError::DeviceUnreachable => "device_unreachable",
+                _ => "unavailable",
+            })?;
+            let keys;
+            let typed = match (&text, engine_key) {
+                (Some(text), _) => Typed::Words(text),
+                (None, Some(key)) => {
+                    keys = [key];
+                    Typed::Keys(&keys)
+                }
                 (None, None) => unreachable!("validated above"),
             };
-            if let Err(error) = pane::wait_for_input(writer.terminals(), &core_pane_id, &input) {
-                return (false, Err(error));
-            }
-            // Asked here, at the write, and held until it returns: a reply queued
-            // while the agent was awake is refused if its pane has closed since,
-            // and a sleep that starts now waits for this write to land first. The
-            // phone's own list may be a second behind either way.
-            let _admission = match writer.admit_input(&core_pane_id) {
-                Ok(admission) => admission,
-                Err(error) => return (false, Err(error)),
-            };
-            let engine = match writer.engine(&device_id) {
-                Ok(engine) => engine,
-                Err(error) => return (false, Err(error)),
-            };
-            let reply = matches!(input, Input::Reply(_));
+            let reply = matches!(typed, Typed::Words(_));
             // Before the write, so the doorbell cannot judge the pane clean
-            // while the key is landing; a refused write only holds the pane.
+            // while the input is landing; a refused write only holds the pane.
             writer.note_input(&core_pane_id);
-            let sent = pane::send(&engine, &pane_id, input);
+            // The one operator write the desktop conversation takes too: the
+            // node's permit, then the gate's admission, asked here, at the
+            // write, and held until it returns, so a reply queued while the
+            // agent was awake is refused if its pane has closed since, and a
+            // sleep that starts now waits for this write to land first. The
+            // phone's own list may be a second behind either way.
+            let sent = operator_input::write(
+                &engine,
+                writer.terminals(),
+                writer.input_gate(),
+                &core_pane_id,
+                &pane_id,
+                typed,
+                &|| Ok(()),
+            );
             if reply && sent.is_ok() {
                 writer.note_submit(&core_pane_id);
             }
-            (true, sent)
+            sent.map_err(|unwritten| {
+                if unwritten.certain() {
+                    pane::unwritten_reason(unwritten)
+                } else {
+                    "uncertain"
+                }
+            })
         })();
-        // A refusal before the write, or a definitive gone/refused answer,
-        // releases the id. Every ambiguous write keeps it reserved.
-        let certain = !attempted
-            || matches!(
-                result,
-                Err(PaneError::Gone
-                    | PaneError::DeviceUnreachable
-                    | PaneError::InputRefused
-                    | PaneError::Asleep)
-            );
-        settlement.state = match &result {
+        // A definitive refusal releases the id; an uncertain write keeps it
+        // reserved, so a repeat is answered from the claim and never typed
+        // twice.
+        settlement.state = match result {
             Ok(()) => Some(InputState::Written),
-            Err(_) if certain => None,
-            Err(_) => Some(InputState::Uncertain),
+            Err("uncertain") => Some(InputState::Uncertain),
+            Err(_) => None,
         };
         drop(settlement);
-        (certain, result)
+        result
     })
     .await
-    .unwrap_or_else(|error| (false, Err(PaneError::Unavailable(error.to_string()))));
+    .unwrap_or(Err("uncertain"));
     match result {
         Ok(()) => {
             hide_core::diagnostic!(json!({
@@ -2140,13 +2152,11 @@ async fn input(
             }));
             answer(true, None)
         }
-        Err(error) => {
+        Err(reason) => {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.failed", "phone_id": phone_id,
-                "reason": error.reason(),
-                "message": match &error { PaneError::Unavailable(message) => Some(message.clone()), _ => None },
+                "reason": reason,
             }));
-            let reason = if certain { error.reason() } else { "uncertain" };
             answer(false, Some(reason))
         }
     }

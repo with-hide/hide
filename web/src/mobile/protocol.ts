@@ -333,7 +333,12 @@ export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before it and from a build with them off. */
   /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string }
+  /**
+   * `answer`: the computer takes a reply of several lines up to one phone message (`replyFits`), sends the open detail's `ask` and the
+   * conversation's `running`, and takes an `input` that picks a choice; absent from every computer before it, which keeps the one-line
+   * reply of `MAX_REPLY_CHARS`.
+   */
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean }
   // Older computers still send off; new phone settings do not use this global mode.
   /** `machines`: the other machines this computer opens that run work of their own (PRD device-connect-iroh B56); absent when none. */
   | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number; machines?: OtherMachine[] }
@@ -473,20 +478,47 @@ export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageK
   { key: "ctrl_c", label: "^C", name: "mobile.key.ctrlC" },
 ];
 
-/** The longest reply hided writes in one input (hided/src/mobile/pane.rs MAX_REPLY_CHARS). */
+/** The longest reply a computer before `answer` writes in one input, on one line. */
 export const MAX_REPLY_CHARS = 2000;
 
-/** Why a reply cannot be sent yet, checked before it leaves the phone (B26, B27). */
-export function replyProblem(text: string): string | null {
+/** The most bytes one message from the phone may hold; hided drops a longer one unread (hided/src/mobile/phone.rs MAX_FRAME). */
+export const MAX_FRAME_BYTES = 16 * 1024;
+
+/**
+ * More than the request id `newRequestId` makes for the next decades (`<time in base 36>-<counter>-<16 hex>`), so a reply measured
+ * while it is written, before its id exists, is measured at least as large as the message that leaves.
+ */
+export const REQUEST_ID_BYTES = 40;
+
+/** The `input` a reply leaves in, the one shape `sendReply` sends and `replyFits` measures. */
+export function replyMessage(key: AgentKey, text: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, text };
+}
+
+/** Whether a reply fits one phone message as JSON, its escapes counted (a new line, a quote and a tab take two bytes each). */
+export function replyFits(key: AgentKey, text: string, requestId = "x".repeat(REQUEST_ID_BYTES)): boolean {
+  return new TextEncoder().encode(JSON.stringify(replyMessage(key, text, requestId))).length <= MAX_FRAME_BYTES;
+}
+
+/**
+ * Why a reply cannot be sent yet, checked before it leaves the phone (B26, B27). A computer with `answer` (`lines`) takes new lines
+ * and tabs and any length one message holds, the rule of the desktop conversation; one before it takes one line of 2,000 characters.
+ */
+export function replyProblem(text: string, lines: boolean, key?: AgentKey): string | null {
   if (text.trim().length === 0) return "empty";
+  if (lines) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(text)) return "control_characters";
+    return key && !replyFits(key, text) ? "too_long" : null;
+  }
   if ([...text].length > MAX_REPLY_CHARS) return "too_long";
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) return "control_characters";
   return null;
 }
 
-/** The line under the reply bar for a refused or failed input. */
-export function inputFailure(reason: string | null): Notice {
+/** The line under the reply bar for a refused or failed input; `lines` words a reply too long for one message, which has no count. */
+export function inputFailure(reason: string | null, lines = false): Notice {
   switch (reason) {
     case "uncertain":
       return { key: "mobile.input.uncertain" };
@@ -495,9 +527,9 @@ export function inputFailure(reason: string | null): Notice {
     case "empty":
       return { key: "mobile.input.empty" };
     case "too_long":
-      return { key: "mobile.input.tooLong", limit: MAX_REPLY_CHARS };
+      return lines ? { key: "mobile.input.tooLongMessage" } : { key: "mobile.input.tooLong", limit: MAX_REPLY_CHARS };
     case "control_characters":
-      return { key: "mobile.input.controlCharacters" };
+      return lines ? { key: "mobile.input.controlCharacter" } : { key: "mobile.input.controlCharacters" };
     case "gone":
       return { key: "mobile.input.gone" };
     case "asleep":

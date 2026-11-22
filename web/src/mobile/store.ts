@@ -153,6 +153,11 @@ type PhoneState = {
    * its saved answer stands (`PairedHost.deviceConnect`). Only then does the agents tab offer the gathered view.
    */
   deviceConnect: boolean | null;
+  /**
+   * Whether the open computer answers from the phone (`answer` in its hello on this page): a reply of several lines, the open detail's
+   * question card and running line, a pick of a choice. False until it says so, so a computer before it keeps the one-line reply.
+   */
+  answer: boolean;
   /** The other machines the open computer opens that run work of their own, as its last meta frame named them (B56). */
   otherMachines: readonly OtherMachine[];
   missionOpen: string | null;
@@ -240,6 +245,7 @@ const initial: PhoneState = {
   tab: "agents",
   listScope: typeof location === "undefined" ? "all" : listScopeOf(new URLSearchParams(location.search)),
   deviceConnect: null,
+  answer: false,
   otherMachines: [],
   missionOpen: null,
   missions: null,
@@ -308,6 +314,7 @@ export function applyFrame(frame: ServerFrame): void {
         vapidKey: frame.vapid_public_key,
         notifications: frame.notifications,
         deviceConnect: frame.device_connect === true,
+        answer: frame.answer === true,
       });
       return;
     case "meta":

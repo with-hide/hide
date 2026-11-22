@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "../i18n/instance";
-import { MAX_MESSAGES, boxDrawingRow, headerLine, listedAgents, machinesName, mergeConversation, messageTime, macNameOf, noticeText, openKey, parseFragment, replyProblem, rowsProblem, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
+import { MAX_MESSAGES, boxDrawingRow, headerLine, listedAgents, machinesName, mergeConversation, messageTime, macNameOf, noticeText, openKey, parseFragment, replyMessage, replyProblem, rowsProblem, MAX_FRAME_BYTES, REQUEST_ID_BYTES, staleTags, toBase64Url, type AgentGroup, type ConversationMessage, type PhoneAgent } from "./protocol";
 
 const CREDENTIAL = "a".repeat(64);
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
@@ -27,11 +27,47 @@ describe("parseFragment", () => {
 });
 
 describe("replyProblem", () => {
-  it("matches what hided refuses", () => {
-    expect(replyProblem("  ")).toBe("empty");
-    expect(replyProblem("x".repeat(2001))).toBe("too_long");
-    expect(replyProblem("a\nb")).toBe("control_characters");
-    expect(replyProblem("yes, 계속")).toBeNull();
+  const key = { device_id: "0f8e2c1a-7b3d-4e5f-9a6b-1c2d3e4f5a6b", pane_id: "w12:p34" };
+  /** The bytes hided reads for this reply, sent under the longest request id the phone makes. */
+  const sent = (text: string) => new TextEncoder().encode(JSON.stringify(replyMessage(key, text, "x".repeat(REQUEST_ID_BYTES)))).length;
+  /** The longest run of `unit` that still fits one message, found from the message's own bytes. */
+  const longest = (unit: string) => {
+    let [fits, over] = [0, MAX_FRAME_BYTES];
+    while (over - fits > 1) {
+      const middle = Math.floor((fits + over) / 2);
+      if (sent(unit.repeat(middle)) <= MAX_FRAME_BYTES) fits = middle;
+      else over = middle;
+    }
+    return unit.repeat(fits);
+  };
+
+  it("keeps a computer before answering to one line of 2,000 characters", () => {
+    expect(replyProblem("  ", false)).toBe("empty");
+    expect(replyProblem("가".repeat(2000), false)).toBeNull();
+    expect(replyProblem("x".repeat(2001), false)).toBe("too_long");
+    expect(replyProblem("a\nb", false)).toBe("control_characters");
+    expect(replyProblem("yes, 계속", false)).toBeNull();
+  });
+
+  it("takes new lines and tabs from a computer that answers, and refuses every other control character", () => {
+    expect(replyProblem(" \n\t ", true, key)).toBe("empty");
+    expect(replyProblem("첫 줄\n둘째 줄\tA", true, key)).toBeNull();
+    expect(replyProblem("x".repeat(2001), true, key)).toBeNull();
+    expect(replyProblem("a\rb", true, key)).toBe("control_characters");
+    expect(replyProblem("a\u001b[201~b", true, key)).toBe("control_characters");
+  });
+
+  it("refuses a reply one byte past one phone message, its escapes counted", () => {
+    // A new line and a quote each take two bytes of JSON and a Korean syllable three, so the longest reply differs by what it holds.
+    for (const unit of ["a", "a\n", "\"", "a\t", "가"]) {
+      const fits = longest(unit);
+      expect(sent(fits)).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+      expect(replyProblem(fits, true, key)).toBeNull();
+      expect(sent(fits + unit)).toBeGreaterThan(MAX_FRAME_BYTES);
+      expect(replyProblem(fits + unit, true, key)).toBe("too_long");
+    }
+    // hided's own rule, 16 KiB of text, never refuses what one message carries.
+    expect(new TextEncoder().encode(longest("a")).length).toBeLessThan(16 * 1024);
   });
 });
 

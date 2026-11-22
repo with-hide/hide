@@ -71,6 +71,7 @@ mod model;
 pub mod node;
 pub mod node_access;
 pub mod node_migration;
+pub mod operator_input;
 pub mod notice_place;
 mod observed;
 pub mod pane_command;

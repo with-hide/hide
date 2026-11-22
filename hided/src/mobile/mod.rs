@@ -2052,16 +2052,10 @@ impl Mobile {
 
     /// Why a registered connection must close at once: the phone was revoked
     /// or Mobile switched off between its handshake and its registration.
-    /// Admits one write to a pane's terminal, or refuses it while the pane's
-    /// agent is ending, asleep or waking. Hold it across the write.
-    pub fn admit_input(
-        &self,
-        pane_id: &str,
-    ) -> Result<hide_core::input_gate::Admission, pane::PaneError> {
-        self.config
-            .input_gate
-            .admit(pane_id)
-            .map_err(|_| pane::PaneError::Asleep)
+    /// The core's input gate, which admits one write to a pane's terminal
+    /// and refuses it while the pane's agent is ending, asleep or waking.
+    pub fn input_gate(&self) -> &Arc<hide_core::input_gate::PaneInputGate> {
+        &self.config.input_gate
     }
 
     pub fn still_admitted(&self, phone_id: &str) -> Result<(), &'static str> {

@@ -27,7 +27,6 @@ import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage,
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
   MAX_MESSAGES,
-  MAX_REPLY_CHARS,
   QUICK_KEYS,
   boxDrawingRow,
   inputFailure,
@@ -38,6 +37,7 @@ import {
   type ConversationMessage,
   sleepTarget,
   replyAbout,
+  replyProblem,
   type AgentKey,
   type DetailTab,
   type LookKind,
@@ -475,6 +475,9 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
   const [text, setText] = useState("");
   const pending = usePhone((s) => s.pendingInput);
   const error = usePhone((s) => s.inputError);
+  // A computer that answers from the phone takes a reply of several lines, as long as one phone message holds.
+  const lines = usePhone((s) => s.answer);
+  const agentKey = usePhone((s) => s.detail?.key ?? null);
   useEffect(
     () =>
       onReplyResult((ok) => {
@@ -482,9 +485,10 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
       }),
     [],
   );
-  const tooLong = [...text].length > MAX_REPLY_CHARS;
+  const reply = about ? replyAbout(about, text) : text;
+  const tooLong = useMemo(() => (agentKey ? replyProblem(reply, lines, agentKey) === "too_long" : false), [reply, lines, agentKey]);
   const blocked = disabled || pending !== null;
-  const shown = tooLong ? inputFailure("too_long") : error;
+  const shown = tooLong ? inputFailure("too_long", lines) : error;
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
       {keys ? (
@@ -508,7 +512,8 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
         <Composer
           value={text}
           onChange={setText}
-          onSubmit={() => sendReply(about ? replyAbout(about, text) : text)}
+          onSubmit={() => sendReply(reply)}
+          lines={lines}
           placeholder={about ? t("mobile.look.replyAbout", { name: about }) : t("mobile.replyPlaceholder")}
           disabled={disabled}
           sendDisabled={blocked || text.trim().length === 0 || tooLong}

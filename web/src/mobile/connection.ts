@@ -20,6 +20,7 @@ import {
   parseFragment,
   prFailure,
   refusalOf,
+  replyMessage,
   replyProblem,
   sameKey,
   sleepTarget,
@@ -709,14 +710,14 @@ export function sendReply(text: string): boolean {
   const state = usePhone.getState();
   const detail = state.detail;
   if (!detail || state.pendingInput) return false;
-  const problem = replyProblem(text);
+  const problem = replyProblem(text, state.answer, detail.key);
   if (problem) {
-    patch({ inputError: inputFailure(problem) });
+    patch({ inputError: inputFailure(problem, state.answer) });
     return false;
   }
   const requestId = lastReply?.text === text ? lastReply.requestId : newRequestId();
   lastReply = { text, requestId };
-  const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, text });
+  const sent = send(replyMessage(detail.key, text, requestId));
   patch(sent ? { pendingInput: { requestId, kind: "text" }, inputError: null } : { inputError: inputFailure("offline") });
   return sent;
 }
@@ -762,7 +763,7 @@ export function onReplyResult(listener: ReplyListener): () => void {
 
 function onInputResult(ok: boolean, reason: string | null): void {
   const pending = usePhone.getState().pendingInput;
-  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason) });
+  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     if (ok) lastReply = null;
     for (const listener of replyListeners) listener(ok);
