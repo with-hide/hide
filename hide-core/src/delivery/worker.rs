@@ -49,6 +49,9 @@ pub struct Prepared {
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
+    /// For a bot held in one workspace, the registrations `hide agent list`
+    /// answers it with, by id (mission-87 D3); `None` answers every one.
+    listed: Option<std::collections::HashSet<String>>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -178,7 +181,14 @@ impl Prepared {
             answered: None,
             then: None,
             forced: None,
+            listed: None,
         }
+    }
+
+    /// Lists only the registrations `ids` names in an agent list's answer.
+    pub(crate) fn listing_only(mut self, ids: Option<std::collections::HashSet<String>>) -> Self {
+        self.listed = ids;
+        self
     }
 
     /// Words what the command hands over in `language`.
@@ -295,6 +305,11 @@ impl Prepared {
                 };
                 Some((text, json!(cells)))
             });
+        }
+        if let (Some(listed), Ok(value)) = (&self.listed, result.as_mut())
+            && let Some(items) = value.get_mut("items").and_then(Value::as_array_mut)
+        {
+            items.retain(|item| item["id"].as_str().is_some_and(|id| listed.contains(id)));
         }
         if let Some(after) = self.then {
             after(&result);
@@ -1215,9 +1230,10 @@ fn run(
                     guard.delivery_successions(),
                     guard.delivery_closed(),
                     guard.delivery_tool_connections(),
+                    guard.delivery_own_connections(),
                 ))
             });
-        let (state, gone, rebinds, successions, closed, tools) = match state {
+        let (state, gone, rebinds, successions, closed, tools, own_tools) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -1239,6 +1255,7 @@ fn run(
                 && !tools
                     .as_deref()
                     .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
+                && !crate::coordination::unowned_watches_left(&state, &own_tools)
                 && !state
                     .letters
                     .iter()
@@ -1253,6 +1270,7 @@ fn run(
             successions,
             closed,
             tools,
+            own_tools,
         };
         let Settled {
             ledger: candidate,
@@ -1653,6 +1671,9 @@ struct Upkeep {
     /// is restored: what a tool not among them keeps ends
     /// (`coordination::end_gone_tools`).
     tools: Option<Vec<String>>,
+    /// The connections the core holds in own mode, whose watches on work not
+    /// their own end (`coordination::end_unowned_watches`).
+    own_tools: Vec<String>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1721,7 +1742,8 @@ impl Upkeep {
         let tools = self
             .tools
             .as_deref()
-            .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now));
+            .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now))
+            | crate::coordination::end_unowned_watches(ledger, &self.own_tools);
         crate::coordination::shed_finished_briefs(ledger);
         Upkept {
             moved,
@@ -2771,7 +2793,48 @@ mod tests {
             successions: Default::default(),
             closed: Default::default(),
             tools: None,
+            own_tools: Vec::new(),
         }
+    }
+
+    /// mission-87: a bot in own mode keeps no watch on an agent it did not
+    /// start, such as one it watched while it had the whole Hide; the
+    /// upkeep ends it before the bot's next command or the watch's next
+    /// warning.
+    #[test]
+    fn the_upkeep_ends_an_own_mode_bots_watch_on_work_not_its_own() {
+        let mut ledger = Ledger::default();
+        let id = "00000000000000a1";
+        let tool = Actor::access(id, "nightly", crate::node::TEST_NODE);
+        let operators = Actor {
+            pane_id: "worker".into(),
+            name: "worker".into(),
+            kind: "codex".into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: Some("worker-session".into()),
+        };
+        watch::start(&mut ledger, &tool, &operators, 1).unwrap();
+        let whole = Upkeep {
+            tools: Some(vec![id.into()]),
+            ..upkeep()
+        };
+        assert!(
+            !whole
+                .apply(&mut ledger, 2, &crate::coordination::Held::default())
+                .tools,
+            "in all mode the bot works as the operator"
+        );
+        assert_eq!(ledger.watches.len(), 1);
+        let own = Upkeep {
+            tools: Some(vec![id.into()]),
+            own_tools: vec![id.into()],
+            ..upkeep()
+        };
+        assert!(
+            own.apply(&mut ledger, 3, &crate::coordination::Held::default())
+                .tools
+        );
+        assert!(ledger.watches.is_empty());
     }
 
     /// D-23: the upkeep ends what a tool the list no longer holds kept, and

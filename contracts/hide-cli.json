@@ -10,17 +10,19 @@
             "access_core_only": "Run the tool on the machine where Hide's core runs",
             "access_from_pane": "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes",
             "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
-            "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again",
-            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
+            "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again",
+            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again",
             "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
-            "access_pending": "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool",
+            "access_not_own_work": "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings",
+            "access_operator_only": "Only the operator adds or removes a device, in Settings > Devices; ask the operator",
+            "access_pending": "Wait until the operator approves the request in Settings > Bots; the next hide command then runs as the tool",
+            "access_reapprove": "External tools became bots with two modes, and a tool that was View only is approved again before it runs anything; run hide access request --name <name> to ask the operator",
             "access_refused": "The operator refused this tool; run hide access request --name <name> to ask again",
             "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
             "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
             "access_spawn_parent": "A tool is no agent's parent; run hide agent spawn without --parent and follow the agent with hide agent show and hide inbox",
-            "access_unavailable": "Start Hide on this machine, then run the same command again",
-            "access_view_only": "This tool is View only; ask the operator to switch it to Act in Settings > External tools"
+            "access_unavailable": "Start Hide on this machine, then run the same command again"
         }
     },
     "answers": {
@@ -283,7 +285,7 @@
                     ]
                 },
                 "origin_tool": {
-                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "description": "The name of the bot whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
                     "type": [
                         "string",
                         "null"
@@ -646,7 +648,7 @@
                     ]
                 },
                 "origin_tool": {
-                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "description": "The name of the bot whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
                     "type": [
                         "string",
                         "null"
@@ -790,7 +792,7 @@
                             ]
                         },
                         "origin_tool": {
-                            "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                            "description": "The name of the bot whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
                             "type": [
                                 "string",
                                 "null"
@@ -1537,7 +1539,7 @@
                     ]
                 },
                 "origin_tool": {
-                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "description": "The name of the bot whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
                     "type": [
                         "string",
                         "null"
@@ -3273,7 +3275,7 @@
                             ]
                         },
                         "origin_tool": {
-                            "description": "The name of the external tool whose connection started this agent; absent for every other start.",
+                            "description": "The name of the bot whose connection started this agent; absent for every other start.",
                             "type": [
                                 "string",
                                 "null"
@@ -9267,7 +9269,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ef14e9f21f96920356fba13db58301904ebca1c23c15a08819ff9b89aac56755",
+    "digest": "sha256:62ee02886bfcd1b49e6156ba5933efeac8e4609b88fb37edb1f8e539171e4e3c",
     "envelopes": {
         "access": {
             "answer": "value",

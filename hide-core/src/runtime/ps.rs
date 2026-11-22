@@ -31,6 +31,9 @@ pub(crate) struct PsRows {
     ledger: Arc<Ledger>,
     /// The registrations Hide holds asleep, read with the ledger.
     sleeping: RegistrationFacts,
+    /// For an own-mode bot, the registrations of its own work, the only
+    /// ones it lists (mission-87); `None` lists every one.
+    only: Option<HashSet<String>>,
 }
 
 /// A pane id as the navigator spells it, as its machine and its own id.
@@ -43,6 +46,7 @@ impl Runtime {
     /// The rows `hide ps` answers from, for a caller on `device` in `pane`.
     pub(crate) fn ps_rows(&self, device: &str, pane: &str) -> Result<PsRows, String> {
         let ledger = self.delivery_state()?;
+        let only = self.own_work(pane).map(|own| own.agents);
         let sleeping = self.sleeping_registrations(&ledger.agents);
         let node = self.node.as_str();
         let navigator = &self.snapshot.navigator;
@@ -200,6 +204,7 @@ impl Runtime {
             missions_unreadable: self.snapshot.missions.failed.is_some(),
             ledger,
             sleeping,
+            only,
         })
     }
 }
@@ -217,6 +222,7 @@ impl PsRows {
             missions_unreadable,
             ledger,
             sleeping,
+            only,
         } = self;
         let mut used = HashSet::new();
         let mut join = |agent: &mut PsAgent| {
@@ -259,11 +265,19 @@ impl PsRows {
                 agent
             })
             .collect();
+        let shown = |id: &str| only.as_ref().is_none_or(|only| only.contains(id));
+        let own = |agent: &PsAgent| agent.id.as_deref().is_some_and(shown);
+        if only.is_some() {
+            panes.retain(|pane| pane.agent.as_ref().is_some_and(own));
+            agents.retain(own);
+        }
         agents.extend(
             ledger
                 .agents
                 .iter()
-                .filter(|record| !used.contains(&record.id) && (all || !record.ended))
+                .filter(|record| {
+                    !used.contains(&record.id) && (all || !record.ended) && shown(&record.id)
+                })
                 .map(|record| PsAgent {
                     id: Some(record.id.clone()),
                     name: Some(record.wire_name().to_owned()),

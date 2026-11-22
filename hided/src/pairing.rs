@@ -214,6 +214,17 @@ impl Ask {
             | Self::Retry { .. } => false,
         }
     }
+
+    /// What a bot needs of its mode to ask it (mission-87): reading the
+    /// machines and dialing one again are the whole Hide's, as `hide device
+    /// list` and `retry` are; pairing, stopping and removing a machine are
+    /// the operator's alone.
+    fn bot_need(&self) -> hide_core::access::Need {
+        match self {
+            Self::Status { .. } | Self::Retry { .. } => hide_core::access::Need::All,
+            _ => hide_core::access::Need::Operator,
+        }
+    }
 }
 
 /// Who asks.
@@ -228,6 +239,9 @@ pub enum Caller {
     /// view of it, a phone): it is refused every ask, and only it hears so
     /// (B52).
     OtherScreen,
+    /// A bot, in the mode its key proved at the bootstrap socket: what
+    /// `Ask::bot_need` says of its mode (mission-87).
+    Bot(hide_core::access::Mode),
 }
 
 /// The refusal of every ask in a build that does not offer connections
@@ -318,7 +332,8 @@ pub fn next_action(code: &str) -> &'static str {
             "Only a device this Hide dials over SSH and has connected to once can be switched"
         }
         "device_own" => "That is this machine itself",
-        _ => "Retry; the reason is in Hide's diagnostic log",
+        code => crate::access::next_action(code)
+            .unwrap_or("Retry; the reason is in Hide's diagnostic log"),
     }
 }
 
@@ -751,6 +766,11 @@ impl Pairing {
             Caller::Pane if !ask.operators() => {}
             Caller::Pane => return refused("device_from_pane"),
             Caller::OtherScreen => return refused("device_from_other_screen"),
+            Caller::Bot(mode) => {
+                if let Err(code) = hide_core::access::admit(mode, ask.bot_need()) {
+                    return refused(code);
+                }
+            }
         }
         match self.run(ask, caller).await {
             Ok(mut answer) => {
@@ -1763,6 +1783,44 @@ mod tests {
             directions(&machine(true, false), Some(Direction::Incoming)),
             Err("device_unknown")
         );
+    }
+
+    /// mission-87: a bot reads the machines and dials one again in the
+    /// whole Hide's mode, and pairs, stops or removes none in either.
+    #[test]
+    fn a_bot_reads_and_retries_machines_and_pairs_or_removes_none() {
+        use hide_core::access::{Mode, NOT_OWN_WORK, OPERATOR_ONLY, admit};
+        let ask = |value: Value| serde_json::from_value::<Ask>(value).unwrap();
+        for read in [
+            json!({"verb": "status"}),
+            json!({"verb": "retry", "device": "pc"}),
+        ] {
+            assert_eq!(
+                admit(Mode::All, ask(read.clone()).bot_need()),
+                Ok(()),
+                "{read}"
+            );
+            assert_eq!(
+                admit(Mode::Own, ask(read.clone()).bot_need()),
+                Err(NOT_OWN_WORK),
+                "{read}"
+            );
+        }
+        for operators in [
+            json!({"verb": "pause", "device": "pc"}),
+            json!({"verb": "remove", "device": "pc"}),
+            json!({"verb": "resume", "device": "pc"}),
+            json!({"verb": "share"}),
+            json!({"verb": "join", "link": "hide://pair#v=1"}),
+        ] {
+            for mode in [Mode::All, Mode::Own] {
+                assert_eq!(
+                    admit(mode, ask(operators.clone()).bot_need()),
+                    Err(OPERATOR_ONLY),
+                    "{operators}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -4164,13 +4164,13 @@ impl Runtime {
         }
     }
 
-    /// Marks the rows of an external tool's work: the agents it started and
-    /// those delegated under them (`started::ToolWork`), matched as Hide AI's
-    /// are, by pane and the session the registration holds. Whether the tool
-    /// keeps the work is read from its connection now, never stored, so a
-    /// disconnect, a leave or View only hands the work to the operator on
-    /// this pass, and Act again takes it back (PRD hide-external-control
-    /// D-14, D-40).
+    /// Marks the rows a bot started: the agents it started and those
+    /// delegated under them (`started::ToolWork`), matched as Hide AI's are,
+    /// by pane and the session the registration holds, in either mode.
+    /// Whether the bot keeps the work is read from its connection now, never
+    /// stored, so all mode, a disconnect or a leave hands the work to the
+    /// operator on this pass, and own mode takes it back (PRD
+    /// hide-external-control D-14, D-40, mission-87).
     fn lay_tool_work(&self, agents: &mut [SidebarAgentSnapshot]) {
         let work = &self.hide_started.tool_work;
         for agent in agents {
@@ -4187,7 +4187,7 @@ impl Runtime {
     }
 
     /// The checkouts Hide made for the agents Hide AI started, and for those
-    /// an external tool started while its connection stands at Act, so the
+    /// a bot started while it stands in own mode, so the
     /// sidebar tree draws both by one rule (PRD hide-ai-work-home D-17).
     /// Once the tool lets go its checkout is the operator's and leaves the
     /// list on the same pass as its rows (PRD hide-external-control D-14). A

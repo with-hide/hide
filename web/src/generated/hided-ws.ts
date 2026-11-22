@@ -132,7 +132,12 @@ export type SnapshotSections =
   | DesktopActivityPayload
   | HumanTurnDonePayload
   | AutomationCall
-  | AutomationResult;
+  | AutomationResult
+  | AccessSnapshot
+  | AccessApprovePayload
+  | AccessModePayload
+  | AccessIdPayload
+  | BotStarter;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -149,6 +154,16 @@ export type PaneTurnRowMode = "one_line" | "two_lines" | "off";
  * The palette every window draws in, `ui_state.color_theme`: hide is the landing page's Owl Field colors and the default (a store without the field opens hide), neutral the grey chrome. Independent of `ui_state.theme`, which picks light, dark or system. A stored value the core does not know opens hide with the diagnostic ui_state.color_theme_unknown.
  */
 export type ColorTheme = "hide" | "neutral";
+/**
+ * What an approved bot reaches (mission-87): `all` is the whole Hide, the operator's work and every bot's on every connected device; `own` is the bot's own work only, the agents it started, the agents started under them and the missions they conduct, which the core holds its commands, lists and reads to. Either mode starts agents in any project on any connected device.
+ */
+export type AccessMode =
+  | {
+      kind: "all";
+    }
+  | {
+      kind: "own";
+    };
 
 export interface HideWireTypes {
   frame?: HidedWs;
@@ -897,4 +912,87 @@ export interface AutomationResult {
   ok: boolean;
   value?: unknown;
   code?: string;
+}
+/**
+ * The core's `access` section (PRD hide-external-control B2, B11, B17; mission-87): the requests waiting for the operator and the approved bots. Absent until the connection list is restored at start.
+ */
+export interface AccessSnapshot {
+  /**
+   * The core's machine, where every bot runs.
+   */
+  machine: string;
+  /**
+   * How many bots may connect.
+   */
+  limit: number;
+  /**
+   * Requests waiting for the operator, oldest first.
+   */
+  pending: AccessPending[];
+  /**
+   * Approved bots, in the order they were approved.
+   */
+  connections: AccessConnection[];
+}
+export interface AccessPending {
+  id: string;
+  name: string;
+  /**
+   * The program that asked, as the kernel named it; null when the system did not say.
+   */
+  program: string | null;
+  requested_ms: number;
+}
+export interface AccessConnection {
+  id: string;
+  name: string;
+  mode: AccessMode;
+  program: string | null;
+  created_ms: number;
+  /**
+   * Moved at most once a minute.
+   */
+  last_used_ms: number;
+  /**
+   * Live agents this bot started; they stay the bot's work in either mode while it is connected.
+   */
+  agent_count: number;
+  /**
+   * Open missions those agents conduct.
+   */
+  mission_count: number;
+}
+/**
+ * Payload of access_approve, taken only from a window's connection: the waiting request `id` becomes a bot in `mode`. A request gone, a full list or a taken name changes nothing.
+ */
+export interface AccessApprovePayload {
+  id: string;
+  mode: AccessMode;
+}
+/**
+ * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`, and its work moves on the same event: own to all hands it to the operator, all to own takes it back.
+ */
+export interface AccessModePayload {
+  id: string;
+  mode: AccessMode;
+}
+/**
+ * Payload of access_refuse (a waiting request `id`) and access_revoke (a connected bot `id`, whose work becomes the operator's at once), taken only from a window's connection.
+ */
+export interface AccessIdPayload {
+  id: string;
+}
+/**
+ * The bot that started a row's root, on an agent row (`navigator.agents[].tool`, a device session's agents alike) and a mission (`missions.items[].tool`), absent for work no bot started (mission-87). Set from the coordination ledger for every bot-started root whatever the bot's mode, and shown, not an owner: `owns` is true only while the bot stands in own mode and keeps the work in its own cell; a bot of the whole Hide works as the operator, so its work is the operator's (false), as it is once the bot disconnects.
+ */
+export interface BotStarter {
+  /**
+   * The bot's connection id (`accessConnection.id`); a new connection of the same name is another id.
+   */
+  connection: string;
+  /**
+   * The name the bot connected with.
+   */
+  name: string;
+  owns: boolean;
 }

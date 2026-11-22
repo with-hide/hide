@@ -393,15 +393,15 @@ fn a_tools_delegated_child_rises_to_the_operator_only_for_a_person() {
 }
 
 /// The tool `nightly` asks to connect under `id` with a key of `digit`s,
-/// and the operator approves it at `level`; its connection's id. A revoked
+/// and the operator approves it in `mode`; its connection's id. A revoked
 /// key is refused, so a new connection comes with a new key.
 pub(super) fn connect(
     runtime: &mut Runtime,
     id: &str,
     digit: &str,
-    level: crate::access::Level,
+    mode: crate::access::Mode,
 ) -> String {
-    connect_as(runtime, "nightly", id, digit, level)
+    connect_as(runtime, "nightly", id, digit, mode)
 }
 
 /// `connect` under another tool's name.
@@ -410,7 +410,7 @@ fn connect_as(
     name: &str,
     id: &str,
     digit: &str,
-    level: crate::access::Level,
+    mode: crate::access::Mode,
 ) -> String {
     let (asked, _) = runtime.access_call(crate::access::Call::Request {
         name: name.into(),
@@ -422,19 +422,21 @@ fn connect_as(
     assert!(
         runtime.access_event(crate::runtime::access::AccessEvent::Approve {
             id: connection.clone(),
-            level,
+            mode,
         })
     );
     connection
 }
 
-/// B16, D-14, D-40: whose the work is follows the tool's connection on the
-/// event that moved it. View only or a disconnect hands the tool's agent
-/// to the operator at once, Act again takes it back, and a new connection
-/// under the same name is another connection, which takes nothing.
+/// B16, D-14, D-40, mission-87: whose the work is follows the bot's
+/// connection on the event that moved it. An own-mode bot keeps what it
+/// started; the whole Hide works as the operator, so all mode hands the
+/// bot's agent to the operator at once, still naming the bot, and own mode
+/// takes it back; a disconnect hands it over, and a new connection under the
+/// same name is another connection, which takes nothing.
 #[test]
-fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
-    use crate::access::Level;
+fn the_bots_work_is_the_operators_in_all_mode_or_once_it_disconnects() {
+    use crate::access::Mode;
     use crate::runtime::access::AccessEvent;
     let mut runtime = runtime();
     runtime.snapshot.navigator.workspaces = vec![workspace(
@@ -451,7 +453,7 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
     let mut agent = row(Owner::Operator, Doing::Working);
     agent.lineage_session = Some("tool-session".into());
     runtime.snapshot.navigator.agents = vec![agent];
-    let connection = connect(&mut runtime, "00000000000000a7", "7", Level::Act);
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::Own);
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
         name: "nightly".into(),
@@ -473,22 +475,26 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
         assert_eq!(sessions, !subject.unlisted, "one decision for every list");
         (subject.tool.as_ref().map(|tool| tool.owns), sessions)
     };
-    assert_eq!(listed(&runtime), (Some(true), false), "kept at Act");
+    assert_eq!(listed(&runtime), (Some(true), false), "kept in own mode");
 
-    assert!(runtime.access_event(AccessEvent::Level {
+    assert!(runtime.access_event(AccessEvent::Mode {
         id: connection.clone(),
-        level: Level::View,
+        mode: Mode::All,
     }));
     assert_eq!(
         listed(&runtime),
         (Some(false), true),
-        "View only lets it go"
+        "the whole Hide works as the operator, still naming the bot"
     );
-    assert!(runtime.access_event(AccessEvent::Level {
+    assert!(runtime.access_event(AccessEvent::Mode {
         id: connection.clone(),
-        level: Level::Act,
+        mode: Mode::Own,
     }));
-    assert_eq!(listed(&runtime), (Some(true), false), "Act takes it back");
+    assert_eq!(
+        listed(&runtime),
+        (Some(true), false),
+        "own mode takes it back"
+    );
 
     assert!(runtime.access_event(AccessEvent::Revoke {
         id: connection.clone(),
@@ -498,7 +504,7 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
         (Some(false), true),
         "a disconnect lets it go"
     );
-    let again = connect(&mut runtime, "00000000000000a8", "8", Level::Act);
+    let again = connect(&mut runtime, "00000000000000a8", "8", Mode::Own);
     assert_ne!(again, connection);
     runtime.refresh_agent_lineage();
     runtime.sync_session_state();
@@ -564,10 +570,10 @@ fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
 /// own cell beside the devices, empty or not, holding only its work; its
 /// agent's question is the tool's turn, the cell's grey number, and never
 /// the operator's Needs You; an answer typed into the pane takes it out of
-/// the tool's turn, and View only or a disconnect takes the cell away.
+/// the tool's turn, and a disconnect takes the cell away.
 #[test]
 fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
-    use crate::access::Level;
+    use crate::access::Mode;
     use crate::runtime::access::AccessEvent;
     let mut runtime = runtime();
     runtime.snapshot.navigator.workspaces = vec![workspace(
@@ -584,8 +590,8 @@ fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
     let mut agent = row(Owner::Operator, Doing::Working);
     agent.lineage_session = Some("tool-session".into());
     runtime.snapshot.navigator.agents = vec![agent];
-    let connection = connect(&mut runtime, "00000000000000a7", "7", Level::Act);
-    let idle = connect_as(&mut runtime, "weekly", "00000000000000a8", "8", Level::Act);
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::Own);
+    let idle = connect_as(&mut runtime, "weekly", "00000000000000a8", "8", Mode::Own);
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
         name: "nightly".into(),
@@ -673,15 +679,14 @@ fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
         "the answer takes it out of the tool's turn and leaves it the tool's"
     );
 
-    assert!(runtime.access_event(AccessEvent::Level {
+    assert!(runtime.access_event(AccessEvent::Revoke {
         id: connection.clone(),
-        level: Level::View,
     }));
     assert!(runtime.access_event(AccessEvent::Revoke { id: idle.clone() }));
     assert_eq!(
         project(&mut runtime),
         (Vec::new(), (1, 0)),
-        "View only and a disconnect end the cells, and the work let go is the operator's"
+        "a disconnect ends the cells, and the work let go is the operator's"
     );
 }
 
@@ -708,7 +713,7 @@ fn kept_by_tool(agent: SidebarAgentSnapshot) -> (Runtime, String) {
         &mut runtime,
         "00000000000000a7",
         "7",
-        crate::access::Level::Act,
+        crate::access::Mode::Own,
     );
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
@@ -772,7 +777,6 @@ fn a_tools_agent_waiting_on_a_person_stays_in_progress_in_the_tools_cell() {
 /// the operator's ordinary checkout and leaves the list.
 #[test]
 fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
-    use crate::access::Level;
     use crate::coordination::started::{CheckoutTool, StartedCheckout};
     use crate::runtime::access::AccessEvent;
     let (mut runtime, connection) = kept_by_tool(row(Owner::Operator, Doing::Working));
@@ -817,14 +821,11 @@ fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
             ("hide-memory-m72".to_owned(), None)
         ]
     );
-    assert!(runtime.access_event(AccessEvent::Level {
-        id: connection,
-        level: Level::View,
-    }));
+    assert!(runtime.access_event(AccessEvent::Revoke { id: connection }));
     assert_eq!(
         listed(&runtime),
         [("hide-memory-m72".to_owned(), None)],
-        "View only hands the checkout to the operator"
+        "a disconnect hands the checkout to the operator"
     );
 }
 

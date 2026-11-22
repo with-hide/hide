@@ -1062,10 +1062,12 @@ pub struct ToolWorkSnapshot {
     pub connection: String,
     /// The name the tool connected with, which the pane head writes.
     pub name: String,
-    /// The tool keeps the work now: its connection stands at Act. Read from
-    /// the connection list on every projection, never stored, so a
-    /// disconnect, a leave or View only hands the work to the operator at
-    /// once and Act again takes it back (D-14, D-40).
+    /// The bot keeps the work now: its connection stands in own mode. A bot
+    /// of the whole Hide works as the operator, so its work is the
+    /// operator's and this names it as the starter only. Read from the
+    /// connection list on every projection, never stored, so all mode, a
+    /// disconnect or a leave hands the work to the operator at once and own
+    /// mode takes it back (D-14, D-40, mission-87).
     pub owns: bool,
 }
 
@@ -2557,11 +2559,13 @@ pub struct SidebarAgentSnapshot {
     /// it; absent from the wire for every other agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_ai: Option<HideAiSnapshot>,
-    /// An external tool's work (PRD hide-external-control D-09): an agent
-    /// the tool started, or one started under it with `--parent`. Set by
-    /// the runtime from the coordination ledger and the tool's connection,
-    /// so a session read never makes it; absent from the wire for every
-    /// other agent.
+    /// The bot that started this row's root (PRD hide-external-control D-09,
+    /// mission-87): an agent the bot started, or one started under it with
+    /// `--parent`, in either mode; `owns` says whether the bot keeps it.
+    /// Set by the runtime from the coordination ledger and the bot's
+    /// connection, so a session read never makes it; absent from the wire
+    /// for every other agent (`botStarter` in
+    /// `contracts/hided-ws.schema.json`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolWorkSnapshot>,
     /// The operator's own lists leave this row out
