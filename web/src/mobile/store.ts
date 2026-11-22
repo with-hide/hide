@@ -116,6 +116,11 @@ export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" 
 /** A choice picked on the agent's ask: sending, sent (until the ask moves on), or refused with why. */
 export type ChoiceState = { turn: string; choice: string; state: "sending" | "sent" } | { turn: string; choice: string; state: "failed"; notice: Notice };
 
+/** Whether two asks are the same question, plan or command, whichever turn each came under. */
+function sameAsk(left: PhoneAsk | null, right: PhoneAsk): boolean {
+  return left !== null && left.kind === right.kind && left.text === right.text && left.command === right.command;
+}
+
 type PhoneState = {
   /** The sample host is open (demoSocket.ts): every host name is marked as sample data and nothing is stored. */
   demo: boolean;
@@ -408,9 +413,12 @@ export function applyFrame(frame: ServerFrame): void {
     case "ask": {
       const detail = state.detail;
       if (!detail || !sameKey(detail.key, frame)) return;
-      // A choice belongs to the ask it was picked on: once the agent asks something else, or nothing, it is over.
-      const choice = state.choice && state.choice.turn === frame.ask?.turn ? state.choice : null;
-      patch({ detail: { ...detail, ask: frame.ask }, choice });
+      // A choice belongs to the ask it was picked on: once the agent asks something else, or nothing, it is over. An answered ask
+      // that stands under a new turn is still that ask: a permission stays open until its command ends, and the agent's state
+      // moves meanwhile, so the answer sent keeps its mark rather than offering the choices again.
+      const ask = frame.ask;
+      const kept = state.choice && ask && (state.choice.turn === ask.turn || (state.choice.state !== "failed" && sameAsk(detail.ask, ask)));
+      patch({ detail: { ...detail, ask }, choice: kept ? { ...state.choice!, turn: ask.turn } : null });
       return;
     }
     case "looks": {

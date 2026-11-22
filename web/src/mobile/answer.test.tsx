@@ -5,7 +5,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { PhoneAgent, ServerFrame } from "./protocol";
+import type { PhoneAgent, PhoneAsk, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
@@ -120,14 +120,12 @@ it("draws the agent's question with each choice's note and sends the picked choi
   const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "question", status_code: "question", changed_at_unix_ms: 100 }));
   try {
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "코멘트 3건을 모두 읽었어요.", truncated: false, at_ms: 1 }], before: null, running: null });
-    await serve({
-      type: "ask", device_id: "local", pane_id: "w1:p1",
-      ask: { kind: "question", turn: "100", since_ms: 100, text: "리뷰 코멘트 3건을 모두 반영할까요?", truncated: false, answerable: true, choices: [
-        { id: "1", label: "모두 반영 (Recommended)", note: "문구 2건과 테스트 1건" },
-        { id: "2", label: "문구 수정 2건만", note: "테스트는 다음에" },
-        { id: "3", label: "반영하지 않기" },
-      ] },
-    });
+    const asked: PhoneAsk = { kind: "question", turn: "100", since_ms: 100, text: "리뷰 코멘트 3건을 모두 반영할까요?", truncated: false, answerable: true, choices: [
+      { id: "1", label: "모두 반영 (Recommended)", note: "문구 2건과 테스트 1건" },
+      { id: "2", label: "문구 수정 2건만", note: "테스트는 다음에" },
+      { id: "3", label: "반영하지 않기" },
+    ] };
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: asked });
     const card = container.querySelector<HTMLElement>('[data-phone-ask="question"]')!;
     expect(card.querySelector("[data-phone-ask-text]")!.textContent).toBe("리뷰 코멘트 3건을 모두 반영할까요?");
     // The conversation answers with the card; the quick keys stay with the terminal (Doop 05).
@@ -148,6 +146,14 @@ it("draws the agent's question with each choice's note and sends the picked choi
     expect(inputs()[0]).not.toHaveProperty("text");
     await serve({ type: "input_result", request_id: String(inputs()[0]!.request_id), ok: true, reason: null });
     expect(container.querySelector('[data-phone-ask-sent="2"]')).not.toBeNull();
+    // The same ask under a new turn (the agent's state moved while it still holds it) keeps the answer sent, and offers nothing.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "130", since_ms: 130 } });
+    expect(container.querySelector('[data-phone-ask-sent="2"]')).not.toBeNull();
+    expect(container.querySelector("[data-phone-ask-send]")).toBeNull();
+    // Another ask is answered afresh.
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { ...asked, turn: "140", since_ms: 140, text: "다음 PR도 이렇게 할까요?" } });
+    expect(container.querySelector("[data-phone-ask-sent]")).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>("[data-phone-ask-send]")!.disabled).toBe(true);
     // Once the agent asks nothing, the card goes.
     await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: null });
     expect(container.querySelector("[data-phone-ask]")).toBeNull();
