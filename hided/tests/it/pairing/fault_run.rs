@@ -528,7 +528,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     std::fs::write(&script, sender_script(&run)).unwrap();
     hand_over(
         &host_env.home,
-        &sender.own_pane(&sender.pane).unwrap(),
+        sender.own_pane(&sender.pane).unwrap(),
         &script,
     );
     let sent = run.join("sent");
