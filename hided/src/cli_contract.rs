@@ -1492,7 +1492,8 @@ pub const COMMANDS: &[Spec] = &[
     // for a computer with no window to open Settings > Mobile in. `pair`
     // draws the pairing QR for a person at a terminal outside Hide's panes
     // and waits until a phone scans it; it never prints the link the QR
-    // holds. A program in a pane may list and remove.
+    // holds, and says each line and refusal as one sentence in the
+    // operator's interface language. A program in a pane may list and remove.
     Spec {
         words: &["phone", "pair"],
         arguments: &[],
