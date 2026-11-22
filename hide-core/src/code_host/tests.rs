@@ -973,3 +973,41 @@ fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
         github.pull_requests[0].reference
     );
 }
+
+/// The declaration on the wire: the screen and the phone read these names,
+/// and a status or a phone card from a core before hosts were declared
+/// reads as carrying none (GitHub's, by the one place that says so).
+#[test]
+fn a_hosts_declaration_travels_by_these_names_and_an_old_payload_carries_none() {
+    let declaration = super::declaration(&crate::gitlab::host::GITLAB);
+    assert_eq!(
+        serde_json::to_value(&declaration).unwrap(),
+        serde_json::json!({
+            "key": "gitlab",
+            "operations": ["commit_checks"],
+            "access": {
+                "program": "glab",
+                "minimum_version": "1.78.0",
+                "sign_in": "glab auth login --hostname gitlab.com",
+            },
+        })
+    );
+    let github = super::declaration(&crate::github::host::GITHUB);
+    assert_eq!(
+        serde_json::to_value(&github.operations).unwrap(),
+        serde_json::json!([
+            "merge", "update_branch", "edit_body", "merge_proof", "base_policy",
+            "commit_checks", "failed_log", "by_number", "handover", "issues",
+            "search", "watch",
+        ])
+    );
+    let old: crate::model::GithubStatusSnapshot = serde_json::from_value(serde_json::json!({
+        "failure_category": null, "available": true, "loading": false, "stale": false,
+        "last_success_at_unix_ms": 1,
+    }))
+    .unwrap();
+    assert_eq!(old.host, None);
+    let card: crate::agent_state::tally::phone::PhoneCard =
+        serde_json::from_value(serde_json::json!({"reading": false})).unwrap();
+    assert_eq!(card.host, None);
+}
