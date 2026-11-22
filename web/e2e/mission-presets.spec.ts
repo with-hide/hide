@@ -105,6 +105,8 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     const phone = paired.phone;
     await phone.locator('[data-phone-tab="missions"]').tap();
     await phone.locator("[data-phone-mission]").tap();
+    // The page opens on its step list (Doop 14); the cards are the map's, behind the head's map button.
+    await phone.locator("[data-phone-mission-map-toggle]").tap();
     const phoneFoot = (key: string) => phone.locator(`[data-mission-node="${key}"] [data-node-foot] [data-node-line="result"]`);
     for (const [key, icon, name] of [["cause", "research", "Research"], ["check", "verify", "Verify"], ["tidy", "general", "General"], ["ship", "deploy", "Deploy"]] as const) {
       await expect(phoneFoot(key).locator("[data-line-icon]")).toHaveAttribute("data-line-icon", icon);

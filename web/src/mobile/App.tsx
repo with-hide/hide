@@ -3,7 +3,7 @@ import { OfflineText } from "./OfflineText";
 // B30, B38): pairing, the refused and unpaired guidance, and the list; the
 // detail is `Detail.tsx`. Every value comes from the store the socket writes.
 
-import { LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
+import { Loader2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
@@ -19,6 +19,7 @@ import { PrsScreen } from "./PrsScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { StartSheet } from "./StartSheet";
 import { TabBar } from "./TabBar";
+import { ScreenHead } from "./layout";
 import {
   GROUP_TITLE,
   type GroupId,
@@ -160,28 +161,18 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
   const dim = unreachable && !connected;
   return (
     <main className="flex min-h-full flex-col">
-      <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
-        <div className="flex items-center justify-between pt-lg">
-          <h1 className="text-headline font-semibold text-foreground">hide</h1>
-          <div className="flex items-center">
-            <button
-              type="button"
-              aria-label={t("mobile.start.title")}
-              data-phone-start="true"
-              className="-mr-sm flex size-(--size-touch-target) items-center justify-center rounded-lg text-foreground active:bg-accent"
-              onClick={openStartSheet}
-            >
-              <PlusIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-            </button>
-          </div>
-        </div>
-        {computers && activeRoom ? <ComputerChoice hosts={computers} activeRoom={activeRoom} /> : hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
-          <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones, devices)}>
-            <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
-            <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones, devices)}</span>
-          </p>
-        ) : null}
-      </header>
+      {/* The computer's name is the screen's title (Doop 01); on the hosted phone it opens the device sheet. */}
+      <ScreenHead
+        data-phone-connected={connected ? "true" : "false"}
+        data-phone-header={!hosted && macName ? headerLine(t, macName, otherPhones, devices) : undefined}
+        title={computers && activeRoom ? "hide" : hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? machinesName(macName, devices) : "hide"}
+        line={computers && activeRoom ? <ComputerChoice hosts={computers} activeRoom={activeRoom} /> : otherPhones > 0 ? t("mobile.otherPhonesLine", { count: otherPhones }) : null}
+        action={
+          <Button variant="ghost" size="icon" aria-label={t("mobile.start.title")} data-phone-start="true" className="-mr-sm size-(--size-touch-target) text-foreground" onClick={openStartSheet}>
+            <PlusIcon aria-hidden="true" className="size-(--size-icon-lg)" />
+          </Button>
+        }
+      />
       {dim ? (
         <div role="status" className="mt-md flex items-center gap-sm px-xl py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
@@ -229,7 +220,7 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
 function GroupHead({ id, count }: { id: GroupId; count: number }) {
   const { t } = useInterfaceTranslation();
   return (
-    <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
+    <h2 className={`flex gap-sm pb-xs text-subhead ${id === "needs_you" ? "font-semibold text-warning" : "text-muted-foreground"}`}>
       <span>{t(GROUP_TITLE[id])}</span>
       <span className="font-mono" data-phone-group-count={count}>
         {count}

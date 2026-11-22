@@ -42,6 +42,43 @@ const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>
 });
 test.use({ viewport: { width: 390, height: 844 }, locale: "en-US" });
 
+test.describe("narrow heads", () => {
+  test.use({ viewport: { width: 320, height: 700 }, hasTouch: true, isMobile: true });
+
+  // UI_BEHAVIOR.md, The phone app: the detail's tabs and chips wrap rather than overlap on a narrow phone (I-17), and a View's
+  // head keeps its name, kind, opener and time inside the screen however long the name (I-65).
+  test("a detail's tabs and chips and a View's head stay inside a 320-wide screen without overlapping", async ({ page, relay }) => {
+    await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
+    await page.locator('[data-phone-agent="local|a1"]').tap();
+    const tabs = page.locator('[role="tablist"]').first();
+    const chips = page.locator("[data-phone-detail-links]");
+    await expect(tabs).toBeVisible();
+    await expect(chips).toBeVisible();
+    const [a, b] = [await tabs.boundingBox(), await chips.boundingBox()];
+    const apart = a!.x + a!.width <= b!.x || b!.x + b!.width <= a!.x || a!.y + a!.height <= b!.y || b!.y + b!.height <= a!.y;
+    expect(apart, "the chips never sit on the tabs").toBe(true);
+    const spill = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(await spill()).toBeLessThanOrEqual(0);
+    // The operator's words stand right, in a bubble narrower than the screen (Doop 02).
+    const mine = (await page.locator('[data-phone-message="you"] p').first().boundingBox())!;
+    expect(mine.x + mine.width).toBeGreaterThan(320 - 24);
+    expect(mine.x).toBeGreaterThan(24);
+
+    await page.locator('[data-phone-back="true"]').tap();
+    await page.locator('[data-phone-agent="local|a2"]').tap();
+    await page.locator('[data-phone-view="looks"]').tap();
+    await page.locator("[data-phone-look]").first().tap();
+    const head = page.locator("[data-phone-viewing]");
+    await expect(head).toBeVisible();
+    await expect(head.locator("[data-phone-viewing-opener]")).toBeVisible();
+    for (const part of await head.locator("h1, [data-phone-viewing-opener]").all()) {
+      const box = (await part.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    expect(await spill()).toBeLessThanOrEqual(0);
+  });
+});
+
 test.describe("mission graph touch", () => {
   test.use({ viewport: { width: 393, height: 852 }, hasTouch: true, isMobile: true });
 
@@ -51,6 +88,12 @@ test.describe("mission graph touch", () => {
     await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
     await page.locator('[data-phone-tab="missions"]').tap();
     await page.locator('[data-phone-mission="mission-release"]').tap();
+    // The page opens on its step list (Doop 14), its head's second line one line: the Conductor, the count and the branch.
+    const conductor = (await page.locator("[data-phone-mission-conductor]").boundingBox())!;
+    const branch = (await page.locator("[data-mission-destination]").boundingBox())!;
+    expect(Math.abs(branch.y + branch.height / 2 - (conductor.y + conductor.height / 2))).toBeLessThan(4);
+    // The graph is behind the head's map button.
+    await page.locator("[data-phone-mission-map-toggle]").tap();
     const canvas = page.locator("[data-mission-canvas]");
     const card = page.locator('[data-mission-node="rehearse"]');
     await expect(canvas.locator('[data-dependency-layout="layered"]')).toBeVisible();

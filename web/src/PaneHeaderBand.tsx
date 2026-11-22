@@ -1,4 +1,4 @@
-import { ChevronDownIcon, GitForkIcon, ListTreeIcon } from "lucide-react";
+import { GitForkIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
@@ -23,6 +23,7 @@ import { paneChildren, type PaneChildren } from "./paneChildren";
 import { sessionOfAgent } from "./sessionWork";
 import { statusText } from "./agentStatus";
 import { StatusMark } from "./components/status-mark";
+import { TreeChipFace } from "./components/tree-chip";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
 import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
@@ -519,15 +520,12 @@ function PaneTreeButton({ paneId, parent, children, agents, actions, connection 
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-tree="${paneId}"]`)?.focus()}
     triggerLabel={label}
     trigger={<button type="button" aria-label={label} data-pane-tree={paneId} data-pane-tree-subagents={subagents || undefined} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
-      <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
-      {count > 0 && (count > 1 || marked.length === 0) ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
-      {count > 0 && subagents > 0 ? <span aria-hidden="true" className="text-muted-foreground">·</span> : null}
-      {subagents > 0 ? <>
-        <span aria-hidden="true" className="size-(--size-subagent-dot) shrink-0 rounded-full bg-agent-working opacity-(--opacity-secondary)" />
-        <span aria-hidden="true" className="font-mono" data-pane-tree-subagent-count="">{subagents}</span>
-      </> : null}
-      <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
+      <TreeChipFace
+        mark={marked.length > 0 ? marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />) : null}
+        count={count}
+        subagents={subagents}
+        icon="size-(--size-icon-sm)"
+      />
     </button>}
   />;
 }

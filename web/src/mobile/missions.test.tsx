@@ -204,11 +204,78 @@ it("opens a step's worker only when the phone's list holds that row", async () =
     await serve({ type: "agents", groups: [{ group: "working", count: 2, rows: [row] }], omitted: 1, devices: [], interface_language: "en", color_theme: null });
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-run"]');
-    expect(container.querySelector('[data-mission-node="a"]')).not.toBeNull();
-    expect(container.querySelector('[data-mission-node="b"]')?.getAttribute("aria-disabled")).toBe("true");
+    expect(container.querySelector('[data-phone-step="a"]')).not.toBeNull();
+    expect(container.querySelector('[data-phone-step="b"]')?.getAttribute("aria-disabled")).toBe("true");
     expect(container.querySelector("[data-phone-mission-chat]"), "the Conductor's row was left out too").toBeNull();
-    await click('[data-mission-node="a"]');
+    await click('[data-phone-step="a"]');
     expect(socket.sent.filter((message) => message.type === "open").map((message) => message.pane_id)).toEqual(["w1:p2"]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("lists the steps by default, says how long a worked step has worked from the Mac's start time, and keeps the graph behind the map button", async () => {
+  const worker = { device_id: "local", pane_id: "w1:p2" };
+  const now = Date.now();
+  const page = mission("m-steps", { destination: "main", nodes: [
+    node("a", "done", { pr: 80, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
+    node("b", "working", { agent: worker, worked_at_unix_ms: now - 4 * 60_000 }),
+    // A Mac that predates the start time sends none: the line has no time.
+    node("c", "working"),
+    // Nobody has started it: its title alone.
+    node("d", "planned", { depends_on: ["b"], agent_runtime: null }),
+  ] });
+  const { container, click, serve, unmount } = await connect([page]);
+  try {
+    const row = {
+      kind: "agent" as const, ...worker, root_pane_id: worker.pane_id, group: "working" as const, mark: "going" as const, wait: null, descendants_working: 0, agent_kind: "claude",
+      title: "Measure memory", place: null, device_label: null, changed_at_unix_ms: null, line: null, status_code: "working" as const, demand: "none", emphasized: false, holds_notification: false,
+    };
+    await serve({ type: "agents", groups: [{ group: "working", count: 1, rows: [row] }], devices: [], interface_language: "en", color_theme: null });
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-steps"]');
+    const line = (key: string) => container.querySelector(`[data-phone-step="${key}"] [data-phone-step-line]`)?.textContent;
+    expect(container.querySelector("[data-mission-node]"), "the graph waits behind the map button").toBeNull();
+    expect(line("a")).toBe("Merged → main");
+    expect(container.querySelector('[data-phone-step="a"] [data-phone-step-pr]')?.textContent).toBe("#80");
+    expect(line("b")).toBe("Measure memory · Working · 4m");
+    expect(line("c")).toBe("Working");
+    expect(container.querySelector('[data-phone-step="d"]'), "a step not started is listed").not.toBeNull();
+    expect(line("d")).toBeUndefined();
+    await click("[data-phone-mission-map-toggle]");
+    expect(container.querySelectorAll("[data-mission-node]")).toHaveLength(4);
+    expect(container.querySelector("[data-phone-step]")).toBeNull();
+    await click("[data-phone-mission-map-toggle]");
+    expect(container.querySelectorAll("[data-phone-step]")).toHaveLength(4);
+  } finally {
+    await unmount();
+  }
+});
+
+it("counts a step's time only while its worker works: a stopped or sleeping step says so with no time, and one owed to the operator stands in the hold band", async () => {
+  const now = Date.now();
+  const forty = now - 40 * 60_000;
+  const page = mission("m-pace", { nodes: [
+    node("stopped", "working", { worked_at_unix_ms: forty, work: { state: "stopped" } }),
+    node("asleep", "working", { worked_at_unix_ms: forty, work: { state: "asleep" } }),
+    node("owed", "working", { worked_at_unix_ms: forty, attention: { reason: "worker_ended", pr: null, to: "operator", since_unix_ms: now, on_row: false, item: false } }),
+    node("merge", "done", { pr: 37, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [37] }, landing: { state: "left", action: "merge" } }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-pace"]');
+    const line = (key: string) => container.querySelector(`[data-phone-step="${key}"] [data-phone-step-line]`)?.textContent;
+    const turn = (key: string) => container.querySelector(`[data-phone-step="${key}"]`)?.getAttribute("data-phone-step-turn");
+    expect(line("stopped")).toBe("Stopped");
+    expect(line("asleep")).toBe("Worker asleep");
+    expect(turn("stopped")).toBeNull();
+    // Owed to the operator: why, then 내 차례, in the hold band, the same reason the map's card says.
+    expect(turn("owed")).toBe("true");
+    expect(line("owed")).toBe("Worker ended with work left · Needs you");
+    expect(line("owed")).not.toMatch(/\d+m/);
+    // A merge that is the operator's now is the row's turn too: the list has no band of its own to draw it in.
+    expect(turn("merge")).toBe("true");
   } finally {
     await unmount();
   }
@@ -225,6 +292,7 @@ it("draws a step its Conductor set waiting as the desktop's card does, why and h
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-wait"]');
+    await click("[data-phone-mission-map-toggle]");
     const line = (key: string) => container.querySelector(`[data-mission-node="${key}"] [data-node-wait]`);
     expect(line("a")?.getAttribute("data-node-wait")).toBe("mission");
     expect(line("a")?.textContent).toMatch(/^Waiting · disk· 40m$/);
@@ -247,6 +315,7 @@ it("draws the raises its Conductor has not settled as one safety net card with a
     await click('[data-phone-tab="missions"]');
     expect(container.querySelector('[data-phone-mission="m-net"] [data-phone-mission-line]')?.textContent).toBe("5 stuck · the Conductor has not settled them yet");
     await click('[data-phone-mission="m-net"]');
+    await click("[data-phone-mission-map-toggle]");
     const net = container.querySelector('[data-phone-safety-net="present"]')!;
     expect(net.querySelector("[data-phone-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
     expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
@@ -274,6 +343,7 @@ it("answers a decision with one request once a marked choice is sent with 답하
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-turn"]');
+    await click("[data-phone-mission-map-toggle]");
     const page = container.querySelector('[data-phone-mission-page="m-turn"]')!;
     // The question, its reason and the recommended choice come first; the stopped step is held.
     expect(page.querySelector("[data-phone-question]")!.textContent).toBe("Merge now?");
@@ -510,6 +580,7 @@ it("shows the desktop graph with finished and parallel nodes, dependencies and i
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-map"]');
+    await click("[data-phone-mission-map-toggle]");
     const map = container.querySelector("[data-phone-mission-steps]")!;
     expect([...map.querySelectorAll("[data-mission-node]")].map((node) => node.textContent)).toEqual([
       expect.stringContaining("Step a"), expect.stringContaining("Step c"), expect.stringContaining("Step b"), expect.stringContaining("Step d"),
@@ -531,6 +602,7 @@ it("keeps empty, completed and long missions readable without a rail fold", asyn
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="long"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelectorAll("[data-mission-node]")).toHaveLength(18);
     await serve({ type: "missions", items: [mission("long", { status: "done", nodes: nodes.map((node) => ({ ...node, status: "done" })) })], failed: false });
     expect(container.querySelectorAll('[data-node-look="done"]')).toHaveLength(18);
@@ -555,6 +627,7 @@ it("names only open PRs in the phone merge turn, newest first with the additiona
     expect(container.querySelector('[data-phone-mission="merge-1"] [data-phone-mission-line]')?.textContent).toBe("Merge order #31");
     for (const index of [0, 1]) {
       await click(`[data-phone-mission="merge-${index}"]`);
+      await click("[data-phone-mission-map-toggle]");
       expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", person: "due", yours: true, tag: null });
       await click('[data-phone-back="missions"]');
     }
@@ -610,6 +683,7 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-dest"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelector("[data-mission-destination]")?.textContent).toBe("→feat/login");
     // A ready pull request the Conductor merges: the PR list's green mark, the newest number and the others' count, to the destination.
     expect(cardOf(container, "ui")).toMatchObject({ band: null, worker: "Claude Code", line: "branch", mark: "mergeable", text: "#31 +1→feat/login", bold: false, person: null, yours: false, hairline: true });
@@ -662,6 +736,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-old"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelector("[data-mission-destination]")).toBeNull();
     // Its merge is still the operator's: the band says so and the line names its pull request, with nowhere to go.
     expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", text: "#33", to: null, yours: true });
@@ -674,6 +749,7 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     expect(cardOf(container, "top")).toMatchObject({ text: "#40→39", toMark: "unknown" });
     await click('[data-phone-back="missions"]');
     await click('[data-phone-mission="m-look"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelector("[data-phone-mission-map]")).not.toBeNull();
     expect(container.querySelector("[data-mission-destination]")).toBeNull();
     expect(container.querySelector('[data-node-line="branch"]')).toBeNull();
@@ -693,6 +769,7 @@ it("reads a step a Hide sends by its old kind as the general step of that preset
     expect(read).toEqual([["cause", "general", "research"], ["together", "general", "verify"], ["ship", "general", "deploy"]]);
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-run"]');
+    await click("[data-phone-mission-map-toggle]");
     const label = (key: string) => container.querySelector(`[data-dependency-node="${key}"] [aria-label]`)?.getAttribute("aria-label");
     expect(label("cause")).toContain("Research");
     expect(label("together")).toContain("Verify");
