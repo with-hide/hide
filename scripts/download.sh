@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Downloads URL to OUT for the scripts that fetch a pinned release on a CI
-# runner (install-nextest.sh, install-hakari.sh, fetch-gh.sh). One attempt is
+# runner (install-nextest.sh, install-hakari.sh, fetch-gh.sh, fetch-glab.sh). One attempt is
 # cut at 40 seconds and a failed one is tried again up to three times, so a
 # stalled or cut-off connection ends inside the 3-minute step limit those
 # installs run under (.github/workflows/pr.yml) instead of hanging until the

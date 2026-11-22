@@ -27,6 +27,7 @@ pub mod document;
 mod executable_fixture;
 pub mod feedback;
 pub mod gh;
+pub mod glab;
 pub mod git;
 pub mod git_command;
 pub mod git_run;
