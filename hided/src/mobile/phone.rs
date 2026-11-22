@@ -2272,6 +2272,12 @@ async fn input(
     .unwrap_or(Err("uncertain"));
     match result {
         Ok(()) => {
+            if message.get("choice").is_some() {
+                mobile
+                    .config
+                    .core
+                    .note_feature_used(hide_core::product_analytics::Feature::PhoneAnswer);
+            }
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
                 "device_id": key.device_id,

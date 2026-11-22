@@ -25,6 +25,7 @@ import { MissionScreen } from "../MissionScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
+import { PracticePhone } from "./PracticePhone";
 import { holdPageClipboard, practiceClipboard } from "./clipboard";
 import { holdPageOutside } from "./outside";
 import type { CoreEvent } from "./world";
@@ -167,7 +168,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
 
   return (
     <TooltipProvider>
-      <div className="flex h-full min-w-0 flex-col bg-background text-foreground" data-practice-chapter={chapter.id} data-practice-moves={moves}>
+      <div className="relative flex h-full min-w-0 flex-col bg-background text-foreground" data-practice-chapter={chapter.id} data-practice-moves={moves}>
         <TitleRow actions={actions} />
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar actions={actions} />
@@ -179,6 +180,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <SettingsGate actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
+        {/* A chapter about answering from the phone holds the phone beside the screen; its presses go to the world. */}
+        {chapter.world.phone ? <PracticePhone screen={chapter.world.phone(model)} send={send} /> : null}
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onEnter={send} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} onLeave={onLeave} />
       </div>
     </TooltipProvider>

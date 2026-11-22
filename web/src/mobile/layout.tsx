@@ -93,12 +93,13 @@ export function StatusStrip({ word, tone, line, since }: { word: string; tone: s
  * What the agent does now, at the foot of its conversation, its time counted on the phone: `생각 중 · 4초` (Doop 09), or with
  * `clock` a running clock, `명령 실행 중 · 0:42` (Doop 02).
  */
-export function ActivityLine({ word, since, clock = false }: { word: string; since: number; clock?: boolean }) {
+export function ActivityLine({ word, since, clock = false, time }: { word: string; since: number; clock?: boolean; time?: string }) {
   return (
     <p className="flex items-center gap-xs pt-xs text-body" data-phone-activity={word}>
       <span className="text-agent-working opacity-(--opacity-secondary)">{word}</span>
       <span aria-hidden="true" className="text-muted-foreground">·</span>
-      {clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
+      {/* `time` is the time a drawing plays (a What's new scene), in place of the clock. */}
+      {time !== undefined ? <span className="font-mono text-muted-foreground">{time}</span> : clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
     </p>
   );
 }

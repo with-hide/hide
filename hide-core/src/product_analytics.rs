@@ -87,15 +87,19 @@ pub enum Feature {
     /// A skill or MCP server added, changed, switched or removed, from
     /// Settings or `hide skill` / `hide mcp`.
     SkillsMcp,
+    /// An agent's own question, plan or tool permission answered with one
+    /// of its choices from a phone.
+    PhoneAnswer,
 }
 
 impl Feature {
-    const ALL: [Self; 2] = [Self::Focus, Self::SkillsMcp];
+    const ALL: [Self; 3] = [Self::Focus, Self::SkillsMcp, Self::PhoneAnswer];
 
     fn name(self) -> &'static str {
         match self {
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
+            Self::PhoneAnswer => "phone_answer",
         }
     }
 }
@@ -156,6 +160,8 @@ pub struct ActiveDays {
     focus: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skills_mcp: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_answer: Option<u64>,
 }
 
 impl ActiveDays {
@@ -169,6 +175,7 @@ impl ActiveDays {
             Daily::Surface(ActiveSurface::Phone) => &mut self.phone,
             Daily::Feature(Feature::Focus) => &mut self.focus,
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
+            Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
         };
         if *recorded == Some(day) {
             return false;
@@ -228,6 +235,7 @@ pub enum PracticeChapter {
     Automation,
     Focus,
     Bots,
+    Answer,
 }
 
 impl PracticeChapter {
@@ -241,6 +249,7 @@ impl PracticeChapter {
             "automation" => Self::Automation,
             "focus" => Self::Focus,
             "bots" => Self::Bots,
+            "answer" => Self::Answer,
             _ => return None,
         })
     }
@@ -417,6 +426,7 @@ impl Event {
                         PracticeChapter::Automation => "automation",
                         PracticeChapter::Focus => "focus",
                         PracticeChapter::Bots => "bots",
+                        PracticeChapter::Answer => "answer",
                     },
                 ),
                 (

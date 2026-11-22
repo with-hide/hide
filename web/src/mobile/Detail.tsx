@@ -11,31 +11,29 @@ import { OfflineText } from "./OfflineText";
 
 import { AnsiUp } from "ansi_up";
 import { CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
-import { Elapsed } from "../components/elapsed";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { Elapsed, useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
-import { renderMarkdown } from "./markdown";
 import { AgentLead, PhoneHumanTurn, PlaceParts } from "./parts";
 import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
 import { lineParts } from "../agentRow";
 import { statusText } from "../agentStatus";
-import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendChoice, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
-import { AskCard, AskStrip } from "./AskCard";
+import { AskCardView, AskStrip } from "./AskCard";
+import { MessageItem } from "./messages";
 import {
   MAX_MESSAGES,
   QUICK_KEYS,
   boxDrawingRow,
   inputFailure,
-  messageTime,
   noticeText,
   rowsProblem,
   type Conversation,
-  type ConversationMessage,
   type PhoneAsk,
   type Running,
   sleepTarget,
@@ -441,44 +439,26 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   );
 }
 
-/** Memoized: a message never changes once it arrived, so its Markdown is parsed once. */
-const MessageItem = memo(function MessageItem({ message, timed }: { message: ConversationMessage; timed: boolean }) {
+/** The card on the phone: the choice marked here is kept for its turn, and 답하기 sends it to the computer (`sendChoice`). */
+export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
-  const time = timed && message.at_ms > 0 ? (
-    <time dateTime={new Date(message.at_ms).toISOString()} className={cn("block pt-xs font-mono text-body text-muted-foreground", message.who === "you" && "text-right")}>
-      {messageTime(message.at_ms)}
-    </time>
-  ) : null;
-  if (message.who === "stopped") {
-    return (
-      <li data-phone-message="stopped" className="text-body text-muted-foreground">
-        {t("mobile.stopped")}
-      </li>
-    );
-  }
-  if (message.who === "you") {
-    return (
-      <li data-phone-message="you" className="flex flex-col items-end">
-        {/* The operator's words stand right, in a rounded bubble, as Doop 02 draws them. */}
-        <p className="max-w-5/6 whitespace-pre-wrap break-keep rounded-xl bg-secondary px-lg py-sm text-body leading-normal text-foreground wrap-anywhere">{message.text}</p>
-        {time}
-      </li>
-    );
-  }
-  return <AgentMessage message={message} time={time} />;
-});
-
-function AgentMessage({ message, time }: { message: ConversationMessage; time: React.ReactNode }) {
-  const { t } = useInterfaceTranslation();
-  const body = useMemo(() => renderMarkdown(message.text), [message.text]);
+  const choice = usePhone((s) => s.choice);
+  const [marked, setMarked] = useState<{ turn: string; id: string } | null>(null);
+  const waited = useElapsed(ask.since_ms);
+  // The answer sent for this turn stands for the mark too, so a card drawn again (the strip unfolded) still shows what was sent.
+  const answered = choice?.turn === ask.turn ? choice : null;
   return (
-    <li data-phone-message="agent">
-      <div className="space-y-sm break-keep wrap-anywhere text-body leading-normal text-foreground">
-        {body}
-        {message.truncated ? <p className="text-muted-foreground">{t("mobile.truncated")}</p> : null}
-      </div>
-      {time}
-    </li>
+    <AskCardView
+      ask={ask}
+      disabled={disabled}
+      waited={waited}
+      picked={marked?.turn === ask.turn ? marked.id : (answered?.choice ?? null)}
+      answer={answered?.state ?? null}
+      error={answered?.state === "failed" ? noticeText(t, answered.notice) : null}
+      onPick={(id) => setMarked({ turn: ask.turn, id })}
+      onAnswer={sendChoice}
+      onTerminal={() => setTab("terminal")}
+    />
   );
 }
 

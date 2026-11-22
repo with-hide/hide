@@ -2,19 +2,17 @@
 // each choice's note, its plan, or the command a permission waits on, with the choices its computer can pick for the operator.
 // Picking only marks a choice; 답하기 sends it, and the computer types the keys the agent's own screen takes for it, never the
 // choice's words. An agent whose screen Hide has no keys for shows its choices and sends the operator to the terminal.
+// Drawn only, with no connection, so a What's new scene and a practice chapter draw the same card (Detail.tsx connects it).
 import { CheckIcon } from "lucide-react";
-import { useState } from "react";
+import type { ReactNode } from "react";
 import { Button } from "../components/ui/button";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { sendChoice, setTab } from "./connection";
 import { renderMarkdown } from "./markdown";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import { noticeText, type PhoneAsk } from "./protocol";
-import { usePhone } from "./store";
+import type { PhoneAsk } from "./protocol";
 
 /** The words a computer's choice ids stand for, with the line under each where the operator needs one. */
 const CHOICE_WORDS: Record<string, { label: MessageKey; note?: MessageKey }> = {
@@ -55,17 +53,27 @@ function headOf(ask: PhoneAsk): { word: MessageKey; about: MessageKey | null; ti
   }
 }
 
-export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean }) {
+/**
+ * The card as drawn, from what is marked and where its answer stands: the phone's own card, a What's new scene and a practice
+ * chapter draw this one, each holding the mark and the answer its own way.
+ */
+export function AskCardView({ ask, disabled, waited, picked, answer, error, onPick, onAnswer, onTerminal }: {
+  ask: PhoneAsk;
+  disabled: boolean;
+  /** How long the agent has waited, in the phone's words (`3분`), or null before it is known. */
+  waited: string | null;
+  picked: string | null;
+  answer: "sending" | "sent" | "failed" | null;
+  error: ReactNode;
+  onPick: (id: string) => void;
+  onAnswer: (id: string) => void;
+  onTerminal: () => void;
+}) {
   const { t } = useInterfaceTranslation();
-  const choice = usePhone((s) => s.choice);
-  const [marked, setMarked] = useState<{ turn: string; id: string } | null>(null);
-  const waited = useElapsed(ask.since_ms);
   const head = headOf(ask);
   const choices = shownChoices(ask, t);
-  const picked = marked?.turn === ask.turn ? marked.id : null;
-  const sending = choice?.state === "sending";
-  const sent = choice?.state === "sent" ? choice : null;
-  const failed = choice?.state === "failed" ? choice : null;
+  const sending = answer === "sending";
+  const sent = answer === "sent";
   const plan = ask.kind === "plan_approval" && ask.text ? renderMarkdown(ask.text) : null;
   return (
     <section
@@ -99,8 +107,8 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
       {choices.length ? (
         <RadioGroup
           value={picked ?? ""}
-          onValueChange={(id) => setMarked({ turn: ask.turn, id })}
-          disabled={disabled || !ask.answerable || sending || sent !== null}
+          onValueChange={onPick}
+          disabled={disabled || !ask.answerable || sending || sent}
           className="gap-xs"
           aria-label={ask.text ?? t(head.word)}
         >
@@ -131,12 +139,12 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
         // Hide has no keys for this agent's screen, so the choice is the operator's to make in its terminal.
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-sm">
           <span className="break-keep text-caption text-muted-foreground wrap-anywhere">{t("mobile.ask.inTerminalHint")}</span>
-          <Button variant="secondary" className="min-h-(--size-touch-target)" data-phone-ask-terminal="true" onClick={() => setTab("terminal")}>
+          <Button variant="secondary" className="min-h-(--size-touch-target)" data-phone-ask-terminal="true" onClick={onTerminal}>
             {t("mobile.ask.inTerminal")}
           </Button>
         </div>
       ) : sent ? (
-        <p className="flex min-w-0 items-center justify-end gap-xs text-body text-muted-foreground" data-phone-ask-sent={sent.choice}>
+        <p className="flex min-w-0 items-center justify-end gap-xs text-body text-muted-foreground" data-phone-ask-sent={picked ?? "true"}>
           <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-success" />
           {t("mobile.ask.sent")}
         </p>
@@ -148,15 +156,15 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
             className="min-h-(--size-touch-target)"
             disabled={disabled || picked === null || sending}
             data-phone-ask-send="true"
-            onClick={() => picked !== null && sendChoice(picked)}
+            onClick={() => picked !== null && onAnswer(picked)}
           >
             {t("mobile.ask.answer")}
           </Button>
         </div>
       )}
-      {failed ? (
+      {error ? (
         <p role="alert" className="break-keep text-body text-destructive wrap-anywhere" data-phone-ask-error="true">
-          {noticeText(t, failed.notice)}
+          {error}
         </p>
       ) : null}
     </section>

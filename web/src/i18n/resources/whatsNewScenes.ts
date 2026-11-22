@@ -5,6 +5,15 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.answer.agent": "Review fixes",
+  "whatsNewScene.answer.read": "I read the 4 review comments.",
+  "whatsNewScene.answer.question": "How should I apply them?",
+  "whatsNewScene.answer.choice1": "All in this PR",
+  "whatsNewScene.answer.note1": "One PR to review",
+  "whatsNewScene.answer.choice2": "Split into two PRs",
+  "whatsNewScene.answer.note2": "The test fixes go first",
+  "whatsNewScene.answer.next": "Splitting them. Running the tests first.",
+  "whatsNewScene.answer.waited": "3 min",
   "whatsNewScene.bots.agent": "Deploy the release",
   "whatsNewScene.bots.question": "Push the tag now?",
   "whatsNewScene.automation.finished": "{{name}} finished · {{time}}",
@@ -69,6 +78,15 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.answer.agent": "리뷰 반영",
+  "whatsNewScene.answer.read": "리뷰 4건을 읽었어요.",
+  "whatsNewScene.answer.question": "어떻게 반영할까요?",
+  "whatsNewScene.answer.choice1": "이 PR에서 전부",
+  "whatsNewScene.answer.note1": "한 번에 검토",
+  "whatsNewScene.answer.choice2": "나눠서 PR 두 개로",
+  "whatsNewScene.answer.note2": "테스트 수정을 먼저",
+  "whatsNewScene.answer.next": "나눠서 할게요. 테스트부터 돌려요.",
+  "whatsNewScene.answer.waited": "3분",
   "whatsNewScene.bots.agent": "릴리스 배포",
   "whatsNewScene.bots.question": "지금 태그를 올릴까요?",
   "whatsNewScene.automation.finished": "{{name}} 끝났어요 · {{time}}",
@@ -133,6 +151,15 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.answer.agent": "处理评审意见",
+  "whatsNewScene.answer.read": "我看完了 4 条评审意见。",
+  "whatsNewScene.answer.question": "要怎么处理？",
+  "whatsNewScene.answer.choice1": "全部放在这个 PR",
+  "whatsNewScene.answer.note1": "一次评审完",
+  "whatsNewScene.answer.choice2": "拆成两个 PR",
+  "whatsNewScene.answer.note2": "先改测试",
+  "whatsNewScene.answer.next": "那就拆开做，先跑测试。",
+  "whatsNewScene.answer.waited": "3 分钟",
   "whatsNewScene.bots.agent": "部署发布",
   "whatsNewScene.bots.question": "现在推送标签吗？",
   "whatsNewScene.automation.finished": "{{name}} 已完成 · {{time}}",
@@ -197,6 +224,15 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.answer.agent": "レビュー対応",
+  "whatsNewScene.answer.read": "レビュー 4 件を読みました。",
+  "whatsNewScene.answer.question": "どう反映しますか？",
+  "whatsNewScene.answer.choice1": "この PR でまとめて",
+  "whatsNewScene.answer.note1": "一度でレビュー",
+  "whatsNewScene.answer.choice2": "2 つの PR に分ける",
+  "whatsNewScene.answer.note2": "テストの修正を先に",
+  "whatsNewScene.answer.next": "分けて進めます。まずテストを回します。",
+  "whatsNewScene.answer.waited": "3 分",
   "whatsNewScene.bots.agent": "リリースをデプロイ",
   "whatsNewScene.bots.question": "今タグを push しますか？",
   "whatsNewScene.automation.finished": "{{name}} が終わりました · {{time}}",
