@@ -323,8 +323,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await stale.locator('[data-phone-pair="true"]').tap();
     await expect(stale.locator('[data-phone-guidance="code_expired"]')).toHaveText("코드가 만료됐어요. Mac에서 QR을 다시 여세요.", { timeout: 20_000 });
 
-    // Agent states before the phone opens: one asks, two works, while another tab is shown, so the ask is not read
-    // on look; a read ask leaves Needs You (operator decision 2026-11-23).
+    // Agent states before the phone opens, another tab shown so one's ask is not read on look: one asks, two works.
     await withControl(daemon, (control) => focusTab(control, fixture, elsewhere));
     await ask(fixture, daemon!, one, "배포 전에 테스트를 다시 돌릴까요?");
     await work(daemon!, two);
@@ -503,8 +502,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     expect(JSON.stringify(asked.payload)).not.toContain("fixture %");
     expect(asked.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
-    // B33: while the phone views one, its ask is read as under the desktop's focus: listed read, never announced, and
-    // resting with the other read rows rather than in Needs You (operator decision 2026-11-23).
+    // B33: while the phone views one, its ask is read as under the desktop's focus: listed read, never announced, resting.
     await oneRow.tap();
     await expect(detail).toBeVisible();
     await work(daemon!, one);
