@@ -195,7 +195,15 @@ fn messages_in(transcript: &LabelTranscript, end: u64) -> impl Iterator<Item = M
                 LabelEventKind::Interrupted => "stopped",
             };
             // OpenCode's events are whole messages already.
-            message(event.offset, who, &event.text, event.at_unix_ms, None)
+            message(
+                event.offset,
+                who,
+                &event.text,
+                event.images,
+                Vec::new(),
+                event.at_unix_ms,
+                None,
+            )
         })
 }
 

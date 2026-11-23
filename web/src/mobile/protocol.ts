@@ -307,6 +307,10 @@ export type ConversationMessage = {
   text: string;
   truncated: boolean;
   at_ms: number;
+  /** The images an operator's message carries as the agent recorded them (a photo it took in from its path); absent at none. */
+  images?: number;
+  /** The files the agent recorded beside an operator's message by their paths, the last part of each; absent at none. */
+  files?: string[];
 };
 
 /** The agent kinds a phone may start (hided/src/mobile/start.rs KINDS). */
@@ -347,7 +351,8 @@ export type ServerFrame =
    * conversation's `running`, and takes an `input` that picks a choice; absent from every computer before it, which keeps the one-line
    * reply of `MAX_REPLY_CHARS`.
    */
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean }
+  /** `attachments`: the computer takes files attached to a reply (`uploads.ts`); absent from every computer before it, which shows no `+`. */
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean; attachments?: boolean }
   // Older computers still send off; new phone settings do not use this global mode.
   /** `machines`: the other machines this computer opens that run work of their own (PRD device-connect-iroh B56); absent when none. */
   | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number; machines?: OtherMachine[] }
@@ -394,6 +399,8 @@ export type ServerFrame =
   | { type: "look_chunk"; request_id: string; seq: number; data: string }
   | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
+  /** An upload frame taken (hided/src/mobile/uploads.rs): a chunk on disk (`seq`), every byte in (`done`), or refused with why (`failed`). */
+  | { type: "attach_ack"; stage: string; seq?: number; begun?: boolean; done?: boolean; cancelled?: boolean; failed?: string }
   | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
@@ -421,7 +428,13 @@ export type PhoneMessage =
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
-  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string }))
+  /** A reply's `stages` are the files uploaded for it (`uploads.ts`), typed as their paths before its words. */
+  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string; stages?: string[] } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string }))
+  /** A file attached to the reply being written, uploaded one phone message at a time; only to a computer whose hello says `attachments`. */
+  | { type: "attach_begin"; stage: string; name: string; size: number }
+  | { type: "attach_chunk"; stage: string; seq: number; data: string }
+  | { type: "attach_end"; stage: string }
+  | { type: "attach_cancel"; stage: string }
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
@@ -555,26 +568,30 @@ export const MAX_FRAME_BYTES = 16 * 1024;
  */
 export const REQUEST_ID_BYTES = 40;
 
-/** The `input` a reply leaves in, the one shape `sendReply` sends and `replyFits` measures. */
-export function replyMessage(key: AgentKey, text: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
-  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, text };
+/** The `input` a reply leaves in, with the stages of the files it attaches, the one shape `sendReply` sends and `replyFits` measures. */
+export function replyMessage(key: AgentKey, text: string, requestId: string, stages: readonly string[] = []): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, text, ...(stages.length > 0 ? { stages: [...stages] } : {}) };
 }
 
-/** Whether a reply fits one phone message as JSON, its escapes counted (a new line, a quote and a tab take two bytes each). */
-export function replyFits(key: AgentKey, text: string, requestId = "x".repeat(REQUEST_ID_BYTES)): boolean {
-  return new TextEncoder().encode(JSON.stringify(replyMessage(key, text, requestId))).length <= MAX_FRAME_BYTES;
+/** A stage's length (a UUID), for measuring a reply whose files are still uploading. */
+const STAGE_CHARS = 36;
+
+/** Whether a reply fits one phone message as JSON, its escapes and its files' stages counted (a new line, a quote and a tab take two bytes each). */
+export function replyFits(key: AgentKey, text: string, requestId = "x".repeat(REQUEST_ID_BYTES), files = 0): boolean {
+  const stages = Array.from({ length: files }, () => "x".repeat(STAGE_CHARS));
+  return new TextEncoder().encode(JSON.stringify(replyMessage(key, text, requestId, stages))).length <= MAX_FRAME_BYTES;
 }
 
 /**
  * Why a reply cannot be sent yet, checked before it leaves the phone (B26, B27). A computer with `answer` (`lines`) takes new lines
  * and tabs and any length one message holds, the rule of the desktop conversation; one before it takes one line of 2,000 characters.
  */
-export function replyProblem(text: string, lines: boolean, key?: AgentKey): string | null {
-  if (text.trim().length === 0) return "empty";
+export function replyProblem(text: string, lines: boolean, key?: AgentKey, files = 0): string | null {
+  if (text.trim().length === 0 && files === 0) return "empty";
   if (lines) {
     // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(text)) return "control_characters";
-    return key && !replyFits(key, text) ? "too_long" : null;
+    return key && !replyFits(key, text, undefined, files) ? "too_long" : null;
   }
   if ([...text].length > MAX_REPLY_CHARS) return "too_long";
   // eslint-disable-next-line no-control-regex
@@ -610,6 +627,10 @@ export function inputFailure(reason: string | null, lines = false): Notice {
       return { key: "mobile.input.asleep" };
     case "device_unreachable":
       return { key: "mobile.input.deviceUnreachable" };
+    case "attachment_lost":
+      return { key: "mobile.input.attachmentLost" };
+    case "attachment_failed":
+      return { key: "mobile.input.attachmentFailed" };
     case "offline":
       return { key: "mobile.input.offline" };
     default:

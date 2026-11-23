@@ -180,10 +180,27 @@ it("shows a permission its computer has no keys for with the command it waits on
     expect(card.querySelector("[data-phone-ask-command]")!.textContent).toBe("pnpm --dir site build");
     expect(card.textContent).toContain("Run this command?");
     expect(card.querySelector("[data-phone-ask-send]")).toBeNull();
+    expect(card.querySelector("[data-phone-ask-terminal-hint]")!.textContent).toBe("This agent's choices are picked in its terminal");
     await act(async () => card.querySelector<HTMLButtonElement>("[data-phone-ask-terminal]")!.click());
     expect(container.querySelector('[data-phone-view="terminal"]')!.getAttribute("data-state")).toBe("active");
     expect(container.querySelectorAll("[data-phone-key]")).toHaveLength(5);
     expect(container.querySelector("[data-phone-reply]")!.getAttribute("placeholder")).toBe("Send to the terminal");
+    expect(inputs()).toEqual([]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("says a command of several lines or one the card cuts is answered in the terminal, on an agent the phone has keys for", async () => {
+  const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "정리할게요.", truncated: false, at_ms: 1 }], before: null, running: null });
+    const hint = () => container.querySelector('[data-phone-ask="permission"] [data-phone-ask-terminal-hint]')?.textContent;
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "100", since_ms: 100, command: "cargo test\nrm -r build", command_truncated: false, answerable: false, choices: [] } });
+    expect(hint()).toBe("A command of several lines or a long one is answered in the terminal");
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "101", since_ms: 101, command: `echo ${"x".repeat(80)}`, command_truncated: true, answerable: false, choices: [] } });
+    expect(hint()).toBe("A command of several lines or a long one is answered in the terminal");
+    expect(container.querySelector("[data-phone-ask-send]")).toBeNull();
     expect(inputs()).toEqual([]);
   } finally {
     await unmount();

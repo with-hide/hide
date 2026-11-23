@@ -138,9 +138,12 @@ export function AskCardView({ ask, disabled, waited, picked, answer, error, inTe
         </RadioGroup>
       ) : null}
       {!ask.answerable ? (
-        // Hide has no keys for this agent's screen, so the choice is the operator's to make in its terminal.
+        // Hide has no keys for this agent's screen, or the card cannot show the command whole on one line (`hided/src/mobile/ask.rs`), so
+        // the choice is the operator's to make in its terminal.
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-sm">
-          <span className="break-keep text-caption text-muted-foreground wrap-anywhere">{t("mobile.ask.inTerminalHint")}</span>
+          <span className="break-keep text-caption text-muted-foreground wrap-anywhere" data-phone-ask-terminal-hint="true">
+            {t(ask.command !== undefined && (ask.command_truncated || ask.command.includes("\n")) ? "mobile.ask.longCommandHint" : "mobile.ask.inTerminalHint")}
+          </span>
           <Button variant="secondary" className="min-h-(--size-touch-target)" data-phone-ask-terminal="true" onClick={onTerminal}>
             {t("mobile.ask.inTerminal")}
           </Button>
