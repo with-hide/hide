@@ -2776,7 +2776,30 @@ impl LabelWorker {
                     .get(pane_id)
                     .is_some_and(|pane| pane.status == "working"));
         match result {
-            Ok((provider, analysis)) => {
+            Ok((provider, mut analysis)) => {
+                // A question the turn only asked again is never a new
+                // demand: unless Hide AI said the answer did nothing else,
+                // the turn ends with work left (`end_without_repeats`), and
+                // the line written as that question's action goes with it,
+                // since the row already counts the question behind.
+                if let Some(end) = analysis
+                    .work
+                    .as_ref()
+                    .map(|work| work.end_without_repeats(analysis.end, &outcome.answer))
+                    .filter(|end| *end != analysis.end)
+                {
+                    crate::diagnostic!(json!({
+                        "component": "labels",
+                        "kind": "analysis.repeat_not_asked",
+                        "target": self.target,
+                        "pane_id": pane_id,
+                        "turn": format!("{:016x}", outcome.turn),
+                        "answered": analysis.end,
+                        "end": end,
+                    }));
+                    analysis.end = end;
+                    analysis.line.clear();
+                }
                 // The questions are checked against the turn's own answer
                 // before anything keeps them; what the checks dropped or
                 // folded is counted, never named.

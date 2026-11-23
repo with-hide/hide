@@ -7323,34 +7323,57 @@ fn an_agents_session_is_read_in_the_account_its_hook_reported() {
 /// A question still waiting (docs/status-model.md): a turn reads as only
 /// asking an open question again when Hide AI says so itself. An answer that
 /// leaves `only_asks_again` out, says false, or lists anything new beside the
-/// repeated ask is news, so a finish misread as a question is never buried.
+/// repeated ask is news, so a finish misread as a question is never buried,
+/// and a question asked again is never a new demand: such a turn ends with
+/// work left, its question's line dropped, unless it also asks a new one.
 #[test]
 fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
+    use super::analysis::LabelEnd;
     let ask = "아까 진정서 건도 정해 주세요. 승인 뒤로 미룰까요?";
     let again = json!({"kind": "ask", "text": "진정서 작성을 승인 뒤로 미룰지 정하기", "same_as": "m1",
         "quote": ask, "ask_type": "decision", "addressed_to": "operator"});
     let follow_up = json!({"kind": "follow_up", "text": "판례 요약을 문서로 남기기", "same_as": null,
         "quote": "", "ask_type": null, "addressed_to": null});
+    let new_ask = "버그 2개도 이번 PR에서 같이 고칠까요?";
+    let asked_new = json!({"kind": "ask", "text": "버그 2개 같이 고칠지 정하기", "same_as": null,
+        "quote": new_ask, "ask_type": "decision", "addressed_to": "operator"});
     let finished = format!("판례 3건을 반영해서 PR #41 올렸어요. {ask}");
-    for (answer, work, expected) in [
+    let with_new = format!("{ask} {new_ask}");
+    let line = "진정서 미룰지 정하기";
+    for (answer, work, end, kept_line, expected) in [
         (
             finished.as_str(),
             json!({"missed": [again], "resolved": []}),
+            LabelEnd::Unfinished,
+            "",
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again], "resolved": [], "only_asks_again": false}),
+            LabelEnd::Unfinished,
+            "",
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again, follow_up], "resolved": [], "only_asks_again": true}),
+            LabelEnd::Question,
+            line,
+            &[][..],
+        ),
+        (
+            with_new.as_str(),
+            json!({"missed": [again, asked_new], "resolved": []}),
+            LabelEnd::Question,
+            line,
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again], "resolved": [], "only_asks_again": true}),
+            LabelEnd::Question,
+            line,
             &["m1"][..],
         ),
     ] {
@@ -7363,17 +7386,45 @@ fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
             &[("user", "진정서 초안을 써 줘"), ("assistant", answer)],
         );
         harness.backend.answers.lock().unwrap().push_back(json!({
-            "goal": "진정서 초안 작성", "goal_update": "replace", "line": "진정서 미룰지 정하기",
+            "goal": "진정서 초안 작성", "goal_update": "replace", "line": line,
             "end": "question", "work": work,
         }));
         observe(&mut worker, &agent(&path, "idle", 1));
         settle(&mut worker, &woken);
         let record = &store.target(LOCAL_TARGET)["w1:p1"];
-        assert_eq!(
-            record.end,
-            Some(super::analysis::LabelEnd::Question),
-            "{work}"
-        );
+        assert_eq!(record.end, Some(end), "{work}");
+        assert_eq!(record.line, kept_line, "{work}");
         assert_eq!(record.asks_again, expected, "{work}");
     }
+}
+
+/// The row an engine agent `row` (its pane, status and `state_change_seq`
+/// among its fields) shows once the label worker read `turns` as its
+/// session and Hide AI answered `answer` for the last one: the raw answer
+/// goes through the worker's checks, the store and the overlay, as on a
+/// live pane.
+pub(crate) fn labeled_row(
+    mut row: Value,
+    turns: &[(&str, &str)],
+    answer: Value,
+) -> crate::model::SidebarAgentSnapshot {
+    let harness = Harness::new();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let path = harness.session("labeled", "native-labeled", turns);
+    harness.backend.answers.lock().unwrap().push_back(answer);
+    let observed = ObservedAgent {
+        pane_id: row["pane_id"].as_str().unwrap().to_owned(),
+        ..agent(
+            &path,
+            row["agent_status"].as_str().unwrap(),
+            row["state_change_seq"].as_u64().unwrap(),
+        )
+    };
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    row["agent_session"] = json!({"kind": "path", "value": path.display().to_string()});
+    let mut payload: SessionSnapshotPayload =
+        serde_json::from_value(json!({"agents": [row]})).unwrap();
+    worker.overlay().apply(&mut payload);
+    crate::sidebar::project_agents(payload).agents.remove(0)
 }

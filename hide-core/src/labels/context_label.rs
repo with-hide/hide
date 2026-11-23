@@ -219,9 +219,9 @@ fn end_prompt(limits: LabelLimits) -> String {
         &requests_rule(limits),
         &format!("line: one line, at most {} characters, not repeating goal. Report the result; for limited, the limit and when it resets if stated; for question, the user's required action as an imperative; blocked, its cause; waiting, the awaited result; unfinished, remaining work. ", limits.line),
         LINE,
-        "Decide end from the WHOLE last assistant answer, picking the FIRST matching case. An ask the answer only asks again (an <open-missed> ask, listed with its same_as) decides end only when the answer does nothing else: beside a result, progress, a finding, remaining work or a new ask, judge end and line from those and leave the repeated ask to missed. ",
+        "Decide end from the WHOLE last assistant answer, picking the FIRST matching case. A question the answer only asks again (an <open-missed> ask, listed in missed with its same_as) never decides end or line: judge both from the rest of the turn (a result, progress, a finding, work left, a block) and leave the repeated ask to missed. Only an answer that does nothing but ask again ends question, with only_asks_again true. ",
         "0 limited: the turn ended because the agent's own model provider refused it: a usage, rate or weekly limit, exhausted credit, or an API/server error printed in place of an answer. Not a tool, CI, network, disk or login failure the agent reports about its work: those are blocked. ",
-        "1 question: a specific answer, choice, approval or information is requested from the user, including an implicit quiz or a separate later decision. State the required action in line; if it cannot be one sentence, not question. This outranks any running work: never hide the request in missed and call it waiting. Greetings ('How can I help?'), completion reports and optional offers are not question. When the answer could be read either as asking the user something or as finished, it is question. Asking to inspect an output still being produced is waiting if work proceeds without the answer; question if that answer is necessary to proceed. ",
+        "1 question: a new specific answer, choice, approval or information is requested from the user, one no <open-missed> ask holds, including an implicit quiz or a separate later decision. State the required action in line; if it cannot be one sentence, not question. This outranks any running work: never hide a new request in missed and call it waiting. Greetings ('How can I help?'), completion reports and optional offers are not question. When the answer could be read either as asking the user something new or as finished, it is question. Asking to inspect an output still being produced is waiting if work proceeds without the answer; question if that answer is necessary to proceed. ",
         "2 blocked: assigned work is unfinished and the answer states a cause the agent cannot resolve alone (disk, login/permission, network, tool/CI failure). State the cause in one sentence in line; unclear stuckness is not blocked. ",
         "3 waiting: it stopped awaiting a result of work still running (tests, build, CI, another agent), even if this answer only gives progress or answers something. Merely planning more edits is unfinished, not waiting. A PR alone does not qualify. ",
         "4 unfinished: work is not reported finished, nothing runs and no blocking cause is stated; includes giving up and unclear/interim stops. ",
@@ -465,6 +465,34 @@ impl JudgedWork {
             }
         }
         again
+    }
+
+    /// How a turn that ended on `end` stands once a question it only asked
+    /// again is taken out: a repeated open question is never a new demand
+    /// (docs/status-model.md, A question still waiting). A turn judged a
+    /// question whose every question repeats an open one (`same_as`), with
+    /// no new one quoted from its answer `answer`, ends with work left,
+    /// unless Hide AI said it did nothing but ask again (`only_asks_again`),
+    /// which [`Self::asked_only_again`] keeps quiet. Any other end stands.
+    pub(crate) fn end_without_repeats(&self, end: LabelEnd, answer: &str) -> LabelEnd {
+        if end != LabelEnd::Question || self.only_asks_again {
+            return end;
+        }
+        let answer = quote_form(answer);
+        let asks = || {
+            self.missed
+                .iter()
+                .filter(|line| line.kind == MissedKind::Ask)
+        };
+        let asked_new = asks().any(|line| {
+            let quote = quote_form(&line.quote);
+            line.same_as.is_none() && !quote.is_empty() && answer.contains(&quote)
+        });
+        if asks().any(|line| line.same_as.is_some()) && !asked_new {
+            LabelEnd::Unfinished
+        } else {
+            end
+        }
     }
 
     /// The judgment as the ledger records it, with the turn's own answer
