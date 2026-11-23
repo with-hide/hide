@@ -50,6 +50,8 @@ async function openDetail(hello: Partial<Extract<ServerFrame, { type: "hello" }>
   const root = createRoot(container);
   patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -69,10 +71,18 @@ async function openDetail(hello: Partial<Extract<ServerFrame, { type: "hello" }>
   const submit = () => act(async () => field().form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   const inputs = () => socket.sent.filter((message) => message.type === "input");
   const send = () => container.querySelector<HTMLButtonElement>("[data-phone-send]")!;
-  return { container, socket, serve, field, type, submit, inputs, send, unmount: () => act(async () => root.unmount()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    });
+  return { container, socket, serve, field, type, submit, inputs, send, unmount };
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -357,11 +367,13 @@ it("never drops an answer that may still hold its ask to make room, and answers 
 });
 
 it("says a command runs by the clock from its start, never by what it runs", async () => {
+  // A fixed clock, so the line reads the same however long the page takes to draw; the page's own timers stay real.
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-23T09:00:00Z") });
   const { container, serve, unmount } = await openDetail({ answer: true }, agent({ status_code: "working", mark: "going", changed_at_unix_ms: Date.now() - 60_000 }));
   try {
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "테스트를 돌려 볼게요.", truncated: false, at_ms: 1 }], before: null, running: { kind: "command", since_ms: Date.now() - 42_000 } });
     const line = container.querySelector<HTMLElement>('[data-phone-activity="Running a command"]')!;
-    expect(line.textContent).toMatch(/Running a command·0:4\d/);
+    expect(line.textContent).toMatch(/Running a command·0:42/);
     // A command ended with no new word: the line goes back to thinking.
     await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "append", messages: [], running: null });
     expect(container.querySelector('[data-phone-activity="Running a command"]')).toBeNull();

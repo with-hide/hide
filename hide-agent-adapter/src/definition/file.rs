@@ -137,6 +137,24 @@ pub struct PermissionKeys {
     pub row: Option<String>,
     #[serde(default)]
     pub unnamed: bool,
+    /// Where the agent's approval dialog draws the command, which a
+    /// permission that names one is checked against; a table with a `row`
+    /// that is not `unnamed` needs it.
+    #[serde(default)]
+    pub command: Option<CommandSlot>,
+}
+
+/// The place of a command in an agent's approval dialog: the first line
+/// after the dialog's `title`, or, with `opens`, after the first line past
+/// the title that begins with it (Claude Code draws a separator before the
+/// command, with a note between it and the title). Each is a line's whole
+/// text past its indent and a box's border.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CommandSlot {
+    pub title: String,
+    #[serde(default)]
+    pub opens: Option<String>,
 }
 
 /// The key names an `[answer]` table may name, as the core's own engine
@@ -202,6 +220,24 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
         return Err(format!(
             "{name}: answer.marker is 1 to {MAX_ROW_BYTES} bytes of text"
         ));
+    }
+    if let Some(permission) = &answer.permission {
+        match &permission.command {
+            Some(slot)
+                if !text(&slot.title)
+                    || slot.opens.as_deref().is_some_and(|opens| !text(opens)) =>
+            {
+                return Err(format!(
+                    "{name}: answer.permission.command names its title and opener in 1 to {MAX_ROW_BYTES} bytes of text"
+                ));
+            }
+            None if permission.row.is_some() && !permission.unnamed => {
+                return Err(format!(
+                    "{name}: answer.permission.command says where the dialog draws the command, which a permission with a row checks before its keys"
+                ));
+            }
+            _ => {}
+        }
     }
     if let Some(plan) = &answer.plan_approval
         && let Some(label) = &plan.approve_label
@@ -1163,8 +1199,9 @@ mod tests {
     /// A row the core cannot find on the screen is refused at the build:
     /// one with no marker to find it by, one that does not name its place,
     /// a choice's label outside a question, keys that move the highlight
-    /// in a way its row count cannot follow, or a plan's approving row named
-    /// by words on a screen with no row to read them on.
+    /// in a way its row count cannot follow, a plan's approving row named
+    /// by words on a screen with no row to read them on, or a permission
+    /// that does not say where its dialog draws the command.
     #[test]
     fn an_answer_row_the_core_cannot_follow_is_refused_by_the_read_the_build_runs() {
         let file = |answer: &str| {
@@ -1183,6 +1220,8 @@ mod tests {
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{label}\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], allow_always = [\"right\", \"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \" } }\n",
             "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], row = \"{n}.\", approve_label = \" \" }\n",
         ] {

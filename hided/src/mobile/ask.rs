@@ -128,16 +128,19 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
             offered.iter().map(|id| json!({"id": id})).collect()
         }
         Ask::Permission => {
+            let mut whole_line = false;
             if let Some(command) = &command {
                 let (shown, cut) = super::calls::cut(command);
+                whole_line = !cut && !shown.contains('\n');
                 frame["command"] = json!(shown);
                 frame["command_truncated"] = json!(cut);
             }
-            // A permission whose command the screen cannot be checked
-            // against is answered where the operator sees what it allows,
-            // and lists no choices: it may be a plan's, which has others.
+            // A permission whose command the card does not show whole on
+            // one line, or the screen cannot be checked against, is answered
+            // where the operator sees what it allows, and lists no choices:
+            // it may be a plan's, which has others.
             answerable = !offered.is_empty()
-                && (command.is_some() || operator_input::unnamed_permission(&agent.agent_kind));
+                && (whole_line || operator_input::unnamed_permission(&agent.agent_kind));
             if answerable {
                 offered.iter().map(|id| json!({"id": id})).collect()
             } else {
@@ -287,34 +290,59 @@ mod tests {
     }
 
     /// An approval the record does not name is tied to the session's one
-    /// open call: its command, cut, which the agent's screen must show while
-    /// the keys are typed, or its plan. With no such call the card names no
-    /// command and is answered in the terminal, except for an agent that
-    /// records a call only once it is allowed (Codex); a choice declared for
-    /// another kind than the one shown types nothing.
+    /// open call: its command, which the agent's screen must show while the
+    /// keys are typed, or its plan. With no such call, or one whose command
+    /// the card does not show whole on one line, the card is answered in the
+    /// terminal, except for an agent that records a call only once it is
+    /// allowed (Codex); a choice declared for another kind than the one
+    /// shown types nothing.
     #[test]
     fn an_approval_is_tied_to_the_one_open_call_and_answered_while_the_screen_shows_it() {
         let waiting = |kind: &str| {
             listed(json!({"agent_kind": kind, "status_code": "approval", "demand": "approval"}))
         };
         let claude = waiting("claude");
-        let command = open("toolu_1", Some("cargo test\nTOKEN=x\nmore"), false);
+        let command = open("toolu_1", Some("cargo test --workspace"), false);
         let shown = of(agent(&claude), Some(&Pending::One(&command))).unwrap();
         assert_eq!(
             shown.frame,
             json!({"kind": "permission", "turn": "100", "since_ms": 100, "call": "toolu_1",
-                "command": "cargo test\nTOKEN=x", "command_truncated": true, "answerable": true,
+                "command": "cargo test --workspace", "command_truncated": false, "answerable": true,
                 "choices": [{"id": "allow"}, {"id": "allow_always"}, {"id": "deny"}]})
         );
-        // Every key waits for the command's first line, Esc included.
+        // Every key waits for the command, Esc included.
         let (typed, screen) =
             keys(agent(&claude), Some(&shown), "100", "permission", "deny").unwrap();
         assert_eq!(typed, ["esc"]);
+        let dialog = |command: &str| {
+            format!(
+                " Bash command\n Run the tests\n╌╌╌╌\n {command}\n╌╌╌╌\n Do you want to proceed?\n ❯ 1. Yes"
+            )
+        };
         assert!(!screen.shows(" Do you want to proceed?\n ❯ 1. Yes", None));
-        assert!(screen.shows("   cargo test\n Do you want to proceed?\n ❯ 1. Yes", None));
+        assert!(screen.shows(&dialog("cargo test --workspace"), None));
         let (_, screen) = keys(agent(&claude), Some(&shown), "100", "permission", "allow").unwrap();
-        assert!(screen.shows("   cargo test\n ❯ 1. Yes", Some(0)));
-        assert!(!screen.shows("   ls -la\n ❯ 1. Yes", Some(0)));
+        assert!(screen.shows(&dialog("cargo test --workspace"), Some(0)));
+        assert!(!screen.shows(&dialog("ls -la"), Some(0)));
+
+        // A command of more than one line, or one the card cuts, is answered
+        // where the operator sees all of what it allows.
+        let long = format!("echo {}", "x".repeat(crate::mobile::calls::COMMAND_CHARS));
+        for unseen in [
+            "cargo test\nrm -r build",
+            "cargo test\nTOKEN=x\nmore",
+            long.as_str(),
+        ] {
+            let command = open("toolu_1", Some(unseen), false);
+            let shown = of(agent(&claude), Some(&Pending::One(&command))).unwrap();
+            assert_eq!(shown.frame["answerable"], false, "{unseen}");
+            assert_eq!(shown.frame["choices"], json!([]), "{unseen}");
+            assert!(shown.frame["command"].is_string(), "{unseen}");
+            assert_eq!(
+                keys(agent(&claude), Some(&shown), "100", "permission", "allow"),
+                Err("unknown_choice")
+            );
+        }
 
         let plan = open("toolu_2", None, true);
         let shown = of(agent(&claude), Some(&Pending::One(&plan))).unwrap();
