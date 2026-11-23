@@ -976,7 +976,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Grants::open(dir.path().join("grants.json")).unwrap();
         let pending = store
-            .grant_pending(key(1), "dev", "work-macbook-pro.local", Via::Ssh, 0)
+            .grant_pending(key(1), "dev", "example-MacBook-Pro.local", Via::Ssh, 0)
             .unwrap();
         store.confirm(&key(1), &pending.id, 1).unwrap();
         let before = store.state_of(&key(1), 1);
