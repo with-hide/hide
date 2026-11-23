@@ -276,6 +276,26 @@ it("says how a waiting step's wait failed on a pull request that closed without 
   }
 });
 
+// Opus review O1: the phone's frame carries a failed CI wait's checks and a read that could not say, so its card says them as the desktop's does.
+it("draws a waiting step's failed CI checks and a read that could not say, as the desktop's card does", async () => {
+  const page = mission("m-ci", { nodes: [
+    node("ci", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, wait_target: { ci: 12 }, wait_outcome: "ci_failed", wait_checks: ["rust workspace", "web e2e"], attention: { reason: "ci_failed", pr: 12, to: "conductor", since_unix_ms: Date.now(), on_row: false, item: false } }),
+    node("read", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, wait_target: { pr: 13 }, unread: true }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-ci"]');
+    await click("[data-phone-mission-map-toggle]");
+    const ci = container.querySelector('[data-mission-node="ci"]')!;
+    expect([ci.querySelector("[data-wait-failed]")?.textContent, ci.querySelector("[data-wait-turn]")?.textContent]).toEqual(["CI failed · rust workspace and 1 more", "Conductor's turn"]);
+    const read = container.querySelector('[data-mission-node="read"]')!;
+    expect([read.querySelector("[data-node-wait-state]")?.getAttribute("data-node-wait-state"), read.querySelector("[data-wait-unread]")?.textContent]).toEqual(["unread", "couldn't check · reading again"]);
+  } finally {
+    await unmount();
+  }
+});
+
 it("counts a step's time only while its worker works: a stopped or sleeping step says so with no time, and one owed to the operator stands in the hold band", async () => {
   const now = Date.now();
   const forty = now - 40 * 60_000;

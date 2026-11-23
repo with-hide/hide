@@ -300,6 +300,14 @@ pub struct PhoneNode {
     /// How its wait failed (`wait_outcome` in snapshot-wire-enums.json, D-17).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_outcome: Option<String>,
+    /// The checks a failed CI wait named (`NodeView::wait_checks`), the
+    /// card's `CI 실패 · <first> 외 n`; absent for any other wait.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wait_checks: Vec<String>,
+    /// A waiting step Hide could not read this time (`NodeView::unread`),
+    /// the card's `확인 못 함`; absent while it reads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unread: bool,
 }
 
 /// A step's wait as the map reads it (`NodeWait`), copied field by field.
@@ -517,6 +525,10 @@ struct NodeIn {
     wait_reference: Option<ReferenceIn>,
     #[serde(default)]
     wait_outcome: Option<String>,
+    #[serde(default)]
+    wait_checks: Vec<String>,
+    #[serde(default)]
+    unread: bool,
 }
 
 /// A change request reference: only its label is read.
@@ -797,6 +809,13 @@ fn phone_mission(
                     .map(|reference| reference.label)
                     .filter(|label| !label.is_empty()),
                 wait_outcome: source.wait_outcome,
+                wait_checks: source
+                    .wait_checks
+                    .iter()
+                    .map(String::as_str)
+                    .map(cut)
+                    .collect(),
+                unread: source.unread,
             }
         })
         .collect();
@@ -981,6 +1000,40 @@ mod tests {
 
     fn projected(rest: &Value) -> PhoneMissions {
         PhoneMissions::project(rest, "local", &project(rest, "local"))
+    }
+
+    #[test]
+    fn a_waiting_step_carries_the_checks_its_ci_failed_on_and_a_read_that_could_not_say() {
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node(
+                        "ci",
+                        json!({"kind": "wait", "wait_target": {"ci": 12}, "wait_outcome": "ci_failed", "wait_checks": ["rust workspace", "web e2e"]}),
+                    ),
+                    node(
+                        "pr",
+                        json!({"kind": "wait", "wait_target": {"pr": 13}, "unread": true}),
+                    ),
+                    node("own", json!({})),
+                ],
+            )],
+            json!({}),
+        );
+        let missions = projected(&rest);
+        let nodes = &missions.items[0].nodes;
+        assert_eq!(nodes[0].wait_checks, ["rust workspace", "web e2e"]);
+        assert!(!nodes[0].unread);
+        assert!(nodes[1].unread && nodes[1].wait_checks.is_empty());
+        let sent = serde_json::to_value(&missions).unwrap();
+        let own = &sent["items"][0]["nodes"][2];
+        assert!(
+            own.get("wait_checks").is_none() && own.get("unread").is_none(),
+            "{own}"
+        );
     }
 
     #[test]

@@ -364,7 +364,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
   const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
   // A waiting node says what it waits for and how that stands instead (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait D-15-D-17).
-  const waits = useMemo(() => waitCard(lineNode(node), minute), [node, minute]);
+  const waits = useMemo(() => waitCard(lineNode(node), look, minute), [node, look, minute]);
   const result = branch || waits ? null : resultLine(lineNode(node));
   const failed = failedVerdict(node);
   const titleText = (

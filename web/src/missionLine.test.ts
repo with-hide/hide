@@ -109,7 +109,7 @@ const gitlabWrite = { wait_target: { node: { mission: "mission-91", node: "gitla
 
 it("says what a waiting node waits for in one sentence, whatever it waits on and however it ended", () => {
   const words = t();
-  const said = (extra: Partial<LineNode>) => waitConditionWords(waitCard(waiting(extra), NOW)!.aim, words);
+  const said = (extra: Partial<LineNode>) => waitConditionWords(waitCard(waiting(extra), "external", NOW)!.aim, words);
   expect(said({ wait_target: { pr: 2528 }, external: { pr: 2528 } })).toBe(`#${2528} 머지되면`);
   // A pull request is named as its code host writes it, the core's reference.
   expect(said({ wait_target: { ci: 1232 }, wait_label: "!1232" })).toBe("!1232 CI 통과하면");
@@ -123,13 +123,13 @@ it("says what a waiting node waits for in one sentence, whatever it waits on and
   expect(said({ wait_target: { pr: 2528 }, status: "done" })).toBe(`#${2528} 머지되면`);
   expect(said({ wait_target: { pr: 2528 }, wait_outcome: "closed_unmerged" })).toBe(`#${2528} 머지되면`);
   // No card for another kind of node, nor for a waiting one whose target the frame does not carry.
-  expect(waitCard(node({ pr: 7 }), NOW)).toBeNull();
-  expect(waitCard(waiting({}), NOW)).toBeNull();
+  expect(waitCard(node({ pr: 7 }), "external", NOW)).toBeNull();
+  expect(waitCard(waiting({}), "external", NOW)).toBeNull();
 });
 
 it("puts in a waiting card's foot only what it has: progress, the hours under a day, met, how it failed and whose turn, a read that could not say", () => {
   const words = t();
-  const foot = (extra: Partial<LineNode>) => waitFootWords(waitCard(waiting(extra), NOW)!, words);
+  const foot = (extra: Partial<LineNode>) => waitFootWords(waitCard(waiting(extra), "external", NOW)!, words);
   const turn = (to: "operator" | "conductor") => ({ attention: { to } });
   expect(foot({ wait_target: { pr: 2528 } })).toEqual([]);
   expect(foot(mission91)).toEqual(["끝 2/7"]);
@@ -149,10 +149,17 @@ it("puts in a waiting card's foot only what it has: progress, the hours under a 
   expect(foot({ wait_target: { pr: 2528 }, wait_until_unix_ms: NOW - HOUR, wait_outcome: "expired", ...turn("conductor") })).toEqual(["기한 지남", "Conductor 차례"]);
   expect(foot({ wait_target: { ci: 1232 }, unread: true })).toEqual(["확인 못 함 · 다시 읽는 중"]);
   // The card's name reads the sentence, then its foot.
-  expect(waitCardWords(waitCard(waiting({ wait_target: { ci: 1232 }, wait_until_unix_ms: NOW + 5 * HOUR - 60_000 }), NOW)!, words)).toBe(`#${1232} CI 통과하면 · 5시간 남음`);
+  expect(waitCardWords(waitCard(waiting({ wait_target: { ci: 1232 }, wait_until_unix_ms: NOW + 5 * HOUR - 60_000 }), "external", NOW)!, words)).toBe(`#${1232} CI 통과하면 · 5시간 남음`);
 });
 
 it("gives a waiting card the state its head icon and border draw: waiting, unread, met or failed", () => {
-  const state = (extra: Partial<LineNode>) => waitCard(waiting({ wait_target: { pr: 2528 }, ...extra }), NOW)?.state;
+  const state = (extra: Partial<LineNode>) => waitCard(waiting({ wait_target: { pr: 2528 }, ...extra }), "external", NOW)?.state;
   expect([state({}), state({ unread: true }), state({ status: "done" }), state({ wait_outcome: "closed_unmerged" }), state({ unread: true, wait_outcome: "expired" })]).toEqual(["waiting", "unread", "met", "failed", "failed"]);
+});
+
+it("gives a wait no one judges any more no card: dropped from its plan, or in a cancelled mission before it was met (Opus review S1)", () => {
+  const failed = waiting({ wait_target: { pr: 2528 }, wait_outcome: "closed_unmerged", attention: { to: "conductor" }, wait_until_unix_ms: NOW + HOUR });
+  expect([waitCard(failed, "dropped", NOW), waitCard(failed, "cancelled", NOW), waitCard(waiting(mission91), "cancelled", NOW)]).toEqual([null, null, null]);
+  // A wait met before the mission ended keeps its card: its look is done.
+  expect(waitCard(waiting({ ...mission91, status: "done" }), "done", NOW)?.state).toBe("met");
 });

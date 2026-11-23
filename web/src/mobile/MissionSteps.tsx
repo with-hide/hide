@@ -6,7 +6,7 @@
 // rule the graph's card reads too, and its line is `missionLine.ts`.
 
 import { useMemo } from "react";
-import { useElapsed } from "../components/elapsed";
+import { useElapsed, useMinuteClock } from "../components/elapsed";
 import { MissionNodeMark } from "../components/mission-node-mark";
 import { StatusMark } from "../components/status-mark";
 import { RowButton } from "../components/ui/row-button";
@@ -58,7 +58,8 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
   const branch = useMemo(() => branchLine(line, mission.destination ?? null), [line, mission.destination]);
   // A waiting step says what it waits for, or once it failed how and whose turn that is, as its map card does (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait D-15-D-17).
-  const waits = useMemo(() => waitCard(line, Date.now()), [line]);
+  const minute = useMinuteClock();
+  const waits = useMemo(() => waitCard(line, look, minute), [line, look, minute]);
   const result = branch || waits || line.kind === "wait" ? null : resultLine(line);
   // The list's row counts a merge that is the operator's now as their turn too: it has no band to draw it in.
   const turn = owed || mergeDue;

@@ -77,7 +77,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
   const branch = useMemo(() => branchLine(line, mission.destination ?? null), [line, mission.destination]);
   // A waiting step says what it waits for and how that stands, as the desktop's card does (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait B22); a step a Mac before waits sent with nothing it watches has none.
-  const waits = useMemo(() => waitCard(line, minute), [line, minute]);
+  const waits = useMemo(() => waitCard(line, look, minute), [line, look, minute]);
   const result = branch || waits || line.kind === "wait" ? null : resultLine(line);
   // `내 차례` stands at the right end of the line's first row as the desktop's marks do (D-56); a long wait's words give way first, the tag's own word never.
   const marks = turn ? (

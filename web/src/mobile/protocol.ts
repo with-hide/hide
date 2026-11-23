@@ -143,6 +143,10 @@ export type PhoneMissionNode = MissionNodeBrief & {
   wait_progress?: { done: number; total: number };
   wait_label?: string;
   wait_outcome?: MissionWaitOutcome;
+  /** The checks a failed CI wait named; absent for any other wait. */
+  wait_checks?: string[];
+  /** A waiting step Hide could not read this time; absent while it reads. */
+  unread?: boolean;
   stage: number | null;
   /** When the step last went to work, its start or back from a finish; the step list's `작업 중 · N분` counts from it. Absent before it started and from a Mac that predates it, where the line has no time. */
   worked_at_unix_ms?: number | null;

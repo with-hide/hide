@@ -18,6 +18,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
 import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, MissionWaitOutcome, MissionWaitTarget, PrState } from "./snapshot";
+import type { NodeLook } from "./missions";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
 export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
@@ -171,9 +172,15 @@ export type WaitCard = {
 const WAIT_LEFT_FROM_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
-/** A waiting node's card at `now`, or null for any other node and a waiting one whose target the frame does not carry. */
-export function waitCard(node: LineNode, now: number): WaitCard | null {
-  if (node.kind !== "wait") return null;
+/**
+ * A waiting node's card at `now` by its look (`nodeLook`), or null for any
+ * other node, a waiting one whose target the frame does not carry, and one no
+ * one judges any more, dropped or in a cancelled mission before it was met:
+ * that card is its look's, struck or cancelled, with no live state. Past that
+ * line its raise is open (`openAttention`'s rule), so its turn is the raise's.
+ */
+export function waitCard(node: LineNode, look: NodeLook, now: number): WaitCard | null {
+  if (node.kind !== "wait" || look === "dropped" || look === "cancelled") return null;
   const aim = waitAim(node);
   if (!aim) return null;
   const outcome = node.wait_outcome ?? null;

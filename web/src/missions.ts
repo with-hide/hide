@@ -697,7 +697,7 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
   if (look === "cancelled" || look === "dropped") return null;
   // A waiting node reads as its card does, the condition then its foot, finished too (B19); one that failed says how and whose turn it is (option A, PRD core-wait D-17).
   if (node.kind === "wait") {
-    const card = waitCard(lineNode(node), Date.now());
+    const card = waitCard(lineNode(node), look, Date.now());
     return card ? { text: waitCardWords(card, t), attention: card.state === "failed" } : null;
   }
   if (look === "done") return null;
