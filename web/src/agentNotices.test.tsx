@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions, type Actions } from "./actions";
-import { receiveAgentNotice, useAgentNotifications } from "./agentNotices";
+import { notificationBadgeCount, receiveAgentNotice, useAgentNotifications } from "./agentNotices";
 import type { AgentScope } from "./agentScope";
 import { clientI18n } from "./i18n/translator";
 import { useShellStore } from "./store";
@@ -258,4 +258,19 @@ it("counts enabled groups across devices, updates when Done is read, and keeps t
   expect(reported).toEqual([3, 4, 3, 12, 0]);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
+});
+
+// Operator decision 2026-11-23: the icon says the number 내 차례 says, so a
+// mission or an automation that is its own Needs You item counts with the
+// agents, under the Needs You switch only.
+it("counts a device's own mission and automation asks with its agents under Needs You", () => {
+  const rest = (needsYou: boolean) => ({
+    ui_state: { desktop_notifications: needsYou, desktop_notifications_done: false },
+    navigator: { devices: [
+      { id: "node", agent_scope: { ...device("node", 1, 0, 0).agent_scope, mission_asks: ["mission-1", "mission-2"], automation_asks: ["auto-1"] } },
+      device("mini", 1, 0, 0),
+    ] },
+  }) as never;
+  expect(notificationBadgeCount(rest(true))).toBe(5);
+  expect(notificationBadgeCount(rest(false))).toBe(0);
 });

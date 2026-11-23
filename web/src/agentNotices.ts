@@ -44,23 +44,27 @@ function cut(text: string, limit: number): string {
 }
 
 /**
- * The agents the app icon counts: the sidebar's enabled notification groups of every
- * device the window shows, the root agents the notifications announce.
+ * What the app icon counts: the sidebar's enabled notification groups of every
+ * device the window shows, the root agents the notifications announce, and
+ * under Needs You the missions and automations that are their own Needs You
+ * item, so the icon says the number 내 차례 says (operator decision 2026-11-23).
  * Each device's scope carries those groups as its `raised` entries
  * (unresolved, not delegated, in a pane the device draws), so adding the
  * devices up counts the whole desktop whichever device the sidebar shows;
- * the navigator's own scope has no such groups. Reading a Done row removes it.
+ * the navigator's own scope has no such groups. Reading a row removes it.
  */
-function notificationBadgeCount(rest: SnapshotRest | null): number {
+export function notificationBadgeCount(rest: SnapshotRest | null): number {
   const needsYou = rest?.ui_state?.desktop_notifications === true;
   const done = (rest?.ui_state?.desktop_notifications_done ?? rest?.ui_state?.desktop_notifications) === true;
   let count = 0;
   for (const device of rest?.navigator?.devices ?? []) {
-    for (const group of device.agent_scope.raised) {
+    const scope = device.agent_scope;
+    for (const group of scope.raised) {
       if (group.group === "needs_you" ? needsYou : group.group === "done" && done) {
         count += group.shown.length + group.more.length;
       }
     }
+    if (needsYou) count += (scope.mission_asks?.length ?? 0) + (scope.automation_asks?.length ?? 0);
   }
   return count;
 }

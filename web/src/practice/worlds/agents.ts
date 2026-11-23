@@ -326,7 +326,17 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
   const common = { ...base, agent_kind: "codex", request: request("rev", at) };
   if (stage === 3) {
     const what = "Run the full test suite?";
-    return agent({ ...common, group: "needs_you", mark: "turn", status_code: "question", demand: "question", activity: "idle", unread: true, elapsed: "2s", state: rowState("asking", true, since(model, 3), { ask: { verb: "answer", what, more: 0 }, line: { text: what, mode: "request", tone: { kind: "warning", read: false } } }) });
+    const asked = since(model, 3);
+    // Opened, the question is read: it leaves Needs You and waits first among the resting tasks, its `!` hollow
+    // (operator decision 2026-11-23).
+    if (model.looked) {
+      return agent({
+        ...common, group: "seen", mark: "turn", status_code: "question", demand: "question", activity: "idle", elapsed: "2s",
+        revisit: { starred: false, read_ask: true, since_unix_ms: asked },
+        state: rowState("asking", true, asked, { attention: false, needs_you: false, title_emphasized: false, ask: { verb: "answer", what, more: 0 }, line: { text: what, mode: "request", tone: { kind: "warning", read: true } } }),
+      });
+    }
+    return agent({ ...common, group: "needs_you", mark: "turn", status_code: "question", demand: "question", activity: "idle", unread: true, elapsed: "2s", state: rowState("asking", true, asked, { ask: { verb: "answer", what, more: 0 }, line: { text: what, mode: "request", tone: { kind: "warning", read: false } } }) });
   }
   if (stage === 5) {
     return agent({
@@ -368,7 +378,7 @@ function tasks(model: AgentsModel, nowMs: number): ProjectTasksScope {
     return pane ? [{ root: pane.id, state, members: [pane.id], checkouts: [CHECKOUT], recency: at(minutes), stage: 1 as const, ...extra }] : [];
   };
   const stage = model.stage;
-  const rev = stage === 3 ? card("rev", "needs_you", 0, model.looked ? { read: true } : {}) : stage === 5 ? card("rev", "needs_you", 0) : stage === 6 ? card("rev", "resting", 0) : card("rev", "working", 1);
+  const rev = stage === 3 ? (model.looked ? card("rev", "resting", 0, { read: true }) : card("rev", "needs_you", 0)) : stage === 5 ? card("rev", "needs_you", 0) : stage === 6 ? card("rev", "resting", 0) : card("rev", "working", 1);
   const docs = card("docs", stage >= 2 ? "done" : "working", stage >= 2 ? 1 : 8);
   const cards = [...rev.filter((one) => one.state === "needs_you"), ...card("lead", "working", 3), ...rev.filter((one) => one.state !== "needs_you"), ...docs];
   return { cards, needs_you: cards.filter((one) => one.state === "needs_you").length, recency: at(0) };

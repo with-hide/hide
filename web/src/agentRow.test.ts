@@ -224,6 +224,17 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(lineText(t, blocked, sidebarLine(blocked)!)).toBe("막힘 · 디스크 여유가 없음");
   });
 
+  // Operator decision 2026-11-23: a turn's news over a question the operator read counts the question behind it, and
+  // a row the operator read counts nothing.
+  it("counts the read questions behind an unread turn's news and none on a quiet row", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const finished = row("f", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "PR #41 올림", asks_behind: 1 } as Partial<AgentRow>);
+    expect(lineText(t, finished, sidebarLine(finished)!)).toBe("끝남 · PR #41 올림 · 외 1건");
+    const quiet = row("q", { activity: "stopped", mark: "quiet", status_code: "idle", group: "seen", asks_behind: 0 } as Partial<AgentRow>);
+    quiet.state = { ...quiet.state, line: { text: "진정서 건 정해 주세요", mode: "quiet", tone: { kind: "subtle", read: true } } };
+    expect(lineText(t, quiet, quiet.state.line!)).toBe("진정서 건 정해 주세요");
+  });
+
   it("leads a waiting row's sentence, or with none the cause's detail, with what it waits for in every list, and 대기 with no proven cause (D-18, B10, B29, needs-you-cleanup B17-B19)", async () => {
     const { t } = await createInterfaceI18n("ko");
     const said = row("w", { activity: "stopped", status_code: "waiting", wait: "background", detail: "빌드 끝나기를 기다림" });

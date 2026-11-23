@@ -13,8 +13,8 @@ import type { AgentRow, ArchivedSession, Device, TaskView, Workspace } from "./s
  * The open groups of the 상태별 view and the bands of a 프로젝트별 group, in
  * the order they are drawn (status-marks D-22, B32): 내 차례 (a question, an
  * approval or a block), 읽을 것, whose tasks want the operator's look, 다시 볼 것
- * (PRD revisit-group D-01), a task the operator starred (a read ask stays in
- * 내 차례, needs-you-cleanup D-04),
+ * (PRD revisit-group D-01), a task the operator starred (a read ask rests,
+ * first in 쉬는 중, operator decision 2026-11-23),
  * above 작업 중, whose tasks are in progress: the ones whose agent works first,
  * then the ones that wait on proven work (CI, children, a reply), since
  * neither asks anything of the operator.
@@ -91,11 +91,9 @@ function band(state: TaskGroupState, entries: TaskEntry[], asks: readonly OwnAsk
 /**
  * A band's rows in the order drawn (operator decision 2026-11-08): device by
  * device, `deviceId`'s first, as its tasks already stand; inside a device a
- * mission or an automation stands among the unread asks by when it began to
- * wait, newest first (operator decision 2026-11-14), and before every read ask
- * and block.
- * The tasks keep the core's order (unread asks before read ones, each newest
- * first).
+ * mission or an automation stands among the asks by when it began to wait,
+ * newest first (operator decision 2026-11-14), and before every block.
+ * The tasks keep the core's order (each ask newest first).
  */
 function bandRows(entries: readonly TaskEntry[], asks: readonly OwnAsk[], deviceId: string): BandRow[] {
   const deviceOf = (entry: TaskEntry) => entry.deviceId ?? deviceId;
@@ -105,8 +103,8 @@ function bandRows(entries: readonly TaskEntry[], asks: readonly OwnAsk[], device
     const rows: BandRow[] = [];
     let next = 0;
     for (const entry of entries.filter((entry) => deviceOf(entry) === device)) {
-      // An unread ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a read ask or a block lets every own ask stand first.
-      const unread = entry.card.state === "needs_you" && !entry.card.read;
+      // An ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a block lets every own ask stand first.
+      const unread = entry.card.state === "needs_you";
       while (next < waiting.length && (!unread || ownAskSince(waiting[next]!) > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "ask", own: waiting[next++]! });
       rows.push({ kind: "task", entry });
     }
@@ -134,14 +132,7 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
     entries.push({ card, agent, device, deviceId: from, project: card.checkouts.map((id) => byCheckout.get(id)).find((row) => row !== undefined) ?? null });
   }
   const open = entries.filter(({ card }) => card.state !== "resting" && card.state !== "cleanup");
-  const resting = entries.filter(({ card }) => card.state === "resting")
-    .sort((a, b) => {
-      const at = a.agent.last_prompt_at_unix_ms;
-      const bt = b.agent.last_prompt_at_unix_ms;
-      if (at == null) return bt == null ? 0 : 1;
-      if (bt == null) return -1;
-      return bt - at;
-    });
+  const resting = entries.filter(({ card }) => card.state === "resting").sort(restingOrder);
   const cleanup = entries.filter(({ card }) => card.state === "cleanup");
   const archived = archivedRows.map((row) => ({ row, project: archivedProject(row, projects) }));
   if (view === "status") {
@@ -169,6 +160,23 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
     return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
   });
   return { total: open.filter((entry) => entry.device === null).length, groups, resting: [], cleanup: [], archived: [] };
+}
+
+/**
+ * The order of 쉬는 중: the read asks first, newest ask first, so a question
+ * read and left waits at the top where it is seen (operator decision
+ * 2026-11-23), then the rest by their latest actual prompt, newest first, so
+ * the order matches the age on each row; unknown times stand last and equal
+ * times keep their order.
+ */
+function restingOrder(a: TaskEntry, b: TaskEntry): number {
+  const read = (entry: TaskEntry) => entry.card.read === true;
+  if (read(a) !== read(b)) return read(a) ? -1 : 1;
+  const at = read(a) ? a.agent.revisit?.since_unix_ms : a.agent.last_prompt_at_unix_ms;
+  const bt = read(b) ? b.agent.revisit?.since_unix_ms : b.agent.last_prompt_at_unix_ms;
+  if (at == null) return bt == null ? 0 : 1;
+  if (bt == null) return -1;
+  return bt - at;
 }
 
 /** A fold's key in the page's open set (B5): `rest:`, `cleanup:` or `archived:` and the group it belongs to, the empty group being the 상태별 view's folds under every group. */

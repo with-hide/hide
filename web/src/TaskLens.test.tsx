@@ -128,7 +128,7 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and �
   expect(rows(container)).not.toContain("rest");
 });
 
-it.each(["status", "project"] as const)("in %s keeps a read question's core-owned line after its unread ask clears", async (view) => {
+it.each(["status", "project"] as const)("in %s keeps a read question's core-owned line where it rests, in a resting row's grey (operator decision 2026-11-23)", async (view) => {
   const question = "긴 한국어 요청을 읽은 뒤 질문 표시가 흐려지는지 확인해 주세요";
   const agent = row("question", { status_code: "question", demand: "question", mark: "turn" }, { group: "idle", line: null });
   agent.state = {
@@ -138,11 +138,38 @@ it.each(["status", "project"] as const)("in %s keeps a read question's core-owne
   };
   agent.revisit = { starred: false, read_ask: true, since_unix_ms: 1 };
   const agents = [agent];
-  const { container } = await render(snapshot(agents, [{ ...card("question", "needs_you", "hide-main"), read: true }], view), agents);
+  const { container } = await render(snapshot(agents, [{ ...card("question", "resting", "hide-main"), read: true }], view), agents);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
   const task = container.querySelector('[data-task-row="question"]')!;
   expect(task.getAttribute("data-task-read")).toBe("true");
-  expect(task.querySelector('[data-task-line="needs_you"]')?.textContent).toContain(question);
-  expect(task.querySelector('[data-task-line="needs_you"] [data-line-part]')?.textContent).toContain("질문");
+  const line = task.querySelector('[data-task-line="resting"]')!;
+  expect(line.textContent).toContain(question);
+  expect(line.querySelector("[data-line-part]")?.textContent).toContain("질문");
+  expect(line.querySelector(".text-subtle-foreground")).not.toBeNull();
+  expect(line.querySelector(".text-warning")).toBeNull();
+});
+
+// Operator decision 2026-11-23: 쉬는 중 stands the read asks first, newest ask first, then the rest by their latest
+// prompt; its head stays `쉬는 중 N` and no 내 차례 counts them.
+it.each(["status", "project"] as const)("in %s rests the read asks first in 쉬는 중, newest ask first, and counts them in no 내 차례", async (view) => {
+  const asked = (id: string, since: number): AgentRow => row(id, { mark: "turn", group: "seen", demand: "question", activity: "idle", last_prompt_at_unix_ms: 50, revisit: { starred: false, read_ask: true, since_unix_ms: since } } as Partial<AgentRow>);
+  const agents = [row("rest_old", { last_prompt_at_unix_ms: 300 }), asked("read_old", 100), row("rest_new", { last_prompt_at_unix_ms: 400 }), asked("read_new", 200)];
+  const cards = agents.map((agent) => ({ ...card(agent.pane_id, "resting", "hide-main"), ...(agent.revisit ? { read: true as const } : {}) }));
+  const { container } = await render(snapshot(agents, cards, view), agents);
+  expect(container.querySelector('[data-task-group="needs_you"]')).toBeNull();
+  expect(container.querySelector("[data-task-fold] > button")?.textContent).toContain("쉬는 중 4");
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
+  expect(rows(container)).toEqual(["read_new", "read_old", "rest_new", "rest_old"]);
+});
+
+it("keeps a read row's View chip where the row rests (operator decision 2026-11-23)", async () => {
+  const look = { group: "seen", count: 1, view_id: "v3", label: "report.html", workspace_id: "hide", checkout_id: "hide-main" };
+  const agent = row("report", { mark: "quiet", group: "seen", status_code: "done", activity: "stopped", look } as Partial<AgentRow>, { group: "idle", line: "리포트 정리 끝" });
+  const { container } = await render(snapshot([agent], [card("report", "resting", "hide-main")]), [agent]);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
+  const task = container.querySelector('[data-task-row="report"]')!;
+  expect(task.querySelector('[data-task-focus="row"] [data-mark]')?.getAttribute("data-mark")).toBe("quiet");
+  expect(task.querySelector('[data-look-chip="v3"]')?.textContent).toContain("report.html");
 });
 
 it("ends a mission decision's line with an eye and how many Views it links to look at, and draws none without them", async () => {
@@ -346,26 +373,27 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
 const needsYouOrder = (container: HTMLElement) => [...container.querySelectorAll('[data-task-group="needs_you"] [data-task-row], [data-task-group="needs_you"] li[data-mission-ask]')]
   .map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
 
-it.each(["status", "project"] as const)("in %s stands a mission among the unread asks newest first, and above every read ask (operator decisions 2026-11-08, 2026-11-14)", async (view) => {
+it.each(["status", "project"] as const)("in %s stands a mission among the asks newest first, and leaves a read ask to 쉬는 중 (operator decisions 2026-11-08, 2026-11-14, 2026-11-23)", async (view) => {
   const now = Date.UTC(2026, 10, 1);
-  // The fixture's mission node has waited six minutes; the core lists the unread asks newest first, then the read one.
+  // The fixture's mission node has waited six minutes; the core lists the asks newest first, and the read one rests.
   const since = (row: AgentRow, at: number): AgentRow => ({ ...row, state: { ...row.state, request_since: at } });
-  const agents = [since(row("newer", {}, { group: "needs_you" }), now - 60_000), since(row("older", {}, { group: "needs_you" }), now - 10 * 60_000), row("seen", {}, { group: "needs_you" })];
-  const cards = [card("newer", "needs_you", "hide-main"), card("older", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }];
+  const agents = [since(row("newer", {}, { group: "needs_you" }), now - 60_000), since(row("older", {}, { group: "needs_you" }), now - 10 * 60_000), row("seen", { group: "seen" })];
+  const cards = [card("newer", "needs_you", "hide-main"), card("older", "needs_you", "hide-main"), { ...card("seen", "resting", "hide-main"), read: true as const }];
   const { container } = await render(withMissionAsk(snapshot(agents, cards, view), "local", now), agents);
   const order = [...container.querySelectorAll("[data-task-row], li[data-mission-ask]")].map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
-  expect(order).toEqual(["newer", "mission:mission-1", "older", "seen"]);
+  expect(order).toEqual(["newer", "mission:mission-1", "older"]);
 });
 
-it("in 내 차례 times an ask by how long it waited, the time the asks stand by, and every other row by its latest prompt (operator decision 2026-11-14)", async () => {
+it("times an ask in 내 차례 by how long it waited and a read ask in 쉬는 중 since its ask, the times they stand by, and every other row by its latest prompt (operator decisions 2026-11-14, 2026-11-23)", async () => {
   const now = Date.now();
   // Each asked long after its last prompt, which is the time the row used to show.
   const prompted = now - 26 * 3_600_000;
   const asking = row("asking", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" });
-  const seen: AgentRow = { ...row("seen", { last_prompt_at_unix_ms: prompted }, { group: "needs_you" }), revisit: { starred: false, read_ask: true, since_unix_ms: now - 3 * 3_600_000 } };
+  const seen: AgentRow = { ...row("seen", { last_prompt_at_unix_ms: prompted, group: "seen" }), revisit: { starred: false, read_ask: true, since_unix_ms: now - 3 * 3_600_000 } };
   const agents = [{ ...asking, state: { ...asking.state, request_since: now - 9 * 60_000 } }, seen, row("works", { last_prompt_at_unix_ms: now - 2 * 3_600_000 })];
-  const cards = [card("asking", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }, card("works", "working", "hide-main")];
+  const cards = [card("asking", "needs_you", "hide-main"), { ...card("seen", "resting", "hide-main"), read: true as const }, card("works", "working", "hide-main")];
   const { container } = await render(snapshot(agents, cards), agents);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
   const time = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-agent-elapsed]`)?.textContent;
   expect(["asking", "seen", "works"].map(time)).toEqual([formatElapsed("ko", 9 * 60_000), formatElapsed("ko", 3 * 3_600_000), formatElapsed("ko", 2 * 3_600_000)]);
 });
@@ -569,17 +597,19 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(at("parent").querySelector("[data-descendant-mark]")).toBeNull();
 });
 
-it("keeps a read question in 내 차례 dimmed with a hollow ! and no 읽음 word, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
+it("rests a read question with a hollow ! and no 읽음 word, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B13; operator decision 2026-11-23)", async () => {
   const agents = [
     row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
     row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
   ];
-  const { container, sent } = await render(snapshot(agents, [{ ...card("asked", "needs_you", "hide-main"), read: true }, card("kept", "revisit", "hide-main")]), agents);
+  const { container, sent } = await render(snapshot(agents, [{ ...card("asked", "resting", "hide-main"), read: true }, card("kept", "revisit", "hide-main")]), agents);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
   const at = (pane: string) => container.querySelector(`[data-task-row="${pane}"]`)!;
   expect(at("asked").getAttribute("data-task-read")).toBe("true");
+  expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark")).toBe("turn");
   expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
   expect(at("asked").querySelector("[data-task-read-tag]")).toBeNull();
-  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("내 차례 · 읽은 질문");
+  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("쉬는 중 · 읽은 질문");
   expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
   expect(button("asked").getAttribute("aria-pressed")).toBe("false");
