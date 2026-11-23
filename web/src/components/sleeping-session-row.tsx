@@ -4,6 +4,8 @@ import { agentProductName } from "../agentAdapters";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { SleepingSession } from "../snapshot";
 import { sleepingCaption } from "../sleeping-session";
+import { sleepWaitWords } from "../sleepWait";
+import { useMinuteClock } from "./elapsed";
 import { startReasonText } from "../startReason";
 import { Button } from "./ui/button";
 import { SessionRowBody } from "./session-row";
@@ -23,16 +25,20 @@ export function SleepingSessionRow({ session, actions, inset = "var(--spacing-xs
   // A sleeping row says itself through its moon and hover; waking, failing or
   // an unsure state says so on its line (status-marks B31).
   const lineShown = session.phase !== "sleeping" || session.checking;
+  // One asleep on its own wait says what it waits on in the line's place (PRD core-wait B18).
+  const minute = useMinuteClock();
+  const waiting = !lineShown && session.wait ? sleepWaitWords(session.wait, minute, t) : null;
   return (
     <li data-sleeping-session={session.sleep_id} className="flex min-w-0 items-start gap-xs rounded-sm py-xs pr-xs text-body" style={{ paddingLeft: inset }}>
       {/* A grey moon at full strength, the one mark outside the four (status-marks D-21, B31), on the task row's body (D-72). */}
-      <Hint label={[session.identity_label, agentProductName(session.kind), session.reason ? startReasonText(session.reason, t) : null, caption].filter(Boolean).join("\n")}>
+      <Hint label={[session.identity_label, agentProductName(session.kind), session.reason ? startReasonText(session.reason, t) : null, caption, waiting].filter(Boolean).join("\n")}>
         <span className="flex min-w-0 flex-1">
         <SessionRowBody
           mark={<><StatusMark mark="asleep" data-agent-status-mark="asleep" /><AgentRowMark kind={session.kind} /></>}
-          head={<span className="min-w-0 flex-1 truncate leading-(--size-sidebar-line) text-subtle-foreground">{session.identity_label}<span className="sr-only">{`, ${[agentProductName(session.kind), lineShown ? null : caption].filter(Boolean).join(", ")}`}</span></span>}
+          head={<span className="min-w-0 flex-1 truncate leading-(--size-sidebar-line) text-subtle-foreground">{session.identity_label}<span className="sr-only">{`, ${[agentProductName(session.kind), lineShown ? null : caption, waiting].filter(Boolean).join(", ")}`}</span></span>}
         >
           {lineShown ? <span className="truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground" data-sleeping-line={session.phase} aria-busy={session.checking || pending || undefined}>{caption}</span> : null}
+          {waiting ? <span className="truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground" data-sleeping-line="wait">{waiting}</span> : null}
         </SessionRowBody>
         </span>
       </Hint>

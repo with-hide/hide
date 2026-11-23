@@ -8,6 +8,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { KitAgent } from "./snapshot";
 import { useShellStore } from "./store";
 import { useStartPanel } from "./startDraft";
+import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
@@ -463,6 +464,20 @@ it("on a Mac that already allows Hide, opens the notification step on, and its C
   await act(async () => { button.click(); });
   expect(choices(events)).toEqual([{ schema_version: 2, kind: "first_run_advance", payload: { from: "notifications", notifications: true } }]);
   expect(notify).not.toHaveBeenCalled();
+  await unmount();
+  vi.unstubAllGlobals();
+});
+
+it("the notification step's phone link opens Settings › Devices on its phone group, not Add device", async () => {
+  vi.stubGlobal("hideHost", { kind: "electron", platform: "darwin", notify: vi.fn(), notificationPermission: async () => "granted", onCommand: () => () => undefined, onNotificationOpen: () => () => undefined });
+  const next = state(true, AGENTS);
+  next.rest.ui_state.first_run.step = "notifications";
+  const { unmount } = await mount(next);
+  await act(async () => { await Promise.resolve(); });
+  const saved = useUiStore.getState();
+  await act(async () => { (document.querySelector('[data-first-run-phone="true"]') as HTMLButtonElement).click(); });
+  expect(useUiStore.getState()).toMatchObject({ overlay: "settings", settingsTab: "devices", devicesRequest: "phones" });
+  useUiStore.setState(saved, true);
   await unmount();
   vi.unstubAllGlobals();
 });

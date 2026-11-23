@@ -4,7 +4,8 @@
 // desktop, from the gate the Mac sends with each step.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { importAppFirst } from "./appImport";
 import type { PhoneMission, PhoneMissionNode, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -81,13 +82,7 @@ async function connect(items: PhoneMission[]) {
   return { container, socket, serve, click, answers, connection, store, unmount };
 }
 
-// The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
-// hook's own budget, so the first test's budget is for what it asserts.
-beforeAll(async () => {
-  vi.stubGlobal("WebSocket", FakeSocket);
-  await import("./App");
-  vi.unstubAllGlobals();
-});
+importAppFirst(FakeSocket);
 
 afterEach(() => {
   vi.unstubAllGlobals();

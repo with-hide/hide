@@ -5,7 +5,8 @@
 // a refused answer shows in the desktop's words.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { importAppFirst } from "./appImport";
 import type { PhoneMission, PhoneMissionNode, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -94,13 +95,7 @@ async function connect(items: PhoneMission[]) {
   return { container, socket, serve, click, answers, connection, store, unmount };
 }
 
-// The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
-// hook's own budget, so the first test's budget is for what it asserts.
-beforeAll(async () => {
-  vi.stubGlobal("WebSocket", FakeSocket);
-  await import("./App");
-  vi.unstubAllGlobals();
-});
+importAppFirst(FakeSocket);
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -255,6 +250,50 @@ it("lists the steps by default, says how long a worked step has worked from the 
   }
 });
 
+// PRD core-wait D-17, B4 and option A of the operator's decision on pull request 2848: a waiting step whose pull request closed
+// without a merge says so and whose turn it is in its state word's place, as the map card's foot does; the map card draws the
+// condition, its failed head and its foot.
+it("says how a waiting step's wait failed on a pull request that closed without a merge, and whose turn that is", async () => {
+  const page = mission("m-wait", { nodes: [
+    node("vendor", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, pr: 2528, external_pr: 2528, external_base: "main", external_state: "closed", wait_target: { pr: 2528 }, wait_outcome: "closed_unmerged", attention: { reason: "pr_closed", pr: 2528, to: "conductor", since_unix_ms: Date.now(), on_row: false, item: false } }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-wait"]');
+    const step = container.querySelector('[data-phone-step="vendor"]');
+    expect(step?.querySelector("[data-phone-step-line]")?.textContent).toBe("closed without merge · Conductor's turn");
+    expect(step?.getAttribute("aria-label")).toContain("closed without merge");
+    await click("[data-phone-mission-map-toggle]");
+    const card = container.querySelector('[data-mission-node="vendor"]')!;
+    expect([card.querySelector("[data-node-wait-state]")?.getAttribute("data-node-wait-state"), card.querySelector("[data-wait-condition]")?.textContent, card.querySelector("[data-wait-failed]")?.textContent, card.querySelector("[data-wait-turn]")?.textContent])
+      .toEqual(["failed", `if #${2528} merges`, "closed without merge", "Conductor's turn"]);
+    expect(card.querySelector("[data-node-line=\"branch\"]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+// Opus review O1: the phone's frame carries a failed CI wait's checks and a read that could not say, so its card says them as the desktop's does.
+it("draws a waiting step's failed CI checks and a read that could not say, as the desktop's card does", async () => {
+  const page = mission("m-ci", { nodes: [
+    node("ci", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, wait_target: { ci: 12 }, wait_outcome: "ci_failed", wait_checks: ["rust workspace", "web e2e"], attention: { reason: "ci_failed", pr: 12, to: "conductor", since_unix_ms: Date.now(), on_row: false, item: false } }),
+    node("read", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, wait_target: { pr: 13 }, unread: true }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-ci"]');
+    await click("[data-phone-mission-map-toggle]");
+    const ci = container.querySelector('[data-mission-node="ci"]')!;
+    expect([ci.querySelector("[data-wait-failed]")?.textContent, ci.querySelector("[data-wait-turn]")?.textContent]).toEqual(["CI failed · rust workspace and 1 more", "Conductor's turn"]);
+    const read = container.querySelector('[data-mission-node="read"]')!;
+    expect([read.querySelector("[data-node-wait-state]")?.getAttribute("data-node-wait-state"), read.querySelector("[data-wait-unread]")?.textContent]).toEqual(["unread", "couldn't check · reading again"]);
+  } finally {
+    await unmount();
+  }
+});
+
 it("counts a step's time only while its worker works: a stopped or sleeping step says so with no time, and one owed to the operator stands in the hold band", async () => {
   const now = Date.now();
   const forty = now - 40 * 60_000;
@@ -323,7 +362,7 @@ it("draws the raises its Conductor has not settled as one safety net card with a
     expect(net.querySelector("[data-phone-safety-net-head]")?.textContent).toBe("5 stuck items unchanged for 25m");
     expect([...net.querySelectorAll("[data-phone-held-step]")].map((row) => row.textContent)).toEqual(held.map((one) => `${one.title}Worker ended with work left · for 25m`));
     // Each held card waits on its Conductor, never the operator's turn.
-    expect(container.querySelector('[data-mission-node="a"] [data-phone-node-reason]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(container.querySelector('[data-mission-node="a"] [data-phone-node-reason]')?.textContent).toBe("Conductor's turn · Worker ended with work left");
     expect(container.querySelector('[data-mission-node="a"] [data-node-turn]')).toBeNull();
     expect(container.querySelector('[data-phone-mission-decided="folded"]')?.textContent).toContain("Decided by the Conductor 1");
     await click('[data-phone-fold="decided:m-net"]');
@@ -661,6 +700,19 @@ const cardOf = (container: HTMLElement, key: string) => {
   };
 };
 
+/** A waiting step's card as the map draws it: what it waits on, its icon, its sentence and its foot's state; null without one. */
+const waitOf = (container: HTMLElement, key: string) => {
+  const card = container.querySelector(`[data-mission-node="${key}"]`)!;
+  const line = card.querySelector('[data-node-line="wait"]');
+  if (!line) return null;
+  return {
+    kind: line.getAttribute("data-wait-kind"),
+    icon: line.querySelector("[data-line-icon]")?.getAttribute("data-line-icon") ?? null,
+    condition: line.querySelector("[data-wait-condition]")?.textContent ?? null,
+    foot: card.querySelector("[data-wait-foot]")?.getAttribute("data-wait-foot") ?? null,
+  };
+};
+
 // PRD mission-destination D-51-D-55, B54-B59: the phone's card draws the desktop's rows from what the Mac sends it: the band under the
 // title, the worker's mark and name, and under a hairline the branch line without the branch name, lit as the PR list lights the pull
 // request, with the operator's merge as a person before the destination; research and verify end in their kind. The head names
@@ -673,8 +725,8 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     node("api", "done", { pr: 34, pr_state: "mergeable", pr_base: "feat/login", ...merge("due", 34), landing: { state: "left", action: "merge" } }),
     node("stack", "working", { pr: 35, pr_state: "failed", base_pr: 31, pr_base: "feat/ui" }),
     node("docs", "done", { delivery: "direct", landing: { state: "landed", proof: { by: "in_main", commit: "abc" } } }),
-    node("sdk", "working", { kind: "external", delivery: null, worker_agent: null, external_pr: 77, external_base: "main", external_state: "mergeable" }),
-    node("lib", "working", { kind: "external", delivery: null, worker_agent: null, external_branch: "feat/lib", external_base: "feat/login" }),
+    node("sdk", "working", { kind: "wait", delivery: null, worker_agent: null, external_pr: 77, external_base: "main", external_state: "mergeable" }),
+    node("lib", "working", { kind: "wait", delivery: null, worker_agent: null, external_branch: "feat/lib", external_base: "feat/login" }),
     node("look", "done", { kind: "general", preset: "research", delivery: null, worker_agent: "codex" }),
     node("check", "working", { kind: "general", preset: "verify", delivery: null }),
     node("tidy", "planned", { delivery: "direct" }),
@@ -702,10 +754,10 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
     expect(cardOf(container, "stack")).toMatchObject({ mark: "failed", to: "→31", toMark: "mergeable", bold: false });
     expect(cardOf(container, "stack").name).toContain("Where it goes: #35 → PR 31");
     expect(cardOf(container, "docs")).toMatchObject({ mark: "merged", text: "→feat/login· No PR" });
-    // An outside pull request ends bold in its own base; an outside branch names the branch it watches, which the frame carries.
-    // A waiting step says `⏳ 기다림` where a worker would be (PRD node-presets D-13, B12).
-    expect(cardOf(container, "sdk")).toMatchObject({ worker: "Watching", mark: "mergeable", text: "↗#77→main", bold: true });
-    expect(cardOf(container, "lib")).toMatchObject({ worker: "Watching", mark: "branch", text: "↗ feat/lib→feat/login", bold: false });
+    // A waiting step draws no worker and no branch line: what it waits for in one sentence, the pull request's icon lit by its state
+    // (option A of the operator's decision on pull request 2848, PRD core-wait D-15).
+    expect([cardOf(container, "sdk").worker, waitOf(container, "sdk")]).toEqual([null, { kind: "pr", icon: "pr", condition: `if #${77} merges`, foot: null }]);
+    expect(waitOf(container, "lib")).toEqual({ kind: "branch", icon: "branch", condition: "if feat/lib lands in feat/login", foot: null });
     // A general step ends in its preset's icon and name, done or not: the result line and verdict are not in the phone's frame (PRD node-presets B10).
     expect(cardOf(container, "look")).toMatchObject({ worker: "Codex", line: "result", mark: "research", text: "Research" });
     expect(cardOf(container, "check")).toMatchObject({ line: "result", mark: "verify", text: "Verify" });
@@ -724,12 +776,14 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
 });
 
 // D1: a gitlab.com step names each merge request as its host does, from the references the Mac carries: its own, the one it is stacked
-// on and an outside one; a GitHub step's words are the card test's above, and a Mac before references reads `#n` (the test below).
+// on and the one a waiting step waits on or whose CI it waits on; a GitHub step's words are the card test's above, and a Mac before
+// references reads `#n` (the test below).
 it("writes a gitlab.com step's merge requests `!n` from the references the Mac carries", async () => {
   const ref = (number: number) => ({ repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number, key: `gitlab.com/acme/app#${number}`, label: `!${number}`, url: `https://gitlab.com/acme/app/-/merge_requests/${number}`, checks_url: "", files_url: "" });
   const { container, click, unmount } = await connect([mission("m-gl", { destination: "main", nodes: [
     node("guard", "working", { pr: 45, pr_state: "pending", pr_reference: ref(45), base_pr: 40, base_reference: ref(40) }),
-    node("moved", "working", { kind: "external", delivery: null, worker_agent: null, external_pr: 44, external_reference: ref(44), external_base: "main", external_state: "pending" }),
+    node("moved", "working", { kind: "wait", delivery: null, worker_agent: null, wait_target: { pr: 44 }, external_pr: 44, external_reference: ref(44), external_base: "main", external_state: "pending" }),
+    node("checks", "working", { kind: "wait", delivery: null, worker_agent: null, wait_target: { ci: 46 }, external_reference: ref(46) }),
   ] })]);
   try {
     await click('[data-phone-tab="missions"]');
@@ -737,7 +791,8 @@ it("writes a gitlab.com step's merge requests `!n` from the references the Mac c
     await click("[data-phone-mission-map-toggle]");
     expect(cardOf(container, "guard")).toMatchObject({ text: "!45→40" });
     expect(cardOf(container, "guard").name).toContain("Where it goes: !45 → MR 40");
-    expect(cardOf(container, "moved")).toMatchObject({ text: "↗!44→main" });
+    expect(waitOf(container, "moved")?.condition).toBe("if !44 merges");
+    expect(waitOf(container, "checks")?.condition).toBe("if !46 CI passes");
   } finally { await unmount(); }
 });
 
@@ -748,8 +803,8 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     mission("m-old", { nodes: [
       node("db", "done", { pr: 33, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [33] }, landing: { state: "left", action: "merge" } }),
       node("docs", "working", { delivery: "direct" }),
-      node("sdk", "working", { kind: "external", delivery: null, pr: 77 }),
-      node("ext", "working", { kind: "external", delivery: null }),
+      node("sdk", "working", { kind: "wait", delivery: null, pr: 77 }),
+      node("ext", "working", { kind: "wait", delivery: null }),
       node("top", "working", { pr: 40, pr_state: "pending", base_pr: 39 }),
     ] }),
     mission("m-look", { destination: "feat/login", nodes: [node("look", "working", { kind: "general", preset: "research", delivery: null }), node("check", "planned", { kind: "general", preset: "verify", delivery: null })] }),
@@ -762,10 +817,10 @@ it("names no branch or destination it was not sent, and tags no mission whose st
     // Its merge is still the operator's: the band says so and the line names its pull request, with nowhere to go.
     expect(cardOf(container, "db")).toMatchObject({ band: "Yours to merge", text: "#33", to: null, yours: true });
     expect(cardOf(container, "docs")).toMatchObject({ mark: "branch", text: "No PR", to: null });
-    // An outside step whose watch was not sent still names the pull request the frame carries.
-    expect(cardOf(container, "sdk")).toMatchObject({ text: "↗#77", to: null });
-    // One sent with nothing it watches has no line at all, rather than a mark that names nothing.
-    expect(cardOf(container, "ext")).toMatchObject({ line: null, hairline: false });
+    // A waiting step whose watch was not sent still names the pull request the frame carries.
+    expect(waitOf(container, "sdk")).toMatchObject({ condition: `if #${77} merges` });
+    // One sent with nothing it watches has no line at all, rather than a sentence that names nothing.
+    expect([cardOf(container, "ext").line, cardOf(container, "ext").hairline, waitOf(container, "ext")]).toEqual([null, false, null]);
     // A pull request it is stacked on that no step holds is drawn grey: the frame says nothing of its state.
     expect(cardOf(container, "top")).toMatchObject({ text: "#40→39", toMark: "unknown" });
     await click('[data-phone-back="missions"]');

@@ -208,8 +208,14 @@ pub(super) fn node_landing(
         return None;
     }
     match node.kind {
-        NodeKind::External => {
-            return Some(NodeLanding::Landed {
+        // A met wait on a pull request or a branch is that work in main; a
+        // wait on CI, a mission or a node lands nothing (PRD core-wait D-04).
+        NodeKind::Wait => {
+            return matches!(
+                node.wait_target,
+                Some(crate::waits::WaitTarget::Pr(_) | crate::waits::WaitTarget::Branch(_))
+            )
+            .then_some(NodeLanding::Landed {
                 proof: LandingProof::Outside,
             });
         }

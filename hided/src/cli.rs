@@ -28,6 +28,8 @@ pub enum CommandKind {
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     Plan(crate::plan_cli::PlanCli),
+    /// `hide wait …`: an agent's own wait (PRD core-wait D-21).
+    Wait(crate::wait_cli::WaitCli),
     /// `hide automation …` (PRD automations B9, B10).
     Automation(crate::automation_cli::AutomationCli),
     /// `hide agent profile …` (PRD agent-profiles D-33).
@@ -59,7 +61,7 @@ pub enum CommandKind {
         reason: String,
     },
     Device(crate::device_cli::DeviceCli),
-    /// `hide phone pair|list|remove`: the phones paired with this computer.
+    /// `hide phone pair|list|rename|remove`: the phones paired with this computer.
     Phone(crate::phone_cli::PhoneCli),
     /// `hide always-on …`: a paired machine's login item and firewall rules.
     AlwaysOn(crate::always_on::cli::Command),
@@ -236,6 +238,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         )),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
+        "wait" => usage(crate::wait_cli::USAGE),
         "automation" => usage(crate::automation_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
         "session" => usage(crate::session_cli::USAGE),
@@ -281,6 +284,7 @@ fn help_text() -> String {
         crate::phone_cli::USAGE,
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::wait_cli::USAGE,
         crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
         "hide workspace info",
@@ -511,6 +515,16 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::plan_cli::parse(iter)
                 .map(CommandKind::Plan)
                 .map_err(|reason| wrong(reason, crate::plan_cli::USAGE))
+        }
+        Some("wait") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
+            crate::wait_cli::parse(args[2..].iter()).map(CommandKind::Wait)
+        }
+        Some("wait") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::wait_cli::USAGE)))?;
+            crate::wait_cli::parse(iter)
+                .map(CommandKind::Wait)
+                .map_err(|reason| wrong(reason, crate::wait_cli::USAGE))
         }
         Some("automation")
             if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) =>
@@ -992,6 +1006,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::plan_cli::HELP);
         return Ok(());
     }
+    if kind == CommandKind::Wait(crate::wait_cli::WaitCli::Help) {
+        print!("{}", crate::wait_cli::HELP);
+        return Ok(());
+    }
     if kind == CommandKind::Automation(crate::automation_cli::AutomationCli::Help) {
         print!("{}", crate::automation_cli::HELP);
         return Ok(());
@@ -1062,6 +1080,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
     match kind {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
+        CommandKind::Wait(command) => crate::wait_cli::run(&env, command),
         CommandKind::Automation(cli) => crate::automation_cli::run(&env, cli),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
@@ -2421,12 +2440,14 @@ const UPDATED_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(10);
 /// A core of another build that its starter runs here (a paired machine's,
 /// or one a move before 1.2.0 placed on this machine) is never stopped
 /// for this app's own: its login item would start that build again at the
-/// next login beside this one. This app, when newer, updates it through
-/// the updater a node runs (B10): this build goes into a version folder
-/// beside the core's, and its own `hided core-update` replaces the core
-/// through the starter, or goes back to the build it ran. Each connection
-/// is one attempt (B20). An older app is told to update; a build neither
-/// orders is refused as another build.
+/// next login beside this one. This app replaces it through the updater a
+/// node runs (B10): this build goes into a version folder beside the
+/// core's, and its own `hided core-update` replaces the core through the
+/// starter, or goes back to the build it ran. Each connection is one
+/// attempt (B20). The app the operator put on this machine is the build it
+/// runs, as it is with no login item: a newer core is lowered to it and a
+/// build neither orders is replaced by it, rather than the app being told
+/// to update (operator review 2026-11-23).
 fn update_started_core(
     env: &Env,
     (state, health): Healthy,
@@ -2459,22 +2480,17 @@ fn update_started_core(
         }
         eprintln!("{record}");
     };
-    match crate::build_order::standing((build, &ours), (running, &core)) {
+    let standing = match crate::build_order::standing((build, &ours), (running, &core)) {
         Standing::Same => return Ok((state, health)),
-        Standing::Older => {
-            log("core.newer_refused", serde_json::json!({}));
-            return Err(ConnectError::CoreNewer(builds));
-        }
-        Standing::Unordered => {
-            log("core.other_build_refused", serde_json::json!({}));
-            return Err(ConnectError::OtherBuild(format!(
-                "the core its login item runs here is build {running}, which this app's build {build} neither updates nor replaces"
-            )));
-        }
-        Standing::Newer => {}
-    }
+        Standing::Newer => "newer",
+        Standing::Older => "older",
+        Standing::Unordered => "unordered",
+    };
     let intent = crate::core_update::new_intent();
-    log("core.update_started", serde_json::json!({"intent": intent}));
+    log(
+        "core.update_started",
+        serde_json::json!({"intent": intent, "standing": standing}),
+    );
     let failed = |reason: String| {
         log(
             "core.update_failed",

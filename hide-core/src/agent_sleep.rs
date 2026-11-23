@@ -437,6 +437,7 @@ impl SleepRecord {
             since_unix_ms: self.since_unix_ms,
             progress: self.label_owner.as_ref().and(self.progress.clone()),
             cause: self.cause,
+            wait: None,
         })
     }
 

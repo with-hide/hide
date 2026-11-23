@@ -78,7 +78,8 @@ test("a device row is one state with a menu, Add device is one button, a rename 
     // B50: Add device opens the dialog, and the device is listed once it is registered; the dialog closes itself.
     await sheet.locator("[data-device-add-open]").click();
     await expect(page.locator("[data-add-device-dialog]")).toBeVisible();
-    // The dialog opens on a computer that runs Hide; a machine over SSH is the other choice.
+    // It asks computer or phone first; a computer opens on one that runs Hide, and a machine over SSH is the other choice.
+    await page.locator('[data-add-choice="computer"]').click();
     const sshChoice = page.locator('[data-add-kind-choice="ssh"]');
     await sshChoice.click();
     await page.locator(`[data-ssh-host="${ALIAS}"]`).click();
@@ -151,7 +152,8 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
 
     // B52: with no Host in the config the dialog is only what to add, and there is no form.
     await sheet.locator("[data-device-add-open]").click();
-    // The dialog opens on a computer that runs Hide; a machine over SSH is the other choice.
+    // It asks computer or phone first; a computer opens on one that runs Hide, and a machine over SSH is the other choice.
+    await page.locator('[data-add-choice="computer"]').click();
     const sshChoice = page.locator('[data-add-kind-choice="ssh"]');
     await sshChoice.click();
     const dialog = page.locator("[data-add-device-dialog]");
@@ -164,6 +166,7 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
     // B50, B51: a Host written while the dialog was closed is listed when it opens again, with the address ssh resolves it to.
     writeSshHost(daemon, ALIAS);
     await sheet.locator("[data-device-add-open]").click();
+    await page.locator('[data-add-choice="computer"]').click();
     await sshChoice.click();
     const host = dialog.locator(`[data-ssh-host="${ALIAS}"]`);
     await expect(host).toBeVisible();

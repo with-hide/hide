@@ -2152,6 +2152,7 @@ mod row_tests {
             since_unix_ms: 1,
             progress: None,
             cause: None,
+            wait: None,
         });
         sleeping
     }
@@ -2260,6 +2261,7 @@ mod row_tests {
             since_unix_ms: 7,
             progress: Some("파서를 나눴어요".into()),
             cause: None,
+            wait: None,
         });
         derive_from_axes(&mut agent);
         let rest = json!({"navigator": {"agents": [&agent], "workspaces": []}});
@@ -2299,6 +2301,7 @@ mod row_tests {
             since_unix_ms: 1,
             progress: None,
             cause: None,
+            wait: None,
         });
         agent.progress = Some("파서를 나눴어요".into());
         derive_from_axes(&mut agent);

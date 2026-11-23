@@ -8,7 +8,7 @@ import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
 import { GatePlanList, OperatorBand } from "./components/mission-gate";
 import { DeviceChip } from "./components/device-chip";
-import { BranchLineView, ResultLineView, WaitingMark } from "./components/mission-line";
+import { BranchLineView, ResultLineView, WaitCardLines, WaitStateMark } from "./components/mission-line";
 import { MissionNodeHover } from "./components/mission-node-hover";
 import { MissionDestinationTag, MissionOptionsLine } from "./components/mission-options";
 import { PullList, ResultTiles } from "./components/mission-results";
@@ -30,7 +30,7 @@ import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
 import { markWord, MissionNumber, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
-import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords } from "./missionLine";
+import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords, waitCard, waitCardWords } from "./missionLine";
 import { landsInDestination, missionOptions } from "./missionOptions";
 import { DEFAULT_CONDUCTOR } from "./conductorSettings";
 import { STATE_PILL } from "./missionList";
@@ -356,19 +356,20 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const worker = useNodeRun(mission, node);
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
-  // How long it has been worked, `n째` while it runs and `n 걸림` once it ended (D-51, B58); a planned node has no time.
+  // How long it has been worked, `n째` while it runs and `n 걸림` once it ended (D-51, B58); a planned node has no time, and a waiting one has no worker to time.
   const times = useNodeTimes(mission, node, events, end);
   // A stopped node counts how long it has stood since it stopped, not how long it ran (operator decision 2026-11-13).
-  const took = stopLine ? (stopLine.age ? t("mission.elapsed.stopped", { elapsed: stopLine.age }) : null) : times?.took ? t(times.running ? "mission.elapsed.running" : "mission.elapsed.total", { elapsed: times.took }) : null;
+  const took = node.kind === "wait" ? null : stopLine ? (stopLine.age ? t("mission.elapsed.stopped", { elapsed: stopLine.age }) : null) : times?.took ? t(times.running ? "mission.elapsed.running" : "mission.elapsed.total", { elapsed: times.took }) : null;
   // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
   const work = nodeSteps(node);
   // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
   const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
-  const result = branch ? null : resultLine(lineNode(node));
-  const waits = node.kind === "external";
+  // A waiting node says what it waits for and how that stands instead (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait D-15-D-17).
+  const waits = useMemo(() => waitCard(lineNode(node), look, minute), [node, look, minute]);
+  const result = branch || waits ? null : resultLine(lineNode(node));
   const failed = failedVerdict(node);
   const titleText = (
-    <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
+    <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", waits ? "text-subtle-foreground" : (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
       {node.title}
     </span>
   );
@@ -398,6 +399,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     <MissionGraphCard
       node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failed}
       pace={pace}
+      mark={waits ? <WaitStateMark state={waits.state} label={word} /> : undefined}
       title={titleText}
       accessory={hide ? <HideMark words={hide} /> : null}
       tab={device ? <DeviceChip label={device} variant="remote" className="max-w-full rounded-b-none" /> : null}
@@ -405,13 +407,14 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       aria-label={[
         node.title,
         word,
-        ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
+        ...(node.kind === "wait" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
         ...(device ? [device] : []),
         ...(took ? [took] : []),
         ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { pull: pullName(pr) })),
         ...(branch ? [`${t("mission.foot.where")}: ${branchLineWords(branch, t)}`] : []),
+        ...(waits ? [waitCardWords(waits, t)] : []),
         ...(result ? [resultLineWords(result, t)] : []),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
@@ -425,14 +428,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
       {/* What the operator does on this node, right under its title (D-51): the gate's strip and a merge that is theirs now, read without a hover. */}
       <OperatorBand gate={gate} mergeDue={mergeDue} />
-      {/* Its worker: the agent's mark, the model and how long; effort, profile and the device's full name are the hover's (D-51), the device away the card's tab. A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13). */}
-      {waits || worker?.agent || worker?.model || took ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={waits ? "waiting" : (run?.from ?? "none")}>
-          {waits ? <WaitingMark /> : null}
+      {/* Its worker: the agent's mark, the model and how long; effort, profile and the device's full name are the hover's (D-51), the device away the card's tab. A waiting node has no worker: its head's mark and its condition say what it waits for. */}
+      {worker?.agent || worker?.model || took ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>
           {worker?.agent ? <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={run?.profile} /></span> : null}
           {worker?.model ? <span className="min-w-0 truncate text-subtle-foreground" data-node-model={run?.from}>{worker.model}</span> : null}
           {run?.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
-          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={stopLine ? "stopped" : times?.running ? "running" : "total"}>{worker?.model || worker?.agent || waits ? "· " : ""}{took}</span> : null}
+          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={stopLine ? "stopped" : times?.running ? "running" : "total"}>{worker?.model || worker?.agent ? "· " : ""}{took}</span> : null}
         </span>
       ) : null}
       {doingLine ? (
@@ -466,7 +468,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         </span>
       ) : null}
       {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): the branch line for a change or a waiting node, the result line for a general node (D-52, D-54; PRD node-presets D-08). `⚠`, 내 차례 and `!` stand at the right end of its first row and take only the width the line leaves there, their words cut before the line's number or icon ever is (D-56). With neither line, the marks alone stand at the right end; with nothing at all, there is no foot. */}
-      {branch || result || marks ? (
+      {/* A waiting node's condition and foot, whose turn a failure is at its right end (option A). */}
+      {waits ? <WaitCardLines card={waits} /> : branch || result || marks ? (
         <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
           {branch ? <BranchLineView line={branch} end={marks} /> : (
             <>
@@ -479,7 +482,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     </MissionGraphCard>
   );
   const hovered = (
-    <MissionNodeHover mission={mission} node={node} facts={{ look, word, pace, failed, doing: doingLine ?? stopLine?.why ?? null, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, pace, failed, doing: doingLine ?? stopLine?.why ?? null, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, wait: waits, result, gate, mergeDue }}>
       {card}
     </MissionNodeHover>
   );

@@ -378,6 +378,20 @@ impl crate::code_host::ByNumber for super::host::Gitlab {
         })
     }
 
+    /// Read on the core's own clock (a CI wait on a merge request the list
+    /// no longer holds): a background read of the account's budget.
+    fn as_listed(
+        &self,
+        node: &dyn NodeLink,
+        place: &Place,
+        number: u32,
+    ) -> Result<crate::model::PullRequestSnapshot, String> {
+        let repository = repository(place)?;
+        super::listed_one(node, repository, number)
+            .map_err(|refusal| refusal.reason())?
+            .ok_or_else(|| format!("{} has no merge request {number}", repository.path))
+    }
+
     /// Read when an agent names a merge request (`--pr`): an opened read.
     fn head(
         &self,

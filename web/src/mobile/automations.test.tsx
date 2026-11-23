@@ -6,7 +6,8 @@
 // be reached. No button makes, edits or removes an automation.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { importAppFirst } from "./appImport";
 import type { PhoneAutomation, ServerFrame } from "./protocol";
 
 vi.hoisted(() => {
@@ -106,12 +107,7 @@ async function connect(automations: PhoneAutomation[] | null) {
   }).then(() => container.remove()) };
 }
 
-// The first import of the app transforms its whole module graph; that cost is paid here, with the hook's own budget.
-beforeAll(async () => {
-  vi.stubGlobal("WebSocket", FakeSocket);
-  await import("./App");
-  vi.unstubAllGlobals();
-});
+importAppFirst(FakeSocket);
 
 afterEach(() => {
   vi.useRealTimers();

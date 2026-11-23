@@ -426,8 +426,9 @@ impl Runtime {
         scope: SleepScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
+        self.snapshot.ui_state.agent_sleep.annotate(agents);
+        self.lay_wait_lines(agents);
         let store = &mut self.snapshot.ui_state.agent_sleep;
-        store.annotate(agents);
         if store.stamp(agents, scope, live_pane_ids, unix_milliseconds()) {
             self.persist_ui_state();
         }
@@ -1131,9 +1132,10 @@ impl Runtime {
 
     /// Draws a record's new phase on its row and pane without waiting for
     /// the next session update.
-    fn refresh_agent_sleep_rows(&mut self) -> bool {
+    pub(super) fn refresh_agent_sleep_rows(&mut self) -> bool {
         let mut agents = self.snapshot.navigator.agents.clone();
         self.snapshot.ui_state.agent_sleep.annotate(&mut agents);
+        self.lay_wait_lines(&mut agents);
         for agent in &mut agents {
             crate::agent_state::rederive(agent);
         }

@@ -100,6 +100,10 @@ pub(crate) struct PollAnswer {
     /// Paused after a failure, or every project at the rate limit's floor:
     /// their marks are stale until a read answers (PRD git-freshness B23).
     pub(crate) held: Vec<String>,
+    /// Fewer than one in `RATE_FLOOR_DIVISOR` of the rate limit is left, so
+    /// nothing is polled until it resets at this unix second: a wait reads no
+    /// change request by number meanwhile either (PRD core-wait D-13).
+    pub(crate) resting_until: Option<u64>,
 }
 
 /// What a commit's checks add up to: the word the mark shows (`passing`,
@@ -268,6 +272,7 @@ pub(crate) fn pass(
     let mut answer = PollAnswer::default();
     if let Some(until) = state.rate_until {
         if clock.unix < until {
+            answer.resting_until = Some(until);
             answer.held = request
                 .projects
                 .iter()
@@ -434,6 +439,7 @@ pub(crate) fn pass(
             Some(kind) => pause(state, project, kind, clock.now),
         }
     }
+    answer.resting_until = state.rate_until;
     answer.held = request
         .projects
         .iter()

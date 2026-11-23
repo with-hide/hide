@@ -1284,13 +1284,15 @@ impl Runtime {
                     .is_some_and(|origin| origin.ssh_alias().is_some());
                 let problem = match &error {
                     EstablishError::Ssh(failure) => Some(failure.problem),
-                    EstablishError::Unsupported(_) if ssh_device => Some(SshProblem::Unsupported),
+                    EstablishError::Unsupported { .. } if ssh_device => {
+                        Some(SshProblem::Unsupported)
+                    }
                     _ => None,
                 };
                 if matches!(
                     &error,
                     EstablishError::IdentityChanged { .. }
-                        | EstablishError::Unsupported(_)
+                        | EstablishError::Unsupported { .. }
                         | EstablishError::MachineName(_)
                 ) || problem.is_some_and(|problem| !problem.retried()) && !needs_operator
                 {
@@ -1303,7 +1305,7 @@ impl Runtime {
                 entry.not_started_on_windows = not_started_on_windows;
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
-                    EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
+                    EstablishError::Unsupported { .. } => HostPhase::Unsupported(message),
                     EstablishError::Stopped(_) => HostPhase::Unavailable(message),
                     // The same machine answers a retry: the operator's
                     // restart or removal is what changes it.

@@ -50,11 +50,18 @@ pub fn note(state_dir: &Path, package: &Path) -> Result<bool, String> {
 /// from ([`crate::bundled_kit_dir`]). A package since removed says nothing,
 /// so the core is a paired machine's to update again.
 pub fn present(state_dir: &Path) -> Result<bool, String> {
-    Ok(
-        read(&crate::layout::app_note(state_dir))?.is_some_and(|noted| {
-            noted.package.is_dir() && crate::bundled_kit_dir(&noted.package.join("hided")).is_some()
-        }),
-    )
+    Ok(package(state_dir)?.is_some())
+}
+
+/// The resources folder of the package whose app opened `state_dir`'s
+/// core, while that package is still there ([`present`]): the app whose
+/// core a login item runs from a copy of its build in the install root.
+pub fn package(state_dir: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(read(&crate::layout::app_note(state_dir))?
+        .map(|noted| noted.package)
+        .filter(|package| {
+            package.is_dir() && crate::bundled_kit_dir(&package.join("hided")).is_some()
+        }))
 }
 
 /// The note at `path`; none when no app opened the folder. A note that
@@ -110,6 +117,7 @@ mod tests {
         assert_eq!(note(&state, &package), Ok(true));
         assert_eq!(note(&state, &package), Ok(false), "the same package again");
         assert_eq!(present(&state), Ok(true));
+        assert_eq!(super::package(&state), Ok(Some(package.clone())));
         // Another folder's core is not this app's.
         let other = dir.path().join("other-state");
         std::fs::create_dir_all(&other).unwrap();
@@ -117,6 +125,7 @@ mod tests {
 
         std::fs::remove_dir_all(dir.path().join("app")).unwrap();
         assert_eq!(present(&state), Ok(false));
+        assert_eq!(super::package(&state), Ok(None));
     }
 
     // A note that cannot be read is not read as "no app": the raise that

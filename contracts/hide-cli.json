@@ -3276,6 +3276,21 @@
             ],
             "type": "object"
         },
+        "phone_renamed": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                },
+                "phone_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "phone_id",
+                "name"
+            ],
+            "type": "object"
+        },
         "plan": {
             "properties": {
                 "plan": {
@@ -4290,6 +4305,51 @@
                 "machine"
             ],
             "title": "StoreList",
+            "type": "object"
+        },
+        "wait": {
+            "properties": {
+                "id": {
+                    "type": "object"
+                },
+                "target": {
+                    "type": "object"
+                },
+                "until_unix_ms": {
+                    "type": "object"
+                },
+                "words": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "target",
+                "words",
+                "until_unix_ms"
+            ],
+            "type": "object"
+        },
+        "wait_cancelled": {
+            "properties": {
+                "cancelled": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "cancelled"
+            ],
+            "type": "object"
+        },
+        "wait_list": {
+            "properties": {
+                "waits": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "waits"
+            ],
             "type": "object"
         },
         "watch": {
@@ -6560,6 +6620,7 @@
                 "pairing_ended",
                 "ssh_hide_absent",
                 "ssh_update_there",
+                "ssh_refused_there",
                 "ssh_hide_not_running",
                 "ssh_not_reached",
                 "ssh_busy",
@@ -6990,6 +7051,7 @@
                 "ssh_mac_from_mac_only",
                 "ssh_mac_signed_out",
                 "ssh_update_there",
+                "ssh_refused_there",
                 "ssh_hide_not_running",
                 "wsl_not_reached",
                 "wsl_unavailable",
@@ -7158,6 +7220,42 @@
                     "requires": [],
                     "value": null
                 }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "phone_renamed"
+            ],
+            "arguments": [
+                {
+                    "name": "phone",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "phone rename",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "phone_unknown",
+                "phone_ambiguous",
+                "phone_name_invalid",
+                "phone_rename_failed"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7998,7 +8096,7 @@
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
                 "mission_checkers_invalid",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_destination_invalid",
                 "mission_needs_git",
                 "mission_operator_merge_invalid",
@@ -8322,7 +8420,7 @@
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
                 "mission_checker_unknown",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
@@ -8528,7 +8626,7 @@
             "refusals": [
                 "mission_not_conductor",
                 "mission_node_unknown",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_defects_too_many"
             ],
             "repeats_at_most": null,
@@ -9357,6 +9455,166 @@
         },
         {
             "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "number",
+                    "value": {
+                        "type": "unsigned"
+                    }
+                }
+            ],
+            "command": "wait pr",
+            "options": [
+                {
+                    "name": "--ci",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait branch",
+            "options": [
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "mission",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait mission",
+            "options": [
+                {
+                    "name": "--node",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait_list"
+            ],
+            "arguments": [],
+            "command": "wait list",
+            "options": [],
+            "refusals": [
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait_cancelled"
+            ],
+            "arguments": [
+                {
+                    "name": "wait",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait cancel",
+            "options": [],
+            "refusals": [
+                "wait_unknown",
+                "wait_not_yours",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -9537,7 +9795,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:12f4fe53df9c402390715de18d2286488ba8b53a8a86997d96e093c913bb7c37",
+    "digest": "sha256:6279096073044b3242337148fd4d47b43f6b75ea3e52974d0cf2652883df30c2",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9616,6 +9874,7 @@
         "body": "not blank, at most 16384 bytes",
         "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
         "commit": "7 to 64 hexadecimal digits",
+        "deadline": "whole minutes, hours or days from 1h to 30d, such as 2h or 3d",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",

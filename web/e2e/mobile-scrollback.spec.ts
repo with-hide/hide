@@ -6,7 +6,7 @@ import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { sendKeys, viewPane, withControl } from "./daemon-actions";
 import { FakeTailscale } from "./fake-tailscale";
-import { chord } from "./chords";
+import { chooseDirect, openPhoneGroup, openPhoneQr } from "./phone-settings";
 import { screenshot } from "./wire";
 import { animationsFinished } from "./wait";
 
@@ -22,14 +22,9 @@ async function withPhone(browser: Browser, page: Page, check: (fixture: PhoneFix
     daemon = await startHided(fixture, "mobile-scrollback", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-sidebar-overview]")).toBeVisible();
-    await page.keyboard.press(chord("settings"));
-    await page.locator('[data-settings-tab="mobile"]').click();
-    const mobile = page.locator("[data-mobile-tab]");
-    await mobile.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
-    await mobile.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
-    await page.locator("[data-mobile-switch]").click();
-    await expect(page.locator("[data-mobile-ready]")).toBeVisible();
-    await page.locator("[data-mobile-show-code]").click();
+    await openPhoneGroup(page);
+    await chooseDirect(page);
+    await openPhoneQr(page);
     const qr = page.locator("[data-mobile-qr]");
     await expect(qr).toBeVisible();
     const address = (await qr.getAttribute("data-mobile-qr"))!;

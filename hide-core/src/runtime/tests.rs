@@ -203,6 +203,7 @@ mod unseen_views;
 mod usage_limit;
 #[path = "tests/view_areas.rs"]
 mod view_areas;
+mod waits;
 #[path = "tests/workspace_control.rs"]
 mod workspace_control;
 #[path = "tests/workspace_view.rs"]

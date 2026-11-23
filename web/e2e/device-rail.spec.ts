@@ -29,7 +29,8 @@ async function openAddDeviceForm(page: Page): Promise<void> {
   await expect(page.locator('[data-settings-tab="devices"]')).toHaveAttribute("data-state", "active");
   // Every entry point opens Settings with the Add device dialog in front.
   await expect(page.locator("[data-add-device-dialog]")).toBeVisible();
-  // The dialog opens on a computer that runs Hide; a machine over SSH is the other choice.
+  // It asks computer or phone first; a computer opens on one that runs Hide, and a machine over SSH is the other choice.
+  await page.locator('[data-add-choice="computer"]').click();
   await page.locator('[data-add-kind-choice="ssh"]').click();
   await expect(page.locator("[data-add-device]")).toBeVisible();
 }

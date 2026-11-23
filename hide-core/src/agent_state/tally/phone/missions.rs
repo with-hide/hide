@@ -248,17 +248,18 @@ pub struct PhoneNode {
     /// `+N` after its number (D-37); left out at zero.
     #[serde(skip_serializing_if = "is_zero")]
     pub pr_more: usize,
-    /// The pull request an outside step watches (`External::Pr`), its
+    /// The pull request a waiting step watches (`WaitTarget::Pr`), its
     /// `↗#n`; absent for one that watches a branch, for every other step
     /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
-    /// That pull request as its host's unit names it
-    /// (`OutsideView::reference`), so it reads `↗!12` on gitlab.com; absent
-    /// with none, and from a core before it, which reads as `↗#n`.
+    /// The pull request a waiting step watches or whose CI it watches, as
+    /// its host's unit names it (`OutsideView::reference`), so it reads
+    /// `!12` on gitlab.com; absent with none, and from a core before it,
+    /// which reads as `#n`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_reference: Option<crate::code_host::ChangeRequestRef>,
-    /// The branch an outside step watches (`External::Branch`), its
+    /// The branch a waiting step watches (`WaitTarget::Branch`), its
     /// `↗ <branch>`; absent otherwise and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_branch: Option<String>,
@@ -309,6 +310,30 @@ pub struct PhoneNode {
     /// 언제까지`; absent while nothing holds it and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<PhoneWait>,
+    /// What a waiting step waits on (`NodeView::wait_target`, PRD core-wait
+    /// D-15, B22): every target, the pull request and branch too; absent on
+    /// any other step and from a core before it. An older bundle ignores it
+    /// and draws the step from `external_pr`/`external_branch`, a step of
+    /// another target as a wait with no line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_target: Option<crate::waits::WaitTarget>,
+    /// When its wait passes its deadline (`NodeView::wait_until_unix_ms`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_until_unix_ms: Option<u64>,
+    /// The progress of the mission it waits on, `끝 2/7` (D-16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_progress: Option<crate::waits::WaitProgress>,
+    /// How its wait failed (`wait_outcome` in snapshot-wire-enums.json, D-17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_outcome: Option<String>,
+    /// The checks a failed CI wait named (`NodeView::wait_checks`), the
+    /// card's `CI 실패 · <first> 외 n`; absent for any other wait.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wait_checks: Vec<String>,
+    /// A waiting step Hide could not read this time (`NodeView::unread`),
+    /// the card's `확인 못 함`; absent while it reads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unread: bool,
 }
 
 /// A step's wait as the map reads it (`NodeWait`), copied field by field.
@@ -520,6 +545,24 @@ struct NodeIn {
     merge: Option<PhoneMerge>,
     #[serde(default)]
     wait: Option<PhoneWait>,
+    #[serde(default)]
+    wait_target: Option<crate::waits::WaitTarget>,
+    #[serde(default)]
+    wait_until_unix_ms: Option<u64>,
+    #[serde(default)]
+    wait_progress: Option<WaitProgressIn>,
+    #[serde(default)]
+    wait_outcome: Option<String>,
+    #[serde(default)]
+    wait_checks: Vec<String>,
+    #[serde(default)]
+    unread: bool,
+}
+
+#[derive(Deserialize)]
+struct WaitProgressIn {
+    done: u32,
+    total: u32,
 }
 
 /// A step's kind as the phone frame carries it (PRD node-presets D-11): a
@@ -527,10 +570,13 @@ struct NodeIn {
 /// the kind a bundle from before general steps names and draws it by; a newer
 /// bundle reads it back as the general step it is (`missionsOnWire`). A
 /// general step of another preset or none is `general`, which an older
-/// bundle draws as a step it has no word for.
+/// bundle draws as a step it has no word for. A waiting step keeps its name
+/// from before, `external`, which every bundle draws as a wait (PRD
+/// core-wait B22).
 fn phone_kind(kind: String, preset: Option<&str>) -> String {
     match (kind.as_str(), preset) {
         ("general", Some(old @ ("research" | "verify"))) => old.to_owned(),
+        ("wait", _) => "external".to_owned(),
         _ => kind,
     }
 }
@@ -789,6 +835,22 @@ fn phone_mission(
                     why: cut(&wait.why),
                     ..wait
                 }),
+                wait_target: source.wait_target,
+                wait_until_unix_ms: source.wait_until_unix_ms,
+                wait_progress: source
+                    .wait_progress
+                    .map(|progress| crate::waits::WaitProgress {
+                        done: progress.done,
+                        total: progress.total,
+                    }),
+                wait_outcome: source.wait_outcome,
+                wait_checks: source
+                    .wait_checks
+                    .iter()
+                    .map(String::as_str)
+                    .map(cut)
+                    .collect(),
+                unread: source.unread,
             }
         })
         .collect();
@@ -999,6 +1061,40 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&missions).unwrap()["asks"],
             json!(["m2", "m1"])
+        );
+    }
+
+    #[test]
+    fn a_waiting_step_carries_the_checks_its_ci_failed_on_and_a_read_that_could_not_say() {
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node(
+                        "ci",
+                        json!({"kind": "wait", "wait_target": {"ci": 12}, "wait_outcome": "ci_failed", "wait_checks": ["rust workspace", "web e2e"]}),
+                    ),
+                    node(
+                        "pr",
+                        json!({"kind": "wait", "wait_target": {"pr": 13}, "unread": true}),
+                    ),
+                    node("own", json!({})),
+                ],
+            )],
+            json!({}),
+        );
+        let missions = projected(&rest);
+        let nodes = &missions.items[0].nodes;
+        assert_eq!(nodes[0].wait_checks, ["rust workspace", "web e2e"]);
+        assert!(!nodes[0].unread);
+        assert!(nodes[1].unread && nodes[1].wait_checks.is_empty());
+        let sent = serde_json::to_value(&missions).unwrap();
+        let own = &sent["items"][0]["nodes"][2];
+        assert!(
+            own.get("wait_checks").is_none() && own.get("unread").is_none(),
+            "{own}"
         );
     }
 

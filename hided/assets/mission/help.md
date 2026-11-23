@@ -92,7 +92,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   "strength_why": "the parser's stored format changes",
   "merge_order": ["api", "screen"],
   "nodes": [
-    {"key": "parser", "title": "#1232 parser (outside)", "kind": "external", "external": {"pr": 1232}},
+    {"key": "parser", "title": "#1232 parser (outside)", "kind": "wait", "wait": {"pr": 1232}},
     {"key": "cause", "title": "#1487 find the cause", "kind": "general", "preset": "research",
      "criteria": ["the cause is named with the line that shows it"],
      "steps": ["Reproduce it on the real screen", "Find the line that loses the filter", "Write the cause down"],
@@ -124,12 +124,14 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
     | none (일반) | anything else that leaves no code, such as a setting changed on a site | its line | nothing |
 
     A plan written with the old kinds, `"kind": "research"` or `"kind": "verify"`, reads as a general node with that preset; a preset on a code or waiting node, or another preset beside an old kind, is refused (`mission_preset_invalid`).
-  - `external`, a waiting node (기다림 노드), is a pull request or branch outside the mission that a node waits on: `"external": {"pr": 1232}` or `{"branch": "feat/x"}`, with no worker, delivery, criteria or checks.
-    Hide marks it done when the pull request merges, whatever its base, or the branch's own work is in main (the default branch, whatever the mission's destination), and wakes you to start the nodes that waited; a pull request closed without a merge keeps it in progress and is raised to you (`pr_closed`).
-    The branch counts only once Hide has seen a commit of its own on it and that commit is in main, or its host merged a pull request from it: a branch just cut from main waits for its commits, and one merged before you added the node, with no pull request, waits for good.
-    The node's line says why it waits; name the pull request instead, or drop the node, when it will not finish by itself.
-    You cannot set it done yourself (`mission_external_invalid`).
-- Every node other than an outside one has its own finish lines in `criteria`: one to three sentences a checker can judge pass or fail (`mission_criteria_missing`, `mission_criteria_too_many`).
+  - `wait`, a waiting node (기다림 노드), is something outside the node's own work that the nodes after it wait on, with no worker, delivery, criteria or checks. Its `wait` names one target and an optional deadline `for` (minutes, hours or days such as `90m`, `2h` or `3d`, between 1h and 30d; 7 days when left out):
+    `{"pr": 1232}` a pull request merges; `{"pr": 1232, "ci": true}` every check on its newest commit ends; `{"branch": "feat/x"}` the branch's own work is in main; `{"mission": "mission-91"}` that mission closes as `done`; `{"mission": "mission-91", "node": "gitlab-write"}` that node is done (a code node once its pull request is ready, not when it reaches main).
+    Hide checks it again on its own (a pull request, CI or branch within a minute for the project on screen and five otherwise, with or without Hide's window; a mission or node the moment its record changes), marks the node done when it is met, and wakes you to start the nodes that waited.
+    When it fails or passes its deadline the node stays in progress and is raised to you with the reason: `pr_closed` (closed without a merge), `ci_failed` (the line names the checks that failed), `mission_cancelled`, `node_dropped` or `wait_expired`. Drop the node or plan it again (a new target, or a new `for` once its deadline passed, starts it over; a plan sent again keeps the deadline); ask the operator with `hide mission decide` when you cannot settle it.
+    The branch counts only once Hide has seen a commit of its own on it and that commit is in main, or its host merged a pull request from it: a branch just cut from main waits for its commits, and one merged before you added the node, with no pull request, waits until its deadline.
+    A mission or node must be on this machine, and neither this mission nor one that waits on it (`mission_wait_unknown`, `mission_wait_self`); a project whose code host cannot read a pull request by its number refuses `pr` and `ci` (`mission_wait_unsupported`); the machine holds at most 256 open waits (`mission_wait_full`).
+    You cannot set it done yourself (`mission_wait_invalid`). A plan written with `"kind": "external"` and `"external": {…}` reads as a waiting node.
+- Every node other than a waiting one has its own finish lines in `criteria`: one to three sentences a checker can judge pass or fail (`mission_criteria_missing`, `mission_criteria_too_many`).
   Write what is true when the node is finished, never the steps to get there; a screenshot is a line only when the node needs one.
   Name what is checked (each cell or behaviour by its name) and by which evidence (a unit test, a real CLI journey, the real app), never "some" or "part of".
   A node that changes what a user runs has one line checked in the real app (an isolated candidate build, never the operator's); a pass in a fake environment or against a stand-in alone does not finish it.
@@ -295,7 +297,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, or the machine cannot take another build, start nothing new, say why and for how long with `hide mission delay --line <why> --for <30m|2h>` (at most 24h; the delay ends by itself then, and you set it again if the reason still holds), and tell the operator in conversation if it holds for long. Clear it when you go on.
   The map shows a delay, and a node's own `--hold`, as one state on each node it holds, `기다리는 중 · <why> · <time>`, and `hide mission show` says it on the node's line.
-- A node that waits on a pull request outside the mission waits on it as a waiting (`external`) node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is in main.
+- A node that waits on a pull request, its CI, a branch or another mission waits on it through a waiting (`wait`) node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is met or fails.
 
 ## 4. While it runs
 
@@ -306,7 +308,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A label or address of another host, or an address of another repository, than the mission's project is refused (`change_request_other_host`, `change_request_other_repository`), and while the project's repository is not read yet only a bare number is taken (`change_request_project_unknown`).
   When a `direct` change reaches the destination, record its commit with `--commit <sha>`; when a general node ends with a judgment (a `verify` node always, any other that checked something), record `--verdict pass|fail` and `--checks <passed>/<total>`.
   Hide refuses a commit on any other node and a verdict on a code or waiting node (`mission_field_kind_invalid`), and the map shows them as the node's result.
-- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, when an outside node is in main, and when a finish line another node waits on passes or opens again (above).
+- Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, when a waiting node is met, and when a finish line another node waits on passes or opens again (above).
   The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI passed, was cancelled with no run replacing it, or failed, with the jobs that failed.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
   A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
@@ -439,7 +441,7 @@ No move is owed while a delay holds the mission, a decision waits on the operato
 A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
 Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
 Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
-To hold on purpose: a node that waits on a pull request outside the mission depends on a waiting (`external`) node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not `external`, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
+To hold on purpose: a node that waits on something outside its own work depends on a waiting (`wait`) node; one node you start later is held with `hide mission node <key> --hold <why> --for <30m|2h>` (not yet started and not a waiting node, at most 24h; neither it nor its worker's spawn starts until `--no-hold` or its end, and no stall is raised on it; the stall clock starts again when the hold ends); the whole mission is held with `hide mission delay`. There is no silent wait.
 
 ### Finish lines
 

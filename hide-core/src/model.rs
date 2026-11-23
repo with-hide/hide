@@ -2729,6 +2729,10 @@ pub struct AgentSleepSnapshot {
     /// Why Hide put it to sleep, when its hover says so; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<crate::agent_sleep::SleepCause>,
+    /// The open wait it sleeps on, the line under its row (PRD core-wait
+    /// D-15, B18); absent for an agent asleep with no wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<crate::waits::WaitLine>,
 }
 
 /// Whether the pane menu's Sleep agent can run now, and why not (PRD B15).
@@ -5470,6 +5474,11 @@ pub struct UiStateSnapshot {
     /// rows the shell draws (`archived_sessions`).
     #[serde(default, skip_serializing)]
     pub session_archive: crate::session_archive::SessionArchive,
+    /// The agents' waits (PRD core-wait D-21, B26). Persisted with this
+    /// store and never on the wire: an asleep row carries its one wait line
+    /// (`AgentSleepSnapshot::wait`).
+    #[serde(default, skip_serializing)]
+    pub waits: crate::waits::WaitStore,
     /// The checkouts last brought to the front, newest first, at most
     /// `RECENT_CHECKOUT_LIMIT` (PRD cmdk-recent D-05, D-08, D-09). ⌘K reads
     /// the first five it can show; the rest are there so the exclusions of
@@ -6327,6 +6336,7 @@ impl Default for UiStateSnapshot {
             agent_start: AgentStartChoice::default(),
             agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
             session_archive: crate::session_archive::SessionArchive::default(),
+            waits: crate::waits::WaitStore::default(),
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
             operator_tab_names: BTreeMap::new(),
@@ -10832,10 +10842,10 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_strength", &strengths);
             checked.insert("mission_strength");
-            let kinds = [NodeKind::Change, NodeKind::General, NodeKind::External];
+            let kinds = [NodeKind::Change, NodeKind::General, NodeKind::Wait];
             for variant in kinds {
                 match variant {
-                    NodeKind::Change | NodeKind::General | NodeKind::External => {}
+                    NodeKind::Change | NodeKind::General | NodeKind::Wait => {}
                 }
             }
             assert_wire(&contract, "mission_node_kind", &kinds);
@@ -11167,6 +11177,10 @@ mod wire_enum_tests {
                 AttentionReason::NotStarted,
                 AttentionReason::WarningStood,
                 AttentionReason::WaitStood,
+                AttentionReason::CiFailed,
+                AttentionReason::MissionCancelled,
+                AttentionReason::NodeDropped,
+                AttentionReason::WaitExpired,
             ];
             for variant in reasons {
                 match variant {
@@ -11180,11 +11194,43 @@ mod wire_enum_tests {
                     | AttentionReason::HumanGate
                     | AttentionReason::NotStarted
                     | AttentionReason::WarningStood
-                    | AttentionReason::WaitStood => {}
+                    | AttentionReason::WaitStood
+                    | AttentionReason::CiFailed
+                    | AttentionReason::MissionCancelled
+                    | AttentionReason::NodeDropped
+                    | AttentionReason::WaitExpired => {}
                 }
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);
             checked.insert("mission_attention_reason");
+            use crate::waits::WaitOutcome;
+            let outcomes = [
+                WaitOutcome::Merged,
+                WaitOutcome::ClosedUnmerged,
+                WaitOutcome::CiPassed,
+                WaitOutcome::CiFailed { checks: Vec::new() },
+                WaitOutcome::MissionDone,
+                WaitOutcome::MissionCancelled,
+                WaitOutcome::NodeDone,
+                WaitOutcome::NodeDropped,
+                WaitOutcome::Expired,
+            ];
+            for variant in &outcomes {
+                match variant {
+                    WaitOutcome::Merged
+                    | WaitOutcome::ClosedUnmerged
+                    | WaitOutcome::CiPassed
+                    | WaitOutcome::CiFailed { .. }
+                    | WaitOutcome::MissionDone
+                    | WaitOutcome::MissionCancelled
+                    | WaitOutcome::NodeDone
+                    | WaitOutcome::NodeDropped
+                    | WaitOutcome::Expired => {}
+                }
+            }
+            let keys: Vec<&str> = outcomes.iter().map(WaitOutcome::key).collect();
+            assert_wire(&contract, "wait_outcome", &keys);
+            checked.insert("wait_outcome");
             use crate::missions::AttentionTo;
             let whom = [AttentionTo::Conductor, AttentionTo::Operator];
             for variant in whom {

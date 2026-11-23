@@ -39,6 +39,8 @@ describe("what a switch reads as (B36, B41)", () => {
     expect(switchFailureKey("ssh_not_reached")).toBe("devices.switch.failed.notReached");
     expect(switchFailureKey("wsl_not_reached")).toBe("devices.switch.failed.wslNotReached");
     expect(switchFailureKey("ssh_update_there")).toBe("pairing.ssh.updateThere");
+    // A refusal from a Hide of this build is no older Hide (operator review 2026-11-23).
+    expect(switchFailureKey("ssh_refused_there")).toBe("pairing.ssh.refusedThere");
     expect(switchFailureKey("ssh_hide_not_running")).toBe("pairing.ssh.notRunning");
     expect(switchFailureKey("switch_not_connected")).toBe("devices.switch.failed.notConnected");
     expect(switchFailureKey("ssh_core_not_started")).toBe("devices.switch.failed.notStarted");

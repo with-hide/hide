@@ -36,7 +36,7 @@ use crate::node_access::NodeLink;
 use hide_node_link::gh::{
     AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS,
     REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS,
-    VIEWER_LOGIN, is_number,
+    VIEWER_LOGIN, WAIT_PR_FIELDS, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::protocol::Call;
@@ -2494,6 +2494,51 @@ pub(crate) fn pr_standing(
     }
 }
 
+/// Pull request `number` at `place` as the project's list holds one, its
+/// checks judged as the list judges them (the rollup, then the GitHub
+/// Actions runs on its head), for a CI wait on a pull request the list's 200
+/// newest no longer hold (PRD core-wait D-05): one `gh pr view` with the
+/// list's fields and the rollup, and while it is open the repository's name
+/// and the runs on its head, on the caller's worker.
+pub(crate) fn pr_as_listed(
+    node: &dyn NodeLink,
+    place: &Where,
+    number: u32,
+) -> Result<PullRequestSnapshot, String> {
+    let run = |arguments: &[&str]| gh_at(node, place, arguments);
+    let viewed = run(&["pr", "view", &number.to_string(), "--json", WAIT_PR_FIELDS])
+        .map_err(|error| error.reason)?;
+    let mut pull_request = parse_pull_requests(&format!("[{viewed}]"))?
+        .pop()
+        .ok_or("gh pr view returned no pull request")?;
+    if !is_open(&pull_request) {
+        return Ok(pull_request);
+    }
+    let checks: GhOpenChecks = serde_json::from_str(&viewed)
+        .map_err(|error| format!("gh pr view returned checks Hide could not read: {error}"))?;
+    let mut open = OpenChecks::of(checks.status_check_rollup);
+    let actions_jobs = open
+        .actions_jobs
+        .take()
+        .map(|jobs| HashMap::from([(number, jobs)]))
+        .unwrap_or_default();
+    open.apply(&mut pull_request);
+    let mut listed = Listed {
+        pull_requests: vec![pull_request],
+        actions_jobs,
+    };
+    let repository = read_identity(node, place);
+    judge_head_runs(
+        &run,
+        repository.as_ref().map(|viewed| viewed.name.as_str()),
+        &mut listed,
+    );
+    listed
+        .pull_requests
+        .pop()
+        .ok_or_else(|| "the pull request read was lost".to_owned())
+}
+
 /// Where pull request `number` at `place` was made from (PRD
 /// hide-plan-delegate D-19): its head branch, whether that branch is in
 /// another repository, and the repository it is in, read in one `gh pr
@@ -4050,7 +4095,15 @@ mod tests {
                 }
                 other => panic!("not a standing read: {other:?}"),
             });
-            pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7)
+            let standing = pr_standing(&node, &Where::Repository("acme/app".to_owned()), 7);
+            for asked in node.asked() {
+                let words: Vec<&str> = asked.iter().map(String::as_str).collect();
+                assert!(
+                    hide_node_link::gh::allowed(&words),
+                    "{words:?} is refused by the host"
+                );
+            }
+            standing
         };
         assert_eq!(standing("OPEN"), Ok(Standing::Open));
         assert_eq!(standing("CLOSED"), Ok(Standing::Closed));
@@ -4061,6 +4114,77 @@ mod tests {
             pr_standing(&refused, &Where::Repository("acme/app".to_owned()), 7),
             Err("HTTP 404: Not Found".to_owned())
         );
+    }
+
+    /// with-hide/hide#2254, found by the core-wait verifier: a CI wait on an
+    /// open pull request older than the list's 200 newest reads it by number
+    /// as the list would hold it, a failure with its checks' names and a pass
+    /// as a pass; a settled one by its state alone; runs that cannot be read
+    /// leave its checks unknown, never passed.
+    #[test]
+    fn a_pull_request_the_list_no_longer_holds_is_read_by_number_with_its_checks() {
+        let read = |state: &'static str, conclusion: &'static str, runs: bool| {
+            let node = Answering::new(move |words| {
+                match words {
+                ["pr", "view", "2254", "--json", fields] if *fields == WAIT_PR_FIELDS => {
+                    Some(format!(
+                        r#"{{"title":"t","number":2254,"headRefName":"old","headRefOid":"{}","isCrossRepository":false,"baseRefName":"main","state":"{state}","reviewDecision":"","isDraft":false,"url":"https://github.com/acme/app/pull/2254","mergedAt":null,"updatedAt":"2026-09-01T10:00:00Z","statusCheckRollup":[{}]}}"#,
+                        head('a'),
+                        run_job("verify", 7, "lint", "COMPLETED", &format!(r#""{conclusion}""#)),
+                    ))
+                }
+                ["repo", "view", "--json", fields]
+                    if *fields == hide_node_link::gh::REPOSITORY_FIELDS =>
+                {
+                    Some(r#"{"nameWithOwner":"acme/app","id":"R1","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#.to_owned())
+                }
+                ["api", "graphql", "-f", _] => runs.then(|| {
+                    format!(
+                        r#"{{"data":{{"repository":{{"c0":{{"checkSuites":{{"totalCount":1,"nodes":[{}]}}}}}}}}}}"#,
+                        run_suite(
+                            VERIFY,
+                            7,
+                            "pull_request",
+                            "COMPLETED",
+                            &format!(r#""{conclusion}""#),
+                            "2026-09-01T10:00:00Z",
+                        )
+                    )
+                }),
+                other => panic!("not a read of #2254: {other:?}"),
+            }
+            });
+            let read = pr_as_listed(&node, &Where::Repository("acme/app".to_owned()), 2254);
+            // A node and a device's host run only what `allowed` names: a
+            // read this fake answers but the host would refuse proves nothing.
+            for asked in node.asked() {
+                let words: Vec<&str> = asked.iter().map(String::as_str).collect();
+                assert!(
+                    hide_node_link::gh::allowed(&words),
+                    "{words:?} is refused by the host"
+                );
+            }
+            read.unwrap()
+        };
+        let ci = crate::waits::WaitTarget::Ci(2254);
+        let judge = |pull: &PullRequestSnapshot| crate::waits::judge_listed(&ci, pull);
+        assert_eq!(
+            judge(&read("OPEN", "FAILURE", true)),
+            Some(crate::waits::WaitOutcome::CiFailed {
+                checks: vec!["lint".to_owned()]
+            })
+        );
+        assert_eq!(
+            judge(&read("OPEN", "SUCCESS", true)),
+            Some(crate::waits::WaitOutcome::CiPassed)
+        );
+        assert_eq!(
+            judge(&read("CLOSED", "FAILURE", true)),
+            Some(crate::waits::WaitOutcome::ClosedUnmerged)
+        );
+        let unread = read("OPEN", "SUCCESS", false);
+        assert_eq!(unread.checks, PullRequestChecks::Unknown);
+        assert_eq!(judge(&unread), None);
     }
 
     /// A write from a card is its one command line; a merge GitHub says was

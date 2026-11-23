@@ -858,7 +858,11 @@ export interface AgentNotice {
             | "human_gate"
             | "not_started"
             | "warning_stood"
-            | "wait_stood";
+            | "wait_stood"
+            | "ci_failed"
+            | "mission_cancelled"
+            | "node_dropped"
+            | "wait_expired";
           unmet?: number;
         }
       | {

@@ -50,7 +50,7 @@ export type PairJoin = {
 export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch" | "rename";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
-export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
+export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string };
 
 /** The daemon's answer to one `pairing_*` event, for the window that sent it. */
 export type PairingResult = {
@@ -278,6 +278,8 @@ export function sshLookLine(look: SshLook | null | undefined): { key: MessageKey
       return { key: "pairing.ssh.ready", tone: "ok" };
     case "update_there":
       return { key: "pairing.ssh.updateThere", tone: "warn" };
+    case "refused":
+      return { key: "pairing.ssh.refusedThere", tone: "warn" };
     case "not_running":
       return { key: look.system === "macos" ? "pairing.ssh.signInMac" : "pairing.ssh.notRunning", tone: "warn" };
     default:
@@ -306,6 +308,8 @@ export function refusalKey(reason: string | null | undefined): MessageKey | null
       return "pairing.ssh.absent";
     case "ssh_update_there":
       return "pairing.ssh.updateThere";
+    case "ssh_refused_there":
+      return "pairing.ssh.refusedThere";
     case "ssh_hide_not_running":
       return "pairing.ssh.notRunning";
     case "ssh_not_reached":

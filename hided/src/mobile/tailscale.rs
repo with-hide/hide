@@ -315,7 +315,7 @@ pub fn funnel_on(serve: &Value, dns_name: &str) -> bool {
             .is_some_and(|sessions| sessions.values().any(allows))
 }
 
-/// The line Settings > Mobile shows while Funnel is on for this address.
+/// The line Settings › Devices shows while Funnel is on for this address.
 pub const FUNNEL_MESSAGE: &str = "Tailscale Funnel publishes this address to the internet; Hide opens only inside the tailnet, so turning Funnel off lets it continue";
 
 /// Reads `serve status --json` for port 443 of `dns_name`: hide's entry is

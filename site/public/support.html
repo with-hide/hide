@@ -73,8 +73,8 @@
           <h3>Connect your phone</h3>
           <p>The phone and the computer are the only places your conversation can be read; hide's relay passes encrypted messages along and cannot read them. No account, payment or Tailscale setup is needed.</p>
           <ol class="support-steps">
-            <li>On the computer, open <strong>Settings › Mobile</strong> and turn on <strong>Open hide from your phone</strong> (폰에서 Hide 열기).</li>
-            <li>Wait until the connection row says <strong>Connected · Hide relay (Tokyo)</strong> (연결됨 · Hide 중계 (도쿄)), then choose <strong>Show QR</strong> (QR 보기).</li>
+            <li>On the computer, open <strong>Settings › Devices</strong>, choose <strong>+ Add device</strong> (기기 추가), then <strong>Phone</strong> (폰). It turns on <strong>Open hide from your phone</strong> (폰에서 Hide 열기) when it is off.</li>
+            <li>The window shows the QR code as soon as the connection is ready; if the code expires, choose <strong>Show QR</strong> (QR 보기) for a new one.</li>
             <li>On an iPhone, install <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">Hide from the App Store</a> and choose <strong>Scan QR code</strong>. The Android app is coming to Google Play. On an Android phone or any other phone, scan the code with the camera; the phone opens <code>app.withhide.dev</code>; choose <strong>Connect</strong> (연결).</li>
             <li>In a browser, you can keep it as an app with the Share menu and <strong>Add to Home Screen</strong>.</li>
           </ol>
@@ -83,7 +83,7 @@
             <li>Four phones can be paired with one computer.</li>
             <li>Keep the computer running and connected. It can sleep; while it is off, the phone says it cannot connect and retries when the computer returns. The relay does not hold messages for later.</li>
             <li>The device name at the top of the phone screen switches between computers, and <strong>Connect another device</strong> (다른 기기 연결) adds one by scanning its code.</li>
-            <li>If you used the older direct Tailscale connection, it is still under <strong>Advanced · Connect directly with Tailscale</strong> (고급 · Tailscale로 직접 연결). Turning Mobile off closes the relay and every phone connection.</li>
+            <li>If you used the older direct Tailscale connection, it is still under <strong>Advanced · Connect directly with Tailscale</strong> (고급 · Tailscale로 직접 연결). Turning <strong>Open hide from your phone</strong> off closes the relay and every phone connection.</li>
           </ul>
 
           <h3>Get help</h3>
@@ -100,7 +100,7 @@
           <h3>Remove a paired phone</h3>
           <p>There are two directions, and you may need only one of them.</p>
           <ul>
-            <li><strong>On the computer</strong>, <strong>Settings › Mobile</strong> lists the phones connected to it and gives each one <strong>Revoke</strong> (연결 해제). A revoked phone cannot connect again without a new code from this computer. Turning Mobile off disconnects every phone at once.</li>
+            <li><strong>On the computer</strong>, <strong>Settings › Devices</strong> lists the phones connected to it under <strong>Phones</strong> (폰), and each one's <strong>⋯</strong> holds <strong>Disconnect…</strong> (연결 해제). A revoked phone cannot connect again without a new code from this computer. Turning <strong>Open hide from your phone</strong> off disconnects every phone at once.</li>
             <li><strong>On the phone</strong>, open the device list and remove the computer (기기 지우기, Remove device). The phone forgets the computer's key and its own credential, and connecting again needs a new code.</li>
           </ul>
           <p>A phone that has not connected for seven days is disconnected automatically. Removing the phone app removes what the phone kept about its computers.</p>
@@ -109,15 +109,15 @@
           <div class="faq support-faq">
             <details id="phone-cannot-connect">
               <summary>The phone says it cannot connect</summary>
-              <p>The computer is off, asleep, or Mobile is turned off in Settings. Wake the computer and check that the connection row says Connected. The phone retries by itself; there is no need to pair again.</p>
+              <p>The computer is off, asleep, or <strong>Open hide from your phone</strong> is off in Settings › Devices. Wake the computer and check that the connection row says Connected. The phone retries by itself; there is no need to pair again.</p>
             </details>
             <details id="phone-revoked">
               <summary>The phone says the connection was revoked</summary>
-              <p>Either that phone was revoked on the computer, or it has not connected for seven days. Show a new code in Settings › Mobile and scan it on the phone.</p>
+              <p>Either that phone was revoked on the computer, or it has not connected for seven days. Show a new code from Settings › Devices › Add device › Phone and scan it on the phone.</p>
             </details>
             <details id="phone-limit">
               <summary>A new phone will not pair</summary>
-              <p>One computer takes four phones. Revoke one in Settings › Mobile, then show a new code.</p>
+              <p>One computer takes four phones. Disconnect one in Settings › Devices, then show a new code.</p>
             </details>
             <details id="no-notifications">
               <summary>The phone does not show notifications</summary>
@@ -146,8 +146,8 @@
           <h3>폰 연결하기</h3>
           <p>대화를 읽을 수 있는 곳은 폰과 컴퓨터뿐입니다. hide의 중계 서버는 암호화된 메시지를 전달할 뿐 내용을 읽지 못합니다. 계정도, 결제도, Tailscale 설정도 필요하지 않습니다.</p>
           <ol class="support-steps">
-            <li>컴퓨터에서 <strong>설정 › 모바일</strong>을 열고 <strong>폰에서 Hide 열기</strong>를 켭니다.</li>
-            <li>연결 줄이 <strong>연결됨 · Hide 중계 (도쿄)</strong>가 되면 <strong>QR 보기</strong>를 고릅니다.</li>
+            <li>컴퓨터에서 <strong>설정 › 기기</strong>를 열고 <strong>+ 기기 추가</strong>에서 <strong>폰</strong>을 고릅니다. <strong>폰에서 Hide 열기</strong>가 꺼져 있으면 함께 켜집니다.</li>
+            <li>연결이 준비되면 창에 QR 코드가 바로 나옵니다. 코드가 만료되면 <strong>QR 보기</strong>로 새 코드를 받습니다.</li>
             <li>iPhone에서는 <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">App Store에서 Hide</a>를 설치하고 <strong>QR 코드 스캔</strong>을 고릅니다. Android 앱은 Google Play에 곧 올라옵니다. Android 폰을 포함한 다른 폰에서는 카메라로 코드를 스캔하고, <code>app.withhide.dev</code>가 열리면 <strong>연결</strong>을 고릅니다.</li>
             <li>브라우저에서는 공유 메뉴의 <strong>홈 화면에 추가</strong>로 앱처럼 쓸 수 있습니다.</li>
           </ol>
@@ -156,7 +156,7 @@
             <li>컴퓨터 한 대에 폰을 4대까지 연결할 수 있습니다.</li>
             <li>컴퓨터를 켜 두고 연결해 두세요. 잠들어도 되지만 꺼져 있는 동안 폰은 연결할 수 없다고 표시하고 컴퓨터가 돌아오면 다시 시도합니다. 중계 서버는 메시지를 쌓아 두지 않습니다.</li>
             <li>폰 화면 위쪽의 기기 이름으로 컴퓨터를 바꾸고, <strong>다른 기기 연결</strong>로 그 컴퓨터의 코드를 스캔해 하나 더 연결합니다.</li>
-            <li>예전 Tailscale 직접 연결은 <strong>고급 · Tailscale로 직접 연결</strong>에 그대로 있습니다. 모바일을 끄면 중계와 모든 폰 연결이 닫힙니다.</li>
+            <li>예전 Tailscale 직접 연결은 <strong>고급 · Tailscale로 직접 연결</strong>에 그대로 있습니다. <strong>폰에서 Hide 열기</strong>를 끄면 중계와 모든 폰 연결이 닫힙니다.</li>
           </ul>
 
           <h3>도움 받기</h3>
@@ -173,7 +173,7 @@
           <h3>연결한 폰 지우기</h3>
           <p>두 방향이 있고, 한쪽만 필요할 수 있습니다.</p>
           <ul>
-            <li><strong>컴퓨터에서</strong> <strong>설정 › 모바일</strong>에 연결된 폰이 나오고 각 폰에 <strong>연결 해제</strong>가 있습니다. 해제한 폰은 이 컴퓨터의 새 코드 없이는 다시 연결할 수 없습니다. 모바일을 끄면 모든 폰 연결이 한꺼번에 끊깁니다.</li>
+            <li><strong>컴퓨터에서</strong> <strong>설정 › 기기</strong>의 <strong>폰</strong> 묶음에 연결된 폰이 나오고, 각 폰의 <strong>⋯</strong>에 <strong>연결 해제…</strong>가 있습니다. 해제한 폰은 이 컴퓨터의 새 코드 없이는 다시 연결할 수 없습니다. <strong>폰에서 Hide 열기</strong>를 끄면 모든 폰 연결이 한꺼번에 끊깁니다.</li>
             <li><strong>폰에서</strong> 기기 목록을 열고 그 컴퓨터를 지웁니다(기기 지우기). 폰은 그 컴퓨터의 키와 자기 자격 증명을 잊고, 다시 연결하려면 새 코드가 필요합니다.</li>
           </ul>
           <p>7일 동안 연결하지 않은 폰은 자동으로 연결이 끊깁니다. 폰 앱을 지우면 폰이 컴퓨터들에 대해 보관하던 것도 함께 지워집니다.</p>
@@ -182,15 +182,15 @@
           <div class="faq support-faq">
             <details id="phone-cannot-connect-ko">
               <summary>폰에 연결할 수 없다고 나와요</summary>
-              <p>컴퓨터가 꺼져 있거나 잠들었거나, 설정에서 모바일이 꺼져 있습니다. 컴퓨터를 깨우고 연결 줄이 ‘연결됨’인지 확인하세요. 폰이 스스로 다시 시도하므로 새로 연결할 필요는 없습니다.</p>
+              <p>컴퓨터가 꺼져 있거나 잠들었거나, 설정 › 기기에서 <strong>폰에서 Hide 열기</strong>가 꺼져 있습니다. 컴퓨터를 깨우고 연결 줄이 ‘연결됨’인지 확인하세요. 폰이 스스로 다시 시도하므로 새로 연결할 필요는 없습니다.</p>
             </details>
             <details id="phone-revoked-ko">
               <summary>폰에 연결이 해제됐다고 나와요</summary>
-              <p>컴퓨터에서 그 폰을 해제했거나, 7일 동안 연결하지 않았습니다. 설정 › 모바일에서 새 코드를 보여 주고 폰으로 스캔하세요.</p>
+              <p>컴퓨터에서 그 폰을 해제했거나, 7일 동안 연결하지 않았습니다. 설정 › 기기 › 기기 추가 › 폰에서 새 코드를 보여 주고 폰으로 스캔하세요.</p>
             </details>
             <details id="phone-limit-ko">
               <summary>새 폰이 연결되지 않아요</summary>
-              <p>컴퓨터 한 대에 폰 4대까지 연결할 수 있습니다. 설정 › 모바일에서 하나를 해제하고 새 코드를 보여 주세요.</p>
+              <p>컴퓨터 한 대에 폰 4대까지 연결할 수 있습니다. 설정 › 기기에서 하나를 해제하고 새 코드를 보여 주세요.</p>
             </details>
             <details id="no-notifications-ko">
               <summary>폰에 알림이 오지 않아요</summary>

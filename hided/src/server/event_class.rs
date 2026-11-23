@@ -582,6 +582,7 @@ mod tests {
             "access_invite_cancel",
             "mobile_show_code",
             "mobile_enable",
+            "mobile_rename",
             "register_device",
             "remove_device",
             "rename_device",
