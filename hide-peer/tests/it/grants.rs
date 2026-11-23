@@ -215,3 +215,44 @@ async fn one_kind_at_its_cap_is_refused_and_frees_its_place_when_a_stream_ends()
         .await
         .expect("the ended stream's place is free");
 }
+
+/// A paired machine renamed since its pairing is shown by its new name from
+/// its next connection, on both sides, with no pairing again; one that says
+/// no name keeps the name it paired under.
+#[tokio::test]
+async fn a_paired_machine_is_named_by_what_it_calls_itself_from_its_next_connection() {
+    let net = Net::new();
+    let mut mini = Machine::calling_itself(&net, "mini", "Mac mini");
+    let mut mac = Machine::calling_itself(&net, "macbook", "hoyeon의 MacBook Pro");
+    let plain = Machine::new(&net, "plain");
+    pair(&mini, &mac);
+    pair(&mini, &plain);
+    mac.peers.dial(&mini.addr()).await.unwrap();
+    granted(&mut mac, mini.key(), GrantState::Active).await;
+    let mac_key = mac.key();
+    mini.event("the Mac connected", |event| {
+        matches!(event, PeerEvent::Connected { key, .. } if *key == mac_key).then_some(())
+    })
+    .await;
+    let name_of = |machine: &Machine, key| {
+        machine
+            .peers
+            .grants(|grants, _| grants.current(&key).map(|grant| grant.name.clone()))
+    };
+    assert_eq!(
+        name_of(&mini, mac.key()).as_deref(),
+        Some("hoyeon의 MacBook Pro")
+    );
+    assert_eq!(
+        mac.peers.host(&mini.key()).map(|host| host.name).as_deref(),
+        Some("Mac mini")
+    );
+
+    plain.peers.dial(&mini.addr()).await.unwrap();
+    let plain_key = plain.key();
+    mini.event("the plain machine connected", |event| {
+        matches!(event, PeerEvent::Connected { key, .. } if *key == plain_key).then_some(())
+    })
+    .await;
+    assert_eq!(name_of(&mini, plain.key()).as_deref(), Some("plain"));
+}

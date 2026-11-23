@@ -8,7 +8,8 @@
 //! and so does what the two machines show of each other's work (D-50,
 //! D-60): a machine's own work that waits on a person, for the machines
 //! that may open it, each computer's seat, and a notification handed to
-//! the computer someone is at.
+//! the computer someone is at, and, from a machine to a machine it runs
+//! work on, the names that work goes by.
 //!
 //! The list grows by kind, as the management messages do: a later message
 //! names the capability it came with in `contracts/peer-link.json`, and a
@@ -137,6 +138,44 @@ pub enum CoreMessage {
     /// seen (PRD device-connect-iroh D-70). The phone's name is all of it:
     /// nothing of the code, the link or the phone's keys.
     PhonePaired { phone: String },
+    /// The names the sending core shows its work on the receiving machine
+    /// by, for a machine it may open, whole each time a name moves and
+    /// once on each stream (PRD device-connect-iroh B10): each pane by the
+    /// id the receiving machine's tap lists it under, with its agent's
+    /// label or else its tab's name. A pane left out has no name, and the
+    /// receiving machine words its row by its folder.
+    WorkNames { names: Vec<WorkName> },
+}
+
+/// One pane of the sending machine's work on the receiving one and the name
+/// its own core shows it by.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkName {
+    pub pane: String,
+    pub name: String,
+}
+
+/// The most panes one [`CoreMessage::WorkNames`] names: the most a host
+/// keeps of one guest (`panes.json`).
+pub const MAX_WORK_NAMES: usize = 128;
+/// The longest name a [`WorkName`] carries, as a told row's title is.
+pub const MAX_WORK_NAME_CHARS: usize = 160;
+const MAX_WORK_PANE_BYTES: usize = 255;
+
+/// Whether `names` is a list a receiving machine keeps: bounded, no pane
+/// twice, every pane id one the tap carries, and every name one line that
+/// is not blank.
+pub fn valid_work_names(names: &[WorkName]) -> bool {
+    let mut panes = std::collections::HashSet::new();
+    names.len() <= MAX_WORK_NAMES
+        && names.iter().all(|named| {
+            !named.pane.is_empty()
+                && named.pane.len() <= MAX_WORK_PANE_BYTES
+                && panes.insert(named.pane.as_str())
+                && !named.name.trim().is_empty()
+                && named.name.chars().count() <= MAX_WORK_NAME_CHARS
+                && !named.name.chars().any(char::is_control)
+        })
 }
 
 /// One notification as the core that judged it worded it: data only, which
@@ -230,7 +269,7 @@ pub fn valid_phone_name(phone: &str) -> bool {
 }
 
 impl CoreMessage {
-    pub const TYPES: [&'static str; 11] = [
+    pub const TYPES: [&'static str; 12] = [
         "letter",
         "letter_taken",
         "letter_refused",
@@ -242,6 +281,7 @@ impl CoreMessage {
         "notice_answer",
         "notice_clear",
         "phone_paired",
+        "work_names",
     ];
 
     /// `None` for a type this build does not know.
@@ -278,6 +318,39 @@ mod tests {
             "iPhone\n2".to_owned(),
         ] {
             assert!(!valid_phone_name(&name), "{name:?}");
+        }
+    }
+
+    /// B10: a machine's work on another goes by the names its core shows
+    /// it by, and a list past the bounds is not kept.
+    #[test]
+    fn work_names_cross_by_pane_and_a_list_past_the_bounds_is_refused() {
+        let named = |pane: &str, name: &str| WorkName {
+            pane: pane.to_owned(),
+            name: name.to_owned(),
+        };
+        let told = CoreMessage::WorkNames {
+            names: vec![named("w1:p1", "로그인 고치기")],
+        };
+        let body = serde_json::to_vec(&told).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::json!({"t": "work_names", "names": [{"pane": "w1:p1", "name": "로그인 고치기"}]})
+        );
+        assert_eq!(CoreMessage::parse(&body).unwrap(), Some(told));
+        assert!(valid_work_names(&[]));
+        assert!(valid_work_names(&[named("w1:p1", "a"), named("w1:p2", "a")]));
+        for wrong in [
+            vec![named("w1:p1", "a"), named("w1:p1", "b")],
+            vec![named("", "a")],
+            vec![named("w1:p1", "  ")],
+            vec![named("w1:p1", "a\nb")],
+            vec![named("w1:p1", &"가".repeat(MAX_WORK_NAME_CHARS + 1))],
+            (0..=MAX_WORK_NAMES)
+                .map(|n| named(&format!("w1:p{n}"), "a"))
+                .collect(),
+        ] {
+            assert!(!valid_work_names(&wrong), "{wrong:?}");
         }
     }
 

@@ -359,6 +359,24 @@ impl Grants {
         }))
     }
 
+    /// Keeps `name`, what the guest under `key` calls itself now, as the
+    /// name of its grants. A name opens nothing, so the generation stays
+    /// and no stream is told. Whether anything changed.
+    pub fn take_name(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let mut changed = false;
+        for grant in next.grants.iter_mut().filter(|grant| grant.key == *key) {
+            if grant.name != name {
+                grant.name = name.to_owned();
+                changed = true;
+            }
+        }
+        if changed {
+            self.commit(next)?;
+        }
+        Ok(changed)
+    }
+
     pub fn pause(&mut self, key: &PeerKey) -> Result<Option<Change>, StoreError> {
         self.settle(key, GrantStatus::Paused)
     }
@@ -553,6 +571,24 @@ impl Known {
         }
         host.state = state;
         self.commit(next)
+    }
+
+    /// Keeps `name`, what the host under `key` calls itself now, as its
+    /// name. A host this machine switched through a login keeps the name
+    /// its device had here (B36): a WSL distribution calls itself by its
+    /// PC's host name, and a machine that was a device keeps the name the
+    /// operator gave it. Whether anything changed.
+    pub fn take_name(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let Some(host) = next.hosts.iter_mut().find(|host| host.key == *key) else {
+            return Ok(false);
+        };
+        if host.name == name || host.started.is_some() {
+            return Ok(false);
+        }
+        host.name = name.to_owned();
+        self.commit(next)?;
+        Ok(true)
     }
 
     /// Whether anything was removed.
@@ -833,5 +869,45 @@ mod tests {
         assert_eq!(Known::open(path).unwrap().of(&key(7)), Some(&host));
         assert!(known.remove(&key(7)).unwrap());
         assert!(!known.remove(&key(7)).unwrap());
+    }
+
+    /// A machine's own name moves its grant's and its host record's, and
+    /// nothing else; a host this machine switched through a login keeps
+    /// the name its device had here.
+    #[test]
+    fn a_name_a_machine_says_is_kept_unless_this_machine_switched_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Grants::open(dir.path().join("grants.json")).unwrap();
+        let pending = store
+            .grant_pending(key(1), "dev", "hoyeonui-MacBookPro.local", Via::Ssh, 0)
+            .unwrap();
+        store.confirm(&key(1), &pending.id, 1).unwrap();
+        let before = store.state_of(&key(1), 1);
+        assert!(store.take_name(&key(1), "hoyeon의 MacBook Pro").unwrap());
+        assert!(!store.take_name(&key(1), "hoyeon의 MacBook Pro").unwrap());
+        assert!(!store.take_name(&key(2), "nobody").unwrap());
+        assert_eq!(store.state_of(&key(1), 1), before);
+        let reopened = Grants::open(dir.path().join("grants.json")).unwrap();
+        assert_eq!(reopened.current(&key(1)).unwrap().name, "hoyeon의 MacBook Pro");
+
+        let mut known = Known::open(dir.path().join("known.json")).unwrap();
+        let host = |key: PeerKey, started: Option<Login>| Host {
+            key,
+            device: "host-device".into(),
+            name: "mini".into(),
+            grant: "g1".into(),
+            state: KnownState::Active,
+            candidates: Vec::new(),
+            started,
+        };
+        known.put(host(key(7), None)).unwrap();
+        known
+            .put(host(key(8), Some(Login::Ssh("mini".into()))))
+            .unwrap();
+        assert!(known.take_name(&key(7), "grab의 Mac mini").unwrap());
+        assert!(!known.take_name(&key(8), "grab의 Mac mini").unwrap());
+        let reopened = Known::open(dir.path().join("known.json")).unwrap();
+        assert_eq!(reopened.of(&key(7)).unwrap().name, "grab의 Mac mini");
+        assert_eq!(reopened.of(&key(8)).unwrap().name, "mini");
     }
 }

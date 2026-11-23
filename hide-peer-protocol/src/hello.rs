@@ -62,6 +62,13 @@ pub struct Hello {
     /// active grant on the reader is heard (D-40).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub update: bool,
+    /// What the sender calls itself now (a Mac's computer name), so a
+    /// machine already paired with it shows a new name from its next
+    /// connection without pairing again. A paired machine's own record
+    /// keeps a name its operator gave it; a sender that predates it says
+    /// none and keeps the name it paired under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Hello {
@@ -79,6 +86,7 @@ impl Hello {
             device: device.to_owned(),
             contract: (!release).then(crate::contract::hash),
             update: false,
+            name: None,
         }
     }
 
@@ -234,6 +242,7 @@ mod tests {
             device: "device".into(),
             contract: contract.map(str::to_owned),
             update: false,
+            name: None,
         }
     }
 
@@ -291,6 +300,13 @@ mod tests {
         // that asks for none is the hello an earlier reader knows.
         assert!(!read.update);
         assert!(!String::from_utf8_lossy(&bytes).contains("update"));
+        assert_eq!(read.name, None, "a hello from before names says none");
+        let named = Hello {
+            name: Some("hoyeon의 MacBook Pro".to_owned()),
+            ..ours.clone()
+        };
+        let bytes = named.encode().unwrap();
+        assert_eq!(Hello::decode(&bytes[PREFIX_BYTES..]).unwrap(), named);
         let asking = Hello {
             update: true,
             ..ours.clone()

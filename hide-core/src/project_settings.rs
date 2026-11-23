@@ -260,19 +260,93 @@ fn display_name(typed: &str) -> Result<Option<String>, &'static str> {
 
 /// Gives each project the name the operator set for it on its device and
 /// root. A project without one keeps the label the catalog gave it, its
-/// registration's or its folder's.
+/// registration's or its folder's, and two of those on one machine that
+/// read alike are told apart by their parent folders ([`tell_apart`]).
 pub(crate) fn apply_names(
     records: &BTreeMap<String, ProjectSettings>,
     projects: &mut [crate::model::WorkspaceSnapshot],
 ) {
-    if records.values().all(|record| record.name.is_none()) {
-        return;
+    if records.values().any(|record| record.name.is_some()) {
+        for project in projects.iter_mut() {
+            if let Some(name) = get(records, &project.device_id, &project.path)
+                .and_then(|record| record.name.as_deref())
+            {
+                project.label = name.to_owned();
+            }
+        }
     }
-    for project in projects.iter_mut() {
-        if let Some(name) = get(records, &project.device_id, &project.path)
-            .and_then(|record| record.name.as_deref())
-        {
-            project.label = name.to_owned();
+    tell_apart(projects);
+}
+
+/// The names of `path` from its last back, `/` between names on every
+/// system.
+fn names_of(path: &str) -> Vec<&str> {
+    path.split('/').filter(|name| !name.is_empty()).rev().collect()
+}
+
+/// `path`'s last `count` names, outermost first: `projects/hide`.
+fn last_names(names: &[&str], count: usize) -> String {
+    let mut kept: Vec<&str> = names.iter().take(count).copied().collect();
+    kept.reverse();
+    kept.join("/")
+}
+
+/// Tells apart the projects of one machine that go by their folder's name
+/// when another project there reads the same: each takes the fewest parent
+/// folders that make it differ from the others (`projects/hide` and
+/// `grab/hide`), on every screen, since every screen reads the project by
+/// this label (docs/UI_BEHAVIOR.md, Project settings). A name the operator
+/// gave is theirs and kept; it still counts as taken, so a folder of that
+/// name beside it is told apart. A label that is already its folder's with
+/// parents is read as its folder's, so telling apart again changes nothing.
+fn tell_apart(projects: &mut [crate::model::WorkspaceSnapshot]) {
+    // Each project's names, and whether its label is its folder's: its
+    // last name, or its last names with their parents.
+    let names: Vec<Vec<&str>> = projects.iter().map(|project| names_of(&project.path)).collect();
+    let folders: Vec<Option<usize>> = projects
+        .iter()
+        .zip(&names)
+        .map(|(project, names)| {
+            (1..=names.len()).find(|count| last_names(names, *count) == project.label)
+        })
+        .collect();
+    let mut labels: Vec<Option<String>> = vec![None; projects.len()];
+    for (index, project) in projects.iter().enumerate() {
+        let Some(own) = names[index].first() else {
+            continue;
+        };
+        if folders[index].is_none() {
+            continue;
+        }
+        let alike: Vec<usize> = (0..projects.len())
+            .filter(|other| {
+                *other != index
+                    && projects[*other].device_id == project.device_id
+                    && match folders[*other] {
+                        Some(_) => names[*other].first() == Some(own),
+                        None => projects[*other].label == *own,
+                    }
+            })
+            .collect();
+        if alike.is_empty() {
+            labels[index] = Some((*own).to_owned());
+            continue;
+        }
+        // The fewest names that no other folder of the same name ends with;
+        // a path no longer than another's ends with all it has.
+        let count = (2..=names[index].len())
+            .find(|count| {
+                let mine = last_names(&names[index], *count);
+                alike.iter().all(|other| {
+                    folders[*other].is_none() || last_names(&names[*other], *count) != mine
+                })
+            })
+            .unwrap_or(names[index].len());
+        labels[index] = Some(last_names(&names[index], count));
+    }
+    for (project, label) in projects.iter_mut().zip(labels) {
+        if let Some(label) = label {
+            project.label = label;
         }
     }
 }

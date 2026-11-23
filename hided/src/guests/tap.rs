@@ -91,6 +91,7 @@ impl State {
                 cols: pane.cols,
                 since_unix_ms: now,
                 folder: None,
+                name: None,
             },
         );
         true
@@ -160,6 +161,28 @@ impl GuestTap {
     /// The guest's panes on this machine, as last seen.
     pub fn panes(&self) -> Vec<Pane> {
         lock(&self.state).panes.values().cloned().collect()
+    }
+
+    /// Names the guest's panes as its core told them, whole (B10): a pane
+    /// the list leaves out has no name, and a name for a pane not listed
+    /// here is dropped, since the list follows the node. Kept in
+    /// `panes.json`, so the names stand while the guest is away.
+    pub fn name(&self, names: &std::collections::HashMap<String, String>) {
+        let mut state = lock(&self.state);
+        let mut changed = false;
+        for (pane, known) in &mut state.panes {
+            let name = names.get(pane);
+            if known.name.as_ref() != name {
+                known.name = name.cloned();
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        self.save(&state);
+        drop(state);
+        (self.changed)();
     }
 
     fn record(&self, kind: &str, extra: serde_json::Value) {
@@ -264,11 +287,13 @@ impl GuestTap {
                         continue;
                     }
                     // The folder a pane was started in does not change: it
-                    // is kept until the node says it again.
+                    // is kept until the node says it again, and so is the
+                    // name the guest's core last told.
                     if let (Some(known), Some(earlier)) =
                         (state.panes.get_mut(&name), earlier.get(&name))
                     {
                         known.folder.clone_from(&earlier.folder);
+                        known.name.clone_from(&earlier.name);
                     }
                 }
                 let gone: Vec<String> = earlier

@@ -545,6 +545,9 @@ pub struct Config<'a> {
     pub device: &'a str,
     /// Whether this build is an official release.
     pub release: bool,
+    /// What this machine calls itself, said in every hello so a paired
+    /// machine shows a new name from its next connection.
+    pub name: Option<&'a str>,
     pub clock: Clock,
 }
 
@@ -586,7 +589,10 @@ impl<T: PeerTransport> Peers<T> {
         let (incoming, accepted) = mpsc::channel(limits::MAX_STREAMS);
         let inner = Arc::new(Inner {
             transport,
-            hello: Hello::ours(config.build, config.device, config.release),
+            hello: Hello {
+                name: config.name.and_then(crate::link::clean_name),
+                ..Hello::ours(config.build, config.device, config.release)
+            },
             grants: Mutex::new(grants),
             known: Mutex::new(known),
             table: Mutex::new(Table {
@@ -866,6 +872,33 @@ impl<T: PeerTransport> Inner<T> {
 
     fn relation_changed(&self) {
         self.relation.send_modify(|count| *count += 1);
+    }
+
+    /// Keeps the name a paired machine calls itself in its hello, in the
+    /// grant it holds here and the host record kept of it, so a machine
+    /// that was renamed is shown by its new name from this connection on,
+    /// without pairing again. A hello that says none, or a name with
+    /// nothing showable, keeps the name it paired under; a stranger's
+    /// hello names nothing here, since neither record has its key.
+    fn take_name(&self, key: &PeerKey, name: Option<&str>) {
+        let Some(name) = name.and_then(crate::link::clean_name) else {
+            return;
+        };
+        let granted = lock(&self.grants).take_name(key, &name);
+        let known = lock(&self.known).take_name(key, &name);
+        match (granted, known) {
+            (Ok(false), Ok(false)) => {}
+            (Ok(_), Ok(_)) => self.relation_changed(),
+            (granted, known) => {
+                crate::diagnostic!(json!({
+                    "component": "peer",
+                    "event": "peer.name_not_saved",
+                    "peer": key.short(),
+                    "reason": granted.err().or(known.err()).map(|error| error.to_string()),
+                }));
+                self.relation_changed();
+            }
+        }
     }
 
     /// Moves the generation of the grant given to `change.key`: every
@@ -1241,6 +1274,7 @@ impl<T: PeerTransport> Inner<T> {
             });
             link
         };
+        self.take_name(&key, link.their_hello().name.as_deref());
         self.admitted.send_modify(|count| *count += 1);
         tokio::spawn(Arc::clone(self).write_hello_frames(link.clone(), send, queued, hello_place));
         tokio::spawn(Arc::clone(self).read_hello_frames(link.clone(), recv));
@@ -1560,6 +1594,7 @@ mod tests {
             build: "1.3.0-test",
             device: "test-device",
             release: false,
+            name: None,
             clock: Clock::system(),
         }
     }

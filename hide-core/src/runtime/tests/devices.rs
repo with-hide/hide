@@ -2533,3 +2533,76 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
         );
     }
 }
+
+/// B10: the names this core shows its work on a machine it opens by, read
+/// for that machine by its connection key, each pane by the id the
+/// machine's node lists it under: the agent's label, else the name its tab
+/// was given. A tab known only by its number tells nothing, and nor does a
+/// machine whose session this core does not hold now.
+#[test]
+fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
+    let mut runtime = runtime();
+    let key = "cd".repeat(32);
+    let event = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "peer_machines",
+        "payload": { "machines": [{
+            "key": key, "device_id": "mac-mini", "name": "Mac mini",
+            "opens": "active", "opened_by": null, "connected": true,
+            "path": "direct", "reason": null, "update": null,
+        }] },
+    }))
+    .expect("event");
+    runtime.dispatch_json(&event);
+    let told = |runtime: &Runtime| {
+        crate::work_names::told(
+            &runtime.snapshot.navigator.devices,
+            &runtime.snapshot.status.remote,
+        )
+    };
+    assert!(told(&runtime).is_empty(), "no session of the machine yet");
+
+    let at = |pane: &str| format!("remote:mac-mini:pane:{pane}");
+    let mut labelled = pane(&at("w1:p1"), "/Users/grab/hide");
+    labelled.identity_label = Some("로그인 고치기".to_owned());
+    let mut checkout = checkout("hide", "hide", "/Users/grab/hide", Some(labelled));
+    for (pane_id, tab_name) in [("w1:p2", "배포 확인"), ("w1:p3", "Tab 3")] {
+        let mut tab = tab("hide", "hide", Some(pane(&at(pane_id), "/Users/grab/hide")));
+        tab.naming.raw = tab_name.to_owned();
+        checkout.tabs.push(tab);
+    }
+    // The first tab is named too: the agent's label wins over it.
+    runtime.snapshot.status.remote = vec![crate::model::RemoteStatusSnapshot {
+        target_id: "mac-mini".into(),
+        state: "connected".into(),
+        message: None,
+        session: Some(crate::model::RemoteSessionSnapshot {
+            workspaces: vec![workspace("hide", "hide", "/Users/grab/hide", vec![checkout])],
+            agents: vec![],
+            active_tab_ids: Default::default(),
+            focused_workspace_id: None,
+            focused_checkout_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: vec![],
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+        }),
+        files: crate::model::RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    }];
+    let names: Vec<(String, String)> = told(&runtime)
+        .remove(&key)
+        .expect("the machine is told")
+        .into_iter()
+        .map(|named| (named.pane, named.name))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("w1:p1".to_owned(), "로그인 고치기".to_owned()),
+            ("w1:p2".to_owned(), "배포 확인".to_owned()),
+        ]
+    );
+}

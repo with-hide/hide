@@ -8,11 +8,11 @@ function project(id: string, path: string): Workspace {
   return { id, label: id, path, device_id: "local", checkouts: [{ id: `${id}-main`, path }] } as unknown as Workspace;
 }
 
-function rest(panes: { pane: string; folder?: string; since?: number }[]): SnapshotRest {
+function rest(panes: { pane: string; folder?: string; name?: string; since?: number }[]): SnapshotRest {
   return {
     navigator: {
       peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: false }],
-      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder })) }],
+      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder, name: pane.name })) }],
     },
   } as SnapshotRest;
 }
@@ -23,6 +23,11 @@ describe("another machine's work on this computer (PRD device-connect-iroh B10, 
     expect(pane).toMatchObject({ id: "guest:macbook:pane:w1:p1", machine: "MacBook Air", mark: "MA", label: "shop-api", folder: "/work/shop-api", projectId: null });
     // A pane whose node said no folder goes by its own id there.
     expect(guestPanes(rest([{ pane: "w1:p2" }]), [])[0]).toMatchObject({ label: "w1:p2", folder: null });
+  });
+
+  it("names a pane by the name its machine told, its folder only when it told none (B10)", () => {
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api", name: "로그인 고치기" }, { pane: "w1:p2", folder: "/work/shop-api" }]), []);
+    expect(panes.map((pane) => [pane.label, pane.folder])).toEqual([["로그인 고치기", "/work/shop-api"], ["shop-api", "/work/shop-api"]]);
   });
 
   it("stands a pane under this computer's project that holds its folder, and under its machine's name otherwise", () => {

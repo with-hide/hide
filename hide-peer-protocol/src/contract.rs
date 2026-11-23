@@ -255,7 +255,8 @@ fn core_messages() -> Vec<CoreMessage> {
             | CoreMessage::Notice { .. }
             | CoreMessage::NoticeAnswer { .. }
             | CoreMessage::NoticeClear { .. }
-            | CoreMessage::PhonePaired { .. } => {}
+            | CoreMessage::PhonePaired { .. }
+            | CoreMessage::WorkNames { .. } => {}
         }
     }
     let _ = exhaustive;
@@ -306,7 +307,17 @@ fn core_messages() -> Vec<CoreMessage> {
         },
         CoreMessage::NoticeClear { tags: vec![text()] },
         CoreMessage::PhonePaired { phone: text() },
+        CoreMessage::WorkNames {
+            names: vec![sample_work_name()],
+        },
     ]
+}
+
+fn sample_work_name() -> crate::core::WorkName {
+    crate::core::WorkName {
+        pane: String::new(),
+        name: String::new(),
+    }
 }
 
 fn sample_notice() -> crate::core::Notice {
@@ -442,6 +453,7 @@ pub fn shape() -> Value {
         device: String::new(),
         contract: Some(String::new()),
         update: true,
+        name: Some(String::new()),
     };
     let ready = Ready {
         guest_node: launch::GUEST_NODE,
@@ -459,6 +471,7 @@ pub fn shape() -> Value {
         cols: 0,
         since_unix_ms: 0,
         folder: Some(String::new()),
+        name: Some(String::new()),
     };
     let streams: Vec<Value> = StreamKind::ALL
         .into_iter()
@@ -527,6 +540,9 @@ pub fn shape() -> Value {
             "notice_states": ["needs_you", "done"],
             "max_clear_tags": crate::core::MAX_CLEAR_TAGS,
             "max_phone_name_chars": crate::core::MAX_PHONE_NAME_CHARS,
+            "work_name_fields": fields(&sample_work_name()),
+            "max_work_names": crate::core::MAX_WORK_NAMES,
+            "max_work_name_chars": crate::core::MAX_WORK_NAME_CHARS,
             "items": names!(Item: Agent, Pane),
             "asks": names!(Ask: Delivery, Pane),
         },

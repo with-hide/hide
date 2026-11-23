@@ -338,6 +338,11 @@ fn the_machine_names_itself_the_same_way_twice() {
     let name = host::name().unwrap();
     assert!(!name.is_empty());
     assert_eq!(host::name().unwrap(), name);
+    // What another machine shows it as: never the local network's spelling.
+    let shown = host::computer_name().unwrap();
+    assert!(!shown.trim().is_empty());
+    assert!(!shown.to_ascii_lowercase().ends_with(".local"), "{shown}");
+    assert_eq!(host::computer_name().unwrap(), shown);
     let id = host::machine_id().unwrap();
     assert!(!id.is_empty());
     assert!(

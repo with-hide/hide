@@ -24,7 +24,7 @@ export type GuestPane = {
   /** The machine's letters, as its rail tile would draw them (`MB`). */
   mark: string;
   folder: string | null;
-  /** What the row is called: the folder's own name, else the pane's id on its machine. */
+  /** What the row is called: the name its machine shows it by, else the folder's own name, else the pane's id there. */
   label: string;
   /** This computer's project that holds the folder, when one does. */
   projectId: string | null;
@@ -75,7 +75,8 @@ export function guestPanes(rest: SnapshotRest | null | undefined, projects: read
       .sort((left, right) => left.since_unix_ms - right.since_unix_ms)
       .map((pane) => {
         const folder = pane.folder ?? null;
-        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label: folder ? folderName(folder) : pane.pane, projectId: projectOf(folder) };
+        const label = pane.name?.trim() || (folder ? folderName(folder) : pane.pane);
+        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, projectId: projectOf(folder) };
       });
   });
 }
