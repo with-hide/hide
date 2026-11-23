@@ -3848,14 +3848,14 @@ In the iOS app every screen keeps clear of the notch, the home indicator and the
 In a browser and a Home Screen app the page is as tall as what the keyboard leaves of the screen, so the reply bar stays above it there too, and a detail read at its bottom keeps its newest line in view above the reply bar when the keyboard comes up; one scrolled up to older lines stays where it was.
 
 The start page with no computer connected is a first screen that says what to do, in order (`web/src/mobile/StartScreens.tsx`).
-It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 모바일 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
+It has `hide` with a gear at the right, the title `컴퓨터를 연결하세요`, one line (`Hide는 내 컴퓨터에서 도는 에이전트를 폰에서 보고 답하는 앱이에요.`) and three steps: `컴퓨터에 Hide 설치` (`맥, 윈도우, 리눅스` and a `withhide.dev` link that opens outside the app), `설정 > 기기 > 기기 추가 > 폰 열기` (`컴퓨터의 Hide에서 QR이 보여요`) and `아래 버튼으로 QR 스캔`.
 At the bottom is the big `QR 스캔` button, and under it `체험해 보기` with its one line.
 With two computers or more, or a computer whose connection was refused, the page is the list of computers it was; with one, it opens that computer ([Mobile companion](#mobile-companion)).
 In the iOS app `QR 스캔` opens the camera at once; in a browser, which has no native scanner, it opens the add page, where `QR 스캔` opens the browser's own camera drawn as the app's scanner and a pasted link connects too.
 The gear opens the same display and about rows as the Settings tab, with `연결한 컴퓨터가 아직 없어요` under 연결된 컴퓨터, and a back arrow returns to the first screen; a language chosen there applies at once.
 The demo's own Settings tab is unchanged.
 
-The iOS app's scanner is a full-screen camera view (`HideScannerPlugin.swift`) with the title `QR 코드 스캔`, the line `틀 안에 QR을 맞추면 바로 읽어요`, a frame with the rest dimmed (only what is inside the frame is read), `QR은 어디 있나요? 컴퓨터의 Hide > 설정 > 모바일` at the bottom, and a close button at the top right.
+The iOS app's scanner is a full-screen camera view (`HideScannerPlugin.swift`) with the title `QR 코드 스캔`, the line `틀 안에 QR을 맞추면 바로 읽어요`, a frame with the rest dimmed (only what is inside the frame is read), `QR은 어디 있나요? 컴퓨터의 Hide > 설정 > 기기 > 기기 추가 > 폰` at the bottom, and a close button at the top right.
 The camera permission is asked when `QR 스캔` is pressed, never at launch.
 Only a Hide pairing link ends the scan; any other QR code is ignored and the camera keeps looking.
 When the camera is refused, or cannot be opened (another app holds it), the view is not black: it says `카메라를 쓸 수 없어요` with `QR을 읽으려면 카메라 권한이 필요해요. iPhone 설정에서 Hide의 카메라를 켜 주세요.` and a `설정 열기` button that opens the app's page in iPhone Settings, and the close button is there in every state.

@@ -175,13 +175,24 @@ it("offers a fresh code once the shown one expired, a press away", async () => {
   await expired.unmount();
 });
 
-it("opens Add device on a computer's two ways when the way in adds a computer, and the phone group when it opens a phone's settings", async () => {
+it("opens Add device on a computer's two ways when the way in adds a computer", async () => {
   const { q, unmount } = await mount(frame());
   await act(async () => { useUiStore.getState().openAddDevice("computer"); });
   expect(q("[data-add-choose]")).toBeNull();
   expect(q("[data-add-kind]")).not.toBeNull();
+  await unmount();
+});
+
+it("brings the phone group into view when a phone's settings are asked for, and opens no Add device", async () => {
+  const { q, unmount } = await mount(frame());
+  const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
   await act(async () => { useUiStore.getState().openPhones(); });
+  expect(scrolled).toHaveBeenCalledTimes(1);
+  expect((scrolled.mock.contexts[0] as Element).querySelector('[data-mobile-tab="true"]')).not.toBeNull();
+  expect(q("[data-add-choose]")).toBeNull();
+  expect(q("[data-add-kind]")).toBeNull();
   expect(useUiStore.getState().devicesRequest).toBeNull();
+  scrolled.mockRestore();
   await unmount();
 });
 
