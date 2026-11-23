@@ -344,9 +344,9 @@ pub(super) fn sign_in(
     let asked = Instant::now();
     let facts = match bootstrap::probe(&mut pipe, dial.until) {
         Ok(facts) => facts,
-        Err(ProbeError::Unsupported(reason)) => {
+        Err(ProbeError::Unsupported { cause, reason }) => {
             pipe.link.kill();
-            return Err(EstablishError::Unsupported(reason));
+            return Err(EstablishError::unsupported(cause, reason));
         }
         Err(ProbeError::Stopped(stop)) => {
             // Read before the kill below ends ssh's output itself, and before

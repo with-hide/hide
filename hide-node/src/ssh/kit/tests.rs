@@ -731,7 +731,7 @@ fn a_local_build_names_the_developer_folder_instead_of_downloading() {
     };
     for identity in [UNPUBLISHED, unnumbered] {
         let packages = HelperPackages::new(Some(folder.path().to_path_buf()), identity);
-        let Err(EstablishError::Unsupported(reason)) = packages.payload_for(os, arch) else {
+        let Err(EstablishError::Unsupported { reason, .. }) = packages.payload_for(os, arch) else {
             panic!("a local build ({identity:?}) reached for a release kit");
         };
         assert!(reason.contains("no published release"), "{reason}");

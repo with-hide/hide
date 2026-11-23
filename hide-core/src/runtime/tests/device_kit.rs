@@ -2541,8 +2541,9 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     runtime.ingest_host_established(
         DEVICE,
         second,
-        Err(hide_node_link::device::EstablishError::Unsupported(
-            "this build cannot serve the device".to_owned(),
+        Err(hide_node_link::device::EstablishError::unsupported(
+            hide_node_link::device::UnsupportedCause::Platform,
+            "this build cannot serve the device",
         )),
     );
     assert_eq!(

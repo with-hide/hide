@@ -221,21 +221,35 @@ fn a_build_is_put_in_a_distribution_s_install_root() {
 fn an_unfinished_or_wsl1_distribution_is_refused_before_any_wsl_call() {
     let fixture = fixture();
     let device = fixture.device(fixture.packages());
-    lock_recover(&fixture.found)[0].first_run_pending = true;
-    let error = establish(&device, &consent(None), Wake::Allowed);
-    assert!(
-        matches!(&error, EstablishError::Unsupported(reason) if reason.contains("Finish setting up")),
-        "{error}"
-    );
-    lock_recover(&fixture.found)[0] = Distribution {
+    // Each refusal carries the class analytics counts beside the row's words.
+    let refused = |found: Vec<Distribution>| {
+        *lock_recover(&fixture.found) = found;
+        match establish(&device, &consent(None), Wake::Allowed) {
+            EstablishError::Unsupported { cause, reason } => (cause, reason),
+            other => panic!("{other}"),
+        }
+    };
+    let (cause, reason) = refused(vec![Distribution {
+        first_run_pending: true,
+        ..distribution()
+    }]);
+    assert_eq!(cause, UnsupportedCause::WslSetup);
+    assert!(reason.contains("Finish setting up"), "{reason}");
+    let (cause, reason) = refused(vec![Distribution {
+        installed: false,
+        ..distribution()
+    }]);
+    assert_eq!(cause, UnsupportedCause::WslInstalling);
+    assert!(reason.contains("Finish setting up"), "{reason}");
+    let (cause, reason) = refused(vec![Distribution {
         wsl_version: 1,
         ..distribution()
-    };
-    let error = establish(&device, &consent(None), Wake::Allowed);
-    assert!(
-        matches!(&error, EstablishError::Unsupported(reason) if reason.contains("wsl --set-version Ubuntu 2")),
-        "{error}"
-    );
+    }]);
+    assert_eq!(cause, UnsupportedCause::Wsl1);
+    assert!(reason.contains("wsl --set-version Ubuntu 2"), "{reason}");
+    let (cause, reason) = refused(Vec::new());
+    assert_eq!(cause, UnsupportedCause::WslMissing);
+    assert!(reason.contains("not installed on this PC"), "{reason}");
     assert!(fixture.calls().is_empty(), "{:?}", fixture.calls());
 }
 

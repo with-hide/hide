@@ -800,11 +800,58 @@ pub enum InstallStop {
     Local,
 }
 
+/// Why this build cannot serve a device: the closed class analytics
+/// counts, decided where the refusal is made; the reason beside it is what
+/// the device's row says.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnsupportedCause {
+    /// The device runs a system or processor Hide ships no device kit for.
+    Platform,
+    /// This build lacks a part the device needs: a build from source that
+    /// did not package it, or has no published release to download it from.
+    Build,
+    /// The start script's answer could not be read, or the script reported
+    /// a failure of its own.
+    Probe,
+    /// The device's account name is not one Hide can run as.
+    UserName,
+    /// The device's account has no usable home folder.
+    Home,
+    /// The device has neither `sha256sum` nor `shasum`.
+    Checksum,
+    /// The device reports no machine id.
+    MachineId,
+    /// The WSL distribution runs on WSL 1.
+    Wsl1,
+    /// WSL is still installing, converting or removing the distribution.
+    WslInstalling,
+    /// The distribution's first-run setup, which creates its user, has not
+    /// run.
+    WslSetup,
+    /// The distribution is no longer installed on this PC.
+    WslMissing,
+    /// The other machine's Hide cannot run this Hide's node until it is
+    /// updated there.
+    PeerUpdate,
+    /// The other machine could not make this Hide's folder.
+    PeerFolder,
+    /// The other machine already runs as many machines' work as it carries.
+    PeerFull,
+}
+
 impl EstablishError {
     /// An install that stopped at `stop`, for `reason`.
     pub fn install(stop: InstallStop, reason: impl Into<String>) -> Self {
         Self::Install {
             stop,
+            reason: reason.into(),
+        }
+    }
+
+    /// A device this build cannot serve, for `cause`, with the row's words.
+    pub fn unsupported(cause: UnsupportedCause, reason: impl Into<String>) -> Self {
+        Self::Unsupported {
+            cause,
             reason: reason.into(),
         }
     }
@@ -824,8 +871,12 @@ pub enum EstablishError {
         bound: Box<HostIdentity>,
         observed: Box<HostIdentity>,
     },
-    /// This build cannot serve the device; nothing was installed.
-    Unsupported(String),
+    /// This build cannot serve the device; nothing was installed. `cause`
+    /// is the closed class analytics counts.
+    Unsupported {
+        cause: UnsupportedCause,
+        reason: String,
+    },
     /// Acquiring the release kit for a known foreign platform failed.
     Download {
         os: String,
@@ -865,7 +916,7 @@ impl fmt::Display for EstablishError {
                 bound.describe()
             ),
             Self::Stopped(reason)
-            | Self::Unsupported(reason)
+            | Self::Unsupported { reason, .. }
             | Self::Install { reason, .. }
             | Self::Helper(reason)
             | Self::NotStarted { reason, .. }

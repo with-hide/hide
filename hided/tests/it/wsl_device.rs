@@ -275,7 +275,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     if row.setup_unfinished {
         let (refused, _) = establish(&*transport, &consent(None), Wake::Allowed);
         assert!(
-            matches!(&refused, Err(EstablishError::Unsupported(reason)) if reason.contains("Finish setting up")),
+            matches!(&refused, Err(EstablishError::Unsupported { reason, .. }) if reason.contains("Finish setting up")),
             "{:?}",
             refused.err()
         );

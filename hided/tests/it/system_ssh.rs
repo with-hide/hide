@@ -157,7 +157,7 @@ mod unix {
     /// it, and only the missing helper build stopped the attempt.
     fn reached_the_device(result: Result<hide_node_link::device::Established, EstablishError>) {
         match result {
-            Err(EstablishError::Unsupported(reason)) => assert!(
+            Err(EstablishError::Unsupported { reason, .. }) => assert!(
                 reason.contains("does not include the device helper"),
                 "{reason}"
             ),
