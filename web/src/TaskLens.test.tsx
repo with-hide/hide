@@ -503,10 +503,18 @@ it("counts a connected machine's Needs You rows in the group's head and says why
   expect(container.querySelector("[data-peer-row='mini:w1:p1'] [data-peer-elapsed]")).not.toBeNull();
   expect(container.querySelector("[data-peer-row='mini:w1:p1']")?.textContent).toContain("권한 요청에서 멈춤");
   expect(container.querySelector("[data-peer-row='mini:w1:p2']")?.textContent).toContain("답을 기다림");
-  // This computer's own row keeps no head; the other machine's rows stand under its letters, name and count.
-  expect(container.querySelector('[data-task-group="needs_you"] [data-task-row="ask"]')?.closest("[data-peer-machine]")).toBeNull();
-  expect(container.querySelector("[data-task-group='needs_you'] [data-peer-machine-head='mini']")?.textContent).toBe("MmMac-mini2");
-  expect([...container.querySelectorAll("[data-task-group='needs_you'] [data-peer-machine='mini'] [data-peer-row]")].map((element) => element.getAttribute("data-peer-row"))).toEqual(["mini:w1:p1", "mini:w1:p2"]);
+  // No machine stands as a head over its rows (operator review 2026-11-23): each row after this computer's ends its second line with the machine's chip, after the reason, and its name says the machine.
+  expect(container.querySelector("[data-peer-machine-head]")).toBeNull();
+  expect([...container.querySelectorAll("[data-task-group='needs_you'] [data-peer-row]")].map((element) => element.getAttribute("data-peer-row"))).toEqual(["mini:w1:p1", "mini:w1:p2"]);
+  const first = container.querySelector("[data-peer-row='mini:w1:p1']");
+  const chip = first?.querySelector("[data-device-chip]");
+  expect(chip?.textContent).toBe("Mac-mini");
+  expect(chip?.previousElementSibling?.textContent).toBe("권한 요청에서 멈춤");
+  expect(chip?.nextElementSibling).toBeNull();
+  expect(first?.getAttribute("aria-label")).toContain("Mac-mini");
+  const own = container.querySelector('[data-task-group="needs_you"] [data-task-row="ask"]');
+  expect(own?.querySelector("[data-device-chip]")).toBeNull();
+  expect(own!.compareDocumentPosition(first!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 // Another computer showing this one's screen shows this computer's Needs You only, not the rows of the machines this one opens.

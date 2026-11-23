@@ -9,11 +9,11 @@ import { scopeOccurrences, scopeRows, type AgentRef, type AgentScope } from "./a
 import type { TFunction } from "i18next";
 import type { TreeRow } from "./agentRow";
 import type { MessageKey } from "./i18n/catalogs";
-import { deviceConnected, thisMachineKey } from "./devices";
+import { deviceConnected } from "./devices";
 import { translate } from "./i18n/client";
 import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
-import { machineName, windowDeviceId } from "./screenMachine";
+import { machineName, ownMachineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace, type AutomationNames } from "./hideAiOrigin";
 import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
@@ -87,7 +87,7 @@ export function allAgents(remote: RemoteStatus[] | undefined, localAgents: Agent
     const agent = entry.remote ? remote?.find((r) => r.target_id === entry.device_id)?.session?.agents[entry.index] : localAgents[entry.index];
     if (!agent || agent.pane_id !== entry.pane_id) throw new Error(`Missing listed agent: ${entry.pane_id}`);
     // Each machine as this window calls it (PRD core-host-node-move B2); the core's own word before devices are listed.
-    const label = devices ? machineName(devices, entry.device_id, translate) : (entry.device_label ?? translate(thisMachineKey(null)));
+    const label = devices ? machineName(devices, entry.device_id, translate) : (entry.device_label ?? ownMachineName(null, translate));
     return { agent: { ...agent, device_label: label }, device: entry.remote ? label : null };
   });
 }

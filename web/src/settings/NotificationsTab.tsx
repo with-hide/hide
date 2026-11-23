@@ -5,7 +5,7 @@ import { hostBridge } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
 import { type PushMode } from "../mobileSettings";
 import { NotificationRows, useNotificationControl, usePermission } from "../NotificationControls";
-import { thisMachineKey } from "../screenMachine";
+import { ownMachineName } from "../screenMachine";
 import { useShellStore } from "../store";
 
 /**
@@ -29,7 +29,7 @@ function DesktopGroup({ actions }: { actions: Actions }) {
   if (!control) return null;
   const sends = control.enabled && control.state !== "no_service";
   return (
-    <Group title={t(thisMachineKey(null))} note={sends ? t("firstRun.settings.sentWhen") : undefined} data-settings-group="notifications">
+    <Group title={ownMachineName(null, t)} note={sends ? t("firstRun.settings.sentWhen") : undefined} data-settings-group="notifications">
       <NotificationRows control={control} />
     </Group>
   );

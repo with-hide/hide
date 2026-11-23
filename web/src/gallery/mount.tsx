@@ -29,6 +29,7 @@ import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
 import { PairingScene } from "./PairingScene";
 import { GuestWorkScene } from "./GuestWorkScene";
+import { RemoteSettingsScene } from "./RemoteSettingsScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
@@ -96,6 +97,11 @@ export function mountGallery(root: Root) {
     if (scene === "guest-work") {
       document.title = "hide · Another machine's work scene";
       root.render(<StrictMode><GuestWorkScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "remote-settings") {
+      document.title = "hide · Another computer's Settings scene";
+      root.render(<StrictMode><RemoteSettingsScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "add-project") {

@@ -253,13 +253,13 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
   const remoteStatus = useShellStore((s) => s.rest?.status?.remote);
   const tools = useShellStore((s) => toolCells(s.rest));
   const tool = useFrontTool();
-  // Shown in another machine's window, this machine's own title is the name that window calls it by, not This Mac.
+  // Shown in another machine's window, this machine's own title is the name that window calls it by, which can arrive after the first paint.
   const viewer = useSyncExternalStore(subscribeViewer, readViewer, () => null);
   // A tool's cell in front is named by the tool, an external tool (PRD hide-external-control B40).
   const title = useMemo(() => {
     if (tool) return { name: tool.name, note: t("devices.rail.tool") };
-    const front = frontTitle(devices, frontId, t);
-    return viewer?.name && front.note === null ? { ...front, name: viewer.name } : front;
+    return frontTitle(devices, frontId, t);
+    // `viewer` is read through `machineName`; it stays a dependency so a name that arrives redraws the title.
   }, [tool, devices, frontId, t, viewer]);
   const deviceMenu = useMemo<DeviceMenu>(() => {
     const list = windowFirst(devices);
@@ -280,7 +280,7 @@ export function useDeviceTitle(actions: Actions): { title: { name: string; note:
       onAddDevice: isRemoteView() ? null : actions.openAddDevice,
       onShowRail: isRemoteView() ? null : actions.showDeviceRail,
     };
-  }, [devices, frontId, remoteStatus, tools, tool, actions, t]);
+  }, [devices, frontId, remoteStatus, tools, tool, actions, t, viewer]);
   return { title, deviceMenu };
 }
 
