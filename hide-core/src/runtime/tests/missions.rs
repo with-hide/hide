@@ -8866,7 +8866,33 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
 /// under it when `workers`; laid, its lineage built and read, as a session
 /// arriving is (`Runtime::apply_session`).
 fn conductor_turn(runtime: &mut Runtime, status: &str, seq: u64, workers: bool) {
-    let mut row = conductor_row();
+    conductor_turn_asking(runtime, status, seq, workers, None);
+}
+
+/// [`conductor_turn`], with Hide AI's reading of a stopped turn as a
+/// question whose reply is `asking`.
+fn conductor_turn_asking(
+    runtime: &mut Runtime,
+    status: &str,
+    seq: u64,
+    workers: bool,
+    asking: Option<&str>,
+) {
+    let mut row = match asking {
+        None => conductor_row(),
+        Some(line) => {
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+                {"pane_id": "sender", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-sender",
+                 "revision": 1, "focused": false, "agent_status": "idle", "agent": "codex",
+                 "name": "sender", "cwd": PROJECT, "state_change_seq": seq,
+                 "label": {"question": true, "expected_reply": line}},
+            ]}))
+            .unwrap();
+            let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+            row.session_id = Some("sender-session".into());
+            row
+        }
+    };
     row.activity = if status == "working" {
         "working"
     } else {
@@ -8994,6 +9020,52 @@ fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
     let (more, notices) = conductor_announced(&mut runtime, &mut transitions);
     assert_eq!((more.group.as_str(), more.unread), ("needs_you", true));
     assert_eq!(notices.len(), 1);
+}
+
+/// A raise the operator read, then a turn Hide AI reads as a new question:
+/// the question stands in 내 차례 with the raise counted behind it (`외 1건`),
+/// announced once; answered at the pane, the Conductor works and rests on
+/// its worker again with the raise still read and nothing announced
+/// (docs/status-model.md, A question laid on a row stays read).
+#[test]
+fn a_read_raise_counts_behind_a_hide_ai_question_and_stays_read_once_it_is_answered() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let read = conductor_with_a_read_raise(&mut runtime, &mut transitions);
+    let raise = read.laid_asks.clone();
+
+    conductor_turn(&mut runtime, "working", 2, true);
+    conductor_turn_asking(&mut runtime, "idle", 3, true, Some("배포 순서 정하기"));
+    let (asking, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (
+            asking.group.as_str(),
+            asking.unread,
+            asking.demand.as_str(),
+            asking.asks_behind
+        ),
+        ("needs_you", true, "question", 1)
+    );
+    assert_eq!(asking.state.ask.as_ref().map(|ask| ask.more), Some(1));
+    assert_eq!(notices.len(), 1, "the question is announced once");
+
+    runtime.set_operator_focus(Some("sender".into()));
+    let kept = runtime.snapshot.ui_state.pane_read_records["sender"]
+        .read_asks
+        .clone()
+        .unwrap();
+    assert!(raise.is_subset(&kept), "{kept:?}");
+    conductor_turn(&mut runtime, "working", 4, true);
+    conductor_turn(&mut runtime, "done", 5, true);
+    runtime.set_operator_focus(None);
+    let (rested, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (rested.group.as_str(), rested.unread, rested.asks_behind),
+        ("seen", false, 0)
+    );
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert!(notices.is_empty(), "the raise read is not announced again");
 }
 
 /// The same Conductor finishing other work with no worker running: its turn

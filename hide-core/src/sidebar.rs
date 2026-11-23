@@ -895,6 +895,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         blocked_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),
+        held_asks: BTreeSet::new(),
         laid_read: false,
         views_unread: false,
         asks_read: 0,
@@ -3467,6 +3468,129 @@ mod tests {
         saved.records.get_mut("root").unwrap().read_asks = None;
         assert!(!laid(("idle", 4), &["a"], quiet, None, &mut saved, None).unread);
         assert!(laid(("done", 6), &["a"], quiet, None, &mut saved, None).unread);
+    }
+
+    /// One read rule for every question laid on a row (docs/status-model.md,
+    /// A question laid on a row stays read): for a session's open question, a
+    /// plan review and a mission raise alike, the question read stays read
+    /// over the agent's turn that rests on a proven wait (a working child, a
+    /// background task, running checks) and nothing is announced; a turn that
+    /// ends with nothing in progress is news in 읽을 것, the question behind
+    /// it (`외 1건`), announced once.
+    #[test]
+    fn every_kind_of_laid_question_stays_read_over_a_rest_on_work_and_waits_behind_a_turn_that_ends()
+     {
+        use crate::agent_state::{phone, push};
+        use crate::model::AskSubject;
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Wait {
+            Child,
+            Background,
+            Checks,
+            Nothing,
+        }
+        let session = "c0ffee00-0000-4000-8000-000000000002";
+        let kinds = [
+            (
+                "ask:test/codex/s#m1",
+                AskSubject::OpenAsk {
+                    id: "m1".to_owned(),
+                    line: "배포할까요?".to_owned(),
+                },
+            ),
+            ("plan:s@1", AskSubject::PlanReview { steps: 3 }),
+            (
+                "attention:mission-1/fix#1",
+                AskSubject::MissionAttention {
+                    node: "fix".to_owned(),
+                    reason: crate::missions::AttentionReason::ConductorFailed,
+                    unmet: 0,
+                },
+            ),
+        ];
+        for (id, subject) in kinds {
+            for wait in [Wait::Child, Wait::Background, Wait::Checks, Wait::Nothing] {
+                let case = format!("{subject:?} over {wait:?}");
+                // A pass with the root at `root`, its question laid on it
+                // while it rests as the core lays one, and what it waits on.
+                let pass = |root: (&str, u64), saved: &mut Saved, focused: Option<&str>| {
+                    let completion = (root.0 == "done").then_some(root.1);
+                    let mut rows = vec![pane("root", root.0, root.1, completion, session)];
+                    if wait == Wait::Child {
+                        let mut child = pane("child", "working", 1, None, "child-session");
+                        child["spawned_from_pane_id"] = json!("root");
+                        child["declared_parent_session"] =
+                            json!(crate::engine::tokens::session_digest(session).unwrap());
+                        rows.push(child);
+                    }
+                    let mut agents = projected(json!(rows));
+                    let row = &mut agents[0];
+                    match wait {
+                        Wait::Background => {
+                            row.row_facts = Some(crate::request_view::RowFacts {
+                                wake_devices: 1,
+                                ..Default::default()
+                            });
+                        }
+                        Wait::Checks => row.checks_wait = Some(7),
+                        Wait::Child | Wait::Nothing => {}
+                    }
+                    if row.activity != "working" {
+                        row.demand = "question".to_owned();
+                        row.user_turn = Some(hide_session::turns::UserTurnFact {
+                            kind: hide_session::turns::UserTurnKind::Question,
+                            content: None,
+                        });
+                        row.ask_subject = Some(subject.clone());
+                        row.laid_since_unix_ms = Some(1);
+                        row.laid_asks = BTreeSet::from([id.to_owned()]);
+                    }
+                    apply_lineage(&mut agents, &[], &[]);
+                    apply_read_state(
+                        &mut agents,
+                        Default::default(),
+                        &mut saved.records,
+                        &mut connection(),
+                        focused.as_slice(),
+                    );
+                    agents
+                        .into_iter()
+                        .find(|row| row.pane_id == "root")
+                        .unwrap()
+                };
+                let mut notices = push::Transitions::default();
+                let mut notice = |row: &SidebarAgentSnapshot| {
+                    let rest =
+                        json!({"navigator": {"agents": [serde_json::to_value(row).unwrap()]}});
+                    notices
+                        .observe(&phone::project(&rest, crate::labels::store::LOCAL_TARGET))
+                        .0
+                };
+                let mut saved = Saved::default();
+                let read = pass(("idle", 4), &mut saved, Some("root"));
+                assert!(!read.unread, "{case}");
+                notice(&read);
+                notice(&pass(("working", 5), &mut saved, None));
+                let rested = pass(("done", 6), &mut saved, None);
+                let sent = notice(&rested);
+                if wait == Wait::Nothing {
+                    assert_eq!(
+                        (rested.group.as_str(), rested.unread, rested.asks_behind),
+                        ("done", true, 1),
+                        "{case}"
+                    );
+                    assert_eq!(sent.len(), 1, "{case}");
+                } else {
+                    assert_eq!(
+                        (rested.group.as_str(), rested.unread),
+                        ("seen", false),
+                        "{case}"
+                    );
+                    assert_eq!(rested.ask_subject.as_ref(), Some(&subject), "{case}");
+                    assert!(sent.is_empty(), "{case}");
+                }
+            }
+        }
     }
 
     fn wire_lacks(row: &SidebarAgentSnapshot, field: &str) -> bool {

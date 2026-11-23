@@ -1184,36 +1184,94 @@ fn a_device_rows_read_plan_review_stays_read_while_its_agent_rests_on_work_and_a
         runtime.ingest_remote_session(DEVICE, Ok(session));
         publish(runtime);
     };
-    put_up(&mut runtime, 1);
+    // t1's device row as published, and the notices it sends.
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let mut shown = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|remote| remote.target_id == DEVICE)
+            .and_then(|remote| remote.session.as_ref())
+            .and_then(|session| {
+                session
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == pane_id("t1"))
+            })
+            .unwrap()
+            .clone();
+        let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+        let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
+            &rest,
+            crate::labels::store::LOCAL_TARGET,
+        ));
+        (row, notices)
+    };
+    let seen =
+        |row: &crate::model::SidebarAgentSnapshot| (row.group.clone(), row.unread, row.asks_behind);
     arrive(&mut runtime, ("idle", 1), ("working", 1), "t2");
-    assert!(unread(&runtime, "t1"), "the plan waits to be read");
+    shown(&runtime);
+    put_up(&mut runtime, 1);
+    publish(&mut runtime);
+    let (asking, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&asking),
+        ("needs_you".into(), true, 0),
+        "the plan waits to be read"
+    );
+    assert_eq!(notices.len(), 1);
     arrive(&mut runtime, ("idle", 1), ("working", 1), "t1");
-    assert!(!unread(&runtime, "t1"), "the device's keyboard read it");
+    let (read, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&read),
+        ("seen".into(), false, 0),
+        "the device's keyboard read it"
+    );
+    assert!(notices.is_empty());
 
     arrive(&mut runtime, ("working", 2), ("working", 1), "t2");
+    shown(&runtime);
     arrive(&mut runtime, ("done", 3), ("working", 1), "t2");
-    assert!(
-        !unread(&runtime, "t1"),
+    let (rested, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&rested),
+        ("seen".into(), false, 0),
         "the agent's work and its rest on its working child are not news"
     );
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert!(notices.is_empty());
 
     // The child finishes, which is news; read, the agent then finishes a
-    // turn with nothing in progress under it, which is news too.
+    // turn with nothing in progress under it, which is news too, the plan
+    // behind it.
     arrive(&mut runtime, ("done", 3), ("idle", 2), "t2");
-    assert!(unread(&runtime, "t1"), "the child's finish is news");
+    assert!(shown(&runtime).0.unread, "the child's finish is news");
     arrive(&mut runtime, ("done", 3), ("idle", 2), "t1");
-    assert!(!unread(&runtime, "t1"));
+    assert!(!shown(&runtime).0.unread);
     arrive(&mut runtime, ("working", 4), ("idle", 2), "t2");
+    shown(&runtime);
     arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
-    assert!(
-        unread(&runtime, "t1"),
+    let (finished, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&finished),
+        ("done".into(), true, 1),
         "a turn that ends with nothing in progress is news"
     );
+    assert_eq!(notices.len(), 1);
     arrive(&mut runtime, ("done", 5), ("idle", 2), "t1");
     arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
-    assert!(!unread(&runtime, "t1"));
+    let (again, _) = shown(&runtime);
+    assert_eq!(seen(&again), ("seen".into(), false, 0));
 
     put_up(&mut runtime, 2);
     publish(&mut runtime);
-    assert!(unread(&runtime, "t1"), "the plan put up again is news");
+    let (put_again, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&put_again),
+        ("needs_you".into(), true, 0),
+        "the plan put up again is news"
+    );
+    assert_eq!(notices.len(), 1);
 }

@@ -964,6 +964,7 @@ mod tests {
             blocked_since_unix_ms: None,
             laid_more: 0,
             laid_asks: std::collections::BTreeSet::new(),
+            held_asks: std::collections::BTreeSet::new(),
             laid_read: false,
             views_unread: false,
             asks_read: 0,

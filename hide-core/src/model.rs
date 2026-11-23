@@ -2366,6 +2366,15 @@ pub struct SidebarAgentSnapshot {
     /// A question laid on a row stays read).
     #[serde(skip)]
     pub(crate) laid_asks: BTreeSet<String>,
+    /// The core's questions for the row that stand while none is laid on
+    /// it, because it works or leads with a demand of its own
+    /// (`runtime/plans.rs::lay_reviews_on`). The read ones are counted
+    /// behind what leads the row (`asks_behind`) and kept in a read record
+    /// taken meanwhile, so a question the operator read stays read once the
+    /// row rests again (docs/status-model.md, A question laid on a row stays
+    /// read); one never read is never marked read by it.
+    #[serde(skip)]
+    pub(crate) held_asks: BTreeSet<String>,
     /// Whether the operator read every question laid on the row
     /// (`laid_asks`), decided with the read axis: such a question steps
     /// behind the agent's own turn while that turn is news

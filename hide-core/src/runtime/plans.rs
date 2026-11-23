@@ -1083,6 +1083,7 @@ impl Runtime {
         let before = agents.to_vec();
         for agent in agents.iter_mut() {
             agent.open_asks = None;
+            agent.held_asks.clear();
             let Some(laid) = self.plans.laid.remove(&agent.pane_id) else {
                 continue;
             };
@@ -1146,10 +1147,13 @@ impl Runtime {
                     items,
                 })
             });
+            // A working row, or one its own demand leads, carries its
+            // questions unlaid, so the read ones stay known to it.
             if agent.user_turn.is_some()
                 || agent.activity == "working"
                 || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None
             {
+                agent.held_asks = mine.iter().map(|(.., id)| id.clone()).collect();
                 continue;
             }
             let Some((asked, since, subject, _)) = mine.first() else {

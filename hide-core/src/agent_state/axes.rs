@@ -968,13 +968,37 @@ pub(crate) fn look_calls(agent: &SidebarAgentSnapshot) -> bool {
     !agent.unseen_views.is_empty() && (agent.unread || agent.views_unread)
 }
 
-/// Every question standing on the row now: the core's questions laid on it
-/// and the questions its session put to the operator that still wait, laid
-/// or not (`SidebarAgentSnapshot::open_asks`). Reading the row reads them all.
+/// Every question the row shows now: the core's questions laid on it and
+/// the questions its session put to the operator that still wait, laid or
+/// not (`SidebarAgentSnapshot::open_asks`). Reading the row reads them all.
 fn asks_on(agent: &SidebarAgentSnapshot) -> BTreeSet<String> {
     let mut asks = agent.laid_asks.clone();
     if let Some(open) = &agent.open_asks {
         asks.extend(open.items.iter().map(|item| open.ask_id(&item.id)));
+    }
+    asks
+}
+
+/// Every question standing for the row: the ones it shows ([`asks_on`]) and
+/// the core's questions it holds unlaid while it works or its own demand
+/// leads (`SidebarAgentSnapshot::held_asks`).
+fn asks_standing(agent: &SidebarAgentSnapshot) -> BTreeSet<String> {
+    let mut asks = asks_on(agent);
+    asks.extend(agent.held_asks.iter().cloned());
+    asks
+}
+
+/// What a read of the row now reads of its questions: the ones it shows,
+/// and of those it holds unlaid only the ones the record `prior` had read,
+/// so a read while a demand leads keeps a question read before and marks
+/// none the operator never saw.
+fn read_asks_for(
+    agent: &SidebarAgentSnapshot,
+    prior: Option<&BTreeSet<String>>,
+) -> BTreeSet<String> {
+    let mut asks = asks_on(agent);
+    if let Some(prior) = prior {
+        asks.extend(agent.held_asks.intersection(prior).cloned());
     }
     asks
 }
@@ -1013,7 +1037,12 @@ pub fn read_now(
     }
     let mut current = read_fingerprint(agent);
     current.server = Some(connection.server_of(agent).to_owned());
-    if records.get(&agent.pane_id) == Some(&current) {
+    let prior = records.get(&agent.pane_id);
+    current.read_asks = Some(read_asks_for(
+        agent,
+        prior.and_then(|record| record.read_asks.as_ref()),
+    ));
+    if prior == Some(&current) {
         return None;
     }
     records.insert(agent.pane_id.clone(), current.clone());
@@ -1283,7 +1312,7 @@ pub fn apply_read_state(
             record.demand = agent.demand.clone();
             record.activity = agent.activity.clone();
             record.completed = agent.completed;
-            record.read_asks = Some(asks_on(agent));
+            record.read_asks = Some(read_asks_for(agent, record.read_asks.as_ref()));
             moved = true;
         } else if settled_here && !record.unread && from_another_server {
             // Only this server's numbering is taken; what the operator read
@@ -1308,10 +1337,10 @@ pub fn apply_read_state(
         });
         moved |= record.descendant_signals.len() != before;
         // A question the record read that does not stand beside those the
-        // row carries now is gone: the core lays all of a row's questions at
-        // once, and the row carries every open one of its session. Dropping
-        // it never changes the read axis, as above.
-        let standing = asks_on(agent);
+        // row carries now is gone: the core lays or holds all of a row's
+        // questions at once, and the row carries every open one of its
+        // session. Dropping it never changes the read axis, as above.
+        let standing = asks_standing(agent);
         if let Some(read) = record.read_asks.as_mut()
             && !standing.is_empty()
             && !read.is_subset(&standing)
@@ -1411,7 +1440,7 @@ pub(crate) fn derive_read_state(
         // The questions read that wait behind whatever leads the row, the
         // ones its turn only asked again being that turn itself.
         let again = asks_again(agent).unwrap_or_default();
-        agent.asks_read = asks_on(agent)
+        agent.asks_read = asks_standing(agent)
             .iter()
             .filter(|ask| asks_read_now(ask) && !again.contains(*ask))
             .count();
