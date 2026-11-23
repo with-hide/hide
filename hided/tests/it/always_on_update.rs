@@ -441,12 +441,13 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
     // The app is removed and the login item starts the core again, which is
     // its install root's own once more: the panes started under the app's
     // name keep reaching it.
-    let (stopped, line) = machine.answer({
-        let mut stop = machine.command(&machine.app_cli, NEW);
-        stop.arg("stop");
-        stop
-    });
-    assert!(stopped, "{line}");
+    let stopped = machine
+        .command(&machine.app_cli, NEW)
+        .arg("stop")
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(stopped.success(), "the app's hide stop ended the core");
     std::fs::remove_dir_all(machine.app_cli.parent().unwrap()).unwrap();
     let restarted = machine.log_in_with(&program, NEW);
     assert!(same_file(&program_of(&restarted), &program), "{restarted}");
