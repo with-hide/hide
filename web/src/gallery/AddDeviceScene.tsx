@@ -64,8 +64,8 @@ const SIGN_IN: Device[] = [
 /**
  * The failure states a device row draws: sign in (needed, refused), the
  * changed server key, cannot connect over ssh's last line or Hide's sentence
- * where ssh has none, and a Hide an update replaced, which only opening Hide
- * again mends.
+ * where ssh has none, a Hide an update replaced, which only opening Hide
+ * again mends, and a Windows PC where Hide did not start.
  */
 const FAILURES: Device[] = [
   failed("studio", "sign_in_needed"),
@@ -77,6 +77,8 @@ const FAILURES: Device[] = [
   failed("old-box", "openssh_old"),
   failed("tower", "ssh_missing"),
   failed("mac-mini", "hide_updated"),
+  // Hide started on a Windows PC and never answered, as Smart App Control's block looks from here.
+  { ...failed("office-pc", "windows_not_started"), host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: null, contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "unavailable", message: null, platform: "windows x86_64", helper_path: null } },
 ];
 
 /** What a chosen Host's own Hide answers, by the scene's `look`. */
