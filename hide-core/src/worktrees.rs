@@ -1127,12 +1127,16 @@ pub fn project_snapshot(
     facts: hide_node_link::worktrees::RepositoryWorktrees,
 ) -> ProjectWorktreesSnapshot {
     let base_branch = facts.base_branch.clone();
+    // An older node sends its origin as the config holds it.
+    let origin_url = facts
+        .origin_url
+        .as_deref()
+        .map(hide_node_link::catalog::without_credentials);
     ProjectWorktreesSnapshot {
-        repository: facts
-            .origin_url
+        repository: origin_url
             .as_deref()
             .and_then(|origin| origin_repository(crate::code_host::CodeHosts::STANDARD, origin)),
-        origin_url: facts.origin_url.clone(),
+        origin_url,
         shared_git_path: facts.shared_git_path,
         root_path: facts.root_path,
         default_branch: facts.default_branch,

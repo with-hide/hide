@@ -517,7 +517,7 @@ export type PullRequestWork = {
   /** Disjoint counts from the open head's GitHub rollup; absent until read. */
   check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
   /** Its place in the base branch's merge queue; `unknown` while the queue could not be read. */
-  queue: { state: "unknown" | "not_queued" } | { state: "at"; position: number };
+  queue: { state: "unknown" | "not_queued" | "unsupported" } | { state: "at"; position: number };
   review_requested_at_unix_ms: number | null;
   /** Each reviewer and where they stand, approvals and change requests first; null while unknown (never "nobody"). Settled pull requests have none (PRD pr-review-status). */
   reviewers?: PrReviewer[] | null;
@@ -537,6 +537,8 @@ export type PrReviewer = { login: string; team: boolean; state: PrReviewerState;
 export type PrCard = {
   workspace_id: string;
   number: number;
+  /** The pull request's host and the operations it offers (`HostDeclaration`); absent until a card read placed the project, and from a core older than hosts, which read GitHub alone. */
+  host?: HostDeclaration | null;
   reading: boolean;
   head: string | null;
   body: string | null;
@@ -561,7 +563,7 @@ export type PrWrite = {
   head: string;
   method: PrMergeMethod | null;
   phase: "working" | "done" | "failed";
-  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "failed" | null;
+  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "unsupported" | "failed" | null;
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */
@@ -576,7 +578,32 @@ export type GithubStatus = {
   last_success_at_unix_ms: number | null;
   /** The extra questions of the last read that went unanswered while the pull request list was read (`ExtraQuery`). */
   unread_queries?: ExtraQuery[];
+  /** The host whose read this is; absent before any host answered, for a project no host reads, and from a core older than hosts, which read GitHub alone. */
+  host?: HostDeclaration | null;
 };
+
+/** A code host as the core declares it (`code_host::HostDeclaration`): its key, the optional operations it offers (an action not named here is refused by the core), and how it is reached. */
+export type HostDeclaration = {
+  key: string;
+  /** The host as the screen names it (`GitHub`, `GitLab`). */
+  name: string;
+  operations: HostOperation[];
+  access: { program: string; minimum_version: string; sign_in: string };
+};
+
+export type HostOperation =
+  | "merge"
+  | "update_branch"
+  | "edit_body"
+  | "merge_proof"
+  | "base_policy"
+  | "commit_checks"
+  | "failed_log"
+  | "by_number"
+  | "handover"
+  | "issues"
+  | "search"
+  | "watch";
 
 /** A question the pull request read asks beside the list: the signed-in account, the review requests, the merge queue, each reviewer's latest review. */
 export type ExtraQuery = "account" | "review_requests" | "merge_queue" | "reviews";

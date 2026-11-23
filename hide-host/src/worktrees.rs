@@ -78,7 +78,7 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         .config()
         .map_err(fail)?
         .origin_url()
-        .map(str::to_owned);
+        .map(hide_node_link::catalog::without_credentials);
     facts.last_fetch_unix_ms = std::fs::metadata(repository.common_dir.join("FETCH_HEAD"))
         .and_then(|metadata| metadata.modified())
         .ok()
@@ -536,7 +536,11 @@ fn read_project_until(
     // Read from the repository's own configuration, not another git process.
     let origin_url = hide_project::git::discover(root)
         .and_then(|repository| repository.config().ok())
-        .and_then(|config| config.origin_url().map(str::to_owned));
+        .and_then(|config| {
+            config
+                .origin_url()
+                .map(hide_node_link::catalog::without_credentials)
+        });
     // Every worktree shares the repository's last fetch.
     let last_fetch_at_unix_ms = shared_git_path
         .as_deref()

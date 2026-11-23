@@ -61,7 +61,7 @@ describe("Issue settings", () => {
     // A gh older than Hide's commands need is gh's own refusal too, and asks for an update.
     const outdated = project({ id: "w5", github: status({ available: false, failure_category: "outdated" }) });
     expect(githubAccess([offline, outdated], [])).toEqual({ state: "failed", category: "outdated" });
-    expect(githubAccessLine({ state: "failed", category: "outdated" })).toEqual({ text: "gh가 오래됐어요. 업데이트하세요", tone: "warn" });
+    expect(githubAccessLine({ state: "failed", category: "outdated" })).toEqual({ text: "gh 버전이 오래됐어요. 업데이트하세요", tone: "warn" });
     // A repository with no GitHub remote says nothing about gh, and a dialed device's project is not read here.
     expect(githubAccess([noRemote], [])).toBeNull();
     const onMini = project({ remote_target_id: "mini", device_id: "mini", github: status({ available: false, failure_category: "not_logged_in" }) });

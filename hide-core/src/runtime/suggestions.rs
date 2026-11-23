@@ -600,10 +600,11 @@ impl Runtime {
         }
     }
 
-    /// Whether GitHub answers for the opened Project (D-41): a missing `gh`,
-    /// a signed-out one or no GitHub remote. A network failure keeps the
-    /// last answer.
-    /// Whether GitHub answers for the Project at `root` on `node` (D-41).
+    /// Whether GitHub answers for the Project at `root` on `node` (D-41): a
+    /// missing `gh`, a signed-out one or no GitHub remote is missing, and so
+    /// is a host that keeps no issues or says nothing of how its base moves
+    /// (gitlab.com), which leaves the Project as it was before that host was
+    /// read. A network failure keeps the last answer.
     pub(super) fn suggestions_github(
         &self,
         node: &crate::node::NodeId,
@@ -616,7 +617,14 @@ impl Runtime {
                 .get(node.as_str())
                 .and_then(|github| github.project(root))
         };
-        match catalog.and_then(|project| project.status.failure_category) {
+        let status = catalog.map(|project| &project.status);
+        if status.is_some_and(|status| {
+            !status.offers(crate::code_host::Operation::Issues)
+                || !status.offers(crate::code_host::Operation::BasePolicy)
+        }) {
+            return SuggestionsGithub::Missing;
+        }
+        match status.and_then(|status| status.failure_category) {
             Some(
                 GithubFailureCategory::NotInstalled
                 | GithubFailureCategory::Outdated

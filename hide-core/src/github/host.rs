@@ -11,10 +11,10 @@ use hide_node_link::gh::{JOB_LOG_TAIL_BYTES, repository_of_remote, valid_reposit
 use super::Where;
 use crate::code_host::{
     BasePolicy, ByNumber, CardRead, ChangeHead, ChangeHeadFailure, ChangeRequestPage, CodeHost,
-    CommitChecks, CreateFailure, EditBody, FailedLog, Feedback, Handover, HeadMerge, HostFailure,
-    HostReads, Issues, JobLog, MergeProof, MergedHead, Place, ReadClock, RepositoryRef, Search,
-    SearchTarget, Standing, UpdateBranch, Watch, WatchAnswer, WatchReader, WatchRequest,
-    WriteFailure,
+    CommitChecks, CreateFailure, EditBody, FailedLog, Feedback, Handover, HeadMerge, HostAccess,
+    HostFailure, HostReads, Issues, JobLog, MergeProof, MergedHead, Place, ReadClock,
+    RepositoryRef, Search, SearchTarget, Standing, UpdateBranch, Watch, WatchAnswer, WatchReader,
+    WatchRequest, WriteFailure,
 };
 use crate::node_access::NodeLink;
 
@@ -67,6 +67,10 @@ pub(super) fn change_request_of(url: &str) -> Option<(RepositoryRef, u32)> {
 impl CodeHost for Github {
     fn key(&self) -> &'static str {
         KEY
+    }
+
+    fn name(&self) -> &'static str {
+        "GitHub"
     }
 
     fn names_server(&self, authority: &str) -> bool {
@@ -152,6 +156,14 @@ impl CodeHost for Github {
 
     fn number_label(&self, number: u32) -> String {
         format!("#{number}")
+    }
+
+    fn access(&self) -> HostAccess {
+        HostAccess {
+            program: "gh".to_owned(),
+            minimum_version: hide_node_link::gh::MINIMUM_VERSION.to_string(),
+            sign_in: "gh auth login".to_owned(),
+        }
     }
 
     fn reads(&self) -> Box<dyn HostReads> {

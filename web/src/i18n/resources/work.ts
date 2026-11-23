@@ -4,9 +4,9 @@ import type { Catalog, Catalogs } from "../schema";
 // and second-line reasons, and the PR card.
 
 export const workEnglish = {
-  "work.lens.stale": "GitHub read failed · value from {{minutes}} min ago",
-  "work.lens.staleNow": "GitHub read failed · last value",
-  "work.lens.partial": "GitHub read incomplete · could not read {{names}}",
+  "work.lens.stale": "{{host}} read failed · value from {{minutes}} min ago",
+  "work.lens.staleNow": "{{host}} read failed · last value",
+  "work.lens.partial": "{{host}} read incomplete · could not read {{names}}",
   "work.lens.unread": "could not read {{names}}",
   "work.lens.query.account": "the signed-in account",
   "work.lens.query.review_requests": "review requests",
@@ -131,6 +131,7 @@ export const workEnglish = {
   "work.card.fail.denied": "No permission · check on GitHub",
   "work.card.fail.conflict": "Conflicts with the base · resolve it first",
   "work.card.fail.not_mergeable": "GitHub does not allow the merge yet · look again",
+  "work.card.fail.unsupported": "This host does not offer this action",
   "work.card.fail.unreachable": "GitHub did not answer · try again",
   "work.card.fail.failed": "It did not go through · try again",
   "work.card.lookAgain": "Look again",
@@ -154,9 +155,9 @@ export const workEnglish = {
 } as const;
 
 const ko = {
-  "work.lens.stale": "GitHub 읽기 실패 · {{minutes}}분 전 값",
-  "work.lens.staleNow": "GitHub 읽기 실패 · 마지막 값",
-  "work.lens.partial": "GitHub 읽기 일부 실패 · 못 읽음: {{names}}",
+  "work.lens.stale": "{{host}} 읽기 실패 · {{minutes}}분 전 값",
+  "work.lens.staleNow": "{{host}} 읽기 실패 · 마지막 값",
+  "work.lens.partial": "{{host}} 읽기 일부 실패 · 못 읽음: {{names}}",
   "work.lens.unread": "못 읽음: {{names}}",
   "work.lens.query.account": "로그인한 계정",
   "work.lens.query.review_requests": "리뷰 요청",
@@ -281,6 +282,7 @@ const ko = {
   "work.card.fail.denied": "권한 없음 · GitHub에서 확인",
   "work.card.fail.conflict": "기준 브랜치와 충돌 · 먼저 해결하세요",
   "work.card.fail.not_mergeable": "GitHub에서 아직 머지를 허용하지 않음 · 다시 확인",
+  "work.card.fail.unsupported": "이 호스트에서는 할 수 없는 동작",
   "work.card.fail.unreachable": "GitHub 응답 없음 · 다시 시도",
   "work.card.fail.failed": "처리하지 못했어요 · 다시 시도",
   "work.card.lookAgain": "다시 확인",
@@ -304,9 +306,9 @@ const ko = {
 } satisfies Catalog<typeof workEnglish>;
 
 const zhCN = {
-  "work.lens.stale": "GitHub 读取失败 · {{minutes}} 分钟前的值",
-  "work.lens.staleNow": "GitHub 读取失败 · 最近一次的值",
-  "work.lens.partial": "GitHub 读取不完整 · 无法读取{{names}}",
+  "work.lens.stale": "{{host}} 读取失败 · {{minutes}} 分钟前的值",
+  "work.lens.staleNow": "{{host}} 读取失败 · 最近一次的值",
+  "work.lens.partial": "{{host}} 读取不完整 · 无法读取{{names}}",
   "work.lens.unread": "无法读取{{names}}",
   "work.lens.query.account": "已登录账号",
   "work.lens.query.review_requests": "审查请求",
@@ -431,6 +433,7 @@ const zhCN = {
   "work.card.fail.denied": "没有权限 · 请在 GitHub 上确认",
   "work.card.fail.conflict": "与基准分支冲突 · 请先解决",
   "work.card.fail.not_mergeable": "GitHub 暂不允许合并 · 重新查看",
+  "work.card.fail.unsupported": "此托管服务不提供该操作",
   "work.card.fail.unreachable": "GitHub 没有响应 · 重试",
   "work.card.fail.failed": "未能执行 · 重试",
   "work.card.lookAgain": "重新查看",
@@ -454,9 +457,9 @@ const zhCN = {
 } satisfies Catalog<typeof workEnglish>;
 
 const ja = {
-  "work.lens.stale": "GitHub の読み取りに失敗 · {{minutes}} 分前の値",
-  "work.lens.staleNow": "GitHub の読み取りに失敗 · 最後の値",
-  "work.lens.partial": "GitHub の読み取りが不完全 · {{names}}を読めません",
+  "work.lens.stale": "{{host}} の読み取りに失敗 · {{minutes}} 分前の値",
+  "work.lens.staleNow": "{{host}} の読み取りに失敗 · 最後の値",
+  "work.lens.partial": "{{host}} の読み取りが不完全 · {{names}}を読めません",
   "work.lens.unread": "{{names}}を読めません",
   "work.lens.query.account": "サインイン中のアカウント",
   "work.lens.query.review_requests": "レビュー依頼",
@@ -581,6 +584,7 @@ const ja = {
   "work.card.fail.denied": "権限なし · GitHub で確認",
   "work.card.fail.conflict": "基準ブランチと競合 · 先に解決してください",
   "work.card.fail.not_mergeable": "GitHub がまだマージを許可しません · 再確認",
+  "work.card.fail.unsupported": "このホストではできない操作です",
   "work.card.fail.unreachable": "GitHub が応答しません · 再試行",
   "work.card.fail.failed": "実行されませんでした · 再試行",
   "work.card.lookAgain": "再確認",

@@ -8,8 +8,9 @@
 //! optional operation it offers, one by one. Common code asks the registry
 //! ([`CodeHosts`]) and the unit, receives a [`Place`] and a [`HostFailure`],
 //! and never branches on a host's key or spells a host's command or address;
-//! `scripts/check-code-host-seam.py` holds that line. GitHub is the one
-//! registered host (`crate::github::host`).
+//! `scripts/check-code-host-seam.py` holds that line. GitHub
+//! (`crate::github::host`) and gitlab.com (`crate::gitlab::host`) are the
+//! registered hosts.
 //!
 //! An optional operation a host does not declare cannot be called: its
 //! accessor answers `None`, and the caller refuses the request as
@@ -81,6 +82,87 @@ pub(crate) fn change_request(
         files_url: unit.change_request_url(&repository, number, ChangeRequestPage::Files),
         repository,
         number,
+    }
+}
+
+/// What a host tells the screen and the phone about itself, beside a
+/// project's read and a change request's card: its key, the optional
+/// operations it offers, and what to do when it cannot be read. Made from
+/// the unit alone ([`declaration`]), so a button the screen draws and an
+/// event the core takes ask the same question.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
+pub struct HostDeclaration {
+    /// The unit's key ([`CodeHost::key`]): `github`, `gitlab`.
+    pub key: String,
+    /// The host as the screen names it ([`CodeHost::name`]): `GitHub`,
+    /// `GitLab`.
+    pub name: String,
+    /// The optional operations the host offers; one not named is refused by
+    /// the core.
+    pub operations: Vec<Operation>,
+    pub access: HostAccess,
+}
+
+/// The diagnostic component of a read's line that names no one host's
+/// project: a pass's projects no host places, a count over every host's
+/// projects, an address a session printed. A line about one placed
+/// project names its host's key instead.
+pub(crate) const COMPONENT: &str = "code_host";
+
+/// One optional operation of the contract, named as the accessor that
+/// offers it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    Merge,
+    UpdateBranch,
+    EditBody,
+    MergeProof,
+    BasePolicy,
+    CommitChecks,
+    FailedLog,
+    ByNumber,
+    Handover,
+    Issues,
+    Search,
+    Watch,
+}
+
+/// How a host is reached, for what the screen says when it cannot be: the
+/// program it runs, the oldest release of it Hide reads with, and the
+/// command that signs it in. Words around them are the screen's.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
+pub struct HostAccess {
+    pub program: String,
+    pub minimum_version: String,
+    pub sign_in: String,
+}
+
+/// The declaration of `unit`, its optional operations read from its own
+/// accessors: nothing lists a host's operations a second time.
+pub(crate) fn declaration(unit: &dyn CodeHost) -> HostDeclaration {
+    let offered = [
+        (Operation::Merge, unit.merge().is_some()),
+        (Operation::UpdateBranch, unit.update_branch().is_some()),
+        (Operation::EditBody, unit.edit_body().is_some()),
+        (Operation::MergeProof, unit.merge_proof().is_some()),
+        (Operation::BasePolicy, unit.base_policy().is_some()),
+        (Operation::CommitChecks, unit.commit_checks().is_some()),
+        (Operation::FailedLog, unit.failed_log().is_some()),
+        (Operation::ByNumber, unit.by_number().is_some()),
+        (Operation::Handover, unit.handover().is_some()),
+        (Operation::Issues, unit.issues().is_some()),
+        (Operation::Search, unit.search().is_some()),
+        (Operation::Watch, unit.watch().is_some()),
+    ];
+    HostDeclaration {
+        key: unit.key().to_owned(),
+        name: unit.name().to_owned(),
+        operations: offered
+            .into_iter()
+            .filter_map(|(operation, offered)| offered.then_some(operation))
+            .collect(),
+        access: unit.access(),
     }
 }
 
@@ -203,6 +285,10 @@ pub(crate) trait CodeHost: Sync {
     /// The unit's key, which a [`RepositoryRef`] names its host by.
     fn key(&self) -> &'static str;
 
+    /// The host as the screen names it (`GitHub`), in the words around a
+    /// read's state.
+    fn name(&self) -> &'static str;
+
     /// Whether `authority` is a server this host is known by name
     /// (`github.com`). A host can also read servers it does not name (GitHub
     /// Enterprise has any name); a server a registered host names is that
@@ -254,6 +340,10 @@ pub(crate) trait CodeHost: Sync {
 
     /// How the host writes a change request's number (`#12`).
     fn number_label(&self, number: u32) -> String;
+
+    /// How the host is reached: its program, the oldest release Hide reads
+    /// with, and the command that signs it in.
+    fn access(&self) -> HostAccess;
 
     /// The host's read of its projects, made once for each reader that
     /// reads them; what it keeps between passes is its own.
@@ -362,7 +452,8 @@ impl ReadClock {
 pub(crate) struct CodeHosts(&'static [&'static dyn CodeHost]);
 
 impl CodeHosts {
-    pub(crate) const STANDARD: Self = Self(&[&crate::github::host::GITHUB]);
+    pub(crate) const STANDARD: Self =
+        Self(&[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB]);
 
     pub(crate) fn hosts(self) -> impl Iterator<Item = Host> {
         self.0.iter().map(|unit| Host(*unit))
@@ -494,8 +585,12 @@ impl CodeHosts {
     /// Where a checkout of the core's machine is read, from its remotes as
     /// its node read them:
     ///
-    /// - no remote that names a server (an empty list): `None`, answered "no
-    ///   remote" with no host asked;
+    /// - no remote that names a server (an empty list of addresses):
+    ///   [`Placement::NoRemote`], answered "no remote" with no host asked;
+    /// - an older node's GitHub-shaped names and none of them:
+    ///   [`Placement::RemotesNotKnown`], since those names say nothing of
+    ///   another host's remote; answered with no host asked and kept apart
+    ///   from no remote;
     /// - remotes of one host alone: that host, in the checkout when it finds
     ///   the remote itself, else by the first remote's repository;
     /// - remotes the node did not list, an address no registered unit reads,
@@ -506,11 +601,11 @@ impl CodeHosts {
     ///
     /// An older node's GitHub-shaped names are read as stored names, as they
     /// were; a name no unit reads names nothing.
-    pub(crate) fn place_of_checkout(
+    pub(crate) fn placement_of_checkout(
         self,
         root: &Path,
         remotes: CheckoutRemotes<'_>,
-    ) -> Option<Place> {
+    ) -> Placement {
         let in_checkout =
             |host: Host, named: &[(Host, RepositoryRef)], complete: bool| Place::Checkout {
                 host,
@@ -525,10 +620,13 @@ impl CodeHosts {
         let resolving = |named: &[(Host, RepositoryRef)], complete: bool| {
             self.hosts()
                 .find(|host| host.resolves_checkout())
-                .map(|host| in_checkout(host, named, complete))
+                .map_or(Placement::NoRemote, |host| {
+                    Placement::At(in_checkout(host, named, complete))
+                })
         };
         let (named, listed): (Vec<(Host, RepositoryRef)>, usize) = match remotes {
             CheckoutRemotes::Unknown => return resolving(&[], false),
+            CheckoutRemotes::Named([]) => return Placement::RemotesNotKnown,
             CheckoutRemotes::Addresses(addresses) => (
                 addresses
                     .iter()
@@ -548,16 +646,50 @@ impl CodeHosts {
         if !complete && matches!(remotes, CheckoutRemotes::Addresses(_)) {
             return resolving(&named, false);
         }
-        let (first, rest) = named.split_first()?;
+        let Some((first, rest)) = named.split_first() else {
+            return Placement::NoRemote;
+        };
         if rest.iter().any(|(host, _)| *host != first.0) {
             return resolving(&named, complete);
         }
         let (host, repository) = first.clone();
-        Some(if host.resolves_checkout() {
+        Placement::At(if host.resolves_checkout() {
             in_checkout(host, &named, complete)
         } else {
             Place::Repository { host, repository }
         })
+    }
+}
+
+/// What the registry makes of a checkout's remotes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Placement {
+    /// Its host reads it there.
+    At(Place),
+    /// No remote names a server a registered host reads.
+    NoRemote,
+    /// The node did not say enough to tell: an older node names only
+    /// GitHub-shaped remotes, and named none. Not a failed read and not no
+    /// remote; a later pass from a node that sends its addresses decides.
+    RemotesNotKnown,
+}
+
+impl Placement {
+    pub(crate) fn as_place(&self) -> Option<&Place> {
+        match self {
+            Self::At(place) => Some(place),
+            Self::NoRemote | Self::RemotesNotKnown => None,
+        }
+    }
+
+    /// The place alone, for a test that asserts only where a checkout is
+    /// read.
+    #[cfg(test)]
+    pub(crate) fn place(self) -> Option<Place> {
+        match self {
+            Self::At(place) => Some(place),
+            Self::NoRemote | Self::RemotesNotKnown => None,
+        }
     }
 }
 

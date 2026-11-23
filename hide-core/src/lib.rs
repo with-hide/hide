@@ -46,6 +46,7 @@ mod fork;
 mod github;
 mod github_poll;
 mod github_store;
+mod gitlab;
 pub mod global_instruction;
 pub mod guest_panes;
 mod handle;
