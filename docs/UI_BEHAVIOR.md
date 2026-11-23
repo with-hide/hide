@@ -1701,7 +1701,7 @@ A number is drawn from the reference the core carried for it, never parsed from 
 The words Hide gives its own lists stay Hide's: the sidebar's `PR` tab and its counts read `PR` for a gitlab.com project too.
 An action the host does not offer is not drawn, not drawn disabled: on gitlab.com today a card has no hand-over, merge queue, branch update, linked issue or new issue, and its Merge appears only once the host declares the merge.
 Hide AI follows the same rule: for a host that files no issues, such as gitlab.com today, a suggestion that would leave an issue shows no `GitHub 연결 필요` hold, and Settings › Hide AI draws no GitHub signals row.
-A line about a read names the host and its program (`glab 로그인 필요`, `GitLab 읽기 실패`), and a line about one pull request calls it what its host does (`MR`).
+A line about a read names the host and its program (`glab 로그인 필요`, `GitLab 읽기 실패`), and a line about one pull request calls it what its host does (`MR`), except two rare notices that keep main's words on both hosts: the card or phone page of one no longer listed, and a merge that met a moved head.
 The host mark among a project row's buttons in the sidebar opens the repository its last read named, on that host; a project no read named yet has no mark there.
 With GitHub as the only host, every screen reads as it did before hosts.
 
