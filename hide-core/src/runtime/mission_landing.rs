@@ -277,7 +277,7 @@ fn holds_close(node: &MissionNode) -> bool {
 /// None once the lower pull request merged or its branch is read in main;
 /// the stack's own rules move what is left (`stack_waiting`, the merge into
 /// the one above, `hide mission help`).
-pub(super) fn stacked_below<'a>(
+pub(crate) fn stacked_below<'a>(
     mission: &'a Mission,
     node: &MissionNode,
 ) -> Option<&'a MissionNode> {

@@ -58,8 +58,6 @@ function deciding(over: Partial<PhoneMission> = {}): PhoneMission {
 
 const closed = (id: string, at: number, status: PhoneMission["status"] = "done") => mission(id, { status, created_at_unix_ms: at - 10, closed_at_unix_ms: at, nodes: [node("a", "done")] });
 
-let endConnection: (() => void) | null = null;
-
 /** A phone paired and connected to a fake hided that has listed the given missions. */
 async function connect(items: PhoneMission[]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -70,13 +68,13 @@ async function connect(items: PhoneMission[]) {
   const { App } = await import("./App");
   const connection = await import("./connection");
   const store = await import("./store");
-  // Its socket watch would fire after this file's environment is gone on a slow machine.
-  endConnection = connection.stop;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -86,7 +84,14 @@ async function connect(items: PhoneMission[]) {
   await act(async () => root.render(<App />));
   const click = (selector: string) => act(async () => container.querySelector<HTMLElement>(selector)!.click());
   const answers = () => socket.sent.filter((message) => message.type === "answer_mission");
-  return { container, socket, serve, click, answers, connection, store, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    }).then(() => container.remove());
+  return { container, socket, serve, click, answers, connection, store, unmount };
 }
 
 // The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
@@ -98,8 +103,6 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  endConnection?.();
-  endConnection = null;
   vi.unstubAllGlobals();
 });
 

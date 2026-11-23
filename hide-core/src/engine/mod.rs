@@ -778,6 +778,14 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
+    /// A pane's visible screen as plain text, without styling; each step of
+    /// the call waits up to `timeout`.
+    pub fn read_visible(&self, pane: &str, timeout: Duration) -> Result<String, EngineError> {
+        self.engine
+            .read_pane(Wait::Each(timeout), pane, "visible", 0)
+            .map(|read| read.text)
+    }
+
     /// Types the operator's `text` into the agent's input in `pane` and
     /// submits it, as a letter's bell is typed ([`Engine::prompt_agent`]):
     /// an agent reads a slash command sent this way as the command (#2354).
@@ -795,6 +803,17 @@ impl EngineHandle {
     /// Presses one key in a pane.
     pub fn press_key(&self, pane: &str, key: &str, timeout: Duration) -> Result<(), EngineError> {
         self.engine.press_key(Wait::Each(timeout), pane, key)
+    }
+
+    /// Presses `keys` in a pane in order: named keys and single characters,
+    /// each typed as a key press, never pasted ([`Engine::send_keys`]).
+    pub fn send_keys(
+        &self,
+        pane: &str,
+        keys: &[&str],
+        timeout: Duration,
+    ) -> Result<(), EngineError> {
+        self.engine.send_keys(Wait::Each(timeout), pane, keys)
     }
 
     /// A pane's folder and the session its agent reports.

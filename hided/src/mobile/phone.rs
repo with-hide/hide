@@ -30,13 +30,16 @@ use hide_holder_protocol::{MAX_COLS, MAX_READ_BYTES, styled};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use super::ask;
+use super::calls::Calls;
 use super::conversation::{self, Tail, Transcript};
 use super::looks;
-use super::pane::{self, Input, PaneError};
+use super::pane::{self, PaneError};
 use super::projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use super::prs;
 use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
+use hide_core::operator_input::{self, Typed};
 
 /// How often an open detail reads its pane again.
 const DETAIL_INTERVAL: Duration = Duration::from_secs(1);
@@ -413,7 +416,11 @@ fn spawn_beside_loop(
 }
 
 struct Detail {
+    key: AgentKey,
     ask: tokio::sync::watch::Sender<Ask>,
+    /// The agent's ask as the phone was last shown it, which a choice is
+    /// checked against before its keys are typed.
+    shown: tokio::sync::watch::Receiver<Option<ask::Shown>>,
     /// The cursors of older conversation pages the phone pulled for.
     older: mpsc::Sender<u64>,
     task: tokio::task::JoinHandle<()>,
@@ -434,22 +441,47 @@ fn spawn_detail(
     frames: mpsc::Sender<Value>,
     mut asks: tokio::sync::watch::Receiver<Ask>,
     mut older: mpsc::Receiver<u64>,
+    shown: tokio::sync::watch::Sender<Option<ask::Shown>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut rows = RowsReader::default();
         let mut transcript: Option<Transcript> = None;
+        let mut calls: Option<Calls> = None;
         // Whether the phone was last told the pane has a conversation.
         let mut told: Option<bool> = None;
         // The Views the phone was last told the agent has open.
         let mut told_looks: Option<hide_core::LookViews> = None;
+        // The agent's ask and running command the phone was last told.
+        let mut told_ask: Option<Value> = None;
+        let mut told_running = Value::Null;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
             outgoing.extend(looks_step(&mobile, &key, &mut told_looks).await);
             if ask.view == View::Conversation {
-                let (next, frame) = conversation_step(&mobile, &key, transcript.take()).await;
+                let follow = follows_calls(&mobile, &key);
+                let (next, next_calls, frame) =
+                    conversation_step(&mobile, &key, transcript.take(), calls.take(), follow).await;
                 transcript = next;
-                outgoing.extend(frame);
+                calls = next_calls;
+                let running = running(&mobile, &key, calls.as_ref());
+                match frame {
+                    Some(mut frame) => {
+                        frame["running"] = running.clone();
+                        told_running = running;
+                        outgoing.push(frame);
+                    }
+                    // A command started or ended with no message: the
+                    // conversation is told its running line alone.
+                    None if transcript.is_some() && running != told_running => {
+                        outgoing.push(json!({
+                            "type": "conversation", "device_id": key.device_id, "pane_id": key.pane_id,
+                            "state": "ok", "mode": "append", "messages": [], "running": running,
+                        }));
+                        told_running = running;
+                    }
+                    None => {}
+                }
                 if transcript.is_none() && told != Some(false) {
                     outgoing.push(json!({
                         "type": "conversation", "device_id": key.device_id, "pane_id": key.pane_id, "state": "none",
@@ -459,6 +491,19 @@ fn spawn_detail(
             }
             if ask.view == View::Terminal || transcript.is_none() {
                 outgoing.extend(rows.read(&mobile, &key, ask.lines).await);
+            }
+            let current = asked(&mobile, &key, calls.as_ref());
+            let frame = current
+                .as_ref()
+                .map_or(Value::Null, |current| current.frame.clone());
+            // Before the frame leaves, so a choice made on it is checked
+            // against it.
+            shown.send_replace(current);
+            if told_ask.as_ref() != Some(&frame) {
+                outgoing.push(json!({
+                    "type": "ask", "device_id": key.device_id, "pane_id": key.pane_id, "ask": frame,
+                }));
+                told_ask = Some(frame);
             }
             for frame in outgoing {
                 if frames.send(frame).await.is_err() {
@@ -535,60 +580,113 @@ fn conversation_failed(message: &str) {
 /// `None` when the pane has no conversation to show. A failed pane read
 /// keeps an open transcript, so a slow answer does not flip the phone to
 /// the terminal.
+/// Whether the detail follows the agent's open calls: while it works, for
+/// its running line, and while a tool call waits for permission, for the
+/// command it waits on; an idle agent's session is not read for them.
+fn follows_calls(mobile: &Mobile, key: &AgentKey) -> bool {
+    let projection = mobile.projection_now();
+    projection.find(key).is_some_and(|agent| {
+        (agent.demand == "none" && agent.status_code == "working")
+            || ask::kind_of(agent) == Some(hide_core::operator_input::Ask::Permission)
+    })
+}
+
+/// The running line the conversation carries (Doop 02): the kind of what
+/// runs and since when, never what it runs; `null` while nothing does, and
+/// `unknown` while calls past those kept may run one.
+fn running(mobile: &Mobile, key: &AgentKey, calls: Option<&Calls>) -> Value {
+    let projection = mobile.projection_now();
+    let Some(agent) = projection.find(key) else {
+        return Value::Null;
+    };
+    if agent.demand != "none" || agent.status_code != "working" {
+        return Value::Null;
+    }
+    let Some(calls) = calls else {
+        return Value::Null;
+    };
+    match calls.command() {
+        // Allowed after waiting, it runs from when the agent went on.
+        Some(open) => json!({
+            "kind": "command",
+            "since_ms": open.since_ms.max(agent.changed_at_unix_ms),
+        }),
+        // Past the open calls kept, one not kept may run a command.
+        None if calls.full() => json!({"kind": "unknown", "since_ms": null}),
+        None => Value::Null,
+    }
+}
+
+/// What the agent asks, as the detail shows it.
+fn asked(mobile: &Mobile, key: &AgentKey, calls: Option<&Calls>) -> Option<ask::Shown> {
+    let projection = mobile.projection_now();
+    let pending = calls.map(Calls::pending);
+    projection
+        .find(key)
+        .and_then(|agent| ask::of(agent, pending.as_ref()))
+}
+
 async fn conversation_step(
     mobile: &Arc<Mobile>,
     key: &AgentKey,
     transcript: Option<Transcript>,
-) -> (Option<Transcript>, Option<Value>) {
+    calls: Option<Calls>,
+    follow: bool,
+) -> (Option<Transcript>, Option<Calls>, Option<Value>) {
     // An SSH device's transcript is on that device.
     if key.device_id != mobile.node().as_str() {
-        return (None, None);
+        return (None, None, None);
     }
     let reader = Arc::clone(mobile);
     let pane_id = key.engine_pane_id().to_owned();
-    let (transcript, page) = tokio::task::spawn_blocking(move || {
+    let (transcript, calls, page) = tokio::task::spawn_blocking(move || {
         let source = reader
             .engine(reader.node().as_str())
             .and_then(|engine| conversation::source(&engine, &pane_id));
         let source = match source {
             Ok(Some(source)) => source,
-            Ok(None) | Err(PaneError::Gone) => return (None, None),
+            Ok(None) | Err(PaneError::Gone) => return (None, None, None),
             Err(error) => {
                 if let PaneError::Unavailable(message) = &error {
                     conversation_failed(message);
                 }
-                return (transcript, None);
+                return (transcript, calls, None);
             }
         };
+        // The core says which account the pane's agent runs in; until a row
+        // shows the agent, there is nothing to open yet.
+        let Some(account) = reader.core().pane_account(&pane_id) else {
+            return (None, None, None);
+        };
+        let calls = follow_calls(&reader, &source, &account, calls, follow);
         if let Some(mut open) = transcript.filter(|open| open.source() == &source) {
             match open.poll() {
                 Ok(Tail::Messages(messages)) => {
                     let appended = (!messages.is_empty()).then_some((messages, None, "append"));
-                    return (Some(open), appended);
+                    return (Some(open), calls, appended);
                 }
                 Ok(Tail::Reset) => {}
                 Err(error) => conversation_failed(&error.to_string()),
             }
         }
-        // The core says which account the pane's agent runs in; until a row
-        // shows the agent, there is nothing to open yet.
-        let Some(account) = reader.core().pane_account(&pane_id) else {
-            return (None, None);
-        };
         match Transcript::open(&reader.session_accounts(), &account, &pane_id, source) {
-            Ok((open, page)) => (Some(open), Some((page.messages, page.before, "reset"))),
+            Ok((open, page)) => (
+                Some(open),
+                calls,
+                Some((page.messages, page.before, "reset")),
+            ),
             // Reported, and nothing written yet.
-            Err(hide_session::SessionError::SessionFileMissing) => (None, None),
+            Err(hide_session::SessionError::SessionFileMissing) => (None, calls, None),
             Err(error) => {
                 conversation_failed(&error.to_string());
-                (None, None)
+                (None, calls, None)
             }
         }
     })
     .await
     .unwrap_or_else(|error| {
         conversation_failed(&error.to_string());
-        (None, None)
+        (None, None, None)
     });
     let frame = page.map(|(messages, before, mode)| {
         let mut frame = json!({
@@ -600,7 +698,27 @@ async fn conversation_step(
         }
         frame
     });
-    (transcript, frame)
+    (transcript, calls, frame)
+}
+
+/// The open calls of the session `source` names, read on if `follow`; kept
+/// as they were read last otherwise, and started anew for another session.
+fn follow_calls(
+    reader: &Mobile,
+    source: &conversation::Source,
+    account: &hide_agent_adapter::AccountKey,
+    calls: Option<Calls>,
+    follow: bool,
+) -> Option<Calls> {
+    let request = source.thread_request(account.clone());
+    let mut calls = match calls.filter(|calls| calls.follows(&request)) {
+        Some(calls) => calls,
+        None => Calls::new(request),
+    };
+    if follow && let Some(reason) = calls.follow(&reader.session_accounts()) {
+        conversation_failed(&format!("calls: {reason}"));
+    }
+    Some(calls)
 }
 
 /// Reads the open pane's rows and answers only when the rows or the asked
@@ -850,6 +968,11 @@ async fn run(
         },
     });
     // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // sends a reply of several lines, draws the open detail's question card
+    // and running line and picks a choice only on a computer that says it
+    // answers them; an older bundle ignores the field.
+    hello["answer"] = json!(true);
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
     // shows the gathered view only for a computer that says it offers
     // connections between two Hides, which every computer from this build
     // on does; an older bundle ignores the field.
@@ -989,12 +1112,26 @@ async fn handle(
                 lines: pane::FIRST_LINES,
             });
             let (older, older_asks) = mpsc::channel(1);
+            let (told, shown) = tokio::sync::watch::channel(None);
             // Opening it is a look: the core reads it as the desktop's focus
             // would while it stays open, and wakes nothing.
             mobile.set_viewing(connection, Some(key.clone()));
             open.look = None;
-            let task = spawn_detail(Arc::clone(mobile), key, frames.clone(), asks, older_asks);
-            open.detail = Some(Detail { ask, older, task });
+            let task = spawn_detail(
+                Arc::clone(mobile),
+                key.clone(),
+                frames.clone(),
+                asks,
+                older_asks,
+                told,
+            );
+            open.detail = Some(Detail {
+                key,
+                ask,
+                shown,
+                older,
+                task,
+            });
             None
         }
         "view" => {
@@ -1083,8 +1220,13 @@ async fn handle(
                 message.clone(),
                 Arc::clone(projection),
             );
+            // A choice answers the ask the open detail showed.
+            let shown = open
+                .detail
+                .as_ref()
+                .map(|detail| (detail.key.clone(), detail.shown.clone()));
             spawn_beside_loop(&mut open.input, frames, busy, async move {
-                input(&mobile, &phone_id, &message, &projection).await
+                input(&mobile, &phone_id, &message, &projection, shown).await
             })
         }
         "wake_sleeping_session" | "check_sleeping_session" => {
@@ -2007,11 +2149,19 @@ fn claim_answer(answer: &impl Fn(bool, Option<&str>) -> Value, state: InputState
     }
 }
 
+/// The ask the open detail shows now, if the input is for its agent.
+fn shown_now(
+    shown: &Option<tokio::sync::watch::Receiver<Option<ask::Shown>>>,
+) -> Option<ask::Shown> {
+    shown.as_ref().and_then(|shown| shown.borrow().clone())
+}
+
 async fn input(
     mobile: &Arc<Mobile>,
     phone_id: &str,
     message: &Value,
     projection: &Projection,
+    shown: Option<(AgentKey, tokio::sync::watch::Receiver<Option<ask::Shown>>)>,
 ) -> Value {
     let Some(request_id) = request_id_of(message) else {
         return json!({"type": "input_result", "ok": false, "reason": "invalid_request"});
@@ -2046,9 +2196,30 @@ async fn input(
     }
     let text = message.get("text").and_then(Value::as_str);
     let engine_key = message.get("key").and_then(Value::as_str);
-    let problem = match (text, engine_key) {
-        (Some(text), None) => pane::reply_problem(text),
-        (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
+    // A choice on the agent's own ask (Doop 03, 04), always written for the
+    // ask the phone's open detail showed, of the kind it declares: typed as
+    // the keys its screen takes, never as text.
+    let choice = message.get("choice").and_then(Value::as_str);
+    let turn = message
+        .get("turn")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let declared = message
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let shown = shown
+        .filter(|(detail, _)| key_of(message).as_ref() == Some(detail))
+        .map(|(_, shown)| shown);
+    let problem = match (text, engine_key, choice) {
+        (Some(text), None, None) => operator_input::problem(text, 0),
+        (None, Some(key), None) => pane::engine_key(key).is_none().then_some("unknown_key"),
+        (None, None, Some(choice)) => match (&turn, &declared) {
+            (Some(turn), Some(kind)) => {
+                ask::keys(agent, shown_now(&shown).as_ref(), turn, kind, choice).err()
+            }
+            _ => Some("invalid_request"),
+        },
         _ => Some("invalid_request"),
     };
     if let Some(problem) = problem {
@@ -2067,6 +2238,8 @@ async fn input(
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
     let engine_key = engine_key.and_then(pane::engine_key);
+    let choice = choice.map(str::to_owned);
+    let asked_key = key.clone();
     // The blocking write owns settlement even if its async caller is cancelled.
     // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
     struct Settlement {
@@ -2087,73 +2260,125 @@ async fn input(
         request_id: request_id.to_owned(),
         state: Some(InputState::Uncertain),
     };
-    let (certain, result) = tokio::task::spawn_blocking(move || {
-        let (attempted, result) = (|| {
-            let input = match (&text, engine_key) {
-                (Some(text), _) => Input::Reply(text),
-                (None, Some(key)) => Input::Key(key),
-                (None, None) => unreachable!("validated above"),
+    let result = tokio::task::spawn_blocking(move || {
+        let result = (|| {
+            let chosen = match &choice {
+                Some(choice) => {
+                    let projection = writer.projection_now();
+                    let agent = projection.find(&asked_key).ok_or("gone")?;
+                    let turn = turn.as_deref().ok_or("invalid_request")?;
+                    let kind = declared.as_deref().ok_or("invalid_request")?;
+                    Some(ask::keys(
+                        agent,
+                        shown_now(&shown).as_ref(),
+                        turn,
+                        kind,
+                        choice,
+                    )?)
+                }
+                None => None,
             };
-            if let Err(error) = pane::wait_for_input(writer.terminals(), &core_pane_id, &input) {
-                return (false, Err(error));
-            }
-            // Asked here, at the write, and held until it returns: a reply queued
-            // while the agent was awake is refused if its pane has closed since,
-            // and a sleep that starts now waits for this write to land first. The
-            // phone's own list may be a second behind either way.
-            let _admission = match writer.admit_input(&core_pane_id) {
-                Ok(admission) => admission,
-                Err(error) => return (false, Err(error)),
+            let chosen_keys: Vec<&str> = chosen
+                .iter()
+                .flat_map(|(keys, _)| keys.iter().map(String::as_str))
+                .collect();
+            let pressed;
+            let typed = match (&text, engine_key, &chosen) {
+                (Some(text), _, _) => Typed::Words(text),
+                (None, Some(key), _) => {
+                    pressed = [key];
+                    Typed::Keys(&pressed)
+                }
+                // Typed only while the agent's screen shows the ask the
+                // phone was shown.
+                (None, None, Some((_, screen))) => Typed::Choice {
+                    keys: &chosen_keys,
+                    screen,
+                },
+                (None, None, None) => unreachable!("validated above"),
             };
-            let engine = match writer.engine(&device_id) {
-                Ok(engine) => engine,
-                Err(error) => return (false, Err(error)),
+            let reply = matches!(typed, Typed::Words(_));
+            // The one operator write the desktop conversation takes too: the
+            // node's permit, then the gate's admission, asked here, at the
+            // write, and held until it returns, so a reply queued while the
+            // agent was awake is refused if its pane has closed since, and a
+            // sleep that starts now waits for this write to land first. A
+            // write for an ask looks last that the agent still asks it; the
+            // phone's own list may be a second behind otherwise.
+            let ready = || {
+                if let (Some(choice), Some(turn), Some(kind), Some(chosen)) =
+                    (&choice, &turn, &declared, &chosen)
+                {
+                    let projection = writer.projection_now();
+                    let agent = projection.find(&asked_key).ok_or("stale")?;
+                    // The ask shown since may be another call's or kind.
+                    if ask::keys(agent, shown_now(&shown).as_ref(), turn, kind, choice)? != *chosen
+                    {
+                        return Err("stale");
+                    }
+                }
+                let engine = writer.engine(&device_id).map_err(|error| match error {
+                    PaneError::DeviceUnreachable => "device_unreachable",
+                    _ => "unavailable",
+                })?;
+                // Before the write, so the doorbell cannot judge the pane
+                // clean while the input is landing; a refused write only
+                // holds the pane.
+                writer.note_input(&core_pane_id);
+                Ok(engine)
             };
-            let reply = matches!(input, Input::Reply(_));
-            // Before the write, so the doorbell cannot judge the pane clean
-            // while the key is landing; a refused write only holds the pane.
-            writer.note_input(&core_pane_id);
-            let sent = pane::send(&engine, &pane_id, input);
+            let sent = operator_input::write(
+                writer.terminals(),
+                writer.input_gate(),
+                &core_pane_id,
+                &pane_id,
+                typed,
+                &ready,
+            );
             if reply && sent.is_ok() {
                 writer.note_submit(&core_pane_id);
             }
-            (true, sent)
+            sent.map_err(|unwritten| {
+                if unwritten.certain() {
+                    pane::unwritten_reason(unwritten)
+                } else {
+                    "uncertain"
+                }
+            })
         })();
-        // A refusal before the write, or a definitive gone/refused answer,
-        // releases the id. Every ambiguous write keeps it reserved.
-        let certain = !attempted
-            || matches!(
-                result,
-                Err(PaneError::Gone
-                    | PaneError::DeviceUnreachable
-                    | PaneError::InputRefused
-                    | PaneError::Asleep)
-            );
-        settlement.state = match &result {
+        // A definitive refusal releases the id; an uncertain write keeps it
+        // reserved, so a repeat is answered from the claim and never typed
+        // twice.
+        settlement.state = match result {
             Ok(()) => Some(InputState::Written),
-            Err(_) if certain => None,
-            Err(_) => Some(InputState::Uncertain),
+            Err("uncertain") => Some(InputState::Uncertain),
+            Err(_) => None,
         };
         drop(settlement);
-        (certain, result)
+        result
     })
     .await
-    .unwrap_or_else(|error| (false, Err(PaneError::Unavailable(error.to_string()))));
+    .unwrap_or(Err("uncertain"));
     match result {
         Ok(()) => {
+            if message.get("choice").is_some() {
+                mobile
+                    .config
+                    .core
+                    .note_feature_used(hide_core::product_analytics::Feature::PhoneAnswer);
+            }
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
-                "device_id": key.device_id, "kind_of_input": if message.get("key").is_some() { "key" } else { "reply" },
+                "device_id": key.device_id,
+                "kind_of_input": if message.get("key").is_some() { "key" } else if message.get("choice").is_some() { "choice" } else { "reply" },
             }));
             answer(true, None)
         }
-        Err(error) => {
+        Err(reason) => {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.failed", "phone_id": phone_id,
-                "reason": error.reason(),
-                "message": match &error { PaneError::Unavailable(message) => Some(message.clone()), _ => None },
+                "reason": reason,
             }));
-            let reason = if certain { error.reason() } else { "uncertain" };
             answer(false, Some(reason))
         }
     }
@@ -2310,17 +2535,17 @@ mod tests {
             ("later", json!("5"), &asking_projection("approval", 6)),
             ("moved-on", json!("5"), &sleeping_projection(None)),
         ] {
-            let answer = input(&mobile, "phone-a", &ask(request, turn), listed).await;
+            let answer = input(&mobile, "phone-a", &ask(request, turn), listed, None).await;
             assert_eq!(
                 (answer["ok"].as_bool(), reason(&answer)),
                 (Some(false), Some("stale")),
                 "{request}"
             );
         }
-        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting).await;
+        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting, None).await;
         assert_eq!(reason(&wrong_type), Some("invalid_request"));
         // The matching turn passes the check and goes on to the write, which these tests do not wire.
-        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting).await;
+        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting, None).await;
         assert_ne!(reason(&matching), Some("stale"));
         // The phone screen's own input carries no turn and is not held to one.
         let own = input(
@@ -2328,9 +2553,107 @@ mod tests {
             "phone-a",
             &input_message("own", json!({"text": "yes"})),
             &waiting,
+            None,
         )
         .await;
         assert_ne!(reason(&own), Some("stale"));
+    }
+
+    /// A choice is written only for the ask the phone's open detail showed, named by its turn and kind, and only one
+    /// the agent's screen takes: without a turn or a kind, with a turn the agent has left, for another kind, with no
+    /// detail showing the ask, on a permission tied to no command, or naming a choice its keys do not reach, nothing
+    /// is reserved or written.
+    #[tokio::test]
+    async fn a_choice_is_refused_outside_the_ask_the_phone_showed_or_its_agents_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let waiting = asking_projection("approval", 5);
+        let key = key_of(&input_message("key", json!({}))).unwrap();
+        let agent = waiting.find(&key).unwrap();
+        let command = super::super::calls::OpenCall {
+            id: "toolu_1".to_owned(),
+            command: Some("cargo test".to_owned()),
+            plan: false,
+            since_ms: Some(4),
+        };
+        let shown_with = |pending: super::super::calls::Pending<'_>| {
+            let (told, shown) = tokio::sync::watch::channel(ask::of(agent, Some(&pending)));
+            (told, Some((key.clone(), shown)))
+        };
+        let (_told, shown) = shown_with(super::super::calls::Pending::One(&command));
+        let (_untold, untied) = shown_with(super::super::calls::Pending::Nothing);
+        let choice = |choice: &str, turn: &str, kind: &str| json!({"choice": choice, "turn": turn, "kind": kind});
+        for (request, fields, detail, expected) in [
+            (
+                "no-turn",
+                json!({"choice": "allow", "kind": "permission"}),
+                &shown,
+                "invalid_request",
+            ),
+            (
+                "no-kind",
+                json!({"choice": "allow", "turn": "5"}),
+                &shown,
+                "invalid_request",
+            ),
+            (
+                "old-turn",
+                choice("allow", "4", "permission"),
+                &shown,
+                "stale",
+            ),
+            (
+                "other-kind",
+                choice("approve", "5", "plan_approval"),
+                &shown,
+                "stale",
+            ),
+            ("unseen", choice("deny", "5", "permission"), &None, "stale"),
+            (
+                "untied",
+                choice("deny", "5", "permission"),
+                &untied,
+                "unknown_choice",
+            ),
+            (
+                "no-such",
+                choice("approve", "5", "permission"),
+                &shown,
+                "unknown_choice",
+            ),
+            (
+                "with-text",
+                json!({"choice": "allow", "turn": "5", "kind": "permission", "text": "yes"}),
+                &shown,
+                "invalid_request",
+            ),
+        ] {
+            let answer = input(
+                &mobile,
+                "phone-a",
+                &input_message(request, fields),
+                &waiting,
+                detail.clone(),
+            )
+            .await;
+            assert_eq!(reason(&answer), Some(expected), "{request}");
+            assert_eq!(mobile.claimed_input("phone-a", request), None, "{request}");
+        }
+        // The matching turn, kind and shown command, and a choice Claude Code's screen takes, go on to the write,
+        // which these tests do not wire.
+        let matching = input(
+            &mobile,
+            "phone-a",
+            &input_message("allow", choice("deny", "5", "permission")),
+            &waiting,
+            shown.clone(),
+        )
+        .await;
+        assert!(!matches!(
+            reason(&matching),
+            Some("stale" | "unknown_choice" | "invalid_request")
+        ));
     }
 
     /// A notice's Reply that was written and is sent again with the same request id (a retry after a lost answer or a
@@ -2350,7 +2673,7 @@ mod tests {
             sleeping_projection(None),
             asking_projection("none", 7),
         ] {
-            let again = input(&mobile, "phone-a", &ask("sent"), &listed).await;
+            let again = input(&mobile, "phone-a", &ask("sent"), &listed, None).await;
             assert_eq!((again["ok"].as_bool(), reason(&again)), (Some(true), None));
         }
         let gone = input(
@@ -2358,6 +2681,7 @@ mod tests {
             "phone-a",
             &ask("sent"),
             &super::super::projection::project(&json!({"navigator": {"agents": []}}), "test-node"),
+            None,
         )
         .await;
         assert_eq!(
@@ -2370,6 +2694,7 @@ mod tests {
             "phone-a",
             &ask("new"),
             &asking_projection("approval", 6),
+            None,
         )
         .await;
         assert_eq!(reason(&other), Some("stale"));
@@ -2385,6 +2710,7 @@ mod tests {
                 "phone-a",
                 &ask(id),
                 &asking_projection("approval", 6),
+                None,
             )
             .await;
             assert_eq!(
@@ -2790,7 +3116,7 @@ mod tests {
                     }),
                     "test-node",
                 );
-                input(&writer, "phone-a", &json!({"type": "input", "request_id": "retry", "device_id": "mini", "pane_id": "remote:mini:pane:w1:p1", "text": "yes"}), &listed).await
+                input(&writer, "phone-a", &json!({"type": "input", "request_id": "retry", "device_id": "mini", "pane_id": "remote:mini:pane:w1:p1", "text": "yes"}), &listed, None).await
             });
             let permission = tokio::time::timeout(Duration::from_secs(5), pending.recv())
                 .await
@@ -2836,6 +3162,7 @@ mod tests {
             "phone-a",
             &input_message("awake", json!({"text": "yes"})),
             &listed_awake,
+            None,
         )
         .await;
         assert_eq!(reason(&answer), Some("gone"));
@@ -2846,7 +3173,14 @@ mod tests {
             ("reply", json!({"text": "echo R11-PHONE-SHELL"})),
             ("key", json!({"key": "enter"})),
         ] {
-            let answer = input(&mobile, "phone-a", &input_message(id, body), &listed_awake).await;
+            let answer = input(
+                &mobile,
+                "phone-a",
+                &input_message(id, body),
+                &listed_awake,
+                None,
+            )
+            .await;
             assert_eq!(answer["ok"], false, "{id}");
             assert_eq!(reason(&answer), Some("asleep"), "{id}");
             assert!(
@@ -2862,6 +3196,7 @@ mod tests {
             "phone-a",
             &input_message("back", json!({"text": "yes"})),
             &listed_awake,
+            None,
         )
         .await;
         assert_eq!(reason(&answer), Some("gone"));
@@ -2893,6 +3228,7 @@ mod tests {
             "phone-a",
             &input_message("written", json!({"text": "yes"})),
             &listed,
+            None,
         )
         .await;
         assert_eq!(
@@ -2904,6 +3240,7 @@ mod tests {
             "phone-a",
             &input_message("uncertain", json!({"text": "yes"})),
             &listed,
+            None,
         )
         .await;
         assert_eq!(
@@ -2916,6 +3253,7 @@ mod tests {
             "phone-a",
             &input_message("fresh", json!({"text": "yes"})),
             &listed,
+            None,
         )
         .await;
         assert_eq!(reason(&fresh), Some("asleep"));

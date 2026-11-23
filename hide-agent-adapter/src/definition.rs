@@ -26,9 +26,10 @@ pub use hide_screen_rules::Rules;
 
 mod file;
 pub use file::{
-    ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Base, By, Hooks, LINE_BYTES, LINE_WORDS,
-    LoginRule, McpFormat, PathRule, SCHEMA, Template, is_plain_command, is_typable_word,
-    reserved_variable, valid_variable,
+    ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Hooks,
+    KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, McpFormat, PathRule,
+    PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Template,
+    is_plain_command, is_typable_word, reserved_variable, valid_variable,
 };
 use file::{Fields, Origin, required};
 
@@ -97,6 +98,9 @@ pub struct Definition {
     /// Where the agent keeps an account's folders (`[account]`), read only
     /// through `crate::resolve`; `None` for an agent Hide keeps no folder of.
     pub account: Option<AccountRule>,
+    /// The keys that answer the agent's own question and approval screens
+    /// (`[answer]`); built-in agents alone, and their copies.
+    pub answer: Option<Answer>,
     pub source: Source,
     /// The built-in agent a user file copied.
     pub based_on: Option<String>,
@@ -327,6 +331,7 @@ fn new_definition(
         resume_last: file.resume_last,
         screen,
         account: file.account,
+        answer: file.answer,
         source,
         based_on: None,
     })
@@ -388,6 +393,8 @@ fn based_on(
         resume_last: file.resume_last.or_else(|| builtin.resume_last.clone()),
         screen,
         account: builtin.account.clone(),
+        // A copy runs the same program, so its screens take the same keys.
+        answer: builtin.answer.clone(),
         source,
         based_on: Some(base.to_owned()),
     })

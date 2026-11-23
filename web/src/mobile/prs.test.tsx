@@ -56,6 +56,8 @@ async function connect(items: PhonePr[], feedback: PhonePrFeedback | null = null
   const root = createRoot(container);
   store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -69,7 +71,14 @@ async function connect(items: PhonePr[], feedback: PhonePrFeedback | null = null
   const click = (selector: string) => act(async () => q(selector)!.click());
   const sent = (type: string) => socket.sent.filter((message) => message.type === type);
   const lose = () => act(async () => socket.onclose?.());
-  return { container, socket, serve, prs, q, click, sent, lose, connection, store, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    }).then(() => container.remove());
+  return { container, socket, serve, prs, q, click, sent, lose, connection, store, unmount };
 }
 
 // The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
@@ -161,6 +170,39 @@ it("opens a page that reads the card, shows its files and lines and GitHub's add
     await click(`[data-phone-pr="${keyOf(7)}"]`);
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(true);
     expect(q("[data-phone-pr-merge-why]")!.getAttribute("data-phone-pr-merge-why")).toBe("ci");
+  } finally {
+    await unmount();
+  }
+});
+
+it("heads a page with one line like every page, and leaves a long title to wrap in the body, for a GitLab merge request too", async () => {
+  const long = "fix: keep Windows paths on the wire when the checkout sits under a very long folder name that cannot fit one line";
+  const gitlab = pr(9, {
+    title: long,
+    url: "https://gitlab.com/with-hide/hide/-/merge_requests/9",
+    reference: { repository: { host: "gitlab", authority: "gitlab.com", path: "with-hide/hide" }, number: 9, key: "gitlab:with-hide/hide!9", label: "!9", url: "https://gitlab.com/with-hide/hide/-/merge_requests/9", checks_url: "", files_url: "" },
+  });
+  const { click, q, unmount } = await connect([pr(1, { title: long }), gitlab]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    const head = q("[data-phone-pr-page] > header")!;
+    expect(head.querySelector("h1")!.textContent).toBe("#1");
+    expect(head.querySelector("[data-phone-pr-branch]")!.textContent!.replace(/\s+/g, " ").trim()).toBe("feat/change-1 → main");
+    expect(head.querySelector("[data-phone-pr-github]")!.getAttribute("aria-label")).toBe("Open on GitHub");
+    expect(head.querySelector("[data-phone-back]")!.getAttribute("data-phone-back")).toBe("prs");
+    // The title is the body's first line, never the head's, and the state chip follows it.
+    expect(head.textContent).not.toContain(long);
+    const title = q("[data-phone-pr-title]")!;
+    expect(title.textContent).toBe(long);
+    expect(head.contains(title)).toBe(false);
+    expect(title.nextElementSibling!.getAttribute("data-phone-pr-pill")).toBe("mergeable");
+
+    await click('[data-phone-back="prs"]');
+    await click(`[data-phone-pr="${keyOf(9)}"]`);
+    expect(q("[data-phone-pr-page] > header h1")!.textContent).toBe("!9");
+    expect(q("[data-phone-pr-github]")!.getAttribute("aria-label")).toBe("Open on GitLab");
+    expect(q("[data-phone-pr-github]")!.getAttribute("href")).toBe("https://gitlab.com/with-hide/hide/-/merge_requests/9");
   } finally {
     await unmount();
   }

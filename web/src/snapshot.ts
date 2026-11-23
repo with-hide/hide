@@ -251,7 +251,8 @@ export type AgentRow = {
 export const USER_TURN_KINDS = ["plan_approval", "question"] as const;
 export type UserTurnFact = {
   kind: typeof USER_TURN_KINDS[number];
-  content: { text: string; choices: string[]; truncated: boolean } | null;
+  /** `notes` is each choice's line under its label, absent when the agent wrote none; `pick_one` says the record asks one question whose one choice is picked (`hide_session::turns::UserTurnContent`). */
+  content: { text: string; choices: string[]; notes?: string[]; pick_one?: boolean; truncated: boolean } | null;
 };
 
 export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"] as const;

@@ -146,6 +146,9 @@ fn tool_use(block: &Value, cwd: &str, thread: &mut Thread) {
                 description
             })
         }
+        // Leaving plan mode waits on the operator's plan approval, which a
+        // phone answers with the plan's choices, not a permission's.
+        "ExitPlanMode" => Call::new(id, name, ToolKind::SwitchMode),
         _ => Call::new(id, name, ToolKind::Other),
     };
     thread.call(call.input(input));

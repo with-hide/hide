@@ -19,7 +19,27 @@ pub enum UserTurnKind {
 pub struct UserTurnContent {
     text: String,
     choices: Vec<String>,
+    /// What the agent says of each choice under its label (Claude Code's
+    /// option `description`), one per choice and empty where it says none;
+    /// no notes at all when it says none of any, so a peer before them
+    /// reads the same record.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
+    /// The record asks one question whose one choice the operator picks:
+    /// a form that answers with one choice, never several questions in turn
+    /// or several choices at once. A screen may then pick a choice for the
+    /// operator by its place; anything else it answers by text alone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pick_one: bool,
     truncated: bool,
+}
+
+/// One question as an agent's record asks it: its text, its choices as
+/// (label, note), and whether several choices may be picked at once.
+pub(crate) struct Asked<'a, C> {
+    pub text: &'a str,
+    pub choices: C,
+    pub several: bool,
 }
 
 impl UserTurnContent {
@@ -40,6 +60,8 @@ impl UserTurnContent {
         Self {
             text,
             choices: kept,
+            notes: Vec::new(),
+            pick_one: false,
             truncated,
         }
     }
@@ -50,6 +72,16 @@ impl UserTurnContent {
     pub fn choices(&self) -> &[String] {
         &self.choices
     }
+    /// The note under choice `index`, when the agent wrote one.
+    pub fn note(&self, index: usize) -> Option<&str> {
+        self.notes
+            .get(index)
+            .map(String::as_str)
+            .filter(|note| !note.is_empty())
+    }
+    pub fn pick_one(&self) -> bool {
+        self.pick_one
+    }
     pub fn truncated(&self) -> bool {
         self.truncated
     }
@@ -57,39 +89,52 @@ impl UserTurnContent {
     /// Native questions can carry several texts, while the common contract
     /// carries one. Join their exact texts and option labels within the same
     /// global budget, without first making an unbounded intermediate copy.
-    pub(crate) fn questions<'a, C>(questions: impl IntoIterator<Item = (&'a str, C)>) -> Self
+    /// It is one pick when there is one question of one choice at a time.
+    pub(crate) fn questions<'a, C>(questions: impl IntoIterator<Item = Asked<'a, C>>) -> Self
     where
-        C: IntoIterator<Item = &'a str>,
+        C: IntoIterator<Item = (&'a str, Option<&'a str>)>,
     {
         let mut content = Self::new("", []);
         let mut text_cut = false;
-        for (index, (text, choices)) in questions.into_iter().take(CHOICE_LIMIT + 1).enumerate() {
+        let mut asked = 0;
+        let mut several = false;
+        for (index, question) in questions.into_iter().take(CHOICE_LIMIT + 1).enumerate() {
             if index == CHOICE_LIMIT {
                 content.truncated = true;
                 break;
             }
+            asked += 1;
+            several |= question.several;
             if !text_cut && index > 0 {
                 text_cut = content.append_text("\n");
             }
             if !text_cut {
-                text_cut = content.append_text(text);
+                text_cut = content.append_text(question.text);
             }
-            for choice in choices.into_iter().take(CHOICE_LIMIT + 1) {
+            for (choice, note) in question.choices.into_iter().take(CHOICE_LIMIT + 1) {
                 if content.choices.len() == CHOICE_LIMIT {
                     content.truncated = true;
                     break;
                 }
                 let (choice, cut) = bounded(choice, CHOICE_LIMIT_BYTES);
-                content.truncated |= cut;
+                let (note, note_cut) = bounded(note.unwrap_or_default(), CHOICE_LIMIT_BYTES);
+                content.truncated |= cut | note_cut;
                 content.choices.push(choice);
+                content.notes.push(note);
             }
         }
+        if content.notes.iter().all(String::is_empty) {
+            content.notes.clear();
+        }
+        content.pick_one = asked == 1 && !several && !content.choices.is_empty();
         content
     }
 
     pub(crate) fn combine<'a>(contents: impl IntoIterator<Item = &'a Self>) -> Self {
         let mut result = Self::new("", []);
         let mut text_cut = false;
+        let mut joined = 0;
+        let mut pick_one = false;
         for (index, content) in contents.into_iter().take(CHOICE_LIMIT + 1).enumerate() {
             if index == CHOICE_LIMIT {
                 result.truncated = true;
@@ -102,14 +147,24 @@ impl UserTurnContent {
                 text_cut = result.append_text(content.text());
             }
             result.truncated |= content.truncated;
-            for choice in content.choices() {
+            for (at, choice) in content.choices().iter().enumerate() {
                 if result.choices.len() == CHOICE_LIMIT {
                     result.truncated = true;
                     break;
                 }
                 result.choices.push(choice.clone());
+                result
+                    .notes
+                    .push(content.note(at).unwrap_or_default().to_owned());
             }
+            joined += 1;
+            pick_one = content.pick_one;
         }
+        if result.notes.iter().all(String::is_empty) {
+            result.notes.clear();
+        }
+        // Several waiting calls are several questions, whatever each one asks.
+        result.pick_one = joined == 1 && pick_one;
         result
     }
 
@@ -130,12 +185,23 @@ impl<'de> Deserialize<'de> for UserTurnContent {
         struct Fields {
             text: BoundedText<TEXT_LIMIT_BYTES>,
             choices: BoundedChoices,
+            #[serde(default)]
+            notes: Option<BoundedChoices>,
+            #[serde(default)]
+            pick_one: bool,
             truncated: bool,
         }
         let fields = Fields::deserialize(deserializer)?;
+        let notes = fields.notes.map_or_else(Vec::new, |notes| notes.0);
+        // Notes stand beside their choices one for one, or not at all.
+        if !notes.is_empty() && notes.len() != fields.choices.0.len() {
+            return Err(de::Error::custom("user_turn_content_notes"));
+        }
         Ok(Self {
             text: fields.text.0,
             choices: fields.choices.0,
+            notes,
+            pick_one: fields.pick_one,
             truncated: fields.truncated,
         })
     }

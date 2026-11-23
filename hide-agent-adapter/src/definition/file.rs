@@ -56,6 +56,234 @@ struct File {
     /// so the build script needs no rule grammar.
     #[serde(default)]
     pub screen: Option<toml::Table>,
+    /// The keys that answer the agent's own question and approval screens
+    /// ([`Answer`]); the built-in files' alone.
+    #[serde(default)]
+    pub answer: Option<Answer>,
+}
+
+/// The keys that answer an agent's own screens from a screen that is not its
+/// terminal (`[answer]`), by the kind of ask: each choice is the keys that
+/// pick it, typed as key presses and never pasted, since a pasted choice is
+/// read as text and the Enter after it picks whatever the screen has
+/// highlighted (docs/ARCHITECTURE.md, The mobile companion). A kind with no
+/// table is shown and answered in the terminal. Each key is a key name
+/// ([`KEY_NAMES`]) or one printable ASCII character.
+///
+/// Keys other than `esc` and a character move from, or pick, the row the
+/// screen has highlighted, so they are typed only where the core can see
+/// that row: the screen draws `marker` before the highlighted row, and a
+/// kind's `row` is a row's text after it, with [`ROW_NUMBER`] for its place
+/// (`{n}.`) or, in a question, [`ROW_LABEL`] for its choice's label. Such a
+/// kind moves with `down` and picks with `enter` alone; one whose keys need
+/// the highlight and that has no `row` is answered in the terminal.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Answer {
+    #[serde(default)]
+    pub marker: Option<String>,
+    #[serde(default)]
+    pub question: Option<QuestionKeys>,
+    #[serde(default)]
+    pub plan_approval: Option<PlanKeys>,
+    #[serde(default)]
+    pub permission: Option<PermissionKeys>,
+}
+
+/// A question of one choice: its screen opens on the first choice, `down`
+/// moves one choice down and `pick` picks the one it stands on.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionKeys {
+    pub down: String,
+    pub pick: String,
+    #[serde(default)]
+    pub row: Option<String>,
+}
+
+/// A plan waiting for approval: approve it, or keep planning (the operator
+/// says what to change in a reply after it).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanKeys {
+    pub approve: Vec<String>,
+    pub keep_planning: Vec<String>,
+    #[serde(default)]
+    pub row: Option<String>,
+    /// The words of the row `approve` picks, after its place, when the menu
+    /// offers more than one way to approve: the screen must show them on that
+    /// row as the pick is typed, so a menu whose rows moved or read otherwise
+    /// is answered in the terminal and never picks a row that widens what the
+    /// agent may do (Claude Code's first row switches it to auto mode).
+    #[serde(default)]
+    pub approve_label: Option<String>,
+}
+
+/// A tool call waiting for permission: allow it once, allow it from now on
+/// where the agent offers that, or refuse it (the operator says what to do
+/// instead in a reply after it). A permission is answered from another
+/// screen only when it names the command it waits on and the agent's screen
+/// shows that command as the keys are typed, unless `unnamed`: the agent
+/// records a call only once it is allowed (Codex), so its permission never
+/// names one and is answered as it stands.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionKeys {
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub allow_always: Option<Vec<String>>,
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub row: Option<String>,
+    #[serde(default)]
+    pub unnamed: bool,
+    /// Where the agent's approval dialog draws the command, which a
+    /// permission that names one is checked against; a table with a `row`
+    /// that is not `unnamed` needs it.
+    #[serde(default)]
+    pub command: Option<CommandSlot>,
+}
+
+/// The place of a one-line command in an agent's approval dialog: under the
+/// dialog's `title`, the first line that begins with `separator`, the
+/// command on the line after it, and that same separator line again after
+/// the command (Claude Code draws a note between the title and the first
+/// separator). `title` is a line's whole text past its indent. A dialog
+/// that marks no end under its command has no such place: a command of
+/// more lines could not be told from one.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CommandSlot {
+    pub title: String,
+    pub separator: String,
+}
+
+/// The key names an `[answer]` table may name, as the core's own engine
+/// presses them.
+pub const KEY_NAMES: [&str; 7] = ["enter", "esc", "tab", "up", "down", "left", "right"];
+/// The most keys one choice types.
+pub const MAX_ANSWER_KEYS: usize = 8;
+/// What a `row` names a row's place by, from 1.
+pub const ROW_NUMBER: &str = "{n}";
+/// What a question's `row` names its choice's label by.
+pub const ROW_LABEL: &str = "{label}";
+/// The longest `marker` or `row`, in bytes.
+const MAX_ROW_BYTES: usize = 64;
+
+/// One kind of ask's table as `check_answer` reads it: its name, the row
+/// its keys count rows by, and each choice's keys by the field that names
+/// them.
+type KindKeys<'a> = (&'a str, Option<&'a String>, Vec<(&'a str, Vec<&'a String>)>);
+
+fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
+    let key = |key: &String| {
+        KEY_NAMES.contains(&key.as_str())
+            || (key.len() == 1 && key.bytes().all(|byte| byte.is_ascii_graphic()))
+    };
+    // Each kind's keys, and the row its keys count rows by.
+    let mut kinds: Vec<KindKeys<'_>> = Vec::new();
+    if let Some(question) = &answer.question {
+        kinds.push((
+            "question",
+            question.row.as_ref(),
+            vec![("question", vec![&question.down, &question.pick])],
+        ));
+    }
+    if let Some(plan) = &answer.plan_approval {
+        kinds.push((
+            "plan_approval",
+            plan.row.as_ref(),
+            vec![
+                ("plan_approval.approve", plan.approve.iter().collect()),
+                (
+                    "plan_approval.keep_planning",
+                    plan.keep_planning.iter().collect(),
+                ),
+            ],
+        ));
+    }
+    if let Some(permission) = &answer.permission {
+        let mut lists = vec![("permission.allow", permission.allow.iter().collect())];
+        if let Some(always) = &permission.allow_always {
+            lists.push(("permission.allow_always", always.iter().collect()));
+        }
+        lists.push(("permission.deny", permission.deny.iter().collect()));
+        kinds.push(("permission", permission.row.as_ref(), lists));
+    }
+    let text = |value: &str| {
+        !value.trim().is_empty()
+            && value.len() <= MAX_ROW_BYTES
+            && !value.chars().any(char::is_control)
+    };
+    if let Some(marker) = &answer.marker
+        && !text(marker)
+    {
+        return Err(format!(
+            "{name}: answer.marker is 1 to {MAX_ROW_BYTES} bytes of text"
+        ));
+    }
+    if let Some(permission) = &answer.permission {
+        match &permission.command {
+            Some(slot) if !text(&slot.title) || !text(&slot.separator) => {
+                return Err(format!(
+                    "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
+                ));
+            }
+            None if permission.row.is_some() && !permission.unnamed => {
+                return Err(format!(
+                    "{name}: answer.permission.command says where the dialog draws the command, which a permission with a row checks before its keys"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if let Some(plan) = &answer.plan_approval
+        && let Some(label) = &plan.approve_label
+        && (!text(label) || plan.row.is_none() || answer.marker.is_none())
+    {
+        return Err(format!(
+            "{name}: answer.plan_approval.approve_label is 1 to {MAX_ROW_BYTES} bytes of text, on a kind with a marker and a row"
+        ));
+    }
+    for (kind, row, lists) in kinds {
+        if let Some(row) = row {
+            if answer.marker.is_none() {
+                return Err(format!("{name}: answer.{kind}.row needs answer.marker"));
+            }
+            let places = row.matches(ROW_NUMBER).count() + row.matches(ROW_LABEL).count();
+            if !text(row) || places != 1 || (kind != "question" && row.contains(ROW_LABEL)) {
+                return Err(format!(
+                    "{name}: answer.{kind}.row is 1 to {MAX_ROW_BYTES} bytes of text naming its \
+                     row once, by {ROW_NUMBER} or, in a question's, {ROW_LABEL}"
+                ));
+            }
+        }
+        for (field, keys) in lists {
+            if keys.is_empty() || keys.len() > MAX_ANSWER_KEYS {
+                return Err(format!(
+                    "{name}: answer.{field} holds 1 to {MAX_ANSWER_KEYS} keys"
+                ));
+            }
+            if let Some(bad) = keys.iter().find(|candidate| !key(candidate)) {
+                return Err(format!(
+                    "{name}: answer.{field} key {bad:?} is not a key name or one printable character"
+                ));
+            }
+            // A row is counted by the downs typed before the pick.
+            if row.is_some()
+                && let Some(bad) = keys.iter().find(|candidate| {
+                    KEY_NAMES.contains(&candidate.as_str())
+                        && !matches!(candidate.as_str(), "down" | "enter" | "esc")
+                })
+            {
+                return Err(format!(
+                    "{name}: answer.{field} key {bad:?} moves the highlight in a way its row cannot follow; \
+                     a kind with a row moves with down and picks with enter"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Which of Hide's own code reads the agent's hooks, sessions and thread:
@@ -155,6 +383,7 @@ pub struct Fields {
     pub resume_last: Option<Vec<String>>,
     pub account: Option<AccountRule>,
     pub screen: Option<toml::Table>,
+    pub answer: Option<Answer>,
 }
 
 /// Parse one file and check every field it carries: the one reading of a
@@ -180,6 +409,13 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     }
     if origin == Origin::Builtin && file.based_on.is_some() {
         return Err(format!("{name}: based_on is for the operator's files"));
+    }
+    // Each table is checked on the agent's own screens before it ships.
+    if origin == Origin::User && file.answer.is_some() {
+        return Err(format!("{name}: answer is for the built-in agents' files"));
+    }
+    if let Some(answer) = &file.answer {
+        check_answer(name, answer)?;
     }
     if let Some(display) = &file.name
         && (display.trim().is_empty()
@@ -243,6 +479,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         resume_last: resume.last,
         account,
         screen: file.screen,
+        answer: file.answer,
     })
 }
 
@@ -955,5 +1192,47 @@ mod tests {
             read("x.toml", &fine, Origin::Builtin).unwrap().home,
             Some(vec![".x".to_owned()])
         );
+    }
+
+    /// A row the core cannot find on the screen is refused at the build:
+    /// one with no marker to find it by, one that does not name its place,
+    /// a choice's label outside a question, keys that move the highlight
+    /// in a way its row count cannot follow, a plan's approving row named
+    /// by words on a screen with no row to read them on, or a permission
+    /// that does not say where its dialog draws the command.
+    #[test]
+    fn an_answer_row_the_core_cannot_follow_is_refused_by_the_read_the_build_runs() {
+        let file = |answer: &str| {
+            format!(
+                "schema = 1\nid = \"x\"\nname = \"X\"\nexecutables = [\"x\"]\nhooks = \"none\"\n[answer]\n{answer}"
+            )
+        };
+        let read_answer = |answer: &str| read("x.toml", &file(answer), Origin::Builtin);
+        assert_eq!(
+            read_answer("question = { down = \"down\", pick = \"enter\", row = \"{n}.\" }\n")
+                .unwrap_err(),
+            "x.toml: answer.question.row needs answer.marker"
+        );
+        for refused in [
+            "marker = \"❯\"\nquestion = { down = \"down\", pick = \"enter\", row = \"1.\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{label}\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], allow_always = [\"right\", \"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
+            "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \", separator = \"╌\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\", separator = \" \" } }\n",
+            "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",
+            "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], row = \"{n}.\", approve_label = \" \" }\n",
+        ] {
+            assert!(read_answer(refused).is_err(), "{refused}");
+        }
+        let answer = read_answer(
+            "marker = \"❯\"\nquestion = { down = \"down\", pick = \"enter\", row = \"○ {label}\" }\n",
+        )
+        .unwrap()
+        .answer
+        .unwrap();
+        assert_eq!(answer.marker.as_deref(), Some("❯"));
     }
 }

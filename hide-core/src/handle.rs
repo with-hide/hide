@@ -1290,7 +1290,8 @@ impl Core {
     }
 
     /// The operator used a main feature somewhere the core does not see (a
-    /// pairing the daemon finished): its first use of a UTC day counts once.
+    /// phone's answer, or a pairing the daemon finished): its first use of a
+    /// UTC day counts once.
     pub fn note_feature_used(&self, feature: crate::product_analytics::Feature) {
         if !check_owner_thread(self, "product_analytics.feature") {
             return;

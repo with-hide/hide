@@ -9150,6 +9150,8 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
+    // The Conductor rests, so a raise it leaves comes to the safety net.
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
     command(
         &mut runtime,
         "sender",
@@ -9158,7 +9160,7 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     .unwrap();
     command(&mut runtime, "sender", criteria_plan()).unwrap();
     let now = crate::runtime::unix_milliseconds();
-    // The Conductor has been there 21 minutes.
+    // The Conductor has been there, resting, 21 minutes.
     runtime.drive_mission_health(now - 21 * MINUTE);
     let raise = |runtime: &mut Runtime, reason, since_unix_ms| {
         runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].attention = Some(Attention {
@@ -19473,6 +19475,70 @@ fn a_raise_after_a_failed_ci_counts_from_the_raise() {
         net(&runtime).map(|net| net.since_unix_ms),
         Some(now - 21 * MINUTE),
         "21 minutes after the raise, counted from it"
+    );
+}
+
+/// The safety net asks the operator only once the Conductor itself rests
+/// (operator decision 2026-11-23): a raise standing for an hour holds no
+/// card while the Conductor's turn runs, while it waits on a task of its
+/// own, or while its own row asks the operator; its workers at work are not
+/// its move; and the card comes 20 minutes after Hide first saw it rest.
+#[test]
+fn the_safety_net_waits_for_its_conductor_to_rest_twenty_minutes() {
+    use crate::missions::AttentionReason;
+    use crate::model::AgentWait;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "cause",
+            AttentionReason::PrClosed,
+            None,
+            now - 60 * MINUTE
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    let row = |runtime: &mut Runtime, activity: &str, wait: Option<AgentWait>, demand: &str| {
+        let conductor = &mut runtime.snapshot.navigator.agents[0];
+        conductor.activity = activity.into();
+        conductor.wait = wait;
+        conductor.demand = demand.into();
+    };
+    let net = |runtime: &Runtime| {
+        runtime
+            .mission_view_of("mission-1")
+            .unwrap()
+            .safety_net
+            .map(|net| net.since_unix_ms)
+    };
+    row(&mut runtime, "working", None, "none");
+    runtime.drive_mission_health(now - 90 * MINUTE);
+    assert_eq!(net(&runtime), None, "its turn runs");
+    row(&mut runtime, "stopped", Some(AgentWait::Background), "none");
+    runtime.drive_mission_health(now - 80 * MINUTE);
+    assert_eq!(net(&runtime), None, "it waits on a task of its own");
+    row(&mut runtime, "stopped", None, "approval");
+    runtime.drive_mission_health(now - 70 * MINUTE);
+    assert_eq!(net(&runtime), None, "its own row asks the operator");
+    row(&mut runtime, "stopped", Some(AgentWait::Children), "none");
+    runtime.drive_mission_health(now - 19 * MINUTE);
+    assert_eq!(net(&runtime), None, "19 minutes after it came to rest");
+    // At work again, and at rest from 21 minutes ago.
+    row(&mut runtime, "working", None, "none");
+    runtime.drive_mission_health(now - 21 * MINUTE);
+    row(&mut runtime, "stopped", Some(AgentWait::Children), "none");
+    runtime.drive_mission_health(now - 21 * MINUTE);
+    assert_eq!(
+        net(&runtime),
+        Some(now - 21 * MINUTE),
+        "21 minutes after it came to rest, counted from the rest"
     );
 }
 

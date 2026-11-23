@@ -77,6 +77,7 @@ pub mod node_access;
 pub mod node_migration;
 pub mod notice_place;
 mod observed;
+pub mod operator_input;
 pub mod pane_command;
 mod pane_reopen;
 pub mod peer_machines;

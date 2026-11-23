@@ -981,6 +981,13 @@ pub(crate) struct MissionRuntime {
     /// at most one entry per mission of the book: a restart, a take or a
     /// resume starts it again.
     pub(super) conductor_seen: std::collections::HashMap<String, u64>,
+    /// Since when this daemon has seen each open mission's present Conductor
+    /// rest (`Runtime::conductor_rests`, `note_conductors_resting`): the
+    /// safety net counts its 20 minutes from then too, so a Conductor at work
+    /// is never read as stuck. The row's own last change cannot say it, as
+    /// for a worker's stop (`stop_clock`). Memory only, at most one entry per
+    /// mission of the book: a restart, a take or a resume starts it again.
+    pub(super) conductor_rest_seen: std::collections::HashMap<String, u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
@@ -5296,6 +5303,10 @@ impl Runtime {
         let mut stops: Vec<_> = self.missions.stop_clock.iter().collect();
         stops.sort_unstable();
         stops.hash(&mut hasher);
+        // A Conductor's rest decides when its safety net may come up.
+        let mut rests: Vec<_> = self.missions.conductor_rest_seen.iter().collect();
+        rests.sort_unstable();
+        rests.hash(&mut hasher);
         for (letter, hold) in &self.delivery_holds {
             (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
         }

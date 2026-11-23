@@ -118,7 +118,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
       await expect(row).toContainText(title, { timeout: 30_000 });
       await expect(row).not.toContainText("Old audit title");
       const observed = () => agents.find((agent) => agent.pane_id === sourcePane);
-      const question = { kind: "question", content: { text: "배포 대상을 골라주세요", choices: ["미리보기", "운영"], truncated: false } };
+      const question = { kind: "question", content: { text: "배포 대상을 골라주세요", choices: ["미리보기", "운영"], pick_one: true, truncated: false } };
       appendOmpQuestion(session);
       await expect.poll(() => observed()?.user_turn, { timeout: 30_000 }).toEqual(question);
       await expect(row.locator('[data-agent-status="question"]')).toBeVisible();
@@ -208,7 +208,7 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     await reportOpenCodeState(fixture, daemon, sourcePane, "idle");
     await dumpOnFailure("OpenCode question native read", nativeReadState, () =>
       expect.poll(question, { message: "the native question reached the row", timeout: 30_000 })
-        .toEqual({ kind: "question", content: { text: "어느 브랜치에 올릴까요?", choices: ["main", "release"], truncated: false } }));
+        .toEqual({ kind: "question", content: { text: "어느 브랜치에 올릴까요?", choices: ["main", "release"], notes: ["기본", "배포"], pick_one: true, truncated: false } }));
     await expect(page.locator(`[data-pane="${sourcePane}"] [data-agent-status="question"]`).first()).toBeVisible();
     await screenshot(page, "opencode-native-question");
     await reportOpenCodeState(fixture, daemon, sourcePane, "working");
