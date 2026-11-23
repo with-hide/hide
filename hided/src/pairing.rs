@@ -1418,11 +1418,7 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Rename { device, name } => {
-                // An empty name takes the machine back to the one it gives itself.
-                let chosen = match name.trim() {
-                    "" => None,
-                    _ => Some(hide_core::device_command::device_name(&name).ok_or("name_invalid")?),
-                };
+                let chosen = chosen_name(&name)?;
                 let paired = self.named(&peers, &device)?;
                 if !peers.rename(&paired.key, chosen).map_err(store)? {
                     return Err("device_unknown");
@@ -1730,13 +1726,8 @@ impl Pairing {
         // replace.
         let saved = peers.known(|known| {
             let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
-            let chosen = record.chosen_name.is_none() && label.is_some();
-            if record.started.as_ref() == Some(through) && !chosen {
+            if !started_through(&mut record, through, label) {
                 return Ok(());
-            }
-            record.started = Some(through.clone());
-            if chosen {
-                record.chosen_name = label.map(str::to_owned);
             }
             known.put(record)
         });
@@ -1989,6 +1980,35 @@ async fn hold(
 /// One row per machine `hosts` and `guests` name, by name, and whether a
 /// host this machine dials has no connection. `link` is the machine's
 /// connection, when it has one.
+/// The name an operator's rename keeps for a machine: none for an empty
+/// one, which takes the machine back to the name it gives itself, else the
+/// name, held to the rule every machine's own name is (`valid_name`).
+fn chosen_name(name: &str) -> Result<Option<&str>, &'static str> {
+    match name.trim() {
+        "" => Ok(None),
+        name if hide_peer::link::valid_name(name) => Ok(Some(name)),
+        _ => Err("name_invalid"),
+    }
+}
+
+/// Records that `through` started the machine's Hide, and keeps `label`,
+/// the name its device had here, as the operator's chosen name unless one
+/// was chosen already (B36). False when the record did not change.
+fn started_through(record: &mut Host, through: &Login, label: Option<&str>) -> bool {
+    let label = label
+        .map(str::trim)
+        .filter(|label| hide_peer::link::valid_name(label));
+    let name = record.chosen_name.is_none() && label.is_some();
+    if record.started.as_ref() == Some(through) && !name {
+        return false;
+    }
+    record.started = Some(through.clone());
+    if name {
+        record.chosen_name = label.map(str::to_owned);
+    }
+    true
+}
+
 fn rows(
     hosts: &[Host],
     guests: &[Grant],
@@ -2512,6 +2532,76 @@ mod tests {
         assert_eq!(candidates.len(), MAX_ADDRESSES);
         assert_eq!(candidates[0], address(5));
         assert!(candidates.contains(&distribution));
+    }
+
+    /// A rename keeps the name the operator typed as theirs, refuses what
+    /// no machine's name may hold, and an empty one takes the chosen name
+    /// back.
+    #[test]
+    fn a_rename_keeps_a_name_a_machine_could_have_and_an_empty_one_takes_it_back() {
+        assert_eq!(chosen_name(" 회사 PC "), Ok(Some("회사 PC")));
+        assert_eq!(chosen_name(""), Ok(None));
+        assert_eq!(chosen_name("   "), Ok(None));
+        for refused in ["a\nb", "\u{202e}cp.exe", &"가".repeat(22)] {
+            assert_eq!(chosen_name(refused), Err("name_invalid"), "{refused:?}");
+        }
+    }
+
+    fn host(key: u8, chosen_name: Option<&str>) -> Host {
+        Host {
+            key: PeerKey::from_bytes([key; 32]),
+            device: format!("device-{key}"),
+            name: format!("Machine {key}"),
+            chosen_name: chosen_name.map(str::to_owned),
+            grant: "grant".into(),
+            state: KnownState::Active,
+            candidates: Vec::new(),
+            started: None,
+        }
+    }
+
+    /// B36: a switched machine is shown under the name its device had
+    /// here, as the operator's chosen name, and a name they chose already
+    /// is never replaced by it.
+    #[test]
+    fn a_switch_keeps_the_devices_name_as_the_chosen_one_unless_one_was_chosen() {
+        let ssh = Login::Ssh("mini".into());
+        let mut record = host(1, None);
+        assert!(started_through(&mut record, &ssh, Some("빌드 서버")));
+        assert_eq!(record.started, Some(ssh.clone()));
+        assert_eq!(record.chosen_name.as_deref(), Some("빌드 서버"));
+        assert_eq!(record.name, "Machine 1", "the machine's own name stays");
+        // The same switch again changes nothing.
+        assert!(!started_through(&mut record, &ssh, Some("다른 이름")));
+        assert_eq!(record.chosen_name.as_deref(), Some("빌드 서버"));
+
+        let mut chosen = host(2, Some("거실 Mac mini"));
+        assert!(started_through(&mut chosen, &ssh, Some("mini")));
+        assert_eq!(chosen.chosen_name.as_deref(), Some("거실 Mac mini"));
+
+        for label in [None, Some("\u{202e}mini"), Some("  ")] {
+            let mut record = host(3, None);
+            assert!(started_through(&mut record, &ssh, label));
+            assert_eq!(record.chosen_name, None, "{label:?}");
+        }
+    }
+
+    /// A row shows the chosen name while there is one and says so, and the
+    /// machine's own otherwise.
+    #[test]
+    fn a_row_shows_the_chosen_name_and_says_it_was_chosen() {
+        let (rows, _) = rows(
+            &[host(1, Some("거실 Mac mini")), host(2, None)],
+            &[],
+            |_| None,
+            &HashMap::new(),
+        );
+        let mut shown: Vec<_> = rows
+            .iter()
+            .map(|row| (row.machine.name.as_str(), row.machine.named))
+            .collect();
+        shown.sort();
+        assert_eq!(shown, [("Machine 2", false), ("거실 Mac mini", true)]);
     }
 
     /// B41: a device added for its switch is taken off again only when the

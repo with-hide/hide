@@ -11,7 +11,7 @@ sidebar:
 - On Windows 11, **Smart App Control** has to be off.
   It blocks programs that are not signed, and hide is not signed yet.
   Check it in **Windows Security** > **App & browser control** > **Smart App Control settings**, and choose **Off**.
-  From Windows 11 25H2 you can turn it back on there later; on earlier versions, turning it back on needs a reset of Windows.
+  From the April 2026 update of Windows 11 25H2 (build 26200.8116) you can turn it back on there later; on earlier versions, turning it back on needs a reset of Windows.
   When this PC is a device another computer connects to, the block shows only on this PC's screen.
   See [Smart App Control blocks hide on Windows 11](/docs/reference/troubleshooting/#smart-app-control-blocks-hide-on-windows-11).
 - Optional: an agent CLI (Claude Code, Codex, Grok, OpenCode, Pi, omp or Antigravity), installed and signed in, if you want hide to start it.

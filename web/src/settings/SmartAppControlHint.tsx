@@ -9,7 +9,7 @@ export const SMART_APP_CONTROL_DOCS = "https://withhide.dev/docs/reference/troub
  * answered: its connection's helper (`windows_not_started`), or the Hide a
  * switch started there. Smart App Control blocks an unsigned program that
  * way, and Windows says so only on that PC's screen, so the row says where
- * to look; it cannot tell that it was the block (issue #2855).
+ * to look; it cannot tell that it was the block (issue 2855).
  */
 export function startedSilentOnWindows(device: Pick<Device, "problem" | "switch" | "host">): boolean {
   if (device.problem === "windows_not_started") return true;

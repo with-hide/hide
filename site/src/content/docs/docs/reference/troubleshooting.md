@@ -42,7 +42,7 @@ To run hide on that PC, turn Smart App Control off:
 1. Open **Windows Security**, then **App & browser control**, then **Smart App Control settings**.
 2. Choose **Off**.
 
-Turning it back on later: from Windows 11 25H2 you can switch it on again on the same page; on earlier versions, Windows has to be reset before Smart App Control can be turned on again.
+Turning it back on later: from the April 2026 update of Windows 11 25H2 (build 26200.8116) you can switch it on again on the same page; on earlier versions, Windows has to be reset before Smart App Control can be turned on again.
 
 When you connect that PC as a device from another computer, Windows shows the block only on that PC's own screen, so the other computer sees only that the connection did not come up.
 

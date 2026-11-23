@@ -518,7 +518,7 @@ it("stops a reconnect nobody could be asked for at Sign in, which starts an atte
   }
 });
 
-it("points a Windows device whose Hide did not start at turning Smart App Control off, and no other failure (issue #2855)", async () => {
+it("points a Windows device whose Hide did not start at turning Smart App Control off, and no other failure (issue 2855)", async () => {
   const windows = { ...host, platform: "windows x86_64" };
   const silent = await mount(state([remote("win", { label: "Windows PC", state: "unavailable", problem: "windows_not_started", host: windows })]));
   const line = silent.q('[data-device-reason="win"]');

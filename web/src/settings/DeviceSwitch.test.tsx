@@ -259,7 +259,7 @@ it("says once over a machine's screen what starts fresh there after its switch l
   await later.unmount();
 });
 
-it("says a switch whose Hide did not start on Windows may be Smart App Control's block, and only on Windows (issue #2855)", async () => {
+it("says a switch whose Hide did not start on Windows may be Smart App Control's block, and only on Windows (issue 2855)", async () => {
   const failed = { state: "failed" as const, reason: "ssh_core_not_started" };
   const windows = await mount(helper({ switch: failed, host: { platform: "windows x86_64" } as Device["host"] }));
   expect(windows.q('[data-device-switch-state="mini:failed"]')?.textContent).toContain("Hide did not start on Windows · if Smart App Control is on, how to turn it off");

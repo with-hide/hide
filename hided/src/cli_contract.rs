@@ -1381,6 +1381,7 @@ pub const COMMANDS: &[Spec] = &[
             "device_ambiguous",
             "name_invalid",
             "device_name_invalid",
+            "device_paired",
         ],
     },
     // A paired machine is dialed again now. An SSH device starts its row's

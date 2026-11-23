@@ -6901,7 +6901,8 @@
                 "device_unknown",
                 "device_ambiguous",
                 "name_invalid",
-                "device_name_invalid"
+                "device_name_invalid",
+                "device_paired"
             ],
             "repeats_at_most": null,
             "rest": null

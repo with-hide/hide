@@ -127,7 +127,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Give a name of one to 64 bytes, on one line, that is not only spaces"
         }
         "device_paired" => {
-            "A paired machine is renamed by its pairing: run hide device rename again"
+            "A paired machine is renamed by its pairing: run hide device list and name it by the id or name shown there"
         }
         "device_files_open" => {
             "Ask the operator to close the device's file tabs, or to remove it in Settings > Devices, which stores their drafts first"

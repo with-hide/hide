@@ -273,6 +273,13 @@ impl Grants {
     ) -> Result<Grant, StoreError> {
         // What stopped waiting holds no place among the machines counted.
         let mut next = self.swept(now_unix_ms);
+        // The name the operator chose stays through a pairing again, also
+        // one chosen while only a pending grant stood.
+        let chosen_name = next
+            .grants
+            .iter()
+            .find(|grant| grant.key == key && grant.chosen_name.is_some())
+            .and_then(|grant| grant.chosen_name.clone());
         next.grants
             .retain(|grant| !(grant.key == key && grant.state == GrantStatus::Pending));
         // The count is of machines: a settled grant and the pending one
@@ -281,12 +288,6 @@ impl Grants {
         if machines >= limits::MAX_GRANTS {
             return Err(StoreError::Full);
         }
-        // The name the operator chose stays through a pairing again.
-        let chosen_name = next
-            .grants
-            .iter()
-            .find(|grant| grant.key == key)
-            .and_then(|grant| grant.chosen_name.clone());
         let grant = Grant {
             id: new_id()?,
             key,

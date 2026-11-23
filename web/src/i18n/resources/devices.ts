@@ -221,7 +221,7 @@ export const devicesEnglish = {
   "devices.detail.alias": "SSH alias",
   "devices.detail.route": "Path",
   "devices.detail.direction": "Who opens whom",
-  "devices.detail.message": "Details",
+  "devices.detail.message": "Reason",
 } as const;
 
 const ko = {
