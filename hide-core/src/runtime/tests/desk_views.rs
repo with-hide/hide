@@ -2226,7 +2226,7 @@ fn a_pane_in_no_agent_tab_is_refused_pair_view() {
 /// Operator decision 2026-11-23: a View's chip in a list enters focus mode on
 /// the pane of the agent that opened it, with that View in front of its desk,
 /// from wherever the operator is. Its Workspace comes forward in the same
-/// event; without `bring_forward` a pane of another Workspace is refused.
+/// event; without `bring_forward` nothing moves.
 #[test]
 fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_front() {
     let (mut runtime, directory) = setup_never_front("pair-chip");
@@ -2241,9 +2241,8 @@ fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_f
     };
 
     ask(&mut runtime, false);
-    let refused = runtime.snapshot.status.last_error.clone().expect("refused");
-    assert_eq!(refused.kind, "pair_view.other_workspace");
-    assert!(!mode_on(&runtime));
+    assert!(!mode_on(&runtime), "a pane of a Workspace not in front");
+    assert_eq!(drawn_pair(&runtime), None);
 
     ask(&mut runtime, true);
     assert_eq!(runtime.snapshot.status.last_error, None);
