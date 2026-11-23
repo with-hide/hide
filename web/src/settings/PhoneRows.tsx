@@ -23,7 +23,7 @@ import { Switch } from "../components/ui/switch";
 import { Disclosure, Group, Note, Row, Status, Value } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { checklistView, codeCountdown, exposureLine, lastSeen, phoneLine, phoneProblem, type FailedStep, type MobileState, type PhoneRow } from "../mobileSettings";
+import { APP_STORE_URL, checklistView, codeCountdown, exposureLine, lastSeen, phoneLine, phoneProblem, type FailedStep, type MobileState, type PhoneRow } from "../mobileSettings";
 import { coreMachineName } from "../screenMachine";
 import { useShellStore } from "../store";
 import { RenameDevice } from "./RenameDevice";
@@ -281,7 +281,20 @@ function PairDialog({ state, actions, onClose }: { state: MobileState; actions: 
               <QrCode text={state.qr} />
               <div className="flex min-w-0 flex-1 flex-col gap-sm">
                 <span className="text-headline font-semibold text-foreground">{t("mobileSetup.scan")}</span>
-                <span className="text-subhead text-muted-foreground">{t(state.method === "relay" ? "mobileSetup.scanDescription" : "mobileSetup.pairDescription")}</span>
+                {state.method === "relay" ? (
+                  <>
+                    <span className="text-subhead text-muted-foreground" data-mobile-scan="iphone">
+                      {t("mobileSetup.scanIphone")}{" "}
+                      <a href={APP_STORE_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-xs text-primary outline-none focus-visible:ring-1 focus-visible:ring-ring" data-mobile-app-store="true">
+                        {t("mobileSetup.appStore")}
+                        <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon)" />
+                      </a>
+                    </span>
+                    <span className="text-subhead text-muted-foreground" data-mobile-scan="other">{t("mobileSetup.scanOther")}</span>
+                  </>
+                ) : (
+                  <span className="text-subhead text-muted-foreground">{t("mobileSetup.pairDescription")}</span>
+                )}
                 <span className="break-all font-mono text-subhead text-subtle-foreground" data-mobile-url={state.url ?? ""}>{state.url}</span>
                 <span className="font-mono text-subhead text-muted-foreground" data-mobile-countdown={countdown ?? "expired"}>
                   {countdown ? t("mobileSetup.codeExpires", { time: countdown }) : t("mobileSetup.codeExpired")}

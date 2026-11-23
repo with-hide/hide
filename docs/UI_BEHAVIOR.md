@@ -3546,7 +3546,7 @@ Only while 폰에서 Hide 열기 is on (or a removal is still owed) and the meth
 A removed Tailscale CLI cannot block relay pairing; its unfinished cleanup is that line while the connected relay's QR remains available.
 The update action opens Settings > About; failures stay in that line without a banner or popup.
 Opening the page makes no code and voids none.
-Add device › 폰 opens the QR window: it turns 폰에서 Hide 열기 on when it is off, shows the method's connection row or Tailscale's failing steps until the way is ready, then makes one code and shows the QR, 폰 카메라로 스캔하세요, app.withhide.dev and the code's m:ss countdown; an expired code offers QR 보기 for a fresh one, a phone that pairs closes the window, and closing it takes the code with it.
+Add device › 폰 opens the QR window: it turns 폰에서 Hide 열기 on when it is off, shows the method's connection row or Tailscale's failing steps until the way is ready, then makes one code and shows the QR, 폰으로 스캔하세요, app.withhide.dev and the code's m:ss countdown; on the relay two lines say how each phone scans it: `iPhone: App Store에서 Hide 앱을 받아 ‘QR 스캔’을 누르세요.` with an App Store link that opens outside Hide, and `다른 폰: 카메라로 스캔하고 열리는 페이지에서 ‘연결’을 누르세요.` with Add to Home Screen after it (Tailscale keeps its one line); an expired code offers QR 보기 for a fresh one, a phone that pairs closes the window, and closing it takes the code with it.
 Pairing spends the five-minute code; a fifth phone is refused on the phone with the limit.
 
 Switching Tailscale로 직접 연결 selects that method and closes the previous method's phone connections.

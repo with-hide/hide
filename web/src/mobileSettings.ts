@@ -10,6 +10,9 @@ import { formatRelativeTime } from "./i18n/format";
 import type { MessageKey } from "./i18n/catalogs";
 import type { InterfaceLanguage } from "./i18n/locale";
 
+/** The iPhone app's App Store page, the same address the site's downloads page links (`site/public/downloads.js`, `APP_STORE_URL`). */
+export const APP_STORE_URL = "https://apps.apple.com/app/hide-remote-coding-agents/id6832780181";
+
 export type StepState = "ok" | "failed" | "waiting";
 
 /** The daemon's `mobile` frame (hided/src/mobile/mod.rs `frame_value`). */

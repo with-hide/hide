@@ -146,6 +146,11 @@ it("asks computer or phone first; Phone turns phone access on, shows one code on
   expect(kinds(events).filter((kind) => kind === "mobile_show_code")).toHaveLength(1);
   expect(q("[data-mobile-qr]")?.getAttribute("data-mobile-qr")).toBe("https://app.withhide.dev/#pair=x");
   expect(q("[data-mobile-countdown]")?.textContent).toBe("Code expires in 5:00");
+  // How each phone scans it: the iPhone app from the App Store, opened outside Hide, and any other phone's camera.
+  const store = q("[data-mobile-app-store]") as HTMLAnchorElement;
+  expect([store.href, store.target]).toEqual(["https://apps.apple.com/app/hide-remote-coding-agents/id6832780181", "_blank"]);
+  expect(q('[data-mobile-scan="iphone"]')?.textContent).toBe("iPhone: get the Hide app from the App Store and tap Scan QR code. App Store");
+  expect(q('[data-mobile-scan="other"]')?.textContent).toBe("Other phones: scan with the camera and tap Connect on the page that opens. Share › Add to Home Screen keeps it as an app.");
   // The phone that scans it closes the window.
   await set({ qr: null, code_expires_at_ms: null, phones: [phone()] });
   expect(q("[data-mobile-pair-dialog]")).toBeNull();
