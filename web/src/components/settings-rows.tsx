@@ -85,10 +85,12 @@ export function Value({ children, mono = true, ...data }: { children: ReactNode;
   );
 }
 
-export type Tone = "ok" | "warn" | "error" | "pending" | "local" | "muted";
+/** `live` is a connection that is up: the success color with a dot, said once beside a row (Settings › Devices). */
+export type Tone = "ok" | "live" | "warn" | "error" | "pending" | "local" | "muted";
 
 const TONE_TEXT: Record<Tone, string> = {
   ok: "text-success",
+  live: "text-success",
   warn: "text-warning",
   error: "text-destructive",
   pending: "text-subtle-foreground",
@@ -96,7 +98,7 @@ const TONE_TEXT: Record<Tone, string> = {
   muted: "text-muted-foreground",
 };
 
-const TONE_SYMBOL: Record<Tone, string> = { ok: "✓", warn: "!", error: "✕", pending: "…", local: "●", muted: "·" };
+const TONE_SYMBOL: Record<Tone, string> = { ok: "✓", live: "●", warn: "!", error: "✕", pending: "…", local: "●", muted: "·" };
 
 /** A state as symbol plus words, never color alone (design 7). */
 export function Status({ tone, children, ...data }: { tone: Tone; children: ReactNode } & Record<`data-${string}`, string>) {

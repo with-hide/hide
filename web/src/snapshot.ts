@@ -2299,7 +2299,7 @@ export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "
  * A retry over ssh's last line, in `message`, is `cannot_connect`; the
  * retries ssh says nothing useful for carry their own value, for a sentence.
  */
-export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated";
+export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated" | "windows_not_started";
 
 /**
  * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:

@@ -134,6 +134,7 @@ async fn a_connection_kept_by_a_pending_grant_closes_when_that_grant_stops_waiti
                 key: host.key(),
                 device: host.name.to_owned(),
                 name: host.name.to_owned(),
+                chosen_name: None,
                 grant: pending.id.clone(),
                 state: KnownState::Confirming,
                 candidates: Vec::new(),

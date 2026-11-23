@@ -90,6 +90,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
                 key: host.key(),
                 device,
                 name,
+                chosen_name: None,
                 grant: id.clone(),
                 state: KnownState::Confirming,
                 candidates: Vec::new(),

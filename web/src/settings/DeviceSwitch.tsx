@@ -7,6 +7,7 @@
 // (`Device.switch`) and hided what a press is answered (`pairingResult`).
 
 import type { TFunction } from "i18next";
+import { SmartAppControlHint, startedSilentOnWindows } from "./SmartAppControlHint";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -55,7 +56,9 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
   if (state.state === "failed") {
     return (
       <div className={cn("flex flex-wrap items-center gap-x-sm gap-y-xs", className)} data-device-switch-state={`${device.id}:failed`} data-device-switch-reason={state.reason ?? ""}>
-        <Status tone="warn">{t(switchFailureKey(state.reason))}</Status>
+        <Status tone="warn">
+          {startedSilentOnWindows(device) ? <>{t("devices.problem.windowsNotStarted")} · <SmartAppControlHint deviceId={device.id} /></> : t(switchFailureKey(state.reason))}
+        </Status>
         <DeviceSwitchButton device={device} actions={actions} retry size="sm" />
       </div>
     );

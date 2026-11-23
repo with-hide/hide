@@ -227,6 +227,7 @@ const renderers: Renderers = {
     "Secondary": () => <Badge>3 agents</Badge>,
     "Destructive": () => <Badge variant="destructive">refused</Badge>,
     "Outline": () => <Badge variant="outline">main</Badge>,
+    "Warning": () => <Badge variant="warning">예전 방식</Badge>,
   },
   "Kbd": {
     "Default": () => <Kbd>⌘K</Kbd>,
