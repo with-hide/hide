@@ -37,7 +37,7 @@
     "desktop/e2e/right-lane.spec.ts": 3,
     "desktop/e2e/server-picker.spec.ts": 2,
     "desktop/e2e/session-labels.spec.ts": 7,
-    "desktop/e2e/session-work-ledger.spec.ts": 7,
+    "desktop/e2e/session-work-ledger.spec.ts": 6,
     "desktop/e2e/session-workflow.spec.ts": 2,
     "desktop/e2e/ssh-pane-fixture.ts": 4,
     "desktop/e2e/status-motion.spec.ts": 2,
