@@ -940,6 +940,13 @@ pub(crate) struct MissionRuntime {
     /// at most one entry per mission of the book: a restart, a take or a
     /// resume starts it again.
     pub(super) conductor_seen: std::collections::HashMap<String, u64>,
+    /// Since when this daemon has seen each open mission's present Conductor
+    /// rest (`Runtime::conductor_rests`, `note_conductors_resting`): the
+    /// safety net counts its 20 minutes from then too, so a Conductor at work
+    /// is never read as stuck. The row's own last change cannot say it, as
+    /// for a worker's stop (`stop_clock`). Memory only, at most one entry per
+    /// mission of the book: a restart, a take or a resume starts it again.
+    pub(super) conductor_rest_seen: std::collections::HashMap<String, u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
@@ -1116,11 +1123,24 @@ fn refresh_seen(
     moved
 }
 
-/// The letter one recorded wake sends.
+/// The letter one recorded wake sends, in GitHub's words: what every
+/// mission test of this module reads.
+#[cfg(test)]
 pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
-    let pr = wake
-        .pr
-        .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
+    wake_words(mission, wake, &crate::github::host::GITHUB)
+}
+
+/// The letter one recorded wake sends, naming a change request and its
+/// create command as `unit`, the host of the mission's project, does.
+pub(super) fn wake_words(
+    mission: &Mission,
+    wake: &PendingWake,
+    unit: &dyn crate::code_host::CodeHost,
+) -> String {
+    let pr = wake.pr.map_or_else(
+        || "The PR".to_owned(),
+        |number| unit.change_request_name(number),
+    );
     let node = mission.nodes.iter().find(|node| node.key == wake.node);
     let outside = || match node.and_then(|node| node.external.as_ref()) {
         Some(External::Branch(branch)) => format!("Branch {branch}"),
@@ -1247,7 +1267,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .map_or_else(|| "-".to_owned(), ToString::to_string);
             news(
                 format!("Node {} can start: line {line} is met", wake.node),
-                &start_words(mission, node),
+                &start_words(mission, node, unit),
             )
         }
         WakeEvent::LineReopened => {
@@ -1288,7 +1308,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
             let (what, act) = match owed {
                 Some(line) => fix_owed_words(line),
-                None => attention_words(wake.reason, &pr, &start_words(mission, node)),
+                None => attention_words(wake.reason, &pr, &start_words(mission, node, unit)),
             };
             news(
                 format!("Node {} needs you to look: {what}", wake.node),
@@ -1556,14 +1576,19 @@ pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen, now: u64) -> b
 /// How to start `node`: on its own from the destination, or stacked on the
 /// node below it while that one's work has not reached main (`node_stack`),
 /// its branch cut from that node's branch and its pull request based on it.
-fn start_words(mission: &Mission, node: Option<&MissionNode>) -> String {
+fn start_words(
+    mission: &Mission,
+    node: Option<&MissionNode>,
+    unit: &dyn crate::code_host::CodeHost,
+) -> String {
     let Some(stack) = node.and_then(|node| node_stack(mission, node)) else {
         return "start its worker".to_owned();
     };
     let branch = stack.branch.as_deref().unwrap_or("<its branch>");
     format!(
-        "start its worker stacked on node {}: cut its branch from {branch} and open its pull request with `gh pr create --base {branch}`; it merges after node {}'s pull request, and Hide names the stack in `hide mission show {}`",
+        "start its worker stacked on node {}: cut its branch from {branch} and open its pull request with `{}`; it merges after node {}'s pull request, and Hide names the stack in `hide mission show {}`",
         stack.on,
+        unit.create_command(branch),
         stack.on,
         node.map_or("-", |node| node.key.as_str()),
     )
@@ -3267,6 +3292,18 @@ impl Runtime {
                 if let Some(destination) = &mission.destination {
                     answer["destination"] = json!(destination);
                 }
+                // A stacked node's hand-off in its project's host's words:
+                // the change request below and the command that opens its
+                // own on that branch.
+                if let Some(stack) = super::mission_landing::node_stack(mission, node) {
+                    let unit = self.mission_unit(mission);
+                    if let Some(pr) = stack.pr {
+                        answer["stack_pr"] = json!(unit.change_request_name(pr));
+                    }
+                    if let Some(branch) = &stack.branch {
+                        answer["stack_create"] = json!(unit.create_command(branch));
+                    }
+                }
                 // Why Hide could not read where the node's branch is, such
                 // as a destination that is gone; the snapshot says only
                 // that it is unread.
@@ -3931,6 +3968,20 @@ impl Runtime {
 
     /// What GitHub says now of pull request `number` in `mission`'s
     /// project, as a node remembers it; none before a current read holds it.
+    /// The unit of the host `mission`'s project is read from, whose words
+    /// its letters take (`MR !12`, `glab mr create`); GitHub's while no host
+    /// has answered for the project.
+    pub(super) fn mission_unit(
+        &self,
+        mission: &Mission,
+    ) -> &'static dyn crate::code_host::CodeHost {
+        self.github_project_on(&mission.device_id, &mission.project)
+            .map_or(
+                &crate::github::host::GITHUB as &dyn crate::code_host::CodeHost,
+                |project| project.status.unit(),
+            )
+    }
+
     pub(super) fn pull_seen(&self, mission: &Mission, number: u32) -> Option<PrSeen> {
         self.mission_pulls(mission)?
             .pull_requests
@@ -4656,7 +4707,7 @@ impl Runtime {
                 .any(|project| project.repository_id() == Some(id))
         });
         if !held {
-            // A GitHub read that failed says why the repository is unknown,
+            // A host read that failed says why the repository is unknown,
             // so the agent can tell the operator what to fix rather than
             // wait for a read that keeps failing.
             let unread = self
@@ -4664,8 +4715,12 @@ impl Runtime {
                 .into_iter()
                 .chain(self.github_projects_on(machine))
                 .filter(|project| project.repository_id().is_none())
-                .find_map(|project| project.status.failure_category)
-                .and_then(crate::github::unread_action);
+                .find_map(|project| {
+                    crate::code_host::unread_action(
+                        project.status.unit(),
+                        project.status.failure_category?,
+                    )
+                });
             return Err(match unread {
                 Some(action) => {
                     crate::coordination::refusal("mission_machine_no_repository", &action)
@@ -5117,6 +5172,10 @@ impl Runtime {
         let mut stops: Vec<_> = self.missions.stop_clock.iter().collect();
         stops.sort_unstable();
         stops.hash(&mut hasher);
+        // A Conductor's rest decides when its safety net may come up.
+        let mut rests: Vec<_> = self.missions.conductor_rest_seen.iter().collect();
+        rests.sort_unstable();
+        rests.hash(&mut hasher);
         for (letter, hold) in &self.delivery_holds {
             (letter, crate::delivery::held::held_for(*hold)).hash(&mut hasher);
         }

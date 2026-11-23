@@ -100,6 +100,7 @@ fn pair(pc: &Machine, distro: &Machine) {
                 key: distro.peers.key(),
                 device: "ubuntu".to_owned(),
                 name: "ubuntu".to_owned(),
+                chosen_name: None,
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: in_wsl(distro).candidates,

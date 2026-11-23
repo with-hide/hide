@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, listedDevices, mayRequest, openedMachines, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Peer } from "./pairing";
+import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, listedDevices, mayRequest, openedMachines, ownWindow, pairedMachines, peerRouteKey, peerState, refusalKey, relayTip, requestLine, timeLeft, type Peer } from "./pairing";
 import type { SnapshotRest } from "./snapshot";
 
 const peer = (over: Partial<Peer> = {}): Peer => ({ key: "ab".repeat(32), device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null, ...over });
@@ -14,11 +14,19 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(directionKey(peer({ opens: "unpaired" }))).toBe("pairing.direction.outgoing");
   });
 
-  it("says only how a connected machine is reached", () => {
-    expect(peerState(peer())).toEqual({ key: "pairing.state.direct", tone: "ok", action: null, reason: null });
-    expect(peerState(peer({ path: "relay" })).key).toBe("pairing.state.relay");
+  it("says a connected machine is connected, and how only in its details, with the relay tip on a relayed row alone (operator review 2026-11-23)", () => {
+    expect(peerState(peer())).toEqual({ key: "pairing.state.connected", tone: "ok", action: null, reason: null });
+    expect(peerState(peer({ path: "relay" })).key).toBe("pairing.state.connected");
+    expect(peerRouteKey(peer())).toBe("pairing.state.direct");
+    expect(peerRouteKey(peer({ path: "relay" }))).toBe("pairing.state.relay");
     // D-86: a direct path between two Tailscale addresses is named apart.
-    expect(peerState(peer({ path: "tailscale" }))).toEqual({ key: "pairing.state.tailscale", tone: "ok", action: null, reason: null });
+    expect(peerRouteKey(peer({ path: "tailscale" }))).toBe("pairing.state.tailscale");
+    expect(peerRouteKey(peer({ connected: false, path: null }))).toBeNull();
+    expect(relayTip(peer({ path: "relay" }))).toBe(true);
+    expect(relayTip(peer({ path: "direct" }))).toBe(false);
+    expect(relayTip(peer({ path: "tailscale" }))).toBe(false);
+    // A relayed machine whose state needs the operator says that, not the tip.
+    expect(relayTip(peer({ path: "relay", update: "there" }))).toBe(false);
   });
 
   it("offers Retry with the relay's reason for a machine it opens and cannot reach, and nothing for one that only opens it", () => {

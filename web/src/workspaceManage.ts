@@ -5,6 +5,7 @@ import type { MenuPresentation } from "./components/menu-symbols";
 // core reports. The core re-checks every one of these; they decide what the
 // screen offers, not what is allowed.
 
+import { pullHost, pullLabel } from "./codeHost";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
@@ -261,7 +262,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
     { id: "new_tab_here", label: t("workspace.menu.newTabHere"), unavailable: checkout.exists ? null : t("workspace.unavailable.folderMissing"), shortcut: host.newTabChord },
     { id: "new_group", label: t("groups.create"), unavailable: checkout.exists ? null : t("workspace.unavailable.folderMissing") },
   ];
-  if (pr) items.push({ id: "open_pull_request", label: t("workspace.menu.openPr", { number: pr.number }), unavailable: null });
+  if (pr) items.push({ id: "open_pull_request", label: t("workspace.menu.openPr", { label: pullLabel(pr), noun: t(pullHost(pr).noun) }), unavailable: null });
   items.push(
     { id: "set_purpose", label: t("workspace.menu.setPurpose"), unavailable: null, separated: true },
     { id: "set_primary", label: t("workspace.menu.setPrimary"), unavailable: primaryProblem(workspace, checkout, host.node, t) },

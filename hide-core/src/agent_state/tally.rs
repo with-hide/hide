@@ -371,6 +371,11 @@ pub mod phone {
         pub tone: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pull_request: Option<u64>,
+        /// That pull request as its host's unit named it, from the row's own
+        /// list (`AgentPullRequestSnapshot::reference`), so the phone names it
+        /// `MR !12` on gitlab.com; absent when the row does not list it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub pull_reference: Option<crate::code_host::ChangeRequestRef>,
         /// A request the core asks for the agent, which the phone words in
         /// place of `text` (`RowLine::subject`).
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -504,6 +509,11 @@ pub mod phone {
         /// human_turn`, PRD ask-human), which the phone draws with Done.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub human_turn: Option<Value>,
+        /// The agent's own question or plan with its choices, as its session
+        /// records it (`SidebarAgentSnapshot::user_turn`). Never in the list
+        /// frame: the phone's detail is told it alone (`hided/src/mobile/ask.rs`).
+        #[serde(skip)]
+        pub user_turn: Option<hide_session::turns::UserTurnFact>,
         /// Every declaration on the row and the ones raised to it, so a new
         /// one is announced once even while the row already stands in Needs
         /// You (B5, B17), by declaration id with what each says. Used only by
@@ -911,6 +921,7 @@ pub mod phone {
                     mode: "kept".to_owned(),
                     tone: "subtle",
                     pull_request: None,
+                    pull_reference: None,
                     subject: None,
                 });
             }
@@ -926,13 +937,26 @@ pub mod phone {
             (_, "news") => "news",
             _ => "subtle",
         };
+        let pull_request = line.get("pull_request").and_then(Value::as_u64);
         Some(Line {
             text: str_of(line, "text").trim().to_owned(),
             mode: mode.to_owned(),
             tone,
-            pull_request: line.get("pull_request").and_then(Value::as_u64),
+            pull_request,
+            pull_reference: pull_request.and_then(|number| pull_reference(agent, number)),
             subject: subject_of(line.get("subject")),
         })
+    }
+
+    /// The reference of the row's own pull request `number`, as its list
+    /// carries it; none when the row does not list it or carries none.
+    fn pull_reference(agent: &Value, number: u64) -> Option<crate::code_host::ChangeRequestRef> {
+        let listed = agent
+            .pointer("/request/pull_requests")?
+            .as_array()?
+            .iter()
+            .find(|pull| pull.get("number").and_then(Value::as_u64) == Some(number))?;
+        serde_json::from_value(listed.get("reference")?.clone()).ok()
     }
 
     /// Where a pane works: its `project · branch` and the project alone.
@@ -1197,6 +1221,10 @@ pub mod phone {
                     .get("human_turn")
                     .filter(|lead| !lead.is_null())
                     .cloned(),
+                user_turn: agent
+                    .get("user_turn")
+                    .filter(|fact| !fact.is_null())
+                    .and_then(|fact| serde_json::from_value(fact.clone()).ok()),
                 human_turns: declared_subject(agent)
                     .into_iter()
                     .chain(
@@ -1409,6 +1437,42 @@ pub mod phone {
                 value[key] = field.clone();
             }
             value
+        }
+
+        /// A row's checks line reaches the phone with the reference its own
+        /// list carries for that number, so the phone names a gitlab.com
+        /// merge request `MR !12` (docs/ARCHITECTURE.md, Code hosts); a number
+        /// the list does not carry sends no reference.
+        #[test]
+        fn a_checks_line_carries_the_rows_reference_for_its_number() {
+            let reference = json!({
+                "repository": {"host": "gitlab", "authority": "gitlab.com", "path": "acme/shop"},
+                "number": 12, "key": "gitlab.com/acme/shop!12", "label": "!12",
+                "url": "https://gitlab.com/acme/shop/-/merge_requests/12",
+                "checks_url": "https://gitlab.com/acme/shop/-/merge_requests/12/pipelines",
+                "files_url": "https://gitlab.com/acme/shop/-/merge_requests/12/diffs",
+            });
+            let row = |number: u64| {
+                agent(
+                    "w1:c",
+                    "done",
+                    1,
+                    json!({
+                        "state": {"tree_rank": 2, "line": {"text": "", "mode": "checks_passed", "tone": {"kind": "news"}, "pull_request": number}},
+                        "request": {"pull_requests": [{"number": 12, "reference": reference}, {"number": 7}]},
+                    }),
+                )
+            };
+            let carried = line(&row(12)).unwrap();
+            assert_eq!(
+                (
+                    carried.pull_request,
+                    carried.pull_reference.map(|reference| reference.label)
+                ),
+                (Some(12), Some("!12".to_owned()))
+            );
+            assert_eq!(line(&row(7)).unwrap().pull_reference, None);
+            assert_eq!(line(&row(40)).unwrap().pull_reference, None);
         }
 
         /// 40 asking roots, a root with 60 delegated children, 140 more

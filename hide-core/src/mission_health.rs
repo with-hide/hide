@@ -548,7 +548,7 @@ fn still_holds(
                     .quiet_since()
                     .is_none_or(|since| since <= attention.since_unix_ms)
                 && (facts.pulls.is_none()
-                    || waiting_pull(node, facts.pulls)
+                    || waiting_pull(mission, node, facts.pulls)
                         .is_some_and(|pull| Some(pull.number) == attention.pr))
         }
     }
@@ -889,7 +889,7 @@ pub(crate) fn stalls(
                 .any(|warning| warning.told_unix_ms.is_some() && warning.kind.stalls())
         {
             out.push(stall(AttentionReason::WarningStood, node.current_pr()));
-        } else if let Some(pull) = waiting_pull(node, pulls) {
+        } else if let Some(pull) = waiting_pull(mission, node, pulls) {
             out.push(Stall {
                 head: pull.head_oid.clone(),
                 ..stall(AttentionReason::WaitStood, Some(pull.number))
@@ -949,9 +949,9 @@ pub(crate) struct SafetyNet {
 }
 
 /// Why a node stands in the safety net (PRD letters-missions-simplify D-23,
-/// B15): its raise, or else the Conductor's standing cell about it (a failed
-/// or cancelled CI, changes asked for, a failed outside node, a warning). The
-/// card's row words this typed fact in the operator's language.
+/// B15): its raise, or else a standing cell only its Conductor moves (a
+/// stopped worker, a failed outside node). The card's row words this typed
+/// fact in the operator's language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(untagged)]
 pub enum HeldReason {
@@ -963,57 +963,62 @@ pub enum HeldReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellReason {
-    CiFailed,
-    CiCancelled,
-    ChangesRequested,
     OutsideFailed,
-    WarningReviewFails,
     WarningStopped,
 }
 
 /// What holds `node` of `mission` in the safety net, with since when it
 /// stood unresolved and the pull request it is about: a raise its Conductor
-/// settles (not `operator_first`, which is the operator's own item), else
-/// the Conductor's standing cell about the node. None when nothing stands.
+/// settles (not `operator_first`, which is the operator's own item), else a
+/// standing cell no one but its Conductor moves: the node's worker stopped
+/// (`WarningKind::Stopped`), or its outside pull request closed unmerged.
+/// A failed or cancelled CI, changes asked for and a review failing at its
+/// round limit are the working worker's to answer and hold nothing: a worker
+/// that stops on one is warned as stopped and one that ends is raised, and
+/// the clock counts from then. None when nothing stands.
 pub(crate) fn held_of(
     mission: &Mission,
     node: &MissionNode,
 ) -> Option<(HeldReason, u64, Option<u32>)> {
-    let wake = mission
-        .wakes
+    use crate::missions::{WakeEvent, WarningKind};
+    // When Hide warned that the node's worker stopped: from then on the
+    // node's cell is its Conductor's to move.
+    let stopped = node
+        .warnings
         .iter()
-        .find(|wake| wake.node == node.key && wake.standing());
+        .find(|warning| warning.kind == WarningKind::Stopped)
+        .map(|warning| warning.since_unix_ms);
     if let Some(attention) = &node.attention {
-        // The raise's cell began when the node's standing cell did, a
-        // warning it took over included: its clock does not start again.
-        let since = wake
-            .and_then(|wake| wake.since_unix_ms)
-            .map_or(attention.since_unix_ms, |since| {
-                since.min(attention.since_unix_ms)
-            });
+        // A raise that took over a stopped worker's warning keeps its
+        // clock; any other raise counts from itself.
+        let since = stopped.map_or(attention.since_unix_ms, |since| {
+            since.min(attention.since_unix_ms)
+        });
         return (!attention.reason.operator_first()).then_some((
             HeldReason::Raise(attention.reason),
             since,
             attention.pr,
         ));
     }
-    let wake = wake?;
-    use crate::missions::{CiResult, WakeEvent, WarningKind};
-    let reason = match wake.event {
-        WakeEvent::Ci => match wake.ci.as_ref().map(|ci| ci.result) {
-            Some(CiResult::Cancelled) => CellReason::CiCancelled,
-            _ => CellReason::CiFailed,
-        },
-        WakeEvent::ChangesRequested => CellReason::ChangesRequested,
-        WakeEvent::OutsideFailed => CellReason::OutsideFailed,
-        WakeEvent::Warning => match wake.warning {
-            Some(WarningKind::ReviewFails) => CellReason::WarningReviewFails,
-            _ => CellReason::WarningStopped,
-        },
-        // A raise's own cell stands with its attention, read above.
-        _ => return None,
-    };
-    Some((HeldReason::Cell(reason), wake.since_unix_ms?, wake.pr))
+    let wake = mission
+        .wakes
+        .iter()
+        .find(|wake| wake.node == node.key && wake.standing())?;
+    let cell_since = wake.since_unix_ms?;
+    if let Some(stopped) = stopped {
+        // The cell may have begun with a fact its worker was still
+        // answering, a failed CI: the Conductor's part began with the stop.
+        return Some((
+            HeldReason::Cell(CellReason::WarningStopped),
+            cell_since.max(stopped),
+            wake.pr,
+        ));
+    }
+    (wake.event == WakeEvent::OutsideFailed).then_some((
+        HeldReason::Cell(CellReason::OutsideFailed),
+        cell_since,
+        wake.pr,
+    ))
 }
 
 /// Whether the operator was told of what holds `mission`'s node `at`.
@@ -1062,53 +1067,76 @@ pub(crate) fn held_nodes(mission: &Mission, operator_waits: &[bool]) -> Vec<usiz
     held.into_iter().map(|(_, at)| at).collect()
 }
 
-/// The mission's safety net now, the one derived state the view, Needs You,
-/// the notice and the handover read: with no Conductor present it holds as
-/// soon as one raise is held (`held_nodes`); with one present, once the
-/// oldest held raise, counted from the Conductor's arrival when that is
-/// later (`present_since`), stood `SAFETY_NET_AFTER_MS`. None for a mission
-/// that asks no one (`MissionStatus::asks`). A closed mission's Conductor
-/// has finished with it, so the caller passes `present` false for it.
-pub(crate) fn safety_net(
+/// The mission's Conductor as the safety net reads it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConductorNow {
+    /// No Conductor holds the mission, or it is closed and its Conductor
+    /// has finished with it.
+    Absent,
+    /// A Conductor holds it, seen present since `since` and resting since
+    /// `resting` (`Runtime::conductor_rests`), none while it moves.
+    Present { since: u64, resting: Option<u64> },
+}
+
+/// The nodes the safety net of `mission` holds with `conductor` and since
+/// when it counts: the oldest held raise with no Conductor; with one, the
+/// latest of that raise, the Conductor's arrival and its rest, and none
+/// while it moves, since the next move is then still its own.
+fn net_since(
     mission: &Mission,
-    present: bool,
-    present_since: u64,
+    conductor: ConductorNow,
     operator_waits: &[bool],
-    now: u64,
-) -> Option<SafetyNet> {
+) -> Option<(u64, Vec<usize>)> {
     if !mission.status.asks() {
         return None;
     }
     let nodes = held_nodes(mission, operator_waits);
     let oldest = held_of(mission, &mission.nodes[*nodes.first()?])?.1;
-    let since = if present {
-        oldest.max(present_since)
-    } else {
-        oldest
+    let since = match conductor {
+        ConductorNow::Absent => oldest,
+        ConductorNow::Present { since, resting } => oldest.max(since).max(resting?),
     };
-    (!present || now.saturating_sub(since) >= SAFETY_NET_AFTER_MS).then_some(SafetyNet {
-        conductor_present: present,
+    Some((since, nodes))
+}
+
+/// The mission's safety net now, the one derived state the view, Needs You,
+/// the notice and the handover read: with no Conductor present it holds as
+/// soon as one raise is held (`held_nodes`); with one present, only once it
+/// rests and the later of the oldest held raise, its arrival and its rest
+/// stood `SAFETY_NET_AFTER_MS` (`net_since`): a Conductor whose turn runs, or
+/// that waits on work of its own, is still moving, and the operator is asked
+/// only when the one whose move it is stopped. None for a mission that asks
+/// no one (`MissionStatus::asks`).
+pub(crate) fn safety_net(
+    mission: &Mission,
+    conductor: ConductorNow,
+    operator_waits: &[bool],
+    now: u64,
+) -> Option<SafetyNet> {
+    let (since, nodes) = net_since(mission, conductor, operator_waits)?;
+    let absent = conductor == ConductorNow::Absent;
+    (absent || now.saturating_sub(since) >= SAFETY_NET_AFTER_MS).then_some(SafetyNet {
+        conductor_present: !absent,
         since_unix_ms: since,
         nodes,
     })
 }
 
 /// When a mission whose raises stand now has its safety net come up with a
-/// Conductor present, if it has not: the time a view made now must be made
-/// again at. None when nothing is held or the net already holds.
+/// resting Conductor present, if it has not: the time a view made now must
+/// be made again at. None when nothing is held, the Conductor moves (its
+/// rest, when it comes, makes the view again) or the net already holds.
 pub(crate) fn safety_net_due(
     mission: &Mission,
-    present_since: u64,
+    conductor: ConductorNow,
     operator_waits: &[bool],
     now: u64,
 ) -> Option<u64> {
-    if !mission.status.asks() {
+    if conductor == ConductorNow::Absent {
         return None;
     }
-    let nodes = held_nodes(mission, operator_waits);
-    let oldest = held_of(mission, &mission.nodes[*nodes.first()?])?.1;
-    let due = oldest
-        .max(present_since)
+    let due = net_since(mission, conductor, operator_waits)?
+        .0
         .saturating_add(SAFETY_NET_AFTER_MS);
     (due > now).then_some(due)
 }
@@ -1127,12 +1155,18 @@ pub(crate) fn could_start(mission: &Mission, node: &MissionNode, lines: &[LinesN
 }
 
 /// The node's current pull request while it waits on CI, a review or the
-/// merge with nothing for its worker to do.
+/// merge with nothing for its worker to do. A pull request stacked on a
+/// node of the mission not merged yet waits on that node instead
+/// (`stacked_below`, the map's `기다림 <node> 머지 먼저`), whose own wait is
+/// the one that can stall.
 fn waiting_pull<'a>(
+    mission: &Mission,
     node: &MissionNode,
     pulls: Option<&'a GithubProjectSnapshot>,
 ) -> Option<&'a PullRequestSnapshot> {
-    if node.status != NodeStatus::Working {
+    if node.status != NodeStatus::Working
+        || crate::runtime::mission_landing::stacked_below(mission, node).is_some()
+    {
         return None;
     }
     let pull = find(pulls?, node.current_pr()?)?;
@@ -2291,6 +2325,56 @@ mod tests {
         assert!(stalls(&m, None, false, &[false], &[]).is_empty());
         let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         assert!(stalls(&m, Some(&merged), false, &[false], &[]).is_empty());
+    }
+
+    /// A pull request stacked on a node of the mission whose own pull
+    /// request is not merged waits on that node, not on CI, a review or the
+    /// merge: the node below stands, the one on it does not, and its raise
+    /// goes; once the node below is merged it stands on its own.
+    #[test]
+    fn a_pull_request_stacked_on_an_unmerged_node_waits_on_that_node() {
+        let mut m = running(&["a", "b"]);
+        for node in &mut m.nodes {
+            node.delivery = Some(crate::missions::Delivery::Pr);
+            node.started_at_unix_ms = Some(0);
+        }
+        m.nodes[0].prs = vec![7];
+        m.nodes[1].prs = vec![8];
+        m.nodes[1].depends_on = vec!["a:c1".into()];
+        let open = listed(vec![
+            pull(7, "feat/a", PullRequestBadge::Open),
+            pull(8, "feat/b", PullRequestBadge::Open),
+        ]);
+        assert_eq!(
+            stalls(&m, Some(&open), false, &[false, false], &[]),
+            [stall(0, AttentionReason::WaitStood, Some(7))]
+        );
+        let mut raised = m.clone();
+        raised.nodes[1].attention = Some(attention(AttentionReason::WaitStood, Some(8)));
+        assert!(
+            evaluate(
+                &raised,
+                &facts(
+                    Some(&open),
+                    vec![NodeFacts::default(), NodeFacts::default()]
+                )
+            )
+            .contains(&Act::Clear { node: 1 }),
+            "a raise made before goes"
+        );
+        m.nodes[0].pr_seen.push(crate::missions::PrSeen {
+            number: 7,
+            merged: true,
+            ..Default::default()
+        });
+        let merged_below = listed(vec![
+            pull(7, "feat/a", PullRequestBadge::Merged),
+            pull(8, "feat/b", PullRequestBadge::Open),
+        ]);
+        assert_eq!(
+            stalls(&m, Some(&merged_below), false, &[false, false], &[]),
+            [stall(1, AttentionReason::WaitStood, Some(8))]
+        );
     }
 
     /// A stall goes once its move came, or once none is owed: the node

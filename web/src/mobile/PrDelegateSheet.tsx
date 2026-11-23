@@ -7,6 +7,7 @@
 // stay until an agent started, so a refusal or a lost connection never costs
 // what was edited.
 
+import { pullHost, pullWords } from "../codeHost";
 import { Loader2Icon } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "../components/ui/button";
@@ -36,10 +37,11 @@ export function PrDelegateSheet() {
   const number = pr?.number ?? 0;
   const title = pr?.title ?? "";
   const branch = pr?.head_branch ?? "";
+  const reference = pr?.reference ?? null;
   useEffect(() => {
     if (read?.phase !== "ready") return;
-    fillDelegatePrompt(delegatePrompt({ number, title, branch }, read, t));
-  }, [read, number, title, branch, t]);
+    fillDelegatePrompt(delegatePrompt({ number, reference, title, branch }, read, t));
+  }, [read, number, reference, title, branch, t]);
   const open = sheet !== null && pr !== null;
   const selection = selectionOf(catalog, sheet?.choice ?? { target: null, kind: null, model: undefined });
   const problem = startProblem(sheet?.prompt ?? "");
@@ -51,7 +53,7 @@ export function PrDelegateSheet() {
   return (
     <Sheet open={open} onOpenChange={(next) => !next && closeDelegate()}>
       <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-pr-delegate-sheet={pr?.key} onOpenAutoFocus={(event) => event.preventDefault()}>
-        <SheetTitle className="text-headline">{t("prWork.delegateTitle", { number: String(number) })}</SheetTitle>
+        <SheetTitle className="text-headline">{t("prWork.delegateTitle", pullWords({ number, reference }))}</SheetTitle>
         <SheetDescription className="line-clamp-2 break-words text-body text-muted-foreground">{title}</SheetDescription>
         {!connected ? (
           <p role="status" className="flex items-center gap-md rounded-lg bg-secondary px-md py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
@@ -92,7 +94,7 @@ export function PrDelegateSheet() {
           <p className="text-body text-muted-foreground" data-phone-pr-delegate-read={reading ? "reading" : "ready"}>{t(reading ? "prWork.readingFeedback" : "prWork.feedbackPrefilled")}</p>
         )}
         <p className="text-body text-muted-foreground" data-phone-pr-delegate-stays="true">{t("mobile.prs.delegate.stays")}</p>
-        {shown ? <p role="alert" className="text-body text-destructive" data-phone-pr-delegate-error="true">{noticeText(t, shown)}</p> : null}
+        {shown ? <p role="alert" className="text-body text-destructive" data-phone-pr-delegate-error="true">{noticeText(t, shown, { noun: t(pullHost({ number, reference }).noun) })}</p> : null}
         <Button disabled={!ready} onClick={() => submitDelegate()} className="h-(--size-touch-target) w-full rounded-lg text-title font-semibold" data-phone-pr-delegate-submit="true">
           {pending ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : null}
           {t("mobile.prs.delegate.submit")}

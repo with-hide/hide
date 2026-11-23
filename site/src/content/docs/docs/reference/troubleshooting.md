@@ -34,11 +34,17 @@ In PowerShell, from the folder that holds both downloads, the first line printed
 Get-Content .\hide-v<version>-windows-x64-setup.exe.sha256
 ```
 
-### hide does not run on Windows 11
+### Smart App Control blocks hide on Windows 11
 
-Windows 11 with Smart App Control turned on blocks every unsigned program, and hide is unsigned.
-hide does not run there.
-This is a known gap, listed in the install guide under "What each system supports".
+Windows 11's Smart App Control blocks programs that are not signed, and hide is not signed yet.
+To run hide on that PC, turn Smart App Control off:
+
+1. Open **Windows Security**, then **App & browser control**, then **Smart App Control settings**.
+2. Choose **Off**.
+
+Turning it back on later: from the April 2026 update of Windows 11 25H2 (build 26200.8116) you can switch it on again on the same page; on earlier versions, Windows has to be reset before Smart App Control can be turned on again.
+
+When you connect that PC as a device from another computer, Windows shows the block only on that PC's own screen, so the other computer sees only that the connection did not come up.
 
 ### Settings > About says updates are off, or asks you to move the app
 
@@ -149,6 +155,12 @@ Where the app's launch reads the variable:
 
 Hide needs GitHub's CLI `gh` 2.72.0 or later, signed in.
 An older `gh` lacks fields Hide asks for, so Hide reads nothing with it and its GitHub row says to update it.
+
+### Merge requests of a gitlab.com project are missing
+
+Hide reads a project whose remote is on gitlab.com with GitLab's CLI `glab` 1.78.0 or later, signed in to gitlab.com (`glab auth login --hostname gitlab.com`).
+Settings › Remote repositories shows a GitLab row once such a project is added, and it says when `glab` is missing, too old or signed out.
+A GitLab server other than gitlab.com is not read; its project shows "No remote Hide can read".
 
 ## Other machines and your phone
 

@@ -12,7 +12,7 @@
 pub(crate) mod content;
 pub(crate) mod native;
 pub(crate) mod wake;
-pub use content::{UserTurnContent, UserTurnFact, UserTurnKind};
+pub use content::{CHOICE_LIMIT, UserTurnContent, UserTurnFact, UserTurnKind};
 
 use serde::{Deserialize, Serialize};
 
@@ -231,6 +231,11 @@ struct SeenCall {
     call: String,
     key: String,
     answered: bool,
+    /// Made in the turn the records read last, so a call an earlier turn
+    /// left without a result (a session that died mid-call) holds no
+    /// dialog of a later one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    this_turn: bool,
 }
 
 /// A provider can ask any number of questions in a turn, one after another,
@@ -279,6 +284,11 @@ struct Turn {
     /// The turn's prompt has no agent record after it yet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unreplied: bool,
+    /// The turn began with a prompt in a format that marks each of the
+    /// agent's records ([`TurnMark::Prompt`]), so every call it made is
+    /// known to the tracker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    records_each: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,6 +528,32 @@ impl TurnTracker {
         }
     }
 
+    /// Whether the records read hold something a dialog could ask the
+    /// operator about: a native question or plan waiting, a call of this turn
+    /// with no result yet, or records that do not settle what the turn waits
+    /// for. A
+    /// dialog drawn over none of these asks about a call the agent has not
+    /// written yet: Claude Code 2.1.330 draws its question before it writes
+    /// the call.
+    ///
+    /// Only a turn whose every call the records mark (`records_each`) can
+    /// say it holds none; in any other the answer is that it may.
+    pub fn holds_open_call(&self) -> bool {
+        self.waiting() != Some(Waiting::Nothing)
+            || !self.last.as_ref().is_some_and(|turn| turn.records_each)
+            || self
+                .calls
+                .iter()
+                .any(|call| call.this_turn && !call.answered)
+    }
+
+    /// A new turn begins: the calls remembered so far are an earlier turn's.
+    fn end_turn_calls(&mut self) {
+        for call in &mut self.calls {
+            call.this_turn = false;
+        }
+    }
+
     /// The call keys ([`ToolTurnMark::Called`]) whose last remembered call
     /// has a result, and `name:` ([`crate::calls::key_by_name`]) for each
     /// tool whose last call has one, the rule
@@ -695,7 +731,9 @@ impl TurnTracker {
                     end: None,
                     answered: false,
                     unreplied: false,
+                    records_each: false,
                 });
+                self.end_turn_calls();
             }
             TurnMark::Plan { turn } => self.current(turn).plan = true,
             TurnMark::PlanContent { turn, content } => {
@@ -732,6 +770,7 @@ impl TurnTracker {
                                     call: call.clone(),
                                     key: key.clone(),
                                     answered: false,
+                                    this_turn: true,
                                 });
                             }
                         }
@@ -812,7 +851,9 @@ impl TurnTracker {
                     end: None,
                     answered: false,
                     unreplied: *mark == TurnMark::Prompt,
+                    records_each: *mark == TurnMark::Prompt,
                 });
+                self.end_turn_calls();
             }
             TurnMark::Reply => {
                 if let Some(turn) = &mut self.last {
@@ -926,6 +967,7 @@ impl TurnTracker {
                 end: None,
                 answered: false,
                 unreplied: false,
+                records_each: false,
             });
         }
         self.last.as_mut().expect("a turn was just made")
@@ -946,6 +988,27 @@ mod tests {
             tracker.fold(offset as u64 * 10, mark);
         }
         tracker
+    }
+
+    /// A checkpoint saved before turns knew their calls reads as one that
+    /// may hold a call (no `records_each`), and a call it kept is an earlier
+    /// turn's (no `this_turn`).
+    #[test]
+    fn a_checkpoint_saved_before_turn_calls_were_kept_reads_as_unknown() {
+        let saved = |records_each: bool| {
+            let mut last = serde_json::json!({"mode": "other", "plan": false, "answered": false});
+            if records_each {
+                last["records_each"] = true.into();
+            }
+            serde_json::from_value::<TurnTracker>(serde_json::json!({
+                "through": 10,
+                "last": last,
+                "calls": [{"call": "toolu_1", "key": "Bash:00aa", "answered": false}],
+            }))
+            .unwrap()
+        };
+        assert!(saved(false).holds_open_call());
+        assert!(!saved(true).holds_open_call());
     }
 
     /// A command run twice is two calls with one key: the second one's

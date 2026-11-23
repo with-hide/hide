@@ -6,6 +6,7 @@
 
 import { scopeOccurrences, type PrBoard, type PrGroupId, type PrReason } from "./agentScope";
 import { readsHere } from "./devices";
+import { namedHost } from "./codeHost";
 import { GH_REFUSAL_KEY, isGhRefusal, type GhRefusal } from "./githubFailure";
 import type { TFunction } from "i18next";
 import type { AgentRow, Device, ExtraQuery, GithubStatus, PullRequest, Workspace } from "./snapshot";
@@ -53,7 +54,7 @@ export type PrReading = (
 export type HostReading = { key: string; name: string; program: string; reading: PrReading };
 
 /** A status without a declaration is from a core before hosts, which read GitHub alone. */
-const UNDECLARED: Omit<HostReading, "reading"> = { key: "github", name: "GitHub", program: "gh" };
+const UNDECLARED: Omit<HostReading, "reading"> = namedHost(null);
 
 export type PrListModel = {
   groups: PrGroupView[];
@@ -135,7 +136,7 @@ export function prReading(projects: readonly Workspace[], now: number): PrReadin
 export function readingOfStatuses(statuses: readonly GithubStatus[], now: number): PrReading {
   const byHost = new Map<string, { named: Omit<HostReading, "reading">; statuses: GithubStatus[] }>();
   for (const status of statuses) {
-    const named = status.host ? { key: status.host.key, name: status.host.name, program: status.host.access.program } : UNDECLARED;
+    const named = namedHost(status.host);
     const entry = byHost.get(named.key) ?? { named, statuses: [] };
     if (status.host) entry.named = named;
     entry.statuses.push(status);

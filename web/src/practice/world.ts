@@ -5,6 +5,8 @@
 import type { AccessCall } from "../accessCall";
 import type { AutomationCall, CallAnswer } from "../automationCall";
 import type { NodeUsage } from "../generated/hided-ws";
+import type { PhoneAsk } from "../mobile/protocol";
+import type { ComposerFile, FileNotice, SentFile } from "../mobile/uploads";
 import type { AccessSection, AgentRow, AutomationsSection, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
 import type { PairingResult, PairingView } from "../pairing";
 import type { DirectoryList, Documents, FileIndexResult } from "../store";
@@ -47,6 +49,32 @@ export type WorldFrames = {
 /** `automations` is the core's section of the automation screen; a world without one sends none, and the shell then holds none. */
 export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames; automations?: AutomationsSection };
 
+/**
+ * The phone a chapter puts beside the screen (`PracticePhone.tsx`), open on
+ * one agent's conversation as the phone draws it: what was said, its ask while
+ * it asks, the choice marked on it and whether it was sent, and since when the
+ * agent runs a command. Its presses come to the world as `practice_phone_pick`
+ * and `practice_phone_answer` (`{ choice }`).
+ */
+export type PracticePhoneScreen = {
+  pane: string;
+  title: string;
+  kind: string;
+  said: { who: "you" | "agent"; text: string }[];
+  ask: PhoneAsk | null;
+  picked: string | null;
+  answered: boolean;
+  running: number | null;
+  /**
+   * The reply bar, for a chapter about a reply's files (Doop 08): the files on it, the line under them, its words, and whether it
+   * may be sent. Its `+` comes to the world as `practice_phone_attach`, a file's `×` as `practice_phone_remove` (`{ id }`) and the
+   * send as `practice_phone_send`. A world without one draws no bar.
+   */
+  reply?: { text: string; files: ComposerFile[]; notice: FileNotice | null; sendable: boolean };
+  /** The files over an operator's message, by its place in `said` (Doop 09). */
+  attached?: Record<number, SentFile[]>;
+};
+
 export type PracticeWorld<M> = {
   initial: () => M;
   /** The model after `event`, or null for an event the chapter never needs. */
@@ -86,4 +114,6 @@ export type PracticeWorld<M> = {
    * every one as the core does with bots unavailable.
    */
   access?: (model: M, call: AccessCall) => { model: M | null; answer: CallAnswer<unknown> };
+  /** The phone beside the screen, for a chapter about the phone; a world without one draws none. */
+  phone?: (model: M) => PracticePhoneScreen;
 };

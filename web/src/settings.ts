@@ -2,13 +2,14 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
+import { hostLook, isOtherHost, namedHost, offers, projectHost } from "./codeHost";
 import { engineStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
 import { kitWhyText } from "./kitWhy";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, EngineStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, GithubStatus, HostDeclaration, EngineStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { GH_REFUSAL_KEY, isGhRefusal } from "./githubFailure";
 import { registeredName } from "./screenMachine";
@@ -59,20 +60,44 @@ export function sleepingCount(agents: readonly AgentRow[] | undefined, localId: 
 /** What `gh` answered across this Mac's Git projects, General's GitHub row. */
 export type GithubAccess = { state: "connected" } | { state: "failed"; category: GithubFailureCategory };
 
+/** One code host's row of Settings › Remote repositories: its key, the declaration its reads carried, and how its reads stand. */
+export type HostAccessRow = { key: string; declaration: HostDeclaration | null; access: GithubAccess | null };
+
 /**
- * Whether GitHub reads work on the core's machine: connected once any Git
- * project the core reads with its own `gh` (its own, or a node's that dials
- * it, `readsHere`) last read successfully, otherwise the failure `gh` itself
- * gave, and null while nothing has answered. A repository with no GitHub
- * remote says nothing about `gh`, and a refusal of `gh` itself (not
+ * How each code host's reads stand on the core's machine, one row per host, so
+ * one host's success never hides another's failure (docs/UI_BEHAVIOR.md,
+ * Settings › Remote repositories). Only Git projects the core reads with its
+ * own programs count (its own, or a node's that dials it, `readsHere`). GitHub
+ * always has a row; another host has one once a project of it has been read.
+ * A status without a declaration is GitHub's (a core before hosts, or a
+ * project no host has answered for yet).
+ */
+export function hostAccessRows(workspaces: readonly Workspace[], devices: readonly Device[] | null | undefined): HostAccessRow[] {
+  const byHost = new Map<string, { declaration: HostDeclaration | null; statuses: GithubStatus[] }>([[hostLook(null).key, { declaration: null, statuses: [] }]]);
+  for (const workspace of workspaces) {
+    if (!workspace.is_git || !readsHere(workspace, devices)) continue;
+    for (const checkout of workspace.checkouts) {
+      const status = checkout.github;
+      if (!status) continue;
+      const key = hostLook(status.host?.key).key;
+      const entry = byHost.get(key) ?? { declaration: null, statuses: [] };
+      entry.declaration ??= status.host ?? null;
+      entry.statuses.push(status);
+      byHost.set(key, entry);
+    }
+  }
+  return [...byHost.entries()].map(([key, { declaration, statuses }]) => ({ key, declaration, access: githubAccess(statuses) }));
+}
+
+/**
+ * Whether one host's reads work: connected once any of its projects last read
+ * successfully, otherwise the failure its program itself gave, and null while
+ * nothing has answered. A repository with no remote the host reads says
+ * nothing about its program, and a refusal of the program itself (not
  * installed, not logged in) is the same for every repository, so it speaks
  * before a network one.
  */
-export function githubAccess(workspaces: readonly Workspace[], devices: readonly Device[] | null | undefined): GithubAccess | null {
-  const statuses = workspaces
-    .filter((workspace) => workspace.is_git && readsHere(workspace, devices))
-    .flatMap((workspace) => workspace.checkouts.map((checkout) => checkout.github))
-    .filter((status) => status !== undefined);
+export function githubAccess(statuses: readonly GithubStatus[]): GithubAccess | null {
   if (statuses.some((status) => status.last_success_at_unix_ms != null && !status.stale)) return { state: "connected" };
   const failure =
     statuses.find((status) => isGhRefusal(status.failure_category)) ??
@@ -91,11 +116,14 @@ const GH_FAILURE_KEY: Partial<Record<GithubFailureCategory, MessageKey>> = {
  * window runs on another one (`coreMachineAway`): the core reads GitHub with
  * that machine's `gh`, so a lapsed sign-in is named there (B15).
  */
-export function githubAccessLine(access: GithubAccess, t: Translate, coreMachine: string | null = null): { text: string; tone: "ok" | "warn" } {
+export function githubAccessLine(access: GithubAccess, t: Translate, coreMachine: string | null = null, declaration: HostDeclaration | null = null): { text: string; tone: "ok" | "warn" } {
   if (access.state === "connected") return { text: t("common.connected"), tone: "ok" };
-  if (access.category === "not_logged_in" && coreMachine) return { text: t("issueSettings.ghNotLoggedInOn", { machine: coreMachine }), tone: "warn" };
+  const { program } = namedHost(declaration);
+  // Another host's row reads as the approved mockup draws it; GitHub's keeps its own words.
+  if (access.category === "not_logged_in" && isOtherHost(declaration)) return { text: coreMachine ? t("settings.signInNeededOn", { machine: coreMachine }) : t("settings.signInNeeded"), tone: "warn" };
+  if (access.category === "not_logged_in" && coreMachine) return { text: t("issueSettings.ghNotLoggedInOn", { machine: coreMachine, program }), tone: "warn" };
   const key = GH_FAILURE_KEY[access.category];
-  return { text: key ? t(key, { program: "gh" }) : access.category, tone: "warn" };
+  return { text: key ? t(key, { program }) : access.category, tone: "warn" };
 }
 
 export type IssueSourceChoice = "auto" | "github" | "local";
@@ -123,7 +151,8 @@ export function issueSourceChoices(
   const repository = source?.kind === "github" ? source.name : (workspace.home_issues?.repository ?? null);
   const options: { id: IssueSourceChoice; label: string }[] = [
     { id: "auto", label: resolved ? t("issueSettings.autoResolved", { source: resolved }) : t("issueSettings.auto") },
-    ...(workspace.is_git ? [{ id: "github" as const, label: repository ? t("issueSettings.githubRepository", { repository }) : "GitHub" }] : []),
+    // GitHub's issues are offered only where the project's host reads them.
+    ...(workspace.is_git && offers(projectHost(workspace), "issues") ? [{ id: "github" as const, label: repository ? t("issueSettings.githubRepository", { repository }) : "GitHub" }] : []),
     { id: "local", label: t("issueSettings.local") },
   ];
   return { value: options.find((option) => option.id === stored)?.id ?? "auto", options };
@@ -213,6 +242,9 @@ export function deviceState(device: Device, remote: RemoteStatus | undefined): {
   if (device.kind !== "remote") return { state: "local", tone: "local" };
   if (device.state === "ready") return { state: "ready", tone: "ok" };
   if (device.state === "disabled") return { state: "disabled", tone: "warn" };
+  // An attempt that stopped on a reason is not connected, whatever the
+  // link's own status still says: one state at a time.
+  if (device.problem != null && device.sign_in == null) return { state: "unavailable", tone: "warn" };
   if (remote?.state === "not_connected" || remote?.state === "connecting") return { state: "connecting", tone: "pending" };
   return { state: "unavailable", tone: "warn" };
 }
@@ -220,21 +252,6 @@ export function deviceState(device: Device, remote: RemoteStatus | undefined): {
 export function deviceLine(device: Device, remote: RemoteStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "pending" | "local" } {
   const { state, tone } = deviceState(device, remote);
   return { text: t(`devices.line.${state}`), tone };
-}
-
-/**
- * The line under a device's name (B54): its SSH alias, the platform its helper
- * runs on, in that order. Nothing here is
- * read on this machine, so a fact the device has not reported is left out
- * rather than filled in; this machine has no alias to show.
- */
-export function deviceSubtitle(device: Device, t: Translate, coreName?: string): string {
-  if (device.kind !== "remote") return t("devices.localAlias");
-  const parts: string[] = [device.ssh_alias ?? registeredName(device)];
-  // A WSL distribution is named where it is, the core's PC, in place of its Linux platform (PRD wsl-device B5).
-  if (device.wsl_distro && coreName) parts.push(coreName);
-  else if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
-  return parts.join(" · ");
 }
 
 /**
@@ -268,9 +285,30 @@ export function deviceProblemLine(problem: DeviceProblem | null | undefined, ali
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.unsupported"), command: null };
     case "hide_updated":
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.hideUpdated"), command: null };
+    case "windows_not_started":
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.windowsNotStarted"), command: null };
     default:
       return null;
   }
+}
+
+/**
+ * Why a device this core dials is not connected, in one plain line for its
+ * row (operator review 2026-11-23): what stopped its last attempt, else
+ * what its helper says, on a connected device too; nothing while it is
+ * still connecting or has nothing to say.
+ * ssh's last line, the helper's own message and a test's stages are
+ * Connection details', not the row's.
+ */
+export function deviceReason(device: Device, remote: RemoteStatus | undefined, t: Translate, platform?: string | null): string | null {
+  if (device.kind !== "remote" || device.dials_in === true || device.sign_in != null) return null;
+  const { state } = deviceState(device, remote);
+  const problem = state === "unavailable" || state === "disabled" ? deviceProblemLine(device.problem, device.ssh_alias, t, platform) : null;
+  if (problem) return problem.note ?? problem.headline;
+  // The helper's failure is said on a connected device too: its Retry helper is on the row.
+  const host = device.host;
+  if (state !== "connecting" && host && host.consent !== "this_machine" && (host.state === "unavailable" || host.state === "unsupported" || host.state === "identity_changed" || host.state === "not_allowed")) return hostLine(host, t).text;
+  return null;
 }
 
 /**

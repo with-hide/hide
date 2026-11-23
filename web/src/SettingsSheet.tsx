@@ -5,8 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
-import { GithubIcon } from "./components/github-icon";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, FolderGit2Icon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -24,7 +23,7 @@ import { AgentsTab } from "./settings/AgentsTab";
 import { ConductorTab } from "./settings/ConductorTab";
 import { DevicesTab } from "./settings/DevicesTab";
 import { GeneralTab } from "./settings/GeneralTab";
-import { GithubTab } from "./settings/GithubTab";
+import { RemoteRepositoriesTab } from "./settings/RemoteRepositoriesTab";
 import { HideAiTab } from "./settings/HideAiTab";
 import { LabsTab } from "./settings/LabsTab";
 import { UsageTab } from "./settings/UsageTab";
@@ -53,7 +52,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
   externalTools: BirdIcon,
-  github: GithubIcon,
+  github: FolderGit2Icon,
   labs: FlaskConicalIcon,
   about: InfoIcon,
   privacy: ShieldIcon,
@@ -139,7 +138,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "externalTools" ? <ExternalToolsTab actions={actions} /> : null}
-              {tab === "github" ? <GithubTab actions={actions} /> : null}
+              {tab === "github" ? <RemoteRepositoriesTab actions={actions} /> : null}
               {tab === "labs" ? <LabsTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab actions={actions} /> : null}
               {tab === "privacy" ? <PrivacyTab actions={actions} /> : null}

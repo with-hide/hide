@@ -45,6 +45,10 @@ describe("what a home-owned row says and where it opens (PRD hide-ai-work-home D
     expect(homeTurnLine(en, { kind: "pr_review", pr_number: 924 })).toBe("PR #924 review");
     expect(hideAiWords(ko, { task: MEMORY, home: "suggestions", turn: { kind: "pr_review", pr_number: 924 } })).toBe("Hide AI · Memory 반영하기 · m72 · PR #924 리뷰");
     expect(hideAiWords(ko, { task: MEMORY, home: "suggestions" })).toBe("Hide AI · Memory 반영하기 · m72");
+    // A merge request the row lists with its gitlab.com reference is named as its host writes it.
+    const reference = { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/shop" }, number: 924, key: "gitlab.com/acme/shop!924", label: "!924", url: "https://gitlab.com/acme/shop/-/merge_requests/924", checks_url: "https://gitlab.com/acme/shop/-/merge_requests/924/pipelines", files_url: "https://gitlab.com/acme/shop/-/merge_requests/924/diffs" };
+    expect(homeTurnLine(ko, { kind: "pr_review", pr_number: 924 }, [{ number: 924, reference }])).toBe("MR !924 리뷰");
+    expect(hideAiWords(en, { home: "suggestions", turn: { kind: "pr_review", pr_number: 924 } }, undefined, [{ number: 924, reference }])).toBe("Hide AI · MR !924 review");
   });
 
   const rest = { navigator: { workspaces: [{ id: "ws-1", device_id: "mac" }] } } as unknown as SnapshotRest;

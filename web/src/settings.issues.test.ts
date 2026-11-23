@@ -1,13 +1,15 @@
 import { emptyScope } from "../test/legacyAgentScope";
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { githubAccess, githubAccessLine as githubAccessLineIn, issueSourceChoices as issueSourceChoicesIn } from "./settings";
-import type { Checkout, Device, GithubFailureCategory, GithubStatus, TaskSource, Workspace } from "./snapshot";
+import { hostAccessRows, githubAccessLine as githubAccessLineIn, issueSourceChoices as issueSourceChoicesIn } from "./settings";
+import type { Checkout, Device, GithubFailureCategory, GithubStatus, HostDeclaration, TaskSource, Workspace } from "./snapshot";
 
 // Korean is the wording the Settings Issues tab shipped with; the rules read the same under it.
 const t = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const githubAccessLine = (access: Parameters<typeof githubAccessLineIn>[0]) => githubAccessLineIn(access, t);
+/** GitHub's row, which Settings always draws. */
+const githubAccess = (workspaces: Workspace[], devices: Device[]) => hostAccessRows(workspaces, devices).find((row) => row.key === "github")!.access;
 const issueSourceChoices = (workspace: Workspace, stored: string | undefined) => issueSourceChoicesIn(workspace, stored, t);
 
 const status = (patch: Partial<GithubStatus>): GithubStatus => ({
@@ -68,6 +70,17 @@ describe("Issue settings", () => {
     expect(githubAccess([onMini], [{ id: "mini", dials_in: false } as Device])).toBeNull();
     // A node that dials the core has its repositories read with the core's gh, so its signed-out read speaks.
     expect(githubAccess([onMini], [{ id: "mini", dials_in: true } as Device])).toEqual({ state: "failed", category: "not_logged_in" });
+  });
+
+  it("draws a row per host so one host's success never hides another's sign-out, and another host's row only once it read a project", () => {
+    const gitlab = { key: "gitlab", name: "GitLab", operations: ["commit_checks"], access: { program: "glab", minimum_version: "1.78.0", sign_in: "glab auth login --hostname gitlab.com" } } as HostDeclaration;
+    const healthy = project({ id: "gh", github: status({ last_success_at_unix_ms: 5 }) });
+    const signedOut = project({ id: "gl", github: status({ available: false, failure_category: "not_logged_in", host: gitlab }) });
+    expect(hostAccessRows([healthy], []).map((row) => row.key)).toEqual(["github"]);
+    const rows = hostAccessRows([signedOut, healthy], []);
+    expect(rows.map((row) => [row.key, row.access])).toEqual([["github", { state: "connected" }], ["gitlab", { state: "failed", category: "not_logged_in" }]]);
+    expect(rows[1]!.declaration?.access.sign_in).toBe("glab auth login --hostname gitlab.com");
+    expect(githubAccessLineIn({ state: "failed", category: "not_logged_in" }, t, null, rows[1]!.declaration).text).toBe("로그인 필요");
   });
 
   it("names what Auto resolves to only where the core has shown it, and offers GitHub only to a Git project", () => {

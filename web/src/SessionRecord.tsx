@@ -1,4 +1,5 @@
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleHelpIcon, Clock3Icon, SquareIcon, ImageIcon, InfoIcon, LightbulbIcon, TriangleAlertIcon, HouseIcon, LoaderCircleIcon, SquareTerminalIcon, RotateCcwIcon } from "lucide-react";
+import { pullLabel } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -260,7 +261,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
   // While its pane works or asks, the 지금 block carries the turn (D-41), its question among it.
   const doing = agent ? liveTurn(agent) : null;
-  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
+  const said = settled ? settledPrs(t, settled, record.pr_groups.flatMap((group) => group.pulls)) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button variant="secondary" size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
@@ -466,9 +467,15 @@ function EndMark({ end }: { end: WorkEnd }) {
   return <span className={cn("shrink-0 text-micro font-medium", tone)} data-record-end={end}>{t(`requests.end.${end}`)}</span>;
 }
 
-/** `#n` for one pull request, `PR n개` for several (fact-status B1). */
-function settledPrs(t: ReturnType<typeof useInterfaceTranslation>["t"], settled: PrSettlement): string {
-  return settled.numbers.length === 1 ? `#${settled.numbers[0]}` : t("record.prCount", { count: settled.numbers.length });
+/**
+ * `#n` (`!n` on gitlab.com) for one pull request, `PR n개` for several (fact-status B1). The settlement names numbers
+ * only, so the label is the record's own pull request of that number; one the record does not list keeps `#n`.
+ */
+function settledPrs(t: ReturnType<typeof useInterfaceTranslation>["t"], settled: PrSettlement, pulls: readonly SessionPull[]): string {
+  if (settled.numbers.length !== 1) return t("record.prCount", { count: settled.numbers.length });
+  const number = settled.numbers[0]!;
+  const pull = pulls.find((each) => each.number === number);
+  return pull ? pullLabel(pull) : `#${number}`;
 }
 
 /**
@@ -476,13 +483,13 @@ function settledPrs(t: ReturnType<typeof useInterfaceTranslation>["t"], settled:
  * question or wait it moved on from, the line its closing label gave, or the
  * end of its last turn.
  */
-function FlowResultLine({ result }: { result: FlowResult }) {
+function FlowResultLine({ result, pulls }: { result: FlowResult; pulls: readonly SessionPull[] }) {
   const { t } = useInterfaceTranslation();
   const line = (text: string) => text ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={text}>{text}</span> : null;
   return <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result={result.kind}>
     {result.kind === "settled" ? <>
       <span className={cn("shrink-0 text-micro font-medium", result.state === "merged" ? "text-pr-merged" : "text-pr-closed")} data-record-end={result.state}>{t(result.state === "merged" ? "record.merged" : "record.closed")}</span>
-      <span className="min-w-0 truncate text-micro text-subtle-foreground">{settledPrs(t, result)}</span>
+      <span className="min-w-0 truncate text-micro text-subtle-foreground">{settledPrs(t, result, pulls)}</span>
       <RequestTime at={result.at_unix_ms} />
     </> : result.kind === "moved_on" ? <>
       <span className="shrink-0 text-micro font-medium text-muted-foreground" data-record-end="moved_on">{t("record.movedOn")}</span>
@@ -523,7 +530,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
               <span className="mt-xxs flex min-w-0 flex-wrap items-center gap-x-xs text-micro text-muted-foreground">
                 <RequestTime at={flow.at_unix_ms} /><span>·</span><span>{isCurrent ? t("record.flowNow") : t("record.flowRequests", { count: flow.request_count })}</span>
               </span>
-              {!isCurrent && flow.result ? <FlowResultLine result={flow.result} /> : null}
+              {!isCurrent && flow.result ? <FlowResultLine result={flow.result} pulls={record.pr_groups.flatMap((group) => group.pulls)} /> : null}
             </span>
           </RowButton>
           {expanded ? <ol className={cn("min-w-0 pb-sm", LANE)} data-record-flow-requests={flow.requests.length}>
@@ -636,14 +643,14 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
   const settled = all.filter(settledOutput);
   const allMerged = all.length > 0 && all.every((pull) => pull.state === "merged");
   // Pressed inside the card, it stacks in the same slot for ← to come back from (operator decision 2026-11-09).
-  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, "here");
+  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number, reference: pull.reference }, "here");
   const rows = (items: readonly SessionPull[]) => items.map((pull) => {
     const word = t(PR_LOOK[pull.state].word);
     const stale = pull.stale ? pull.last_read_at_unix_ms ? new Date(pull.last_read_at_unix_ms).toLocaleString() : t("common.unavailable") : null;
     const dim = pull.state === "closed" && CLOSED_DIM;
     return <div key={pull.url} className="flex min-w-0 items-start gap-sm py-xs" data-record-pr-row={pull.number} data-pr-closed={pull.state === "closed" || undefined}>
-      <button type="button" data-record-output="pr" data-record-output-number={pull.number} className={cn(ROW, "shrink-0 px-xxs hover:bg-accent")} aria-label={[`#${pull.number} ${word}`, pull.title, stale].filter(Boolean).join(" · ")} title={pull.title} onClick={() => open(pull)}>
-        <PrMark state={pull.state} number={pull.number} stale={pull.stale} className={dim || undefined} />
+      <button type="button" data-record-output="pr" data-record-output-number={pull.number} className={cn(ROW, "shrink-0 px-xxs hover:bg-accent")} aria-label={[`${pullLabel(pull)} ${word}`, pull.title, stale].filter(Boolean).join(" · ")} title={pull.title} onClick={() => open(pull)}>
+        <PrMark state={pull.state} label={pullLabel(pull)} stale={pull.stale} className={dim || undefined} />
       </button>
       <button type="button" className={cn(ROW, "min-w-0 flex-1 truncate text-caption hover:underline", (pull.stale || dim) && "opacity-(--opacity-dimmed)")} onClick={() => open(pull)} title={[pull.title, stale].filter(Boolean).join("\n")}>{pull.title}</button>
     </div>;

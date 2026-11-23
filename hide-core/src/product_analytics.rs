@@ -105,16 +105,33 @@ pub enum Feature {
     /// A pairing with another computer that runs Hide finished, in either
     /// direction (PRD device-connect-iroh): the daemon tells the core.
     HidesPaired,
+    /// A gitlab.com project's merge requests read on this machine.
+    Gitlab,
+    /// An agent's own question, plan or tool permission answered with one
+    /// of its choices from a phone.
+    PhoneAnswer,
+    /// A reply sent from a phone with files attached to it.
+    PhoneAttachments,
 }
 
 impl Feature {
-    const ALL: [Self; 3] = [Self::Focus, Self::SkillsMcp, Self::HidesPaired];
+    const ALL: [Self; 6] = [
+        Self::Focus,
+        Self::SkillsMcp,
+        Self::HidesPaired,
+        Self::Gitlab,
+        Self::PhoneAnswer,
+        Self::PhoneAttachments,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
             Self::HidesPaired => "hides_paired",
+            Self::Gitlab => "gitlab",
+            Self::PhoneAnswer => "phone_answer",
+            Self::PhoneAttachments => "phone_attachments",
         }
     }
 }
@@ -178,6 +195,12 @@ pub struct ActiveDays {
     skills_mcp: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hides_paired: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gitlab: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_answer: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_attachments: Option<u64>,
 }
 
 impl ActiveDays {
@@ -192,6 +215,9 @@ impl ActiveDays {
             Daily::Feature(Feature::Focus) => &mut self.focus,
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
             Daily::Feature(Feature::HidesPaired) => &mut self.hides_paired,
+            Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
+            Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
+            Daily::Feature(Feature::PhoneAttachments) => &mut self.phone_attachments,
         };
         if *recorded == Some(day) {
             return false;
@@ -252,6 +278,9 @@ pub enum PracticeChapter {
     Focus,
     Bots,
     Connect,
+    Gitlab,
+    Answer,
+    Attachments,
 }
 
 impl PracticeChapter {
@@ -266,6 +295,9 @@ impl PracticeChapter {
             "focus" => Self::Focus,
             "bots" => Self::Bots,
             "connect" => Self::Connect,
+            "gitlab" => Self::Gitlab,
+            "answer" => Self::Answer,
+            "attachments" => Self::Attachments,
             _ => return None,
         })
     }
@@ -444,6 +476,9 @@ impl Event {
                         PracticeChapter::Focus => "focus",
                         PracticeChapter::Bots => "bots",
                         PracticeChapter::Connect => "connect",
+                        PracticeChapter::Gitlab => "gitlab",
+                        PracticeChapter::Answer => "answer",
+                        PracticeChapter::Attachments => "attachments",
                     },
                 ),
                 (

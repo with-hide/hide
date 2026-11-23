@@ -8,7 +8,8 @@ import { Hint } from "./components/ui/tooltip";
 import { layerLines } from "./diskCleanup";
 import { LAYER_DOT, openDiskCleanup } from "./DiskCleanupSheet";
 import { readsHere } from "./devices";
-import { GithubIcon } from "./components/github-icon";
+import { hostLook, hostRepository, projectHost } from "./codeHost";
+import type { Workspace } from "./snapshot";
 import { formatBytes } from "./i18n/format";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -204,7 +205,7 @@ function ProjectRow({ row, sessions, largest, actions }: { row: ProjectRowModel;
     <div role="row" className={cn(COLUMNS, "relative border-b border-border px-md py-xl text-body hover:bg-accent", selected && "bg-secondary")} data-projects-row={project.id}>
       <RowOverlayButton hover={false} aria-label={project.label} aria-pressed={selected} className="rounded-sm" onClick={() => useUiStore.getState().setOverview({ projectId: project.id, panel: null })} />
       <span role="cell" className="pointer-events-none flex min-w-0 items-center gap-xs">
-        {row.folder ? <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : project.tasks?.source?.kind === "github" ? <GithubIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-projects-github="true" /> : <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
+        {row.folder ? <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : hostRepository(project) ? <HostMark project={project} /> : <FolderGit2Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
         <span className="min-w-0"><span className="block truncate text-title font-semibold text-foreground">{project.label}</span><span className="text-micro text-muted-foreground">{t("overviewRedesign.checkouts")} {project.checkouts.length}</span></span>
         {row.folder ? <span className="shrink-0 text-micro text-muted-foreground">{t("overviewProjects.folder")}</span> : null}
       </span>
@@ -330,4 +331,10 @@ export function ProjectPanel({ panel, projects, actions, onClose }: { panel: Ext
       </div>
     </div>
   );
+}
+
+/** A project its host read a repository for: that host's mark, as the sidebar draws it. */
+function HostMark({ project }: { project: Workspace }) {
+  const { Mark, key } = hostLook(projectHost(project)?.key);
+  return <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-projects-host={key} />;
 }

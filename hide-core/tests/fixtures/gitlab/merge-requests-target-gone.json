@@ -1,0 +1,1369 @@
+{
+ "data": {
+  "currentUser": {
+   "username": "example-user"
+  },
+  "project": {
+   "id": "gid://gitlab/Project/89295207",
+   "fullPath": "example-user/hide-code-host-check",
+   "visibility": "private",
+   "webUrl": "https://gitlab.com/example-user/hide-code-host-check",
+   "repository": {
+    "rootRef": "main"
+   },
+   "open": {
+    "count": 12,
+    "nodes": [
+     {
+      "iid": "25",
+      "title": "Stack up",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/25",
+      "sourceBranch": "stack-up",
+      "targetBranch": "main",
+      "diffHeadSha": "b8ac89844a802ceba4daeac06d13751d3ff1e327",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:28Z",
+      "updatedAt": "2026-11-22T16:11:34Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": null
+     },
+     {
+      "iid": "27",
+      "title": "Stack2 up",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/27",
+      "sourceBranch": "stack2-up",
+      "targetBranch": "stack2-low",
+      "diffHeadSha": "0b2a80b9affe061c9ae5a03fa991730a96f14d1c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:30Z",
+      "updatedAt": "2026-11-22T16:10:31Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "COMMITS_STATUS",
+      "mergeable": false,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "0b2a80b9affe061c9ae5a03fa991730a96f14d1c",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 1,
+        "nodes": [
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18259668980"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "23",
+      "title": "W slow must",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/23",
+      "sourceBranch": "w-slow-must",
+      "targetBranch": "main",
+      "diffHeadSha": "80bdec6071423e4647eced117b91f1d4e880f8ae",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:25Z",
+      "updatedAt": "2026-11-22T16:10:27Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "80bdec6071423e4647eced117b91f1d4e880f8ae",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 2,
+        "nodes": [
+         {
+          "name": "slow",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18259668416"
+         },
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18259668415"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "5",
+      "title": "Scene slow",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/5",
+      "sourceBranch": "scene-slow",
+      "targetBranch": "main",
+      "diffHeadSha": "598f50ddb5d4f6d0d1b7665eddfe19659191c94a",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:54Z",
+      "updatedAt": "2026-11-22T12:45:27Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "598f50ddb5d4f6d0d1b7665eddfe19659191c94a",
+       "status": "CANCELED",
+       "jobs": {
+        "count": 2,
+        "nodes": [
+         {
+          "name": "slow",
+          "status": "CANCELED",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18257846374"
+         },
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18257846368"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "1",
+      "title": "Scene pass",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/1",
+      "sourceBranch": "scene-pass",
+      "targetBranch": "main",
+      "diffHeadSha": "3717404af6601ba29292d08c9c05391f1b32920e",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:48Z",
+      "updatedAt": "2026-11-22T05:34:35Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": true,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 1,
+       "nodes": [
+        {
+         "username": "example-user"
+        }
+       ]
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "3717404af6601ba29292d08c9c05391f1b32920e",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 1,
+        "nodes": [
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254448946"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "7",
+      "title": "Scene skip",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/7",
+      "sourceBranch": "scene-skip",
+      "targetBranch": "main",
+      "diffHeadSha": "8ec0a23c5e393bbab99df2d179e9ee8612767922",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:56Z",
+      "updatedAt": "2026-11-22T05:33:06Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "8ec0a23c5e393bbab99df2d179e9ee8612767922",
+       "status": "SKIPPED",
+       "jobs": {
+        "count": 0,
+        "nodes": []
+       }
+      }
+     },
+     {
+      "iid": "11",
+      "title": "Scene closes",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/11",
+      "sourceBranch": "scene-closes",
+      "targetBranch": "main",
+      "diffHeadSha": "215fd55f3bf711e00c156161f9857425d81fd5a8",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:32:02Z",
+      "updatedAt": "2026-11-22T05:33:04Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "215fd55f3bf711e00c156161f9857425d81fd5a8",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 1,
+        "nodes": [
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254450401"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "6",
+      "title": "Scene nopipe",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/6",
+      "sourceBranch": "scene-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "d22302c538e0bc915248205e968f6e9e3764c2b8",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:55Z",
+      "updatedAt": "2026-11-22T05:33:00Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": null
+     },
+     {
+      "iid": "4",
+      "title": "Scene manual",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/4",
+      "sourceBranch": "scene-manual",
+      "targetBranch": "main",
+      "diffHeadSha": "380e1d7ef9f13ee5c8b25401bfce045358ef2413",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:52Z",
+      "updatedAt": "2026-11-22T05:32:57Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "380e1d7ef9f13ee5c8b25401bfce045358ef2413",
+       "status": "MANUAL",
+       "jobs": {
+        "count": 2,
+        "nodes": [
+         {
+          "name": "gate",
+          "status": "MANUAL",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449470"
+         },
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449469"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "3",
+      "title": "Scene soft",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/3",
+      "sourceBranch": "scene-soft",
+      "targetBranch": "main",
+      "diffHeadSha": "47f0da55ddf0cdf0c0c735b0911ce03539a5d915",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:51Z",
+      "updatedAt": "2026-11-22T05:32:55Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "47f0da55ddf0cdf0c0c735b0911ce03539a5d915",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 2,
+        "nodes": [
+         {
+          "name": "soft-fail",
+          "status": "FAILED",
+          "allowFailure": true,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449341"
+         },
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449340"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "2",
+      "title": "Scene fail",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/2",
+      "sourceBranch": "scene-fail",
+      "targetBranch": "main",
+      "diffHeadSha": "1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:50Z",
+      "updatedAt": "2026-11-22T05:32:54Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "MERGEABLE",
+      "mergeable": true,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c",
+       "status": "FAILED",
+       "jobs": {
+        "count": 2,
+        "nodes": [
+         {
+          "name": "fail",
+          "status": "FAILED",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449043"
+         },
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254449042"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "10",
+      "title": "Draft: Scene draft",
+      "state": "opened",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/10",
+      "sourceBranch": "scene-draft",
+      "targetBranch": "main",
+      "diffHeadSha": "68498504cf48b8b3903fc21e5c50b36a4dbd427f",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:32:01Z",
+      "updatedAt": "2026-11-22T05:32:02Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "DRAFT_STATUS",
+      "mergeable": false,
+      "approved": false,
+      "approvalsRequired": 0,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      },
+      "approvedBy": {
+       "count": 0,
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "68498504cf48b8b3903fc21e5c50b36a4dbd427f",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 1,
+        "nodes": [
+         {
+          "name": "pass",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/example-user/hide-code-host-check/-/jobs/18254450107"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "settled": {
+    "count": 39,
+    "nodes": [
+     {
+      "iid": "30",
+      "title": "verify gw 2",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/30",
+      "sourceBranch": "verify-gw-2",
+      "targetBranch": "main",
+      "diffHeadSha": "6ec489829ce756babfceadf4f2a0ca7dbc4a1e3c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T18:11:51Z",
+      "updatedAt": "2026-11-22T19:13:48Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:13:48Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "39",
+      "title": "C3 merge from the card uc-5-nopipe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/39",
+      "sourceBranch": "uc-5-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "e61e4eae4cce6d2a530d32ca5f507e77465dbd57",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:10:01Z",
+      "updatedAt": "2026-11-22T19:11:30Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:11:30Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "38",
+      "title": "C3 merge from the card uc-4-nopipe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/38",
+      "sourceBranch": "uc-4-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "fbfc592447be1ef19a45f959a37db54a2726a11f",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:09:59Z",
+      "updatedAt": "2026-11-22T19:11:25Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:11:25Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "37",
+      "title": "C3 merge from the card uc-3-nopipe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/37",
+      "sourceBranch": "uc-3-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "cf587186e0ae3b1a2cbdf4ad7412c45ceea958fe",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:09:57Z",
+      "updatedAt": "2026-11-22T19:11:21Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:11:21Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "36",
+      "title": "C3 merge from the card uc-2-nopipe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/36",
+      "sourceBranch": "uc-2-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "0d878e9e88d80442803d404d36a2c83a17516ec2",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:09:54Z",
+      "updatedAt": "2026-11-22T19:11:18Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:11:17Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "35",
+      "title": "C3 merge from the card uc-1-nopipe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/35",
+      "sourceBranch": "uc-1-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "893ba8912426088b868f3b14e52c8c3d140afbe9",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:09:51Z",
+      "updatedAt": "2026-11-22T19:11:14Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T19:11:14Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "29",
+      "title": "verify gw 1",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/29",
+      "sourceBranch": "verify-gw-1",
+      "targetBranch": "main",
+      "diffHeadSha": "d9cf4655481aeef5f20b28b53761a0ea2d3d750c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T18:11:48Z",
+      "updatedAt": "2026-11-22T19:08:16Z",
+      "mergedAt": "2026-11-22T19:08:16Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "34",
+      "title": "C3 merge from the card c3-pipe-nopipe",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/34",
+      "sourceBranch": "c3-pipe-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "2fbd2cb4411ac670f37bde6aee6e38218f17fd57",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:05:24Z",
+      "updatedAt": "2026-11-22T19:05:30Z",
+      "mergedAt": "2026-11-22T19:05:31Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "33",
+      "title": "C3 merge from the card c3-hang-nopipe",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/33",
+      "sourceBranch": "c3-hang-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "cba03f3a4b0b6fe1b3706ba052f8ef4e48d0f531",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T19:04:39Z",
+      "updatedAt": "2026-11-22T19:04:51Z",
+      "mergedAt": "2026-11-22T19:04:51Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "32",
+      "title": "C3 merge from the card",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/32",
+      "sourceBranch": "c3-nopipe-merge",
+      "targetBranch": "main",
+      "diffHeadSha": "7fc2857e3552260f71109f4ad7128be432b1d213",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T18:40:19Z",
+      "updatedAt": "2026-11-22T19:02:06Z",
+      "mergedAt": "2026-11-22T19:02:06Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "31",
+      "title": "c3 sessions check",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/31",
+      "sourceBranch": "c3-sessions",
+      "targetBranch": "main",
+      "diffHeadSha": "a6e03ad25e4cbe2f6969fc50eda2adeb13ed13ac",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T18:24:10Z",
+      "updatedAt": "2026-11-22T18:28:01Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T18:28:01Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "28",
+      "title": "W slow auto",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/28",
+      "sourceBranch": "w-slow-auto",
+      "targetBranch": "main",
+      "diffHeadSha": "82e6b3c70ac8e24146c5c5766580747faeb5b1ec",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:13:56Z",
+      "updatedAt": "2026-11-22T16:14:33Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T16:14:33Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "26",
+      "title": "Stack2 low",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/26",
+      "sourceBranch": "stack2-low",
+      "targetBranch": "main",
+      "diffHeadSha": "f880c651918c3641a173916c3b3d68513597721c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:29Z",
+      "updatedAt": "2026-11-22T16:11:36Z",
+      "mergedAt": "2026-11-22T16:11:36Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "25",
+      "title": "Stack up",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/25",
+      "sourceBranch": "stack-up",
+      "targetBranch": "main",
+      "diffHeadSha": "b8ac89844a802ceba4daeac06d13751d3ff1e327",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:28Z",
+      "updatedAt": "2026-11-22T16:11:34Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "24",
+      "title": "Stack low",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/24",
+      "sourceBranch": "stack-low",
+      "targetBranch": "main",
+      "diffHeadSha": "11c68f238a9ec5bcb5683ee721a174891a0edddb",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:27Z",
+      "updatedAt": "2026-11-22T16:11:32Z",
+      "mergedAt": "2026-11-22T16:11:32Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "22",
+      "title": "W slow run",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/22",
+      "sourceBranch": "w-slow-run",
+      "targetBranch": "main",
+      "diffHeadSha": "21c40a4f58deaa8510e709079912a5de6e6435a3",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:24Z",
+      "updatedAt": "2026-11-22T16:11:03Z",
+      "mergedAt": "2026-11-22T16:11:04Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "21",
+      "title": "W squash",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/21",
+      "sourceBranch": "w-squash",
+      "targetBranch": "main",
+      "diffHeadSha": "25a20b503742fd4ea4c74456dcaf4b4ccce75319",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:23Z",
+      "updatedAt": "2026-11-22T16:10:40Z",
+      "mergedAt": "2026-11-22T16:10:40Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "27",
+      "title": "Stack2 up",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/27",
+      "sourceBranch": "stack2-up",
+      "targetBranch": "stack2-low",
+      "diffHeadSha": "0b2a80b9affe061c9ae5a03fa991730a96f14d1c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:30Z",
+      "updatedAt": "2026-11-22T16:10:31Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "23",
+      "title": "W slow must",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/23",
+      "sourceBranch": "w-slow-must",
+      "targetBranch": "main",
+      "diffHeadSha": "80bdec6071423e4647eced117b91f1d4e880f8ae",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T16:10:25Z",
+      "updatedAt": "2026-11-22T16:10:27Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "20",
+      "title": "alias",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/20",
+      "sourceBranch": "sessions-push-alias",
+      "targetBranch": "main",
+      "diffHeadSha": "96330fd58b252ac4c95bcd56cdb857b27679ea1c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T15:31:26Z",
+      "updatedAt": "2026-11-22T15:31:32Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T15:31:31Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "19",
+      "title": "Sessions glab probe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/19",
+      "sourceBranch": "sessions-push-plain",
+      "targetBranch": "main",
+      "diffHeadSha": "f3f2cf469747dc2e714dcaf24a7c0db02df0fc42",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T15:29:51Z",
+      "updatedAt": "2026-11-22T15:30:05Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T15:30:04Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "18",
+      "title": "Sessions push option probe",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/18",
+      "sourceBranch": "sessions-push-option",
+      "targetBranch": "main",
+      "diffHeadSha": "08ca65cd64b43ff21e17f0643f2c0c56b179edce",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T15:29:38Z",
+      "updatedAt": "2026-11-22T15:30:03Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T15:30:03Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "5",
+      "title": "Scene slow",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/5",
+      "sourceBranch": "scene-slow",
+      "targetBranch": "main",
+      "diffHeadSha": "598f50ddb5d4f6d0d1b7665eddfe19659191c94a",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:54Z",
+      "updatedAt": "2026-11-22T12:45:27Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "17",
+      "title": "Draft: guard live verification",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/17",
+      "sourceBranch": "guards-verify-live-1795343139",
+      "targetBranch": "main",
+      "diffHeadSha": "b18b61dc9a6a9e500095ef62956ef07be4c00340",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T10:26:54Z",
+      "updatedAt": "2026-11-22T10:27:17Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T10:27:16Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "16",
+      "title": "Draft: guard live verification",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/16",
+      "sourceBranch": "guards-verify-live-1795341256",
+      "targetBranch": "main",
+      "diffHeadSha": "02ba07e2faa5a8c62a2c605626156b43ddeb08f2",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T09:54:59Z",
+      "updatedAt": "2026-11-22T09:55:11Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T09:55:11Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "15",
+      "title": "Draft: guards c3 check",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/15",
+      "sourceBranch": "c3-guards-check",
+      "targetBranch": "main",
+      "diffHeadSha": "62eb079a274552cdd938e057c4a56a6dc753f8de",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T09:18:49Z",
+      "updatedAt": "2026-11-22T09:19:06Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T09:19:06Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "14",
+      "title": "Draft: Draft push option verification",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/14",
+      "sourceBranch": "guard-push-options-verify-1795337999",
+      "targetBranch": "main",
+      "diffHeadSha": "a06e16e624b019a68dc836572c9faabfc17fa67c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T09:00:05Z",
+      "updatedAt": "2026-11-22T09:00:19Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T09:00:19Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "13",
+      "title": "Draft: guards check mr.merge_when_pipeline_succeeds",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/13",
+      "sourceBranch": "guards-pushopt-1795337070-mr",
+      "targetBranch": "main",
+      "diffHeadSha": "17d792289fdbadb093bb7db747df3db981b43f5d",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T08:44:37Z",
+      "updatedAt": "2026-11-22T08:44:54Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T08:44:54Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "12",
+      "title": "Draft: guards check merge_request.auto_merge",
+      "state": "closed",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/12",
+      "sourceBranch": "guards-pushopt-1795337070-merge_request",
+      "targetBranch": "main",
+      "diffHeadSha": "6fb190b69ff95abfb41bef42bda5ba3e8fe5ecee",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T08:44:33Z",
+      "updatedAt": "2026-11-22T08:44:52Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T08:44:52Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "1",
+      "title": "Scene pass",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/1",
+      "sourceBranch": "scene-pass",
+      "targetBranch": "main",
+      "diffHeadSha": "3717404af6601ba29292d08c9c05391f1b32920e",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:48Z",
+      "updatedAt": "2026-11-22T05:34:35Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "9",
+      "title": "Scene merge",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/9",
+      "sourceBranch": "scene-merge",
+      "targetBranch": "main",
+      "diffHeadSha": "169aeb81a27c77529e3ba4382aabd5f5c5859f62",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:32:00Z",
+      "updatedAt": "2026-11-22T05:33:49Z",
+      "mergedAt": "2026-11-22T05:33:49Z",
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "7",
+      "title": "Scene skip",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/7",
+      "sourceBranch": "scene-skip",
+      "targetBranch": "main",
+      "diffHeadSha": "8ec0a23c5e393bbab99df2d179e9ee8612767922",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:56Z",
+      "updatedAt": "2026-11-22T05:33:06Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "11",
+      "title": "Scene closes",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/11",
+      "sourceBranch": "scene-closes",
+      "targetBranch": "main",
+      "diffHeadSha": "215fd55f3bf711e00c156161f9857425d81fd5a8",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:32:02Z",
+      "updatedAt": "2026-11-22T05:33:04Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "6",
+      "title": "Scene nopipe",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/6",
+      "sourceBranch": "scene-nopipe",
+      "targetBranch": "main",
+      "diffHeadSha": "d22302c538e0bc915248205e968f6e9e3764c2b8",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:55Z",
+      "updatedAt": "2026-11-22T05:33:00Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "4",
+      "title": "Scene manual",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/4",
+      "sourceBranch": "scene-manual",
+      "targetBranch": "main",
+      "diffHeadSha": "380e1d7ef9f13ee5c8b25401bfce045358ef2413",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:52Z",
+      "updatedAt": "2026-11-22T05:32:57Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "3",
+      "title": "Scene soft",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/3",
+      "sourceBranch": "scene-soft",
+      "targetBranch": "main",
+      "diffHeadSha": "47f0da55ddf0cdf0c0c735b0911ce03539a5d915",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:51Z",
+      "updatedAt": "2026-11-22T05:32:55Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "2",
+      "title": "Scene fail",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/2",
+      "sourceBranch": "scene-fail",
+      "targetBranch": "main",
+      "diffHeadSha": "1487cb8ce0c1f453e6ef90655ec45c0e98c97b7c",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:50Z",
+      "updatedAt": "2026-11-22T05:32:54Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "8",
+      "title": "Scene closed",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/8",
+      "sourceBranch": "scene-closed",
+      "targetBranch": "main",
+      "diffHeadSha": "a71a1645a457c3605d89981780b5dde49c277124",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:31:58Z",
+      "updatedAt": "2026-11-22T05:32:19Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-22T05:32:19Z",
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     },
+     {
+      "iid": "10",
+      "title": "Draft: Scene draft",
+      "state": "opened",
+      "draft": true,
+      "webUrl": "https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/10",
+      "sourceBranch": "scene-draft",
+      "targetBranch": "main",
+      "diffHeadSha": "68498504cf48b8b3903fc21e5c50b36a4dbd427f",
+      "sourceProjectId": 89295207,
+      "targetProjectId": 89295207,
+      "createdAt": "2026-11-22T05:32:01Z",
+      "updatedAt": "2026-11-22T05:32:02Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "author": {
+       "username": "example-user",
+       "bot": false
+      }
+     }
+    ]
+   }
+  }
+ }
+}

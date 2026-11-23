@@ -193,6 +193,10 @@ pub(super) struct DeviceHost {
     /// action until an attempt ends otherwise, never the words of a link
     /// that already ended (B13, B18); none once the link is up.
     pub(super) problem: Option<SshProblem>,
+    /// The last attempt started Hide's program on a Windows device and it
+    /// never answered (`EstablishError::NotStarted`); kept and cleared as
+    /// `problem` is.
+    pub(super) not_started_on_windows: bool,
     pub(super) failure: Option<String>,
     /// What the running attempt waits on from the operator (B4-B12, B27).
     pub(super) sign_in: Option<super::device_sign_in::SignInState>,
@@ -209,6 +213,7 @@ impl DeviceHost {
             generation,
             wake: Wake::NotAllowed,
             problem: None,
+            not_started_on_windows: false,
             failure: None,
             sign_in: None,
             withdrawn: Arc::default(),
@@ -1142,6 +1147,7 @@ impl Runtime {
                 self.device_wake_pending.remove(device_id);
                 let host = self.device_host_entry(device_id);
                 host.problem = None;
+                host.not_started_on_windows = false;
                 host.sign_in = None;
                 // A device of the core's own engine has its engine opened on
                 // this link, to be let go with it, once its node runs its
@@ -1290,7 +1296,11 @@ impl Runtime {
                 {
                     self.device_wake_pending.remove(device_id);
                 }
-                self.device_host_entry(device_id).problem = problem;
+                let not_started_on_windows =
+                    matches!(&error, EstablishError::NotStarted { windows: true, .. });
+                let entry = self.device_host_entry(device_id);
+                entry.problem = problem;
+                entry.not_started_on_windows = not_started_on_windows;
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),

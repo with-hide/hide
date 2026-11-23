@@ -11,7 +11,7 @@ import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
 import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ChangeRequestRef, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -53,7 +53,7 @@ export type PhoneAgent = {
   /** When the Mac's core last saw this agent change state (epoch ms); the phone counts the elapsed time from it. */
   changed_at_unix_ms: number | null;
   /** The desktop row's second line (`RowLine`), worded the same way. */
-  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number; subject?: AskSubject } | null;
+  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number; pull_reference?: ChangeRequestRef; subject?: AskSubject } | null;
   status_code: AgentStatusCode;
   demand: string;
   /** Present while the agent's process is ended and its pane holds a bare shell: nothing may be sent to it, and the detail says so (`AgentSleepSnapshot`). */
@@ -307,6 +307,10 @@ export type ConversationMessage = {
   text: string;
   truncated: boolean;
   at_ms: number;
+  /** The images an operator's message carries as the agent recorded them (a photo it took in from its path); absent at none. */
+  images?: number;
+  /** The files the agent recorded beside an operator's message by their paths, the last part of each; absent at none. */
+  files?: string[];
 };
 
 /** The agent kinds a phone may start (hided/src/mobile/start.rs KINDS). */
@@ -342,7 +346,13 @@ export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before 1.3.0. */
   /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string }
+  /**
+   * `answer`: the computer takes a reply of several lines up to one phone message (`replyFits`), sends the open detail's `ask` and the
+   * conversation's `running`, and takes an `input` that picks a choice; absent from every computer before it, which keeps the one-line
+   * reply of `MAX_REPLY_CHARS`.
+   */
+  /** `attachments`: the computer takes files attached to a reply (`uploads.ts`); absent from every computer before it, which shows no `+`. */
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string; answer?: boolean; attachments?: boolean }
   // Older computers still send off; new phone settings do not use this global mode.
   /** `machines`: the other machines this computer opens that run work of their own (PRD device-connect-iroh B56); absent when none. */
   | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number; machines?: OtherMachine[] }
@@ -376,7 +386,11 @@ export type ServerFrame =
       messages?: ConversationMessage[];
       /** The cursor for the page before the oldest message; null at the start. */
       before?: number | null;
+      /** What the agent runs now, on a reset or an append from a computer that answers (its hello says `answer`); null while nothing does. */
+      running?: Running | null;
     }
+  /** What the agent asks on its own screen, sent while its detail is open by a computer that answers; null once it asks nothing. */
+  | { type: "ask"; device_id: string; pane_id: string; ask: PhoneAsk | null }
   /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
   | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
   | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string; reason?: LookPageReason }
@@ -385,6 +399,8 @@ export type ServerFrame =
   | { type: "look_chunk"; request_id: string; seq: number; data: string }
   | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
+  /** An upload frame taken (hided/src/mobile/uploads.rs): a chunk on disk (`seq`), every byte in (`done`), or refused with why (`failed`). */
+  | { type: "attach_ack"; stage: string; seq?: number; begun?: boolean; done?: boolean; cancelled?: boolean; failed?: string }
   | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
@@ -412,7 +428,13 @@ export type PhoneMessage =
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
   | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
-  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
+  /** A reply's `stages` are the files uploaded for it (`uploads.ts`), typed as their paths before its words. */
+  | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string; stages?: string[] } | { key: QuickKey } | { turn: string; kind: PhoneAsk["kind"]; choice: string }))
+  /** A file attached to the reply being written, uploaded one phone message at a time; only to a computer whose hello says `attachments`. */
+  | { type: "attach_begin"; stage: string; name: string; size: number }
+  | { type: "attach_chunk"; stage: string; seq: number; data: string }
+  | { type: "attach_end"; stage: string }
+  | { type: "attach_cancel"; stage: string }
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
@@ -458,8 +480,9 @@ type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.r
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
 
-export function noticeText(t: TFunction<"translation">, notice: Notice): string {
-  return "limit" in notice ? t(notice.key, { limit: notice.limit }) : t(notice.key);
+/** `words` fills a notice about one pull request with what its host calls it (`noun`). */
+export function noticeText(t: TFunction<"translation">, notice: Notice, words?: { noun: string }): string {
+  return "limit" in notice ? t(notice.key, { limit: notice.limit }) : t(notice.key, words);
 }
 
 export const GROUP_TITLE: Record<GroupId, MessageKey> = {
@@ -475,27 +498,109 @@ export const GROUP_TITLE: Record<GroupId, MessageKey> = {
 export type QuickKey = "enter" | "escape" | "up" | "down" | "ctrl_c";
 
 export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageKey }[] = [
-  { key: "enter", label: "⏎", name: "mobile.key.enter" },
+  { key: "enter", label: "Enter", name: "mobile.key.enter" },
   { key: "escape", label: "Esc", name: "mobile.key.escape" },
   { key: "up", label: "↑", name: "mobile.key.up" },
   { key: "down", label: "↓", name: "mobile.key.down" },
-  { key: "ctrl_c", label: "^C", name: "mobile.key.ctrlC" },
+  { key: "ctrl_c", label: "Ctrl-C", name: "mobile.key.ctrlC" },
 ];
 
-/** The longest reply hided writes in one input (hided/src/mobile/pane.rs MAX_REPLY_CHARS). */
+/** The longest reply a computer before `answer` writes in one input, on one line. */
 export const MAX_REPLY_CHARS = 2000;
 
-/** Why a reply cannot be sent yet, checked before it leaves the phone (B26, B27). */
-export function replyProblem(text: string): string | null {
-  if (text.trim().length === 0) return "empty";
+/** The most bytes one message from the phone may hold; hided drops a longer one unread (hided/src/mobile/phone.rs MAX_FRAME). */
+/**
+ * What the agent asks on its own screen (hided/src/mobile/ask.rs, Doop 03, 04): its question with each choice's note, its plan
+ * waiting for approval, or a tool call waiting for permission with the first of the command it runs. `turn` names the ask an
+ * answer is written for; `answerable` says the computer types a picked choice as the keys the agent's screen takes, and when it is
+ * false the choices are shown and answered in the terminal. A question's choice is its place (`1` for the first); a plan's is
+ * `approve` or `keep_planning`; a permission's is `allow`, `allow_always` or `deny`.
+ */
+export type PhoneAsk = {
+  kind: "question" | "plan_approval" | "permission";
+  turn: string;
+  since_ms: number | null;
+  text?: string;
+  truncated?: boolean;
+  command?: string;
+  command_truncated?: boolean;
+  /** The call the computer tied the ask to, when it could: the same call under a new turn is the same ask. */
+  call?: string;
+  choices: { id: string; label?: string; note?: string }[];
+  answerable: boolean;
+};
+
+/**
+ * Which ask an answer belongs to: the agent's call when the computer names one, else the turn and what it asks, so a new
+ * question or approval with the same words is a new ask and an answered one that stays open under a new turn is not.
+ */
+export function askIdentity(key: AgentKey, ask: PhoneAsk): string {
+  const what = ask.call !== undefined ? `call ${ask.call}` : `turn ${ask.turn} ${JSON.stringify([ask.text ?? null, ask.command ?? null, ask.choices])}`;
+  return `${key.device_id}|${key.pane_id}|${ask.kind}|${what}`;
+}
+
+/** What `identity` (`askIdentity`) was made on when it is one of `key`'s asks: its call, or its turn; null for another agent's. */
+export function askOf(identity: string, key: AgentKey): { call: string } | { turn: number } | null {
+  const agent = `${key.device_id}|${key.pane_id}|`;
+  if (!identity.startsWith(agent)) return null;
+  const rest = identity.slice(agent.length);
+  const what = rest.slice(rest.indexOf("|") + 1);
+  if (what.startsWith("call ")) return { call: what.slice("call ".length) };
+  return { turn: Number(what.slice("turn ".length, what.indexOf(" ", "turn ".length))) };
+}
+
+/**
+ * What runs now under the agent's turn, by kind and since when, never by what it runs (Doop 02); `unknown` when the computer
+ * kept fewer of the agent's open calls than it made, so it cannot say.
+ */
+export type Running = { kind: string; since_ms: number | null };
+
+/** The input that picks `choice` on the ask the phone showed: typed by the computer as keys, never as text. */
+export function choiceMessage(key: AgentKey, ask: Pick<PhoneAsk, "turn" | "kind">, choice: string, requestId: string): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, turn: ask.turn, kind: ask.kind, choice };
+}
+
+export const MAX_FRAME_BYTES = 16 * 1024;
+
+/**
+ * More than the request id `newRequestId` makes for the next decades (`<time in base 36>-<counter>-<16 hex>`), so a reply measured
+ * while it is written, before its id exists, is measured at least as large as the message that leaves.
+ */
+export const REQUEST_ID_BYTES = 40;
+
+/** The `input` a reply leaves in, with the stages of the files it attaches, the one shape `sendReply` sends and `replyFits` measures. */
+export function replyMessage(key: AgentKey, text: string, requestId: string, stages: readonly string[] = []): Extract<PhoneMessage, { type: "input" }> {
+  return { type: "input", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, text, ...(stages.length > 0 ? { stages: [...stages] } : {}) };
+}
+
+/** A stage's length (a UUID), for measuring a reply whose files are still uploading. */
+const STAGE_CHARS = 36;
+
+/** Whether a reply fits one phone message as JSON, its escapes and its files' stages counted (a new line, a quote and a tab take two bytes each). */
+export function replyFits(key: AgentKey, text: string, requestId = "x".repeat(REQUEST_ID_BYTES), files = 0): boolean {
+  const stages = Array.from({ length: files }, () => "x".repeat(STAGE_CHARS));
+  return new TextEncoder().encode(JSON.stringify(replyMessage(key, text, requestId, stages))).length <= MAX_FRAME_BYTES;
+}
+
+/**
+ * Why a reply cannot be sent yet, checked before it leaves the phone (B26, B27). A computer with `answer` (`lines`) takes new lines
+ * and tabs and any length one message holds, the rule of the desktop conversation; one before it takes one line of 2,000 characters.
+ */
+export function replyProblem(text: string, lines: boolean, key?: AgentKey, files = 0): string | null {
+  if (text.trim().length === 0 && files === 0) return "empty";
+  if (lines) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(text)) return "control_characters";
+    return key && !replyFits(key, text, undefined, files) ? "too_long" : null;
+  }
   if ([...text].length > MAX_REPLY_CHARS) return "too_long";
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) return "control_characters";
   return null;
 }
 
-/** The line under the reply bar for a refused or failed input. */
-export function inputFailure(reason: string | null): Notice {
+/** The line under the reply bar for a refused or failed input; `lines` words a reply too long for one message, which has no count. */
+export function inputFailure(reason: string | null, lines = false): Notice {
   switch (reason) {
     case "uncertain":
       return { key: "mobile.input.uncertain" };
@@ -504,15 +609,28 @@ export function inputFailure(reason: string | null): Notice {
     case "empty":
       return { key: "mobile.input.empty" };
     case "too_long":
-      return { key: "mobile.input.tooLong", limit: MAX_REPLY_CHARS };
+      return lines ? { key: "mobile.input.tooLongMessage" } : { key: "mobile.input.tooLong", limit: MAX_REPLY_CHARS };
     case "control_characters":
-      return { key: "mobile.input.controlCharacters" };
+      return lines ? { key: "mobile.input.controlCharacter" } : { key: "mobile.input.controlCharacters" };
     case "gone":
       return { key: "mobile.input.gone" };
+    case "stale":
+    case "unknown_choice":
+      return { key: "mobile.input.stale" };
+    case "screen_differs":
+      return { key: "mobile.input.screenDiffers" };
+    case "ask_not_shown":
+      return { key: "mobile.input.askNotShown" };
+    case "answers_full":
+      return { key: "mobile.input.answersFull" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":
       return { key: "mobile.input.deviceUnreachable" };
+    case "attachment_lost":
+      return { key: "mobile.input.attachmentLost" };
+    case "attachment_failed":
+      return { key: "mobile.input.attachmentFailed" };
     case "offline":
       return { key: "mobile.input.offline" };
     default:

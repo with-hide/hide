@@ -10,7 +10,7 @@ import type { Device, GuestPanes } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { forgetFirewallAsk } from "./firewall";
-import { PairedRows } from "./PairingRows";
+import { DevicesTab } from "./DevicesTab";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
 vi.hoisted(() => {
@@ -36,10 +36,12 @@ async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_pane
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices, peers, guest_panes }, ui_state: {} } } as never);
+    // This computer's own row carries the share; the paired machines are the rows under it.
+    const own = { id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
+    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { focused_device_id: "local", devices: [own, ...devices], peers, guest_panes }, ui_state: {} } } as never);
     root.render(
       <TooltipProvider>
-        <PairedRows actions={actions} />
+        <DevicesTab actions={actions} />
         <PairingDialogs actions={actions} />
       </TooltipProvider>,
     );
@@ -98,9 +100,11 @@ it("lists a paired machine with its state, its direction and the one action its 
   const { q, press, events, unmount } = await mount({ ...idle, requests: [] }, [guest, lost]);
   const row = (id: string) => q(`[data-peer-row="${id}"]`);
   expect(row("macbook")?.textContent).toContain("MacBook");
-  expect(row("macbook")?.textContent).toContain("Relay");
-  expect(row("macbook")?.querySelector("[data-peer-direction]")?.textContent).toBe("it opens this computer");
-  expect(row("windows-pc")?.textContent).toContain("Not connected · the relay cannot be reached");
+  // Connected says only that; the path and who opens whom are Connection details'.
+  expect(q('[data-peer-status="macbook"]')?.textContent).toBe("●Connected");
+  expect(row("macbook")?.querySelector("[data-peer-direction]")).toBeNull();
+  expect(q('[data-peer-status="windows-pc"]')?.textContent).toBe("!Not connected");
+  expect(q('[data-peer-reason="windows-pc"]')?.textContent).toBe("the relay cannot be reached");
   await press('[data-peer-retry="windows-pc"]');
   // An ask names the machine by its connection id, never by the device id it says of itself.
   expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: lost.key } });
@@ -110,6 +114,82 @@ it("lists a paired machine with its state, its direction and the one action its 
   expect(last(events)).toMatchObject({ kind: "pairing_request", payload: { device: guest.key } });
   expect(q('[data-peer-request-go="windows-pc"]')).toBeNull();
   await unmount();
+});
+
+it("names a paired machine's system as its device reports it, and none before that device exists", async () => {
+  const linux = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux" });
+  const fresh = peer();
+  const { q, unmount } = await mount(idle, [linux, fresh], [], [{ id: "office", label: "Office Linux", kind: "remote", state: "ready", peer_key: linux.key, host: { platform: "linux x86_64" } as Device["host"] }]);
+  expect(q('[data-peer-system="office"]')?.textContent).toBe("Linux");
+  // This computer's own system is never said of another machine.
+  expect(q('[data-peer-system="windows-pc"]')).toBeNull();
+  await unmount();
+});
+
+it("names a machine a device was switched onto by that device's name, as the rail does (B36)", async () => {
+  const switched = peer({ name: "DESKTOP-7Q2" });
+  const { q, unmount } = await mount(idle, [switched], [], [{ id: "build-box", label: "빌드 서버", kind: "remote", state: "ready", peer_key: switched.key }]);
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("빌드 서버");
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).not.toContain("DESKTOP-7Q2");
+  await unmount();
+});
+
+it("says the Tailscale tip only on a row connected through the relay, and keeps the path and direction in Connection details (D-86)", async () => {
+  const relayed = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux", path: "relay" });
+  const direct = peer({ path: "tailscale" });
+  const { q, press, unmount } = await mount(idle, [relayed, direct]);
+  expect(q('[data-peer-relay-tip="office"]')?.textContent).toBe("Connected through the relay · turn on Tailscale on both computers and they connect directly, which is faster");
+  expect(q('[data-peer-relay-tip="windows-pc"]')).toBeNull();
+  await act(async () => { q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-details="windows-pc"]');
+  const details = q('[data-peer-details-dialog="windows-pc"]');
+  expect(details?.querySelector("[data-peer-route]")?.textContent).toBe("Tailscale");
+  expect(details?.querySelector("[data-peer-direction]")?.textContent).toBe("this computer opens it");
+  await unmount();
+});
+
+it("renames a paired machine through its pairing, by its connection id (c2)", async () => {
+  const { q, press, events, unmount } = await mount(idle, [peer()]);
+  await act(async () => { q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-rename="windows-pc"]');
+  const input = q('[data-device-rename-input="windows-pc"]') as HTMLInputElement;
+  expect(input.value).toBe("Windows PC");
+  expect((q('[data-device-rename-go="windows-pc"]') as HTMLButtonElement).disabled, "the same name saves nothing").toBe(true);
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    set?.call(input, "  Office PC ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await press('[data-device-rename-go="windows-pc"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_rename", payload: { device: "ab".repeat(32), name: "Office PC" } });
+  expect(q('[data-device-rename-dialog="windows-pc"]')).toBeNull();
+  await unmount();
+});
+
+it("takes a chosen name back to the machine's own with an empty name, and not one it gives itself", async () => {
+  const { q, press, events, unmount } = await mount(idle, [peer({ name: "회사 PC", named: true })]);
+  await act(async () => { q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-rename="windows-pc"]');
+  const input = q('[data-device-rename-input="windows-pc"]') as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "  ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(q('[data-device-rename-go="windows-pc"]')?.hasAttribute("disabled")).toBe(false);
+  await press('[data-device-rename-go="windows-pc"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_rename", payload: { device: "ab".repeat(32), name: "" } });
+  await unmount();
+
+  const own = await mount(idle, [peer()]);
+  await act(async () => { own.q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await own.press('[data-peer-rename="windows-pc"]');
+  const field = own.q('[data-device-rename-input="windows-pc"]') as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(own.q('[data-device-rename-go="windows-pc"]')?.hasAttribute("disabled")).toBe(true);
+  await own.unmount();
 });
 
 it("offers to update a machine too old to connect only from the computer that opens it (B22)", async () => {

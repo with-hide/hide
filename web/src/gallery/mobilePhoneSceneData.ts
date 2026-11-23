@@ -241,7 +241,7 @@ export function phoneLookDetail(scene: PhoneLookScene): Detail {
     { id: "v5", kind: "other", name: "architecture.pdf", unseen: true, at: Date.now() - 12 * MINUTE },
     { id: "v6", kind: "image", name: "screen-recording-poster.png", unseen: true, at: Date.now() - 14 * MINUTE },
   ];
-  const base: Detail = { key: KEY, view: "conversation", tab: "looks", rows: null, moreAskedAt: null, conversation: { messages: [], before: null }, olderAskedAt: null, looks: { rows, omitted: 0 }, look: null };
+  const base: Detail = { key: KEY, view: "conversation", tab: "looks", rows: null, moreAskedAt: null, conversation: { messages: [], before: null }, olderAskedAt: null, looks: { rows, omitted: 0 }, look: null, ask: null, running: null };
   if (scene === "phone-looks") return base;
   const viewed = VIEWED[scene];
   const row = [...rows, ...extra].find((candidate) => candidate.id === viewed.id)!;

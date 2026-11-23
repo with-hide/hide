@@ -1290,7 +1290,8 @@ impl Core {
     }
 
     /// The operator used a main feature somewhere the core does not see (a
-    /// pairing the daemon finished): its first use of a UTC day counts once.
+    /// phone's answer, or a pairing the daemon finished): its first use of a
+    /// UTC day counts once.
     pub fn note_feature_used(&self, feature: crate::product_analytics::Feature) {
         if !check_owner_thread(self, "product_analytics.feature") {
             return;
@@ -1451,6 +1452,17 @@ impl Core {
         lock_recover(&self.runtime)
             .device_engine(device_id)
             .map(crate::engine::EngineHandle::new)
+    }
+
+    /// Where the files a phone's reply attaches go before its words are
+    /// typed into a pane of `device_id`: the same step the desktop
+    /// conversation's input takes. Only taking it is under the lock;
+    /// `Attach::words` calls the nodes off it.
+    pub fn input_attach(&self, device_id: &str) -> Option<crate::operator_input::Attach> {
+        if !check_owner_thread(self, "input_attach") {
+            return None;
+        }
+        Some(lock_recover(&self.runtime).input_attach(device_id))
     }
 
     /// The gate a writer that bypasses a node's terminal (a phone's reply)

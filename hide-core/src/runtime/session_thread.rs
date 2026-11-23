@@ -13,9 +13,10 @@
 //! session re-sends only its live page.
 //!
 //! Input goes only to the pane the thread was opened for, while it still
-//! runs that session, as the phone's reply does: the node's input permit,
-//! the sleep gate, then the engine's `prompt_agent`, which types the words as
-//! a letter's bell is typed.
+//! runs that session, through the one write a phone's reply takes too
+//! (`crate::operator_input`): the node's input permit, the sleep gate, a last
+//! look at the thread, then the engine's `prompt_agent`, which types the
+//! words as a letter's bell is typed.
 
 use super::*;
 use crate::delivery::ledger::Ledger;
@@ -31,20 +32,14 @@ use hide_session::thread::{
     spawned_agent,
 };
 use serde_json::Value;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 /// Whole pages a thread keeps besides its live one. A forward read that
 /// fills past it lets the oldest go, which an older read brings back.
 pub(super) const HISTORY_PAGES: usize = 4;
 
-/// The longest text one input carries, in bytes, under the node's 64 KiB
-/// held-input cap with room for the attachment paths.
-pub(super) const INPUT_LIMIT_BYTES: usize = 16 * 1024;
-
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
-const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const UNREACHABLE_RETRY_MS: u64 = 5_000;
 const BUSY_RETRY_MS: u64 = 500;
 const ACTIVITY_EVERY_MS: u64 = 1_000;
@@ -476,7 +471,7 @@ impl Runtime {
             // answer on.
             return self.settle_thread_input(&payload.request_id, Err("closed"));
         };
-        let refusal = input_problem(&payload.text, &payload.paths)
+        let refusal = crate::operator_input::problem(&payload.text, payload.paths.len())
             .or(self.thread_input_target(open.generation).err())
             .or(open.inputting.then_some("in_flight"));
         if let Some(reason) = refusal {
@@ -485,7 +480,10 @@ impl Runtime {
         let device = open.device.clone();
         let raw_pane = open.raw_pane.clone();
         let generation = open.generation;
-        let Some(engine) = self.delivery_engine(&device) else {
+        let Some(engine) = self
+            .delivery_engine(&device)
+            .map(crate::engine::EngineHandle::new)
+        else {
             let reason = if device == self.node.as_str() {
                 "unavailable"
             } else {
@@ -493,9 +491,7 @@ impl Runtime {
             };
             return self.settle_thread_input(&payload.request_id, Err(reason));
         };
-        let on_device = device != self.node.as_str();
-        let staging = (on_device && !payload.paths.is_empty()).then(|| self.staging_link(&device));
-        let own_node = self.own_node();
+        let attach = self.input_attach(&device);
         let terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes> =
             Arc::clone(&self.terminals);
         let gate = Arc::clone(&self.input_gate);
@@ -516,36 +512,19 @@ impl Runtime {
         let core_pane = payload.pane_id.clone();
         let write =
             move |still: &dyn Fn() -> Result<(), &'static str>| -> Result<(), &'static str> {
-                let text = input_text(
-                    &payload.text,
-                    &payload.paths,
-                    on_device,
-                    own_node.as_ref(),
-                    staging,
-                    &payload.request_id,
-                )?;
-                wait_permit(terminals.as_ref(), &core_pane, text.len() + 1)?;
-                let _admission = gate.admit(&core_pane).map_err(|_| "asleep")?;
-                // The pane may have moved on while the words waited for staging,
-                // their permit or the pane's admission: ask once more, last.
-                still()?;
-                engine
-                    .prompt_agent(
-                        crate::engine::Wait::Each(SEND_TIMEOUT),
-                        &raw_pane,
-                        &text,
-                        crate::engine::PromptBy::Operator,
-                    )
-                    .map_err(|error| match error {
-                        crate::engine::EngineError::Refused { code, .. }
-                            if code.contains("not_found") =>
-                        {
-                            "pane_gone"
-                        }
-                        // No answer: the words may have landed.
-                        crate::engine::EngineError::Unanswered(_) => "uncertain",
-                        _ => "unavailable",
-                    })
+                let text = attach.words(&payload.text, &payload.paths, &payload.request_id)?;
+                // The pane may have moved on while the words waited for
+                // staging, their permit or the pane's admission: the write
+                // asks once more, last.
+                crate::operator_input::write(
+                    terminals.as_ref(),
+                    &gate,
+                    &core_pane,
+                    &raw_pane,
+                    crate::operator_input::Typed::Words(&text),
+                    &|| still().map(|()| engine.clone()),
+                )
+                .map_err(crate::operator_input::Unwritten::reason)
             };
         let Some(context) = self.worker_context.clone() else {
             // Nothing moves between here and the write without a worker.
@@ -962,73 +941,6 @@ fn apply_in(context: &RuntimeWorkerContext, change: impl FnOnce(&mut Runtime) ->
     }
 }
 
-/// Why an input is refused before anything reaches the pane.
-fn input_problem(text: &str, paths: &[String]) -> Option<&'static str> {
-    if text.trim().is_empty() && paths.is_empty() {
-        return Some("empty");
-    }
-    if text.len() > INPUT_LIMIT_BYTES {
-        return Some("too_long");
-    }
-    // A new line stays inside the engine's bracketed paste and submits nothing;
-    // any other control character could act on the agent's screen.
-    if text
-        .chars()
-        .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
-    {
-        return Some("control_characters");
-    }
-    if paths.len() > ingress::MAX_FILES {
-        return Some("too_many_files");
-    }
-    None
-}
-
-/// The words typed into the pane: the attached files' paths on the pane's
-/// machine, quoted as a terminal attachment pastes them, then the text. A
-/// device's pane gets its files staged there first.
-fn input_text(
-    text: &str,
-    paths: &[String],
-    on_device: bool,
-    own_node: &dyn crate::node_access::NodeLink,
-    staging: Option<Result<Arc<dyn crate::node_access::NodeLink>, String>>,
-    request_id: &str,
-) -> Result<String, &'static str> {
-    if paths.is_empty() {
-        return Ok(text.to_owned());
-    }
-    let destinations = match staging {
-        Some(link) => {
-            let link = link.map_err(|_| "device_unreachable")?;
-            let cancelled = AtomicBool::new(false);
-            let files = ingress::read_sources(own_node, paths, &cancelled)
-                .map_err(|_| "attachment_failed")?;
-            ingress::stage(link.as_ref(), request_id, &files, &cancelled)
-                .map_err(|_| "attachment_failed")?
-        }
-        None => paths.to_vec(),
-    };
-    let quoted =
-        ingress::paste_bytes(&destinations, false, on_device).map_err(|_| "attachment_failed")?;
-    let mut words = String::from_utf8(quoted).map_err(|_| "attachment_failed")?;
-    words.push_str(text);
-    Ok(words)
-}
-
-/// Waits behind the pane node's creation holder for room for `bytes`.
-fn wait_permit(
-    terminals: &dyn hide_node_link::terminal::TerminalNode,
-    pane: &str,
-    bytes: usize,
-) -> Result<(), &'static str> {
-    match hide_node_link::terminal::wait_for_input_permit(terminals, pane, bytes) {
-        Ok(()) => Ok(()),
-        Err(hide_node_link::terminal::InputPermitError::Asleep) => Err("asleep"),
-        Err(_) => Err("input_refused"),
-    }
-}
-
 /// A page as its read answered it: where it sits in the record, and the
 /// screen's copy of it, made on the read's worker and never under the
 /// runtime lock.
@@ -1174,6 +1086,7 @@ mod tests {
     use hide_node_link::sessions::ReaderFeatures;
     use serde_json::json;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
     const SESSION: &str = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
     const INPUT: &str = "4f1c2b3a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
@@ -1925,21 +1838,6 @@ mod tests {
                 intent: Some("m:review".to_owned()),
                 agent_id: Some("agent-42".to_owned()),
             })
-        );
-    }
-
-    #[test]
-    fn an_input_is_refused_before_the_pane_for_what_it_could_do_there() {
-        assert_eq!(input_problem("  \n", &[]), Some("empty"));
-        assert_eq!(input_problem("", &["/tmp/a.png".to_owned()]), None);
-        assert_eq!(input_problem("멈추고\n다시 해줘", &[]), None);
-        assert_eq!(
-            input_problem("a\u{1b}[201~b", &[]),
-            Some("control_characters")
-        );
-        assert_eq!(
-            input_problem(&"가".repeat(INPUT_LIMIT_BYTES), &[]),
-            Some("too_long")
         );
     }
 }

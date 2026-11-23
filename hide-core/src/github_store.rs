@@ -70,7 +70,14 @@ fn encode(github: &GithubSnapshot) -> Result<Vec<u8>, String> {
                         cross_repository: pull_request.cross_repository,
                     })
                     .collect(),
-                project: project.clone(),
+                project: GithubProjectSnapshot {
+                    // Made again from the identity on restore.
+                    status: crate::model::GithubStatusSnapshot {
+                        repository: None,
+                        ..project.status.clone()
+                    },
+                    ..project.clone()
+                },
             })
             .collect(),
     };
@@ -220,6 +227,7 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
                 Some(host.unit().repository_url(repository))
             });
         }
+        project.show_repository();
         project.status.stale = true;
         project.status.loading = false;
         projects.push(project);
@@ -409,6 +417,70 @@ mod tests {
             None,
             "without a pull request the server is unknown until the next read"
         );
+    }
+
+    /// The repository the screen names and opens is made from the saved
+    /// identity on restore by its host's unit, the server's port and a
+    /// gitlab.com subgroup kept, and never written to the file itself.
+    #[test]
+    fn the_repository_on_the_screen_is_made_again_on_restore_and_not_saved() {
+        for (host, authority, path, name, url) in [
+            (
+                "github",
+                "github.com",
+                "acme/app",
+                "acme/app",
+                "https://github.com/acme/app",
+            ),
+            (
+                "github",
+                "ghe.example.com:8443",
+                "acme/app",
+                "ghe.example.com:8443/acme/app",
+                "https://ghe.example.com:8443/acme/app",
+            ),
+            (
+                "gitlab",
+                "gitlab.com",
+                "acme/shop/api",
+                "gitlab.com/acme/shop/api",
+                "https://gitlab.com/acme/shop/api",
+            ),
+        ] {
+            let repository = crate::code_host::RepositoryRef {
+                host: host.to_owned(),
+                authority: authority.to_owned(),
+                path: path.to_owned(),
+            };
+            let unit = crate::code_host::CodeHosts::STANDARD
+                .of(&repository)
+                .expect("a registered host")
+                .unit();
+            let mut sent = answer("/repo", Some(100));
+            sent.repository = Some(RepositoryIdentity::named(unit, repository));
+            sent.show_repository();
+            let shown = crate::model::RepositoryOnScreen {
+                name: name.to_owned(),
+                url: url.to_owned(),
+            };
+            assert_eq!(sent.status.repository.as_ref(), Some(&shown));
+            let stored: serde_json::Value = serde_json::from_slice(
+                &encode(&GithubSnapshot {
+                    projects: vec![sent.clone()],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                stored["projects"][0]["status"].get("repository").is_none(),
+                "the file keeps the identity only"
+            );
+            let restored = saved_then_restored(GithubSnapshot {
+                projects: vec![sent],
+            })
+            .expect("the file is restored");
+            assert_eq!(restored.projects[0].status.repository, Some(shown));
+        }
     }
 
     /// Each of the four outcomes of the issues part comes back as it was

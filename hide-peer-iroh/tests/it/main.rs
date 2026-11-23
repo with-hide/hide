@@ -135,6 +135,7 @@ fn pair(host: &Machine, guest: &Machine) {
                 key: host.key(),
                 device: host.name.to_owned(),
                 name: host.name.to_owned(),
+                chosen_name: None,
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: host.addr().candidates,

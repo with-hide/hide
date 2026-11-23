@@ -32,7 +32,9 @@ const DEADLINE: Duration = Duration::from_secs(10);
 /// One budget from peer arrival through Noise and the first credential message.
 const PHONE_AUTH_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_PEERS: usize = 8;
-const INBOUND_QUEUE: usize = 8;
+/// The relay frames hided takes from one phone before it reads them; a
+/// phone that sends past them is closed (`receive_limit`).
+pub(super) const INBOUND_QUEUE: usize = 8;
 const OUTBOUND_QUEUE: usize = 32;
 /// The phone application contract, independent of relay wire version. 2 is
 /// the list a parent's children hang under, with devices in one recency

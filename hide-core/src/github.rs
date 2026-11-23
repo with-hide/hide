@@ -336,28 +336,6 @@ fn supported_version(answer: Result<String, GhFailure>) -> Result<(), GhFailure>
     }
 }
 
-/// What the operator does about a GitHub read that failed for `category`,
-/// for a refusal that rests on that read; `None` for a repository with no
-/// GitHub remote, which nothing fixes. `gh`'s own words stay in the log.
-pub(crate) fn unread_action(category: GithubFailureCategory) -> Option<String> {
-    Some(match category {
-        GithubFailureCategory::NotInstalled => {
-            "GitHub is not read: gh is not installed on the core's machine".to_owned()
-        }
-        GithubFailureCategory::Outdated => format!(
-            "GitHub is not read: gh on the core's machine is older than {MINIMUM_VERSION}; update it"
-        ),
-        GithubFailureCategory::NotLoggedIn => {
-            "GitHub is not read: gh is not signed in on the core's machine; run gh auth login there"
-                .to_owned()
-        }
-        GithubFailureCategory::NetworkOrRateLimit => {
-            "GitHub's last read failed (network or rate limit); retry in a minute".to_owned()
-        }
-        GithubFailureCategory::NoGithubRemote => return None,
-    })
-}
-
 /// States that an extra question went unanswered, with the reason, for the
 /// diagnostic log (design principle 13): the operator sees which question,
 /// not `gh`'s words.
@@ -502,6 +480,7 @@ fn read_project(
                     failure_category: None,
                     unread_queries,
                     host: None,
+                    repository: None,
                 },
             },
             warning,
@@ -2831,6 +2810,7 @@ fn failed(reason: GhFailure) -> GithubStatusSnapshot {
         failure_category: Some(reason.category),
         unread_queries: Vec::new(),
         host: None,
+        repository: None,
     }
 }
 
@@ -4130,7 +4110,30 @@ mod tests {
             Err(crate::code_host::WriteFailure {
                 reason: "not_mergeable",
                 detail: blocked.to_owned(),
+                read_again: false,
             })
+        );
+
+        // GitHub's unit asks the core to read again exactly where it always
+        // did: a moved head on any write, and a conflict a branch update
+        // made; never after an unknown answer or another refusal.
+        let read_again = |result: Result<(), crate::code_host::WriteFailure>| {
+            let failure = result.unwrap_err();
+            (failure.reason, failure.read_again)
+        };
+        assert_eq!(
+            read_again(merge(&refused(
+                "Head branch was modified. Review and try the merge again."
+            ))),
+            ("head_moved", true)
+        );
+        assert_eq!(
+            read_again(merge(&refused("Pull request has merge conflicts"))),
+            ("conflict", false)
+        );
+        assert_eq!(
+            read_again(merge(&refused("dial tcp: connection refused"))),
+            ("unreachable", false)
         );
 
         let named = |words: &[&str]| {
@@ -4165,6 +4168,14 @@ mod tests {
             named,
         );
         assert_eq!(update(&late).unwrap_err().reason, "failed");
+        let conflicted = Answering::refusing(
+            (
+                GithubFailureCategory::NetworkOrRateLimit,
+                "merge conflict between base and head",
+            ),
+            named,
+        );
+        assert_eq!(read_again(update(&conflicted)), ("conflict", true));
         // A repository `gh` cannot name takes no write.
         let unnamed = refused("HTTP 404: Not Found");
         assert_eq!(update(&unnamed).unwrap_err().reason, "failed");

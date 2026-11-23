@@ -43,7 +43,6 @@ mcp_format = "codex"
 
 [account.forbid]
 vars = ["CODEX_SQLITE_HOME"]
-
 [screen]
 version = "2026.11.08.1"
 min_engine_version = 3
@@ -209,3 +208,15 @@ not = [
   { regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)'] },
   { contains = ["Action Required"] },
 ]
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of Codex 0.171.0 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+# The keys other than esc and a letter count from the highlighted row, so each
+# is typed only while the screen draws `marker` before the row `row` names there.
+[answer]
+marker = "›"
+question = { down = "down", pick = "enter", row = "{n}." }
+plan_approval = { approve = ["enter"], keep_planning = ["down", "down", "enter"], row = "{n}." }
+# Codex records a call only once it is allowed, so its permission names no command.
+permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", unnamed = true }

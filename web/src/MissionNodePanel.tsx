@@ -18,30 +18,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeSpans, useNodeTimes, useWorkerRow } from "./missionParts";
-import {
-  attentionWords,
-  cardLine,
-  checkerState,
-  criteriaTally,
-  criterionName,
-  criterionNote,
-  dependencyNodes,
-  eventWords,
-  gateWaitedLong,
-  hideWords,
-  landingLeft,
-  lineOutrun,
-  mainCommit,
-  missionOpen,
-  nodeLook,
-  nodeQuestion,
-  nodeSteps,
-  nodePace,
-  nodeResumable,
-  openAttention,
-  ownCriteria,
-  shortCommit,
-} from "./missions";
+import { attentionWords, cardLine, checkerState, criteriaTally, criterionName, criterionNote, dependencyNodes, eventWords, gateWaitedLong, hideWords, landingLeft, lineOutrun, mainCommit, missionOpen, type MissionPulls, nodeLook, nodePace, nodeQuestion, nodeResumable, nodeSteps, openAttention, ownCriteria, pullsByNumber, shortCommit } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
 import { PILL_TONE, ProgressCells } from "./components/mission-tone";
 import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
@@ -53,6 +30,7 @@ import { presetIcon } from "./components/mission-line";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
+import { pullLabel } from "./codeHost";
 
 // The node the operator picked on a mission's map (PRD mission-map-git-criteria
 // D-01, D-10, B31-B33), read top down: a head that stays while the panel
@@ -81,7 +59,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
       <HideRecord mission={mission} node={node} events={events} />
-      <Events node={node} events={events} />
+      <Events node={node} events={events} pulls={pullsByNumber(mission.nodes)} />
       <Brief key={node.key} mission={mission} node={node} actions={actions} />
     </MapPanel>
   );
@@ -167,13 +145,13 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
   if (node.kind === "external") return null;
-  const card = node.pr != null ? `${t("mission.prCard")} · #${node.pr}` : null;
+  const card = node.pr != null ? `${t("mission.prCard")} · ${pullLabel({ number: node.pr, reference: node.pr_reference })}` : null;
   return (
     <>
       {node.pr != null && card ? (
         <Hint label={card}>
-          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! }, "here")} data-node-pr-card={node.pr}>
-            <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.github_stale} />
+          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr!, reference: node.pr_reference }, "here")} data-node-pr-card={node.pr}>
+            <MissionPrMark number={node.pr} reference={node.pr_reference} state={node.pr_state} stale={mission.github_stale} />
           </Button>
         </Hint>
       ) : null}
@@ -409,15 +387,15 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
       </ul>,
     ]);
   }
-  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
+  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url, reference: null }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
   const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
   if (prs.length > 0 || node.base_pr != null) {
     rows.push([
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
-        {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} />)}
-        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { number: String(node.base_pr) })}</span> : null}
+        {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} reference={pr.reference} state={pr.state} stale={mission.github_stale} />)}
+        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { label: pullLabel({ number: node.base_pr, reference: node.prs.find((pr) => pr.number === node.base_pr)?.reference ?? mission.nodes.find((other) => other.pr === node.base_pr)?.pr_reference }) })}</span> : null}
       </span>,
     ]);
   }
@@ -611,7 +589,7 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
         return (
           <button key={other.key} type="button" onClick={() => onSelect(other.key)} title={other.title} aria-label={`${t(which === "before" ? "mission.panel.waitsOn" : "mission.panel.waitedBy")} · ${other.title}`} className="flex min-w-0 max-w-full items-center gap-xxs rounded-xs border border-border px-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" data-panel-link={other.key}>
             <span className="min-w-0 truncate">{other.title}</span>
-            {pr != null ? <MissionPrMark number={pr} state={other.pr_state} stale={mission.github_stale} /> : null}
+            {pr != null ? <MissionPrMark number={pr} reference={pr === other.pr ? other.pr_reference : null} state={other.pr_state} stale={mission.github_stale} /> : null}
           </button>
         );
       })}
@@ -655,6 +633,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
   const language = requireInterfaceLanguage(i18n.language);
   const own = events?.filter((event) => event.node === node.key && HIDE_KINDS.has(event.kind)) ?? [];
   const mark = hideWords(mission, node, t);
+  const pulls = pullsByNumber(mission.nodes);
   if (own.length === 0 && !mark) return null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
@@ -662,7 +641,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
       {own.length > 0 ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-panel-hide-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, pulls);
             return (
               <li key={index} className="contents" data-panel-hide-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
@@ -685,7 +664,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
 const HIDE_KINDS: ReadonlySet<MissionEvent["kind"]> = new Set(["hide", "hide_closed", "raised", "raised_to_operator", "resolved"]);
 
 /** The node's events in order, folded under their count (B31). */
-function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | null }) {
+function Events({ node, events, pulls }: { node: MissionNode; events: MissionEvent[] | null; pulls: MissionPulls }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const [open, setOpen] = useState(false);
@@ -701,7 +680,7 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
       {open ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-flow-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t);
+            const words = eventWords(event, t, pulls);
             return (
               <li key={index} className="contents" data-panel-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>

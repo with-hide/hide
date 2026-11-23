@@ -20,6 +20,7 @@ import {
   parseFragment,
   prFailure,
   refusalOf,
+  askIdentity, choiceMessage, replyMessage,
   replyProblem,
   sameKey,
   sleepTarget,
@@ -37,14 +38,15 @@ import {
   type ServerFrame,
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
-import { confirmOf, holds, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, type StartSheet } from "./store";
+import { confirmOf, holds, prHostOf, prOf } from "./prModel";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
 import { appPushRefused, syncAppPush } from "./appPush";
 import { browserPushResult, forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
+import { bindUploads, dropFiles, filesSent, onAttachAck, replyFiles, reuploadFiles, uploadsConnected, uploadsLost } from "./uploads";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -224,6 +226,7 @@ export function send(message: PhoneMessage): boolean {
   try { socket.send(JSON.stringify(message)); return true; }
   catch { if (socket) lose(socket); return false; }
 }
+bindUploads(send);
 
 function scheduleRetry(): void {
   if (stopped || retryTimer !== null) return;
@@ -257,6 +260,8 @@ function connect(): void {
     stopped = true;
     window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
   }, (reason) => {
+    // The relay's day is spent: an upload stops with its own line rather than starting again on every retry.
+    if (reason === "daily_limit") uploadsLost(reason);
     if (["connection_limit", "room_limit", "rate_limit", "daily_limit", "frame_limit"].includes(reason)) patch({ relayError: "busy" });
     else if (reason === "unsupported_version") { stopped = true; patch({ screen: "version" }); }
   }) : new WebSocket(socketUrl());
@@ -292,6 +297,9 @@ function connect(): void {
       }
       if (watch) watch.ready = true;
       applyFrame(frame);
+      // A computer that takes no files (an older one, or one put back) keeps none of the bar's.
+      if (frame.attachments === true) uploadsConnected();
+      else dropFiles();
       reopenDetail();
       reopenStartSheet();
       reopenPr();
@@ -303,7 +311,11 @@ function connect(): void {
       return;
     }
     if (frame.type === "input_result") {
-      onInputResult(frame.ok, frame.reason);
+      onInputResult(frame.request_id, frame.ok, frame.reason);
+      return;
+    }
+    if (frame.type === "attach_ack") {
+      onAttachAck(frame);
       return;
     }
     if (frame.type === "human_turn_result") {
@@ -366,9 +378,13 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   const state = usePhone.getState();
   failPendingSleep();
   failLoadingLook();
+  uploadsLost(null);
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  // A choice on its way may have landed: each is answered in the terminal from now on.
+  for (const requestId of Object.keys(state.answering)) settleChoice(requestId, false, "uncertain");
+  if (state.pendingInput && state.pendingInput.kind !== "choice") patch({ pendingInput: null, inputError: inputFailure("offline") });
+  else if (state.pendingInput) patch({ pendingInput: null });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
   if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
@@ -424,7 +440,8 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   }
   const view: DetailView = "conversation";
   dropTransfer();
-  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null }, inputError: null, pendingInput: null });
+  if (!sameKey(state.detail?.key ?? null, key)) dropFiles();
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
@@ -447,6 +464,7 @@ export function setTab(tab: DetailTab): void {
 
 export function closeDetail(): void {
   dropTransfer();
+  dropFiles();
   patch({ detail: null, inputError: null, pendingInput: null });
   send({ type: "close" });
 }
@@ -554,8 +572,11 @@ export function loadOlder(): void {
 }
 
 let requestCounter = 0;
-/** A reply that failed keeps its request id, so a resend of the same text lands once (B27). */
-let lastReply: { text: string; requestId: string } | null = null;
+/**
+ * The last reply sent: the same words with the same files are the same reply, sent again under the same request id (B27); the files
+ * it named, by what was picked, are the ones that leave the bar when it lands.
+ */
+let lastReply: { intent: string; files: string[]; requestId: string } | null = null;
 
 function newRequestId(): string {
   requestCounter += 1;
@@ -712,19 +733,26 @@ function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>
   patch({ missionDrafts: drafts, missionAnswerError: null });
 }
 
-/** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */
+/**
+ * Sends a reply with Enter after it, with the files on the bar once the computer has every one of them; the caller clears its field
+ * only on success (B26, B27).
+ */
 export function sendReply(text: string): boolean {
   const state = usePhone.getState();
   const detail = state.detail;
   if (!detail || state.pendingInput) return false;
-  const problem = replyProblem(text);
+  const attached = replyFiles();
+  if (!attached) return false;
+  const problem = replyProblem(text, state.answer, detail.key, attached.stages.length);
   if (problem) {
-    patch({ inputError: inputFailure(problem) });
+    patch({ inputError: inputFailure(problem, state.answer) });
     return false;
   }
-  const requestId = lastReply?.text === text ? lastReply.requestId : newRequestId();
-  lastReply = { text, requestId };
-  const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, text });
+  // The files by what was picked, not by their stages: a file uploaded again after a lost connection is still the same reply's.
+  const intent = `${text}\u0000${attached.ids.join(",")}`;
+  const requestId = lastReply?.intent === intent ? lastReply.requestId : newRequestId();
+  lastReply = { intent, files: attached.ids, requestId };
+  const sent = send(replyMessage(detail.key, text, requestId, attached.stages));
   patch(sent ? { pendingInput: { requestId, kind: "text" }, inputError: null } : { inputError: inputFailure("offline") });
   return sent;
 }
@@ -736,6 +764,58 @@ export function sendKey(key: QuickKey): void {
   const requestId = newRequestId();
   const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, key });
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });
+}
+
+/**
+ * Answers the agent's own ask with one of its choices (Doop 03, 04): the computer types the keys the agent's screen takes for it,
+ * only while the agent still asks what the phone showed (`turn`). The choice says sending, then sent until the ask moves on, or
+ * why it did not land.
+ */
+export function sendChoice(choice: string): void {
+  const state = usePhone.getState();
+  const detail = state.detail;
+  const ask = detail?.ask;
+  if (!detail || !ask || !ask.answerable || state.pendingInput) return;
+  const identity = askIdentity(detail.key, ask);
+  // An ask answered, or one whose answer may have landed, is never sent again from here: a second send would be a second press.
+  const answered = state.answers[identity];
+  if (answered && (answered.state !== "failed" || answered.inTerminal)) return;
+  // Room for it first: with every remembered answer still holding an ask that may stand, nothing is sent.
+  const sending = withAnswer(state.answers, identity, { choice, state: "sending" });
+  if (!sending) {
+    patch({ inputError: inputFailure("answers_full") });
+    return;
+  }
+  const requestId = newRequestId();
+  const sent = send(choiceMessage(detail.key, ask, choice, requestId));
+  patch(
+    sent
+      ? { pendingInput: { requestId, kind: "choice" }, answering: { ...state.answering, [requestId]: identity }, answers: sending }
+      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) ?? state.answers },
+  );
+}
+
+/**
+ * Settles the choice sent as `requestId` on the ask it was picked on, never on another: sent, or refused with why. One that may
+ * have landed (`uncertain`), or that the terminal no longer showed, is answered in the terminal from then on, whatever the phone
+ * does next.
+ */
+function settleChoice(requestId: string, ok: boolean, reason: string | null): void {
+  const state = usePhone.getState();
+  const identity = state.answering[requestId];
+  if (identity === undefined) return;
+  const answering = Object.fromEntries(Object.entries(state.answering).filter(([waiting]) => waiting !== requestId));
+  const pendingInput = state.pendingInput?.requestId === requestId ? null : state.pendingInput;
+  const picked = state.answers[identity];
+  if (!picked) {
+    patch({ pendingInput, answering });
+    return;
+  }
+  const settled: ChoiceState = ok
+    ? { choice: picked.choice, state: "sent" }
+    : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown" };
+  // The answer is already kept, so setting it again takes no room.
+  patch({ pendingInput, answering, answers: withAnswer(state.answers, identity, settled) ?? state.answers });
 }
 
 /**
@@ -768,10 +848,20 @@ export function onReplyResult(listener: ReplyListener): () => void {
   return () => replyListeners.delete(listener);
 }
 
-function onInputResult(ok: boolean, reason: string | null): void {
-  const pending = usePhone.getState().pendingInput;
-  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason) });
+function onInputResult(requestId: string | undefined, ok: boolean, reason: string | null): void {
+  if (requestId !== undefined && requestId in usePhone.getState().answering) {
+    settleChoice(requestId, ok, reason);
+    return;
+  }
+  const { pendingInput: pending } = usePhone.getState();
+  // A result for a reply or key no longer waited on (its detail closed) is not this one's.
+  if (!pending || pending.kind === "choice" || (requestId !== undefined && pending.requestId !== requestId)) return;
+  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
+    const detail = usePhone.getState().detail;
+    if (ok && detail && lastReply) filesSent(detail.key, lastReply.files);
+    // The computer no longer holds a file the reply named: every file goes up again, and the reply is sent once they are in.
+    if (!ok && reason === "attachment_lost") reuploadFiles();
     if (ok) lastReply = null;
     for (const listener of replyListeners) listener(ok);
   }
@@ -892,7 +982,7 @@ export function lookAgainPr(): void {
 export function askMerge(): void {
   const { prs, prOpen } = usePhone.getState();
   const pr = prOf(prs?.items ?? null, prOpen);
-  const confirm = pr ? confirmOf(pr) : null;
+  const confirm = pr ? confirmOf(pr, prHostOf(pr, prs?.projects ?? [])) : null;
   if (confirm) patch({ prConfirm: confirm, prNotice: null });
 }
 
@@ -910,7 +1000,7 @@ export function confirmMerge(): boolean {
   if (!confirm || state.prPending) return false;
   const pr = prOf(state.prs?.items ?? null, confirm.key);
   patch({ prConfirm: null });
-  if (!pr || !holds(confirm, pr)) return false;
+  if (!pr || !holds(confirm, pr, prHostOf(pr, state.prs?.projects ?? []))) return false;
   const intent = JSON.stringify([confirm.key, confirm.head, confirm.queue ? null : confirm.method]);
   const requestId = lastMerge?.key === intent ? lastMerge.requestId : newRequestId();
   lastMerge = { key: intent, requestId };

@@ -1,5 +1,6 @@
 import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
+import { hostLook, pullHost, pullLabel } from "./codeHost";
 import type { MessageKey } from "./i18n/catalogs";
 import { formatDateTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -68,19 +69,19 @@ export function settled(state: PrState): boolean {
   return state === "merged" || state === "closed";
 }
 
-/** When GitHub could not be read again, the last read time a PR mark dims for. */
-export type PrStaleness = { stale: boolean; lastRead: number | null };
+/** When the host could not be read again, the last read time a PR mark dims for. */
+export type PrStaleness = { stale: boolean; lastRead: number | null; host: string };
 
 /** A project's GitHub read as a mark's staleness: undefined before any answer. */
 export function staleness(github: GithubStatus | null | undefined): PrStaleness | undefined {
-  return github ? { stale: github.stale === true, lastRead: github.last_success_at_unix_ms ?? null } : undefined;
+  return github ? { stale: github.stale === true, lastRead: github.last_success_at_unix_ms ?? null, host: hostLook(github.host?.key).name } : undefined;
 }
 
 /** The tooltip line of a stale mark, or null while GitHub reads. */
 export function staleLabel(value: PrStaleness | undefined, t: TFunction<"translation">, language: InterfaceLanguage): string | null {
   if (!value?.stale) return null;
   const time = value.lastRead == null ? "-" : formatDateTime(language, value.lastRead, { dateStyle: "short", timeStyle: "short" });
-  return t("agentSessions.pr.stale", { time });
+  return t("agentSessions.pr.stale", { time, host: value.host });
 }
 
 /**
@@ -94,12 +95,12 @@ export function rowPulls(agent: AgentRow, scope: "family" | "own" = "family"): S
   return scope === "own" ? pulls.filter((pull) => pull.own) : pulls;
 }
 
-/** A list's GitHub read: stale while any of its pull requests is, with the oldest of those last reads; undefined for no pull request. */
+/** A list's host read: stale while any of its pull requests is, with the oldest of those last reads; undefined for no pull request. */
 export function pullsStaleness(pulls: readonly SessionPull[]): PrStaleness | undefined {
   if (pulls.length === 0) return undefined;
   const stale = pulls.filter((pull) => pull.stale);
-  if (stale.length === 0) return { stale: false, lastRead: null };
-  return { stale: true, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
+  if (stale.length === 0) return { stale: false, lastRead: null, host: pullHost(pulls[0]!).name };
+  return { stale: true, host: pullHost(stale[0]!).name, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
 }
 
 /** A closed pull request is drawn dimmed in a session's list: it stays, but asks nothing (with-hide/hide-private docs/task-identity.md, One list per session). */
@@ -108,7 +109,7 @@ export const CLOSED_DIM = "opacity-(--opacity-dimmed)";
 const PR_RANK = Object.fromEntries(Object.keys(PR_LOOK).map((state, rank) => [state, rank])) as Record<PrState, number>;
 
 /** What a mark draws: one PR's state and number, or for several, how many of each state, worst first. */
-export type PrMarkParts = { state: PrState; number: number } | { counts: { state: PrState; count: number }[] };
+export type PrMarkParts = { state: PrState; label: string } | { counts: { state: PrState; count: number }[] };
 
 /**
  * Several PRs as one mark: the worst state among those still open and how
@@ -122,10 +123,10 @@ export function prCountsSummary(counts: readonly { state: PrState; count: number
 }
 
 /** The mark of a list of PRs; null for none. */
-export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state">[]): PrMarkParts | null {
+export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state" | "reference">[]): PrMarkParts | null {
   const [first] = pulls;
   if (!first) return null;
-  if (pulls.length === 1) return { state: first.state, number: first.number };
+  if (pulls.length === 1) return { state: first.state, label: pullLabel(first) };
   const counts = new Map<PrState, number>();
   for (const { state } of pulls) counts.set(state, (counts.get(state) ?? 0) + 1);
   return { counts: [...counts].sort(([a], [b]) => PR_RANK[a] - PR_RANK[b]).map(([state, count]) => ({ state, count })) };

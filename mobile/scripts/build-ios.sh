@@ -90,7 +90,7 @@ case "$command" in
         fi
         if [[ "${HIDE_IOS_SKIP_PHONE_BUILD:-}" != 1 ]]; then
             if [[ -n "${HIDE_IOS_RELAY_PORT:-}" ]]; then
-                VITE_HIDE_RELAY_URL="ws://127.0.0.1:$HIDE_IOS_RELAY_PORT" bash scripts/verify-web.sh web build:phone
+                VITE_HIDE_RELAY_URL="ws://127.0.0.1:$HIDE_IOS_RELAY_PORT/ws" bash scripts/verify-web.sh web build:phone
             else
                 bash scripts/verify-web.sh web build:phone
             fi

@@ -56,6 +56,8 @@ async function connect(items: PhonePr[], feedback: PhonePrFeedback | null = null
   const root = createRoot(container);
   store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -69,7 +71,14 @@ async function connect(items: PhonePr[], feedback: PhonePrFeedback | null = null
   const click = (selector: string) => act(async () => q(selector)!.click());
   const sent = (type: string) => socket.sent.filter((message) => message.type === type);
   const lose = () => act(async () => socket.onclose?.());
-  return { container, socket, serve, prs, q, click, sent, lose, connection, store, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    }).then(() => container.remove());
+  return { container, socket, serve, prs, q, click, sent, lose, connection, store, unmount };
 }
 
 // The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
@@ -161,6 +170,39 @@ it("opens a page that reads the card, shows its files and lines and GitHub's add
     await click(`[data-phone-pr="${keyOf(7)}"]`);
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(true);
     expect(q("[data-phone-pr-merge-why]")!.getAttribute("data-phone-pr-merge-why")).toBe("ci");
+  } finally {
+    await unmount();
+  }
+});
+
+it("heads a page with one line like every page, and leaves a long title to wrap in the body, for a GitLab merge request too", async () => {
+  const long = "fix: keep Windows paths on the wire when the checkout sits under a very long folder name that cannot fit one line";
+  const gitlab = pr(9, {
+    title: long,
+    url: "https://gitlab.com/with-hide/hide/-/merge_requests/9",
+    reference: { repository: { host: "gitlab", authority: "gitlab.com", path: "with-hide/hide" }, number: 9, key: "gitlab:with-hide/hide!9", label: "!9", url: "https://gitlab.com/with-hide/hide/-/merge_requests/9", checks_url: "", files_url: "" },
+  });
+  const { click, q, unmount } = await connect([pr(1, { title: long }), gitlab]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    const head = q("[data-phone-pr-page] > header")!;
+    expect(head.querySelector("h1")!.textContent).toBe("#1");
+    expect(head.querySelector("[data-phone-pr-branch]")!.textContent!.replace(/\s+/g, " ").trim()).toBe("feat/change-1 → main");
+    expect(head.querySelector("[data-phone-pr-github]")!.getAttribute("aria-label")).toBe("Open on GitHub");
+    expect(head.querySelector("[data-phone-back]")!.getAttribute("data-phone-back")).toBe("prs");
+    // The title is the body's first line, never the head's, and the state chip follows it.
+    expect(head.textContent).not.toContain(long);
+    const title = q("[data-phone-pr-title]")!;
+    expect(title.textContent).toBe(long);
+    expect(head.contains(title)).toBe(false);
+    expect(title.nextElementSibling!.getAttribute("data-phone-pr-pill")).toBe("mergeable");
+
+    await click('[data-phone-back="prs"]');
+    await click(`[data-phone-pr="${keyOf(9)}"]`);
+    expect(q("[data-phone-pr-page] > header h1")!.textContent).toBe("!9");
+    expect(q("[data-phone-pr-github]")!.getAttribute("aria-label")).toBe("Open on GitLab");
+    expect(q("[data-phone-pr-github]")!.getAttribute("href")).toBe("https://gitlab.com/with-hide/hide/-/merge_requests/9");
   } finally {
     await unmount();
   }
@@ -267,6 +309,40 @@ it("shows what a refused or finished merge did in the desktop's words, and reads
     expect(q("[data-phone-pr-pill]")!.getAttribute("data-phone-pr-pill")).toBe("merged");
     expect(q("[data-phone-pr-merge]")).toBeNull();
     expect(q("[data-phone-pr-delegate]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("names no merge method where the host merges by its own settings, and still sends the event's one method", async () => {
+  const own = pr(1, { card: card({ merge: { methods: ["merge"], queue: false, can_merge: true, host_sets_method: true } }) });
+  const { click, sent, q, unmount } = await connect([own]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    await click("[data-phone-pr-merge]");
+    const sheet = q("[data-phone-pr-confirm]")!;
+    expect(sheet.textContent).toContain(HEAD.slice(0, 7));
+    expect(sheet.textContent).not.toContain("Merge commit");
+    await click("[data-phone-pr-confirm-yes]");
+    expect(sent("merge_pr")[0]).toMatchObject({ head: HEAD, method: "merge" });
+  } finally {
+    await unmount();
+  }
+});
+
+it("shows a gitlab.com merge that set auto-merge only, or found the request budget spent, as its own outcome in the desktop's words", async () => {
+  const { click, q, prs, unmount } = await connect([pr(1)]);
+  try {
+    await click('[data-phone-tab="prs"]');
+    await click(`[data-phone-pr="${keyOf(1)}"]`);
+    for (const reason of ["auto_merge", "budget_spent"] as const) {
+      await prs([pr(1, { card: card({ write: { action: "merge", head: HEAD, method: "merge", phase: "failed", reason } }) })]);
+      const shown = q("[data-phone-pr-write]")!;
+      expect(shown.getAttribute("data-phone-pr-write-reason")).toBe(reason);
+      // The words are the card's own, never the key.
+      expect(shown.textContent).not.toContain("work.card.fail");
+    }
   } finally {
     await unmount();
   }

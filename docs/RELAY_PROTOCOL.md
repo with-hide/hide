@@ -326,6 +326,32 @@ The relay refuses to start on a project id that is not Google's shape (6 to 30 l
 `--fcm-endpoint` and `--fcm-metadata-endpoint` name loopback stand-ins for tests and are refused for any other host, by the configuration and by `fcm::Fcm::new` alike.
 A push log line names a fixed event (`delivered`, `unregistered`, `fcm_delivered`, `fcm_unregistered`, `push_token_invalid`, `cap_exceeded` and the rest in `hide-relay/src/apns.rs`, `fcm.rs` and `server.rs`) and a cap, never a token, ciphertext, provider token, access token, Apple's or Google's answer body or the room.
 
+## Files a phone attaches
+
+A reply's files travel in the phone's own application messages, inside the same Noise session and the same relay budgets as every other phone frame; the relay sees only envelopes and has no message of its own for them.
+`hided/src/mobile/uploads.rs` owns the frames and their numbers, and `web/src/mobile/uploads.ts` mirrors them.
+A phone offers files only to a computer whose `hello` carries `attachments: true`; an older computer never sees these frames, and an older phone bundle ignores the field, so `PHONE_PROTOCOL` stays 5.
+
+| Frame | Fields | Answer |
+| --- | --- | --- |
+| `attach_begin` | `stage`, a UUID the phone makes; `name`; `size`, at most 10 MiB (`FILE_BYTES`) | `attach_ack {stage, begun: true}` |
+| `attach_chunk` | `stage`; `seq`, counted from 0; `data`, the base64 of at most 12,000 bytes (`CHUNK`) | `attach_ack {stage, seq}` once the bytes are on disk |
+| `attach_end` | `stage` | `attach_ack {stage, done: true}` once the stage's bytes match its `size` |
+| `attach_cancel` | `stage` | `attach_ack {stage, cancelled: true}` once the stage and its file are dropped |
+
+Every upload frame is answered exactly once; a refusal is `attach_ack {stage, failed}` with the store's reason (`too_large`, `too_many_files`, `batch_too_large`, `staging_full`, `size_mismatch`, `invalid_request` and the store's others); a frame that names no stage of the phone's shape is refused as a request is, with no `attach_ack`.
+The stages a reply attaches go in its `input` as `stages`, at most eight and each once, beside its `text` (which may be empty); hided commits them from the store when the reply is written, and answers `attachment_lost` for a stage the store no longer holds, which the phone uploads again under a new stage before it sends again.
+
+Pacing keeps every hop inside its cap without a new limit:
+
+- A chunk frame is at most 16,128 bytes of JSON (12,000 bytes as 16,000 of base64 and 128 for the rest), under the 16 KiB phone message hided reads (`phone::MAX_FRAME`), and so one envelope.
+- The phone keeps at most four upload frames (`WINDOW`) out that hided has not answered, of every kind and whichever file they name, half the eight frames hided takes from one phone before it reads them (`relay::INBOUND_QUEUE`), so a ping and a request always fit beside them; a cancel waits for a place like any other frame, and the next file begins only once there is one, so a cancel never opens a second window beside the frames still out.
+- Four frames are about 64 KiB in the phone's socket, far under the 1 MiB the phone's relay socket buffers before it refuses a send (`send_limit`, `web/src/mobile/relaySocket.ts`).
+- Every chunk is charged to the room's 1 GiB a day as any frame is; when it is spent the relay closes the phone with `daily_limit`, the phone marks every file not yet in as failed with one line that says the day's budget is used up, and it does not retry.
+
+One file uploads at a time, in the order it was picked.
+A lost connection releases the stages that phone uploaded and no reply committed, as a desktop window's are released (`Attachments::release`), so after the phone is back it uploads every file on its bar that was in or on its way again under new stages; a file whose upload failed waits for a press on it.
+
 ## Encrypted frames and messages
 
 Every binary WebSocket message is exactly one envelope: wire version u8 (1), kind u8 (1 handshake, 2 transport), connection u32 big-endian, then Noise bytes.

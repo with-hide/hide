@@ -45,7 +45,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | Guarding a destructive choice that can be undone, in a row of choices | The same `Button`, pressed twice | The first press turns it into its confirm word (`제외 확인`) in the `destructive` variant in place, a press elsewhere puts it back, and only the second press sends; no layer opens (`AttentionChoices`, `components/mission-attention.tsx`). |
 | A side or large panel | `Sheet` | |
 | A searchable command or item list | `Command` | `CommandDialog` for the palette form. |
-| A short label or count | `Badge` | `secondary` by default; `outline`, `default`, `destructive`. |
+| A short label or count | `Badge` | `secondary` by default; `outline`, `default`, `destructive`, and `warning` for a mark that asks for a look, such as a device's `예전 방식`. |
 | A shortcut | `Kbd`, `KbdGroup` | `Keycap` is the number a modifier hold reveals on a row or tile. |
 | A hint on hover or focus | `Hint` (or `Tooltip` parts) | A hint holds nothing to click. |
 | A notice the operator can act on | `Toast` inside the window's one `ToastStack` (`App.tsx`) | `level="info"` leaves on its own after `TOAST_INFO_MS` when given `timeout`; `level="important"` draws the warning border and mark and stays; a shell notice goes through `useUiStore`'s `showNotice` rather than a Toast of its own ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#notices)). |
@@ -69,7 +69,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | An agent's runtime logo | `agent-logo.tsx` |
 | Time since something | `Elapsed`, `useElapsed` (`elapsed.tsx`) |
 | A row's second line that must keep its leading word | `RowLineText` |
-| A settings form | `Group`, `Row`, `Disclosure`, `Value`, `Status`, `Note` (`settings-rows.tsx`) |
+| A settings form | `Group`, `Row`, `Disclosure`, `Value`, `Status`, `Note` (`settings-rows.tsx`); `Status` tone `live` is a connection that is up (`● 연결됨`), `ok` a check that passed |
 | A pull request's mark or card | `pr-mark.tsx`, `pr-card.tsx` |
 | A file or folder mark | `FileMark` |
 | A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding, and `variant="remote"` fills it in the other-device colour (`--device-remote`) for the mission map's card and panel |

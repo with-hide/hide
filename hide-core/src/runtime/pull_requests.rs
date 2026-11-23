@@ -1194,6 +1194,7 @@ impl Runtime {
                 Err(crate::code_host::WriteFailure {
                     reason: "failed",
                     detail: message,
+                    read_again: false,
                 }),
             );
         }
@@ -1241,10 +1242,10 @@ impl Runtime {
                 }));
                 write.phase = "failed";
                 write.reason = Some(failure.reason);
-                // A moved head means the card shows an old PR, and a branch
-                // update that conflicted has made the row a conflict: read it again.
-                failure.reason == "head_moved"
-                    || (action == "update_branch" && failure.reason == "conflict")
+                // The host's unit says when the change request may have
+                // moved (a moved head, a conflict the write made, a write
+                // that may have landed unseen): read it again.
+                failure.read_again
             }
         };
         if reread {
@@ -1303,6 +1304,7 @@ fn run_card_write(
     let unsupported = || crate::code_host::WriteFailure {
         reason: "failed",
         detail: "the project's host does not offer this write".to_owned(),
+        read_again: false,
     };
     match *write {
         CardWrite::Merge { method } => place

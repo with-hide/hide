@@ -45,15 +45,15 @@ export const checkoutGitEnglish = {
   "checkoutGit.observed.stale": "Value from {{time}} ago",
   "checkoutGit.observed.gitFailed": "Git read failed · value from {{time}} ago",
   "checkoutGit.observed.gitFailedNever": "Git read failed",
-  "checkoutGit.observed.githubFailed": "GitHub read failed · value from {{time}} ago",
-  "checkoutGit.observed.githubFailedNever": "GitHub read failed",
+  "checkoutGit.observed.githubFailed": "{{host}} read failed · value from {{time}} ago",
+  "checkoutGit.observed.githubFailedNever": "{{host}} read failed",
   "checkoutGit.notChecked": "Remote not checked yet",
   "checkoutGit.fetchFailing": "Couldn't reach the remote · as of {{time}} ago",
   "checkoutGit.fetchFailingNever": "Couldn't reach the remote",
   "checkoutGit.incoming": "Not pulled",
   "checkoutGit.incomingMore": "+{{count}} more not pulled",
   "checkoutGit.unpushed": "Not pushed",
-  "checkoutGit.openCommit": "Open commit on GitHub"
+  "checkoutGit.openCommit": "Open commit on {{host}}"
 };
 
 export const checkoutGitCatalogs = {
@@ -103,15 +103,15 @@ export const checkoutGitCatalogs = {
   "checkoutGit.observed.stale": "{{time}} 전 기준",
   "checkoutGit.observed.gitFailed": "Git 읽기 실패 · {{time}} 전 기준",
   "checkoutGit.observed.gitFailedNever": "Git 읽기 실패",
-  "checkoutGit.observed.githubFailed": "GitHub 읽기 실패 · {{time}} 전 기준",
-  "checkoutGit.observed.githubFailedNever": "GitHub 읽기 실패",
+  "checkoutGit.observed.githubFailed": "{{host}} 읽기 실패 · {{time}} 전 기준",
+  "checkoutGit.observed.githubFailedNever": "{{host}} 읽기 실패",
   "checkoutGit.notChecked": "아직 확인 안 함",
   "checkoutGit.fetchFailing": "원격 확인 실패 · {{time}} 전 기준",
   "checkoutGit.fetchFailingNever": "원격 확인 실패",
   "checkoutGit.incoming": "받지 않음",
   "checkoutGit.incomingMore": "받지 않은 커밋 {{count}}개 더",
   "checkoutGit.unpushed": "푸시하지 않음",
-  "checkoutGit.openCommit": "GitHub에서 커밋 열기"
+  "checkoutGit.openCommit": "{{host}}에서 커밋 열기"
 },
 "zh-CN": {
   "checkoutGit.files": "未提交文件记录 {{count}} 条",
@@ -158,15 +158,15 @@ export const checkoutGitCatalogs = {
   "checkoutGit.observed.stale": "{{time}}前的值",
   "checkoutGit.observed.gitFailed": "Git 读取失败 · {{time}}前的值",
   "checkoutGit.observed.gitFailedNever": "Git 读取失败",
-  "checkoutGit.observed.githubFailed": "GitHub 读取失败 · {{time}}前的值",
-  "checkoutGit.observed.githubFailedNever": "GitHub 读取失败",
+  "checkoutGit.observed.githubFailed": "{{host}} 读取失败 · {{time}}前的值",
+  "checkoutGit.observed.githubFailedNever": "{{host}} 读取失败",
   "checkoutGit.notChecked": "尚未检查远程",
   "checkoutGit.fetchFailing": "无法连接远程 · {{time}}前的值",
   "checkoutGit.fetchFailingNever": "无法连接远程",
   "checkoutGit.incoming": "未拉取",
   "checkoutGit.incomingMore": "还有 {{count}} 个未拉取",
   "checkoutGit.unpushed": "未推送",
-  "checkoutGit.openCommit": "在 GitHub 上打开提交"
+  "checkoutGit.openCommit": "在 {{host}} 上打开提交"
 },
 "ja": {
   "checkoutGit.files": "未コミットのファイル {{count}} 件",
@@ -213,14 +213,14 @@ export const checkoutGitCatalogs = {
   "checkoutGit.observed.stale": "{{time}}前の値",
   "checkoutGit.observed.gitFailed": "Git読み取り失敗 · {{time}}前の値",
   "checkoutGit.observed.gitFailedNever": "Git読み取り失敗",
-  "checkoutGit.observed.githubFailed": "GitHub読み取り失敗 · {{time}}前の値",
-  "checkoutGit.observed.githubFailedNever": "GitHub読み取り失敗",
+  "checkoutGit.observed.githubFailed": "{{host}}読み取り失敗 · {{time}}前の値",
+  "checkoutGit.observed.githubFailedNever": "{{host}}読み取り失敗",
   "checkoutGit.notChecked": "リモートは未確認",
   "checkoutGit.fetchFailing": "リモートを確認できません · {{time}}前の値",
   "checkoutGit.fetchFailingNever": "リモートを確認できません",
   "checkoutGit.incoming": "未取得",
   "checkoutGit.incomingMore": "未取得があと {{count}} 件",
   "checkoutGit.unpushed": "未プッシュ",
-  "checkoutGit.openCommit": "GitHub でコミットを開く"
+  "checkoutGit.openCommit": "{{host}} でコミットを開く"
 }
 } satisfies Catalogs<typeof checkoutGitEnglish>;

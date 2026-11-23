@@ -1,6 +1,6 @@
 import { projectCheckout } from "./projects";
 import { deviceConnected, readsHere } from "./devices";
-import { sameGithubPullRequest } from "./pullRequestIdentity";
+import { samePull } from "./codeHost";
 import { useGroupFeedback } from "./groupTabs";
 import { areaFrame } from "./areaFrames";
 import { AGENT_WORDS, agentAreaStepUnavailable, agentMenu, type AgentAreaStep, type AgentCommand } from "./agentLayout";
@@ -59,6 +59,7 @@ import {
   sameDetailItem,
   visibleTab,
   type AgentRow,
+  type ChangeRequestRef,
   type Checkout,
   type DeskAgentId,
   type DeskApprovalAnswer,
@@ -1742,6 +1743,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "device_host_retry", payload: { device_id: deviceId } });
     },
 
+    /** The name this computer shows an SSH or WSL device under; a paired machine is renamed through `pairing("rename")`. */
+    renameDevice(deviceId: string, name: string) {
+      dispatch({ schema_version: 2, kind: "rename_device", payload: { device_id: deviceId, name } });
+    },
+
     testDevice(deviceId: string) {
       dispatch({ schema_version: 2, kind: "test_device", payload: { device_id: deviceId } });
     },
@@ -2124,10 +2130,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * pane, a card tab on the desk in front `here`, and a place with no agent leaves
      * it to the agent that made the pull request.
      */
-    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}, at: import("./snapshot").DetailPlace = "owner") {
+    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number; reference?: ChangeRequestRef | null}, at: import("./snapshot").DetailPlace = "owner") {
       const projects = catalogWorkspaces(rest());
-      const project = projects.find((row) => row.id === pull.workspace_id && row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)))
-        ?? projects.find((row) => row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)));
+      const holds = (row: Workspace) => row.pull_requests?.some((pr) => samePull(pr.reference, pull.reference));
+      const project = projects.find((row) => row.id === pull.workspace_id && holds(row)) ?? projects.find(holds);
       if (project) this.openPrCard(project.id, pull.number, undefined, at);
       else this.openLink(pull.url, false);
     },
@@ -3987,9 +3993,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openLink(url, external || deviceId !== localDeviceId(rest()));
     },
 
-    /** A project's GitHub repository page: the default browser's for an SSH device's project, as for its pull request. */
-    openRepository(repository: string, deviceId: string, external: boolean) {
-      this.openLink(`https://github.com/${repository}`, external || deviceId !== localDeviceId(rest()));
+    /** A project's repository page, as its host's unit made it: the default browser's for an SSH device's project, as for its pull request. */
+    openRepository(url: string, deviceId: string, external: boolean) {
+      this.openLink(url, external || deviceId !== localDeviceId(rest()));
     },
 
     /**

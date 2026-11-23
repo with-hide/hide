@@ -1175,11 +1175,11 @@ it("draws the cells its Conductor has not resolved as one safety net card in 내
     expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
   } finally { await map.unmount(); }
   // A standing cell that is no raise holds a row too, worded from its typed fact (letters-missions-simplify B15).
-  const failed = { key: "ci", title: "Node ci", reason: "ci_failed" as const, pr: 7, since_unix_ms: now - 21 * 60_000 };
-  const cells = await mount({ items: [mission({ nodes: [...nodes, node("ci", { status: "working" })], safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: [...held, failed] } })] });
+  const stopped = { key: "stop", title: "Node stop", reason: "warning_stopped" as const, pr: 7, since_unix_ms: now - 21 * 60_000 };
+  const cells = await mount({ items: [mission({ nodes: [...nodes, node("stop", { status: "working" })], safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: [...held, stopped] } })] });
   try {
-    const row = cells.q('[data-mission-held-node="ci"]')!;
-    expect(row.textContent).toBe("Node ciCI failed on PR #7for 21m");
+    const row = cells.q('[data-mission-held-node="stop"]')!;
+    expect(row.textContent).toBe("Node stopWarned · the worker stoppedfor 21m");
   } finally { await cells.unmount(); }
   // With no Conductor the card says so, holds 지휘 다시 열기, and the Conductor row steps aside so the screen says it once.
   const gone = await mount({ items: [mission({ nodes, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: false, takes_answers: false }, safety_net: { conductor_present: false, since_unix_ms: now - 25 * 60_000, nodes: held } })] });

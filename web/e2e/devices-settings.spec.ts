@@ -49,7 +49,7 @@ async function openDevices(page: Page, daemon: Daemon) {
   return page.locator('[data-settings="true"]');
 }
 
-test("a device row is one line with Test and a menu, Add device is one button, and Remove asks first", async ({ page }) => {
+test("a device row is one state with a menu, Add device is one button, a rename reaches the rail, and Remove asks first", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
   const engine = await startFixture();
   let daemon: Daemon | null = null;
@@ -65,7 +65,7 @@ test("a device row is one line with Test and a menu, Add device is one button, a
 
     // B55: This Mac's menu has Connection details and nothing that removes it or revokes a helper.
     const local = sheet.locator(`[data-device-row="${daemon.node}"]`);
-    await expect(local.locator(`[data-device-subtitle="${daemon.node}"]`)).toBeVisible();
+    await expect(local.locator(`[data-device-name="${daemon.node}"]`)).toBeVisible();
     await local.locator(`[data-device-menu="${daemon.node}"]`).click();
     const localMenu = page.locator(`[data-device-menu-content="${daemon.node}"]`);
     await expect(localMenu.getByRole("menuitem")).toHaveText(["Connection details…"]);
@@ -87,12 +87,12 @@ test("a device row is one line with Test and a menu, Add device is one button, a
     await page.locator("[data-add-device]").click();
     await expect(page.locator("[data-add-device-dialog]")).toHaveCount(0);
 
-    // B54: the device is one row: name, alias, and its connection; Test and the menu are its only controls.
+    // B54; operator review 2026-11-23: the device is one row: its name marked as the old way, and one state.
     const row = sheet.locator(`[data-device-row="${ALIAS}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await expect(row.locator(`[data-device-subtitle="${ALIAS}"]`)).toHaveText(ALIAS);
+    await expect(row.locator(`[data-device-old-link="${ALIAS}"]`)).toHaveText("old way");
     await expect(row.locator(`[data-device-state="${ALIAS}:unavailable"]`)).toBeVisible({ timeout: 30_000 });
-    await expect(row.locator(`[data-device-test="${ALIAS}"]`)).toBeVisible();
+    await expect(row.locator("[data-device-state]")).toHaveCount(1);
     // B56: no per-device Agents line, no Coordination retirement row, no kit part list.
     await expect(row).not.toContainText(/Agents:|Coordination|hide command/);
     await expect(row.locator("[data-kit-part]")).toHaveCount(0);
@@ -105,18 +105,21 @@ test("a device row is one line with Test and a menu, Add device is one button, a
     const menu = page.locator(`[data-device-menu-content="${ALIAS}"]`);
     await expect(menu).toBeVisible();
     const items = await menu.getByRole("menuitem").allTextContents();
-    expect(items.slice(0, 2)).toEqual(["Select", "Connection details…"]);
+    expect(items.slice(0, 3)).toEqual(["Rename", "Test", "Connection details…"]);
     expect(items.at(-1)).toBe("Remove…");
     await screenshot(page, "devices-menu");
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await expect(trigger).toBeFocused();
 
-    // B55: Select is one event, and the selected device is marked on its row.
+    // c2: Rename is one event, the core keeps the name, and the row and the rail show it.
     await trigger.click();
-    await page.locator(`[data-device-select="${ALIAS}"]`).click();
-    await expect.poll(() => sent.get("focus_device") ?? 0).toBe(1);
-    await expect(row.getByText("selected", { exact: true })).toBeVisible();
+    await page.locator(`[data-device-rename="${ALIAS}"]`).click();
+    await page.locator(`[data-device-rename-input="${ALIAS}"]`).fill("빌드 서버");
+    await page.locator(`[data-device-rename-go="${ALIAS}"]`).click();
+    await expect.poll(() => sent.get("rename_device") ?? 0).toBe(1);
+    await expect(row.locator(`[data-device-name="${ALIAS}"]`)).toHaveText("빌드 서버");
+    await expect(page.locator(`[data-rail-tile="${ALIAS}"]`)).toHaveAttribute("aria-label", /^빌드 서버/);
 
     // B55: Remove asks before it acts, Keep leaves the device, and Remove takes it away.
     await trigger.click();

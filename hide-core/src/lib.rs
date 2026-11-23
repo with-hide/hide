@@ -18,7 +18,9 @@ mod checkout_git;
 mod checkout_owner;
 mod checkout_start;
 mod code_host;
-pub use code_host::{ChangeRequestPlace, WrittenChangeRequest, written_change_request};
+pub use code_host::{
+    ChangeRequestPlace, WrittenChangeRequest, change_request_name, written_change_request,
+};
 mod codex_launch;
 mod composer_checks;
 mod composer_store;
@@ -75,6 +77,7 @@ pub mod node_access;
 pub mod node_migration;
 pub mod notice_place;
 mod observed;
+pub mod operator_input;
 pub mod pane_command;
 mod pane_reopen;
 pub mod peer_machines;

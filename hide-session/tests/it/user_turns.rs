@@ -281,7 +281,8 @@ fn native_question_fixtures_preserve_exact_text_and_choices_through_serde() {
             serde_json::to_value(fact(&answer)).unwrap(),
             json!({
                 "kind":"question", "content":{"text":"배포 대상을 골라주세요\n검토 방식을 고르세요",
-                "choices":["미리보기","운영","직접","자동"], "truncated":false}
+                "choices":["미리보기","운영","직접","자동"],
+                "notes":["검토용 배포","공개 배포","직접 검토","자동 검토"], "truncated":false}
             })
         );
     }
@@ -311,6 +312,75 @@ fn only_the_correlated_native_result_clears_a_question_and_a_replayed_call_stays
         ));
         assert_eq!(fact(&session.read()), None, "{agent:?} call-id replay");
     }
+}
+
+/// 2026-11-23: Claude Code 2.1.330 drew a question before it wrote the call,
+/// so a read between the two must say it holds nothing a dialog could ask
+/// about (what the core reads again on), whether the question follows an
+/// interrupted call or a call that ran in the same turn. A call still
+/// waiting for its result is held, and the question's call, once written,
+/// carries its words and choices.
+#[test]
+fn a_read_before_a_questions_call_holds_no_open_call_and_the_written_call_carries_its_words() {
+    let records = fixture("user-turns/claude-2.1.330-question-after-interrupt.jsonl");
+    let records: Vec<&str> = records.lines().collect();
+    let call = records[5];
+    let session = |before: &[&str]| {
+        Session::new(
+            Agent::Claude,
+            ".claude/projects/-work-app/question-after-interrupt.jsonl",
+            &format!("{}\n", before.join("\n")),
+        )
+    };
+    let holds = |before: &[&str]| session(before).read().turns.unwrap().holds_open_call();
+    assert!(holds(&records[..2]), "the Bash call has no result yet");
+    for before in [&records[..5], &records[..3]] {
+        assert!(!holds(before), "{} records", before.len());
+        let mut session = session(before);
+        let drawn = session.read();
+        session.resume(&drawn);
+        session.append(&serde_json::from_str::<Value>(call).unwrap());
+        let read = session.read();
+        assert!(read.turns.as_ref().unwrap().holds_open_call());
+        let asked = fact(&read).expect("the call asks a question");
+        assert_eq!(asked.kind, UserTurnKind::Question);
+        let content = asked.content.expect("the call's words are read");
+        assert_eq!(content.text(), "Which font should the title use?");
+        assert_eq!(content.choices(), ["Serif", "Sans", "Mono"]);
+    }
+}
+
+/// Only a format that marks each of the agent's records (Claude Code) can
+/// say a turn holds no call: a running Codex turn may hold one it never
+/// marks. And a call an earlier turn left without a result holds no dialog
+/// of the next turn.
+#[test]
+fn only_a_turn_whose_every_call_is_marked_can_hold_no_open_call() {
+    let codex = Session::new(
+        Agent::Codex,
+        ".codex/sessions/2026/10/07/rollout-2026-10-07T01-00-00-0199a000-0000-7000-8000-0000000000b4.jsonl",
+        &[
+            json!({"type":"session_meta","timestamp":"2026-10-07T01:00:00Z","payload":{"id":"0199a000-0000-7000-8000-0000000000b4","timestamp":"2026-10-07T01:00:00Z","cwd":"/work/app","originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
+            json!({"type":"event_msg","timestamp":"2026-10-07T01:00:00Z","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}}),
+            json!({"type":"response_item","timestamp":"2026-10-07T01:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"빌드를 돌려줘"}]}}),
+        ]
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>(),
+    );
+    let turns = codex.read().turns.unwrap();
+    assert_eq!(turns.waiting(), Some(Waiting::Nothing));
+    assert!(turns.holds_open_call(), "Codex marks no call");
+
+    let records = fixture("user-turns/claude-2.1.330-question-after-interrupt.jsonl");
+    let records: Vec<&str> = records.lines().collect();
+    // A prompt, a Bash call that never got its result, and the next prompt.
+    let claude = Session::new(
+        Agent::Claude,
+        ".claude/projects/-work-app/question-after-interrupt.jsonl",
+        &format!("{}\n{}\n{}\n", records[0], records[1], records[4]),
+    );
+    assert!(!claude.read().turns.unwrap().holds_open_call());
 }
 
 #[test]
@@ -365,6 +435,46 @@ fn anchor_replay_and_session_replacement_do_not_reopen_an_answered_question() {
         assert!(replaced.rescanned.is_some());
         assert_eq!(fact(&replaced), None, "{agent:?} replacement");
     }
+}
+
+/// One question of one choice at a time is a pick a phone can make by the
+/// choice's place, with what the agent says under each choice; a question of
+/// several choices at once, or several questions, is answered by text alone.
+#[test]
+fn one_question_of_one_choice_keeps_each_choice_note_and_is_one_pick() {
+    for agent in [Agent::Claude, Agent::Codex] {
+        let mut session = Session::question(agent);
+        let asked = session.read();
+        session.resume(&asked);
+        session.append(&session.human("one question"));
+        let one = json!([{"question":"어느 쪽으로 할까요?","header":"방식","multiSelect":false,"options":[
+            {"label":"전부 반영","description":"리뷰 4건을 이 PR에서 고칩니다"},
+            {"label":"나눠서"}]}]);
+        session.append(&session.native_question("one", one));
+        let answer: LabelTranscript =
+            serde_json::from_slice(&serde_json::to_vec(&session.read()).unwrap()).unwrap();
+        let content = fact(&answer).unwrap().content.unwrap();
+        assert_eq!(content.choices(), ["전부 반영", "나눠서"]);
+        assert_eq!(content.note(0), Some("리뷰 4건을 이 PR에서 고칩니다"));
+        assert_eq!(content.note(1), None);
+        assert!(content.pick_one(), "{agent:?}");
+
+        let mut several = Session::question(agent);
+        let first = several.read();
+        several.resume(&first);
+        several.append(&several.human("several at once"));
+        let many = json!([{"question":"무엇을 넣을까요?","multiSelect":true,"options":[{"label":"A"},{"label":"B"}]}]);
+        several.append(&several.native_question("many", many));
+        let content = fact(&several.read()).unwrap().content.unwrap();
+        assert!(!content.pick_one(), "{agent:?}");
+        assert_eq!(content.note(0), None);
+    }
+    // Two questions in one call are answered in turn, never by one pick.
+    let two = fact(&Session::question(Agent::Claude).read())
+        .unwrap()
+        .content
+        .unwrap();
+    assert!(!two.pick_one());
 }
 
 #[test]
