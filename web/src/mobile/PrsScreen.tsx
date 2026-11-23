@@ -8,7 +8,7 @@
 // desktop's own rules; this draws them.
 
 import { pullLabel, pullWords } from "../codeHost";
-import { ChevronRightIcon, Loader2Icon } from "lucide-react";
+import { Loader2Icon } from "lucide-react";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
@@ -78,16 +78,19 @@ export function PrsScreen() {
   );
 }
 
-/** One group (B37): its name and count, then its rows in the order the core listed them. */
+/**
+ * One group (B37): its name and count, then its rows in the order the core listed them, set apart by spacing alone (Doop 17).
+ * The group the operator can merge now leads in the warning colour, as 내 차례 leads the agent list; the rest are muted.
+ */
 function Group({ group, entries, showProject }: { group: PrGroup; entries: PrEntry[]; showProject: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
     <section className="px-xl pt-lg" aria-label={`${t(`mobile.prs.group.${group}`)} ${entries.length}`} data-phone-pr-group={group} data-phone-pr-group-count={entries.length}>
-      <h2 className="flex items-center gap-sm pb-xs text-body text-muted-foreground">
+      <h2 className={cn("flex items-center gap-sm pb-xs text-subhead", group === "ready" ? "font-semibold text-warning" : "text-muted-foreground")}>
         <span>{t(`mobile.prs.group.${group}`)}</span>
-        <span className="font-mono font-normal">{entries.length}</span>
+        <span className="font-mono">{entries.length}</span>
       </h2>
-      <ul className="divide-y divide-border border-b border-border">
+      <ul>
         {entries.map((entry) => (
           <li key={entry.pr.key}>
             <Row entry={entry} showProject={showProject} />
@@ -116,7 +119,6 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
         <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
         <span className="shrink-0 font-mono text-body text-subtle-foreground">{pullLabel(pr)}</span>
         <span className="min-w-0 flex-1 truncate text-title font-medium text-foreground">{pr.title}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs pl-[calc(var(--size-pr-icon)+var(--spacing-sm))] text-body">
         <ReasonLine

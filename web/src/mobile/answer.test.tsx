@@ -207,6 +207,20 @@ it("says a command of several lines or one the card cuts is answered in the term
   }
 });
 
+it("names the command a permission's lasting allow keeps allowing, and no command on a card that shows none", async () => {
+  const { container, serve, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
+  const always = () => container.querySelector('[data-phone-ask="permission"] [data-phone-ask-choice="allow_always"]')!.closest("label")!.textContent;
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", messages: [], before: null, running: null });
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "100", since_ms: 100, command: "pnpm --dir site build", command_truncated: false, answerable: true, choices: [{ id: "allow" }, { id: "allow_always" }, { id: "deny" }] } });
+    expect(always()).toBe("Always allow this commandIt won't ask again for the same command");
+    await serve({ type: "ask", device_id: "local", pane_id: "w1:p1", ask: { kind: "permission", turn: "101", since_ms: 101, answerable: true, choices: [{ id: "allow" }, { id: "allow_always" }, { id: "deny" }] } });
+    expect(always()).toBe("Always allowIt won't ask again");
+  } finally {
+    await unmount();
+  }
+});
+
 it("sends the operator to the terminal when the computer refuses a choice because the terminal no longer shows the card's ask", async () => {
   const { container, serve, inputs, unmount } = await openDetail({ answer: true }, agent({ demand: "approval", status_code: "approval", changed_at_unix_ms: 100 }));
   try {
