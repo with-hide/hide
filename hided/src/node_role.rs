@@ -1891,6 +1891,7 @@ mod tests {
                 build: "1.3.0-test".to_owned(),
                 device: "macbook".to_owned(),
                 release: false,
+                name: None,
                 direct: None,
                 relay: None,
                 relay_only: false,

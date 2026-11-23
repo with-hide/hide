@@ -71,6 +71,8 @@ export type AgentsModel = DeskModel & {
   /** Whether the reviewer's file is open in the lane's View, and the core's count of lane calls. */
   viewed: boolean;
   calls: number;
+  /** The pane focus mode draws on the left, its View's chip having asked for it; null while the mode is off. */
+  pair: string | null;
   /** The Explorer shown beside the lane, and its open folders. */
   tool: "explorer" | null;
   expanded: string[];
@@ -112,7 +114,7 @@ function initial(): AgentsModel {
     groups: [{ id: null, name: null, tabs: ["t1", "t2"] }],
     selectedGroup: null, activeTab: "t1", nextId: 4, operations: [],
     stage: 0, times: { 0: Date.now() }, draft: "", draftIn: null, said: [], answer: null,
-    recent: [LEAD, DOCS], closed: [], reopened: null, looked: false, switched: false, viewed: false, calls: 0, tool: null, expanded: [],
+    recent: [LEAD, DOCS], closed: [], reopened: null, looked: false, switched: false, viewed: false, calls: 0, pair: null, tool: null, expanded: [],
   };
 }
 
@@ -250,8 +252,20 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
       let next: AgentsModel = { ...model, ...desk };
       const role = roleOf(pane);
       if (role === "rev" && model.stage === 3) next = { ...next, looked: true };
-      // The row with a View to look at brings the View forward with the pane, which sees it.
-      if (role === "rev" && model.stage === 5 && p.reveal_unseen === true) next = to({ ...next, viewed: true, calls: model.calls + 1 }, 6);
+      // Going to another pane takes focus mode with it, as the core's `follow_pair_focus` does.
+      if (next.pair !== null) next = { ...next, pair: id };
+      return visited(next);
+    }
+    // A View's chip enters focus mode on the agent that opened it with that View in front, which sees it (`pair_view`
+    // with `bring_forward`, operator decision 2026-11-23); with no pane the mode ends.
+    case "pair_view": {
+      if (typeof p.pane_id !== "string") return model.pair === null ? null : { ...model, pair: null };
+      const id = p.pane_id;
+      const pane = model.panes.find((row) => row.id === id);
+      const desk = pane && applyDesk(model, { kind: "focus_pane", payload: { pane_id: id, origin: "operator" } });
+      if (!pane || !desk) return null;
+      let next: AgentsModel = { ...model, ...desk, pair: id };
+      if (roleOf(pane) === "rev" && model.stage === 5 && p.display_id === REVIEW_VIEW) next = to({ ...next, viewed: true, calls: model.calls + 1 }, 6);
       return visited(next);
     }
     case "focus_tab": {
@@ -325,7 +339,8 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
   return agent({ ...common, group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1m", state: rowState("working", true, at) });
 }
 
-const REVIEW_VIEW = "view-review";
+/** The id the desk gives the reviewer's file (`withViewedFile`), which its row's `look` names. */
+const REVIEW_VIEW = "view1";
 const REVIEW_FILE = "review-notes.md";
 const REVIEW_PATH = `${ROOT}/${REVIEW_FILE}`;
 
@@ -407,7 +422,17 @@ const REVIEW: ViewedFile = { path: REVIEW_PATH, label: REVIEW_FILE, contents: NO
 /** The lane as the core draws it: the Explorer beside the View, and the reviewer's notes as the View's one display. */
 function viewOf(model: AgentsModel, view: NonNullable<WorldSnapshot["rest"]["workspace_view"]>): NonNullable<WorldSnapshot["rest"]["workspace_view"]> {
   const lane = { ...view, open: model.tool !== null || model.viewed, tool: model.tool, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view" as const };
-  return model.viewed ? withViewedFile(lane, REVIEW) : lane;
+  const desk = model.viewed ? withViewedFile(lane, REVIEW) : lane;
+  // Focus mode draws its pane beside the desk while the reviewer's file is on it, and alone otherwise (D-53).
+  const tab = model.pair === null ? undefined : model.tabs.find((row) => panesOf(row.root).includes(model.pair!));
+  if (!tab || model.pair === null) return desk;
+  const beside = model.viewed && roleOf(model.panes.find((row) => row.id === model.pair)!) === "rev";
+  return {
+    ...desk,
+    tray: { ...desk.tray, pair: { tab_id: tab.id, pane_id: model.pair, alone: !beside, shown: beside ? 1 : 0, folded: [] } },
+    pair_mode: { on: true, ratio: null },
+    panes_with_views: beside ? [model.pair] : [],
+  };
 }
 
 // --- The snapshot --------------------------------------------------------------------------

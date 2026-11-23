@@ -417,6 +417,31 @@ pub fn name() -> io::Result<String> {
     Ok(name.to_owned())
 }
 
+/// What a person calls the machine, for another machine to show: on macOS
+/// the computer name set in System Settings (`ComputerName`, such as
+/// `작업용 MacBook Pro`), and only when it has none its host name without
+/// the `.local` the local network gives it. Windows and Linux name
+/// themselves by their host name, which is the name set there.
+pub fn computer_name() -> io::Result<String> {
+    if let Some(name) = sys::computer_name() {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Ok(name.to_owned());
+        }
+    }
+    name().map(|name| without_local(&name).to_owned())
+}
+
+/// `name` without the `.local` suffix macOS adds to a host name, unless
+/// nothing would be left.
+fn without_local(name: &str) -> &str {
+    let cut = name.len().saturating_sub(".local".len());
+    match name.get(cut..) {
+        Some(suffix) if cut > 0 && suffix.eq_ignore_ascii_case(".local") => &name[..cut],
+        _ => name,
+    }
+}
+
 /// The machine's own identity, which survives a rename and a reinstall of
 /// Hide: the hardware UUID on macOS (`IOPlatformUUID`), `/etc/machine-id` on
 /// Linux, the `MachineGuid` Windows keeps in its registry.
@@ -675,6 +700,25 @@ mod sys {
         // SAFETY: `first` came from getifaddrs and is freed once.
         unsafe { libc::freeifaddrs(first) };
         Ok(addresses)
+    }
+
+    /// `ComputerName`, as `scutil` reads it from the system's configuration;
+    /// `None` when it is unset or cannot be read.
+    #[cfg(target_os = "macos")]
+    pub(super) fn computer_name() -> Option<String> {
+        let output = std::process::Command::new("/usr/sbin/scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn computer_name() -> Option<String> {
+        None
     }
 
     pub(super) fn name() -> io::Result<String> {
@@ -940,6 +984,10 @@ mod sys {
         ComputerNameDnsHostname, GetComputerNameExW,
     };
 
+    pub(super) fn computer_name() -> Option<String> {
+        None
+    }
+
     pub(super) fn name() -> io::Result<String> {
         let mut buffer = vec![0u16; 256];
         loop {
@@ -1028,5 +1076,20 @@ mod sys {
             ));
         }
         Ok(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_host_name_loses_only_the_local_networks_suffix() {
+        assert_eq!(
+            super::without_local("Work-MacBookPro.local"),
+            "Work-MacBookPro"
+        );
+        assert_eq!(super::without_local("Mac-mini.LOCAL"), "Mac-mini");
+        assert_eq!(super::without_local("build-box"), "build-box");
+        assert_eq!(super::without_local("box.localdomain"), "box.localdomain");
+        assert_eq!(super::without_local(".local"), ".local");
     }
 }

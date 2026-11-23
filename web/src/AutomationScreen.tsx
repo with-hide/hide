@@ -537,7 +537,7 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
       <span className="flex min-w-0 flex-1 items-center gap-xs">
         <RecordWords tone={shown.tone} text={shown.text} />
         {record.kind === "run" ? <RunTags run={record} /> : null}
-        {look && paneId ? <LookChip look={look} onOpen={() => actions.openAgent(paneId, look)} /> : null}
+        {look && paneId ? <LookChip look={look} onOpen={() => actions.openLook(paneId, look)} /> : null}
       </span>
       {record.kind === "run" && record.spend ? <RunSpend spend={record.spend} words={words} /> : null}
     </>

@@ -8,7 +8,7 @@ import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
+import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, withoutLook, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
@@ -55,7 +55,7 @@ import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
 import { toolProjectChoice, toolTaskList } from "./toolCells";
-import { GuestMachineGroups, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
+import { GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
@@ -329,6 +329,8 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         </Fragment>
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      {/* Another machine's panes started in this project's folders end its section (PRD device-connect-iroh B10). */}
+      {!tool && view === "project" && group.project ? <ul className="flex min-w-0 flex-col"><GuestProjectRows projectId={group.project.id} actions={actions} /></ul> : null}
       {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
       {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} treeIndent /></ul> : null}
     </section>
@@ -340,13 +342,15 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // stay, stacked under the ones already passed, so a scrolled list still says what
   // is above it and pressing a head goes back to its rows.
   const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
+  // In 프로젝트별 another machine's panes end the section of the project that holds them; the rest keep their machine's group.
+  const sectionProjects = new Set(sections.flatMap(({ group }) => (group.project ? [group.project.id] : [])));
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
       <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
         {peerOnly("needs_you")}
         {peerOnly("done")}
         {sections.map(drawSection)}
-        {tool ? null : <ul className="flex min-w-0 flex-col"><GuestMachineGroups actions={actions} /></ul>}
+        {tool ? null : <ul className="flex min-w-0 flex-col"><GuestMachineGroups actions={actions} projects={view === "project" ? sectionProjects : null} /></ul>}
         {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
       </div>
     </div>
@@ -781,8 +785,9 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn, agent.request?.pull_requests), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
-  // What it opened rides its own chip where the row's line says something else, an ask or a run's result (operator decision 2026-11-21).
-  const look = card.state === "needs_you" && agent.mark !== "look" ? agent.look : undefined;
+  // What it opened rides its own chip, which opens it in focus mode, under whatever the line says: an ask, a run's result
+  // or the agent's own line (operator decisions 2026-11-21, 2026-11-23).
+  const look = agent.look ?? undefined;
   if (!parts && !(showProject && project) && !tool && !origin && !look) return null;
   // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
   const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
@@ -795,7 +800,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
-      {look ? <div className={cn(indent, "flex min-w-0")}><LookChip look={look} onOpen={() => actions.openAgent(agent.pane_id, look)} /></div> : null}
+      {look ? <div className={cn(indent, "flex min-w-0")}><LookChip look={look} onOpen={() => actions.openLook(agent.pane_id, look)} /></div> : null}
     </>
   );
 }
@@ -805,16 +810,18 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
  * B29, B31): a sleeping row has none, a waking, failed or unknown one says its
  * state, a waiting ring leads with 대기 and its cause, a stop leads with how
  * it ended and keeps the tail of what it left running (background tasks,
- * children still working); work in progress says its sentence.
+ * children still working); work in progress says its sentence. A View to
+ * look at is never the line: its chip under the line names and counts it
+ * (operator decision 2026-11-23).
  */
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
   if (own === null) return null;
-  // A row whose move is to look says the View, as the sidebar's does (`sidebarLine`): an external tool's
-  // question on the same row is the tool's, so it is no line of the operator's (PRD hide-external-control B29).
-  const looking = agent.mark === "look" && agent.look ? { text: agent.look.label, mode: "request" as const, look: agent.look.count } : null;
-  const row = own ?? looking ?? rowLine(agent);
-  if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, agent, row!);
+  const row = own ?? rowLine(agent);
+  // The eye outranks a request on the line, an external tool's question, which is no line of the operator's (PRD
+  // hide-external-control B29): the row says nothing beside its chip.
+  if (!own && agent.mark === "look" && row?.mode === "request") return null;
+  if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, withoutLook(agent), row!);
   const text = agent.state.session.line;
   if (!text) return null;
   return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: leftTail(t, agent) };
@@ -880,8 +887,12 @@ function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
   const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
-  if (!parts) return null;
-  return <div className={cn(indent, "flex min-w-0 text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /></div>;
+  const look = child.look ?? undefined;
+  if (!parts && !look) return null;
+  return <>
+    {parts ? <div className={cn(indent, "flex min-w-0 text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /></div> : null}
+    {look ? <div className={cn(indent, "flex min-w-0")}><LookChip look={look} onOpen={() => actions.openLook(child.pane_id, look)} /></div> : null}
+  </>;
 }
 
 /** Past five siblings, the rest wait behind one line at their depth (B10). */

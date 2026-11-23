@@ -2223,6 +2223,45 @@ fn a_pane_in_no_agent_tab_is_refused_pair_view() {
     assert!(!mode_on(&runtime));
 }
 
+/// Operator decision 2026-11-23: a View's chip in a list enters focus mode on
+/// the pane of the agent that opened it, with that View in front of its desk,
+/// from wherever the operator is. Its Workspace comes forward in the same
+/// event; without `bring_forward` nothing moves.
+#[test]
+fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_front() {
+    let (mut runtime, directory) = setup_never_front("pair-chip");
+    let pane = "w-order:t2:p";
+    open_file_result(&mut runtime, pane, &directory, "a.md", "chip-a");
+    let opened = open_file_result(&mut runtime, pane, &directory, "c.md", "chip-c");
+    let ask = |runtime: &mut Runtime, bring: bool| {
+        runtime.dispatch_json(&explorer_event(
+            "pair_view",
+            serde_json::json!({"pane_id": pane, "display_id": opened.view_id, "bring_forward": bring}),
+        ));
+    };
+
+    ask(&mut runtime, false);
+    assert!(
+        !runtime.pair_mode_on(),
+        "a pane of a Workspace not in front"
+    );
+
+    ask(&mut runtime, true);
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        runtime.front_workspace_key(),
+        Some(key(&directory)),
+        "the pane's Workspace in front"
+    );
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], pane)));
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["c.md"],
+        "the View the chip named, not the newest"
+    );
+    assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(pane));
+}
+
 /// The desk tab the published snapshot shows in front.
 fn front_display(runtime: &Runtime) -> &crate::model::ViewDisplaySnapshot {
     fn find(node: &crate::model::ViewNodeSnapshot) -> Option<&crate::model::ViewDisplaySnapshot> {

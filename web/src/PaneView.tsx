@@ -167,6 +167,7 @@ export const PaneView = memo(function PaneView({
   local = true,
   keysStayOnDesk = false,
   entryInput = null,
+  entryKeys = "pane",
   offline = false,
   owned = false,
 }: {
@@ -191,8 +192,10 @@ export const PaneView = memo(function PaneView({
   local?: boolean;
   /** Pair view's left pane taken while pair view was on screen: a desk the keys are on keeps them (D-09). */
   keysStayOnDesk?: boolean;
-  /** For the pane focus mode was asked for: the keyboard's input count then; arriving, it takes the keys only while the operator has not moved them since (`pairEntryInput`). */
+  /** For the pane focus mode was asked for: the keyboard's input count then; arriving, it takes the keys only while the operator has not moved them since (`pairEntry`). */
   entryInput?: number | null;
+  /** For that pane: `desk` when a View's chip asked for focus mode, so the View takes the keys and the pane leaves them (`pairEntry`). */
+  entryKeys?: "pane" | "desk";
   /** True while that device's connection is down. */
   offline?: boolean;
   /** True where a screen owns the pane's life, as an automation's run terminal (PRD automations B16): its head carries no ⋯ menu and no ✕. */
@@ -330,8 +333,10 @@ export const PaneView = memo(function PaneView({
     if (keysStayOnDesk && keyboardCommandOwner().kind === "view") return;
     // Focus mode arrives with the core's answer: a desk tab or page the operator pressed after asking keeps the keys.
     if (entryInput !== null && keyboardInputRevision() !== entryInput) return;
+    // A View's chip asked for focus mode on that View, which takes the keys itself (`viewFocusRequest`).
+    if (entryKeys === "desk") return;
     focusTerminal(paneId);
-  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput]);
+  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput, entryKeys]);
 
   // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
   // runs in the capture phase, before xterm's textarea sees the event.

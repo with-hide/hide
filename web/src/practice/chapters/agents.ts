@@ -9,8 +9,8 @@ import { AGENTS_WORLD, besideLead, inReviewer, LEAD, REV, reopenedAsClosed, show
 
 const pane = (id: string) => `[data-pane-view="${id}"]`;
 const row = (id: string) => `[data-task-row="${id}"]`;
-/** The reviewer's row, or, once it was closed and reopened, the row of the pane that brought it back (`ag<n>`). */
-const REVIEWER_ROW = `${row(REV)}, [data-task-row^="ag"]`;
+/** The chip under the reviewer's row, or, once it was closed and reopened, under the row of the pane that brought it back (`ag<n>`). */
+const REVIEWER_CHIP = `${row(REV)} [data-look-chip], [data-task-row^="ag"] [data-look-chip]`;
 const say = (pane: string, text: string) => ({ type: { pane, text } });
 
 export default chapter<AgentsModel>({
@@ -35,8 +35,8 @@ export default chapter<AgentsModel>({
     { id: "close", quest: true, target: pane(REV), side: "inside", command: "close_tab", done: (model) => model.closed.length > 0 },
     { id: "reopen", quest: true, target: "[data-agent-area]", side: "inside", command: "reopen_closed_tab", done: reopenedAsClosed },
     { id: "switch", quest: true, target: "[data-agent-area]", side: "inside", command: "recent_area_tab", done: (model) => model.switched && !inReviewer(model) },
-    // The row marked 볼 것 brings the agent and the file it opened forward in the lane.
-    { id: "look", quest: true, target: REVIEWER_ROW, side: "right", gesture: { click: true }, done: (model) => model.viewed },
+    // The file under the row marked 볼 것 opens in focus mode beside the agent that opened it; the row goes to the agent only.
+    { id: "look", quest: true, target: REVIEWER_CHIP, side: "right", gesture: { click: true }, done: (model) => model.viewed },
     { id: "changes", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
   ],
 });

@@ -15,7 +15,7 @@
 //! [`MAX_PANES`] panes, each under an id a list carries; a pane past that
 //! is not listed and its output goes nowhere.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -69,6 +69,11 @@ struct State {
     /// The connection the reader of that number serves; a later attach
     /// takes its place.
     connection: u64,
+    /// The names the guest's core last told, by the node's pane ids, so a
+    /// pane the node lists after the names came is named as it joins;
+    /// `None` until the core tells any after this daemon started, and the
+    /// names `panes.json` kept stand until it does.
+    told: Option<HashMap<String, String>>,
 }
 
 impl State {
@@ -86,11 +91,15 @@ impl State {
         self.panes.insert(
             pane.pane.clone(),
             Pane {
-                pane: pane.pane,
                 rows: pane.rows,
                 cols: pane.cols,
                 since_unix_ms: now,
                 folder: None,
+                name: self
+                    .told
+                    .as_ref()
+                    .and_then(|told| told.get(&pane.pane).cloned()),
+                pane: pane.pane,
             },
         );
         true
@@ -160,6 +169,29 @@ impl GuestTap {
     /// The guest's panes on this machine, as last seen.
     pub fn panes(&self) -> Vec<Pane> {
         lock(&self.state).panes.values().cloned().collect()
+    }
+
+    /// Names the guest's panes as its core told them, whole (B10): a pane
+    /// the list leaves out has no name, and a pane the node lists later
+    /// takes its name as it joins. Kept in `panes.json`, so the names stand
+    /// while the guest is away.
+    pub fn name(&self, names: &HashMap<String, String>) {
+        let mut state = lock(&self.state);
+        state.told = Some(names.clone());
+        let mut changed = false;
+        for (pane, known) in &mut state.panes {
+            let name = names.get(pane);
+            if known.name.as_ref() != name {
+                known.name = name.cloned();
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        self.save(&state);
+        drop(state);
+        (self.changed)();
     }
 
     fn record(&self, kind: &str, extra: serde_json::Value) {
@@ -252,6 +284,7 @@ impl GuestTap {
             ToHost::Welcome { panes, .. } => {
                 let mut state = lock(&self.state);
                 let earlier = std::mem::take(&mut state.panes);
+                let told = state.told.is_some();
                 let now = now_unix_ms();
                 let mut unlisted = 0usize;
                 for pane in panes {
@@ -264,11 +297,15 @@ impl GuestTap {
                         continue;
                     }
                     // The folder a pane was started in does not change: it
-                    // is kept until the node says it again.
+                    // is kept until the node says it again, and so is the
+                    // name the file kept while the core has told none.
                     if let (Some(known), Some(earlier)) =
                         (state.panes.get_mut(&name), earlier.get(&name))
                     {
                         known.folder.clone_from(&earlier.folder);
+                        if !told {
+                            known.name.clone_from(&earlier.name);
+                        }
                     }
                 }
                 let gone: Vec<String> = earlier
@@ -276,7 +313,12 @@ impl GuestTap {
                     .filter(|pane| !state.panes.contains_key(*pane))
                     .cloned()
                     .collect();
-                let joined = state.panes.keys().any(|pane| !earlier.contains_key(pane));
+                // A pane that joined, or one whose name moved with it.
+                let joined = state.panes.iter().any(|(pane, known)| {
+                    earlier
+                        .get(pane)
+                        .is_none_or(|earlier| earlier.name != known.name)
+                });
                 self.save(&state);
                 drop(state);
                 if unlisted > 0 {
@@ -744,6 +786,104 @@ pub(crate) mod tests {
             Some(folder),
             "the folder is the file's too"
         );
+    }
+
+    fn names(tap: &GuestTap) -> Vec<(String, Option<String>)> {
+        tap.panes()
+            .into_iter()
+            .map(|pane| (pane.pane, pane.name))
+            .collect()
+    }
+
+    fn told(names: &[(&str, &str)]) -> HashMap<String, String> {
+        names
+            .iter()
+            .map(|(pane, name)| ((*pane).to_owned(), (*name).to_owned()))
+            .collect()
+    }
+
+    /// B10: a pane reads by the name the guest's core told, whether the
+    /// name came before the node listed the pane or after; the file keeps
+    /// the names while the guest is away and through a new welcome, and a
+    /// pane the next list leaves out loses its name.
+    #[test]
+    fn a_guests_panes_take_the_names_its_core_told_and_keep_them_while_it_is_away() {
+        let root = short_root();
+        let file = root.path().join("h").join(panes::FILE);
+        let endpoint = root.path().join("tap.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        let (tap, _drawn, changed) = tap(&file);
+        tap.attach(&endpoint);
+        let mut node = listener.accept().unwrap();
+        heard(&mut node);
+        say(
+            &mut node,
+            &ToHost::Welcome {
+                version: tap::NEWEST_TAP,
+                panes: vec![size("w1:p1", 24, 80)],
+            },
+        );
+        changed.recv_timeout(WITHIN).expect("the list changed");
+
+        tap.name(&told(&[("w1:p1", "로그인 고치기"), ("w1:p2", "배포 확인")]));
+        changed.recv_timeout(WITHIN).expect("a name was told");
+        assert_eq!(
+            names(&tap),
+            [("w1:p1".to_owned(), Some("로그인 고치기".to_owned()))]
+        );
+        // The node lists the pane after its name came.
+        say(&mut node, &ToHost::Pane(size("w1:p2", 24, 80)));
+        changed.recv_timeout(WITHIN).expect("a pane joined");
+        let both = [
+            ("w1:p1".to_owned(), Some("로그인 고치기".to_owned())),
+            ("w1:p2".to_owned(), Some("배포 확인".to_owned())),
+        ];
+        assert_eq!(names(&tap), both);
+        tap.name(&told(&[("w1:p1", "로그인 고치기"), ("w1:p2", "배포 확인")]));
+        assert!(changed.try_recv().is_err(), "the same names are no change");
+
+        // The guest is away and this daemon starts again: the file's names
+        // stand, through the welcome of the node that comes back.
+        tap.detach();
+        let (again, _drawn, changed) = self::tap(&file);
+        assert_eq!(names(&again), both);
+        let endpoint = root.path().join("tap-2.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        again.attach(&endpoint);
+        let mut node = listener.accept().unwrap();
+        heard(&mut node);
+        say(
+            &mut node,
+            &ToHost::Welcome {
+                version: tap::NEWEST_TAP,
+                panes: vec![
+                    size("w1:p1", 24, 80),
+                    size("w1:p2", 24, 80),
+                    size("w1:p3", 24, 80),
+                ],
+            },
+        );
+        changed.recv_timeout(WITHIN).expect("a pane joined");
+        assert_eq!(
+            names(&again),
+            [
+                ("w1:p1".to_owned(), Some("로그인 고치기".to_owned())),
+                ("w1:p2".to_owned(), Some("배포 확인".to_owned())),
+                ("w1:p3".to_owned(), None),
+            ]
+        );
+
+        // The core's next list is whole: a pane it leaves out has no name.
+        again.name(&told(&[("w1:p2", "배포 다시 확인")]));
+        changed.recv_timeout(WITHIN).expect("a name moved");
+        let renamed = [
+            ("w1:p1".to_owned(), None),
+            ("w1:p2".to_owned(), Some("배포 다시 확인".to_owned())),
+            ("w1:p3".to_owned(), None),
+        ];
+        assert_eq!(names(&again), renamed);
+        let (read, _drawn, _changed) = self::tap(&file);
+        assert_eq!(names(&read), renamed, "the file holds the names told");
     }
 
     #[test]
