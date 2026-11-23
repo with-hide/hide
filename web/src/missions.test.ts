@@ -452,11 +452,12 @@ describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
     expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "nodes", keys: ["core:c1"] } }, null, t)?.text).toBe("waiting for #1703 c1");
     expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } }, null, t)?.text).toBe("can start · stacked on core");
     const outside = node("x", { kind: "wait", delivery: null, external: { pr: 1232 }, status: "planned" });
-    expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
-    expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
-    expect(cardLine(m, { ...outside, status: "working", attention: raised("conductor", "pr_closed", 1232) }, null, t)).toEqual({ text: "Closed without merge", attention: true });
-    // Finished, it still says where it ended (B19).
-    expect(cardLine(m, { ...outside, status: "done" }, null, t)).toEqual({ text: "In main", attention: false });
+    // A waiting node reads as its card does: the condition, then its foot (option A of the operator's decision on pull request 2848).
+    expect(cardLine(m, outside, null, t)).toEqual({ text: `if #${1232} merges`, attention: false });
+    expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe(`if #${1232} merges · couldn't check · reading again`);
+    expect(cardLine(m, { ...outside, status: "working", wait_outcome: "closed_unmerged", attention: raised("conductor", "pr_closed", 1232) }, null, t)).toEqual({ text: `if #${1232} merges · closed without merge · Conductor's turn`, attention: true });
+    // Finished, it still says what it waited for (B19).
+    expect(cardLine(m, { ...outside, status: "done" }, null, t)).toEqual({ text: `if #${1232} merges · met`, attention: false });
     expect(cardLine(m, node("d", { status: "done", pr: 9, pr_state: "mergeable" }), null, t)).toBeNull();
   });
 });
@@ -614,7 +615,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
     for (const why of contract.mission_fix_reason) expect(english).toHaveProperty(`mission.fix.${why}`);
     for (const kind of contract.mission_event_kind as MissionEvent["kind"][]) expect(eventWords({ at_unix_ms: 1, kind, node: "n" }, t).what).not.toBe("");
-    expect(attentionWords(node("n", { attention: raised("conductor", "pr_closed", 12) }), t)).toEqual({ who: "Conductor", why: "PR #12 closed without a merge" });
+    expect(attentionWords(node("n", { attention: raised("conductor", "pr_closed", 12) }), t)).toEqual({ who: "Conductor's turn", why: "PR #12 closed without a merge" });
     expect(attentionWords(node("n"), t)).toBeNull();
   });
 

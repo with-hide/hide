@@ -5,13 +5,13 @@ import { useMinuteClock } from "../components/elapsed";
 import { OperatorBand } from "../components/mission-gate";
 import { NodeWaitLine, useWaitWords } from "../components/mission-hold";
 import { MissionGraphCard, MissionGraphReport } from "../components/mission-graph-card";
-import { BranchLineView, ResultLineView, WaitingMark, WaitLineView } from "../components/mission-line";
+import { BranchLineView, ResultLineView, WaitCardLines, WaitStateMark } from "../components/mission-line";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
-import { branchLine, branchLineWords, resultLine, resultLineWords, waitLeft, waitLine as targetLine, waitLineWords } from "../missionLine";
+import { branchLine, branchLineWords, resultLine, resultLineWords, waitCard, waitCardWords } from "../missionLine";
 import { gateWaitedLong, holdReason } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
@@ -75,12 +75,10 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const long = gateWaitedLong(gate, minute);
   const agent = usePhone((s) => node.agent && agentOf(s.groups, node.agent) ? node.agent : null);
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
-  // An outside step a Mac before destinations sent with nothing it watches has no line: a lone mark would say nothing (B60).
-  const branch = useMemo(() => line.kind === "wait" && !line.external ? null : branchLine(line, mission.destination ?? null), [line, mission.destination]);
-  // A waiting step on CI, another mission or a node of one says what it waits on in the branch line's place, as on the desktop (PRD core-wait B22).
-  const target = useMemo(() => targetLine(line), [line]);
-  const result = branch || target ? null : resultLine(line);
-  const left = waitLeft(line, minute);
+  const branch = useMemo(() => branchLine(line, mission.destination ?? null), [line, mission.destination]);
+  // A waiting step says what it waits for and how that stands, as the desktop's card does (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait B22); a step a Mac before waits sent with nothing it watches has none.
+  const waits = useMemo(() => waitCard(line, minute), [line, minute]);
+  const result = branch || waits || line.kind === "wait" ? null : resultLine(line);
   // `내 차례` stands at the right end of the line's first row as the desktop's marks do (D-56); a long wait's words give way first, the tag's own word never.
   const marks = turn ? (
     <span className="flex min-w-0 items-center justify-end gap-x-xs overflow-hidden" data-node-foot-end="true">
@@ -95,12 +93,12 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
     <div data-dependency-node={node.key} className="flex">
       <MissionGraphCard
         node={node} look={look} word={word} yours={mergeDue || turn} pace={pace}
+        mark={waits ? <WaitStateMark state={waits.state} label={word} /> : undefined}
         aria-label={[
           node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, asleep, detail, waitLine?.full ?? null,
           // The lines are drawn for the eye, so their words and states are said here (B28).
           branch ? `${t("mission.foot.where")}: ${branchLineWords(branch, t)}` : null,
-          target ? waitLineWords(target, t) : null,
-          left ? ("expired" in left ? t("mission.wait.failed.expired") : t("mission.wait.left", { hours: String(left.hours) })) : null,
+          waits ? waitCardWords(waits, t) : null,
           result ? resultLineWords(result, t) : null,
           gate ? `${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}` : null,
           mergeDue && !branch?.person ? t("mission.merge.turn") : null,
@@ -110,10 +108,6 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       >
         <OperatorBand gate={gate} mergeDue={mergeDue} />
         {gate?.state === "passed" && gate.via ? <span className="text-caption text-muted-foreground" data-phone-node-gate-via={gate.via}>{t(`mission.gate.via.${gate.via}`)}{gate.said ? ` · “${gate.said}”` : ""}</span> : null}
-        {/* A waiting step has no worker and says `⏳ 기다림` in its place, as the desktop's card does (PRD node-presets D-13). */}
-        {node.kind === "wait" ? (
-          <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run="waiting"><WaitingMark left={left} /></span>
-        ) : null}
         {node.worker_agent ? (
           <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run="worker">
             <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={node.worker_agent} /></span>
@@ -123,10 +117,11 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
         {stopped ? <span className="truncate text-caption text-mission-stopped" data-node-work={node.work?.state}>{stopped}</span> : null}
         {asleep ? <span className="truncate text-caption text-muted-foreground" data-node-work="asleep">{asleep}</span> : null}
         {node.wait && waitLine ? <NodeWaitLine wait={node.wait} words={waitLine} /> : null}
-        {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
-        {branch || target || result || marks ? (
-          <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch || target ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
-            {branch ? <BranchLineView line={branch} end={marks} /> : target ? <WaitLineView line={target} end={marks} /> : (
+        {/* A waiting step's foot says how its wait failed and whose turn that is, so the reason is not said twice. */}
+        {detail && !waits ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
+        {waits ? <WaitCardLines card={waits} /> : branch || result || marks ? (
+          <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
+            {branch ? <BranchLineView line={branch} end={marks} /> : (
               <>
                 {result ? <ResultLineView line={result} className="flex-1" /> : null}
                 {marks}

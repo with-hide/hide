@@ -16,11 +16,12 @@
 // accessible name says these words; the line itself is for the eye.
 
 import type { ReactNode } from "react";
-import { ChevronRightIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, WaypointsIcon, type LucideIcon } from "lucide-react";
+import { ChevronRightIcon, CircleCheckIcon, CircleHelpIcon, CircleXIcon, ClockIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, ListChecksIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, WaypointsIcon, WorkflowIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { linePrLabel, lineToLabel, lineToWords, resultLineWords, waitFailureWords, waitLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone, type WaitFailure, type WaitLine } from "../missionLine";
+import { linePrLabel, lineToLabel, lineToWords, resultLineWords, waitConditionWords, waitFailureWords, waitTurnWords, type BranchLine, type LineMark, type ResultLine, type ResultTone, type WaitCard, type WaitState } from "../missionLine";
 import { PR_LOOK } from "../prMark";
+import { ProgressCells } from "./mission-tone";
 import type { MissionNodePreset, PrState } from "../snapshot";
 
 /** A mark the PR list does not draw: a branch before any pull request, one not read yet, and a planned node's faint marks. */
@@ -33,12 +34,6 @@ const OWN_MARK: Record<Exclude<LineMark, keyof typeof PR_LOOK>, { icon: LucideIc
 
 function markLook(mark: LineMark): { icon: LucideIcon; tone: string } {
   return mark in PR_LOOK ? PR_LOOK[mark as keyof typeof PR_LOOK] : OWN_MARK[mark as keyof typeof OWN_MARK];
-}
-
-/** How a waiting node failed, in the failed tone after either line, never giving way (PRD core-wait D-17, B4). */
-function FailedWord({ failed }: { failed: WaitFailure | null }) {
-  const { t } = useInterfaceTranslation();
-  return failed ? <span className="shrink-0 whitespace-nowrap font-normal text-mission-failed" data-wait-failed-word="true">· {waitFailureWords(failed, t)}</span> : null;
 }
 
 /** The person before the destination (D-53): faint orange ahead, yellow when the merge is the operator's now, grey after. */
@@ -54,7 +49,7 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
   const plan = line.plan ? t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : null;
   // A direct change's `PR 없이` follows the destination's name, or the branch when there is none, and never gives way.
   const direct = (after: boolean) => (line.direct ? <span className="shrink-0 font-normal text-muted-foreground" data-line-direct="true">{after ? "· " : ""}{t("mission.foot.planDirect")}</span> : null);
-  const from = plan != null || line.branch != null || (line.to == null && (line.direct || line.failed != null));
+  const from = plan != null || line.branch != null || (line.direct && line.to == null);
   const icon = <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
   const to = (full: boolean) =>
     line.to ? (
@@ -64,7 +59,6 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
         {line.to.kind === "stack" ? <StackMark state={line.to.state} /> : null}
         <span className={cn(full ? "break-all" : "min-w-0 truncate", line.to.kind === "stack" && "font-normal tabular-nums text-muted-foreground")} title={full ? undefined : lineToWords(line.to, t)}>{lineToLabel(line.to)}</span>
         {direct(true)}
-        <FailedWord failed={line.failed} />
       </span>
     ) : null;
   // A line runs inline when its head (the number, or the icon of a line without one that has marks) holds the first row
@@ -79,18 +73,16 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
           {plan ? <span className="min-w-0 truncate" data-line-plan={line.plan}>{plan}</span> : null}
           {line.branch ? (
             <span className="min-w-0 truncate" title={line.branch.name} data-line-branch={line.branch.name}>
-              {line.branch.outside ? "↗ " : ""}
               {line.branch.name}
             </span>
           ) : null}
           {line.to ? null : direct(line.branch != null)}
-          {line.to ? null : <FailedWord failed={line.failed} />}
         </span>
       ) : null}
       {to(false)}
     </span>
   );
-  const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined, "data-wait-failed": line.failed ?? undefined };
+  const data = { "data-node-line": "branch", "data-line-mark": line.mark, "data-line-person": line.person ?? undefined };
   const number = line.pr ? <span className="text-foreground tabular-nums" data-line-pr={line.pr.number}>{linePrLabel(line.pr)}</span> : null;
   if (whole) {
     return (
@@ -102,16 +94,10 @@ export function BranchLineView({ line, end, whole = false, className }: { line: 
         {plan ? <span data-line-plan={line.plan}>{plan}</span> : null}
         {line.branch ? (
           <span className="break-all" data-line-branch={line.branch.name}>
-            {line.branch.outside ? "↗ " : ""}
             {line.branch.name}
           </span>
         ) : null}
-        {line.to ? to(true) : (
-          <>
-            {direct(line.branch != null)}
-            <FailedWord failed={line.failed} />
-          </>
-        )}
+        {line.to ? to(true) : direct(line.branch != null)}
       </span>
     );
   }
@@ -185,48 +171,85 @@ export function ResultLineView({ line, whole = false, className }: { line: Resul
   );
 }
 
-/**
- * A waiting node's place for a worker on the desktop's card and the phone's (PRD node-presets D-13, B12): an hourglass and `기다림`,
- * since Hide, not an agent, watches what it waits on; then `· 5시간 남음` under a day before its deadline and `· 기한 지남` past it
- * (PRD core-wait D-15, B8), the latter in the failed tone.
- */
-export function WaitingMark({ left = null }: { left?: { expired: true } | { hours: number } | null }) {
-  const { t } = useInterfaceTranslation();
+/** A waiting node's head mark in the ring's place (option A, operator decision on with-hide/hide pull request 2848): an hourglass while it waits, a question mark in the same colour while a read could not say, a green check once met, a red X once failed. */
+const WAIT_STATE_MARK: Record<WaitState, { icon: LucideIcon; tone: string }> = {
+  waiting: { icon: HourglassIcon, tone: "text-mission-hold" },
+  unread: { icon: CircleHelpIcon, tone: "text-mission-hold" },
+  met: { icon: CircleCheckIcon, tone: "text-mission-done" },
+  failed: { icon: CircleXIcon, tone: "text-mission-failed" },
+};
+
+/** `label` is the card's state word, which a screen reader says. */
+export function WaitStateMark({ state, label }: { state: WaitState; label: string }) {
+  const { icon: Icon, tone } = WAIT_STATE_MARK[state];
   return (
-    <span className="flex shrink-0 items-center gap-xxs" data-node-waiting="true">
-      <HourglassIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-      {t("mission.kind.external")}
-      {left ? (
-        <span className={cn("whitespace-nowrap", "expired" in left && "text-mission-failed")} data-node-wait-left={"expired" in left ? "expired" : left.hours}>
-          · {"expired" in left ? t("mission.wait.failed.expired") : t("mission.wait.left", { hours: String(left.hours) })}
-        </span>
-      ) : null}
+    <span className="flex shrink-0" role="img" aria-label={label} data-node-wait-state={state}>
+      <Icon aria-hidden="true" className={cn("size-(--size-icon-sm)", tone)} />
     </span>
   );
 }
 
+/** The icon of what a waiting node waits on; a pull request's and its CI's in the colour of the state its code host last answered. */
+function aimLook(card: WaitCard): { icon: LucideIcon; tone: string } {
+  const aim = card.aim;
+  switch (aim.kind) {
+    case "pr":
+      return markLook(aim.mark);
+    case "ci":
+      return { icon: ListChecksIcon, tone: markLook(aim.mark).tone };
+    case "branch":
+      return { icon: GitBranchIcon, tone: "text-muted-foreground" };
+    case "mission":
+      return { icon: WaypointsIcon, tone: "text-muted-foreground" };
+    case "node":
+      return { icon: WorkflowIcon, tone: "text-muted-foreground" };
+  }
+}
+
 /**
- * A waiting node's line for its CI, another mission or a node of one (PRD core-wait D-15-D-17): the pull request's mark and its
- * number as its code host writes it then `CI 끝나면`; the mission mark and its id then its progress `끝 2/7` or the node's key;
- * and how it failed, in the failed tone. `end` is the foot's right-end marks, as for the branch line.
+ * A waiting node's card under its head (option A, operator decision on
+ * with-hide/hide pull request 2848; PRD core-wait D-15-D-17, B4-B8): the
+ * condition it waits for, always, in the foreground while it waits and muted
+ * once met or failed; then a foot only when it has something: a waited
+ * mission's progress, the hours left under a day at the right, `끝남` once
+ * met, how it failed with whose turn that is at the right, or `확인 못 함`
+ * while a read could not say. The card's accessible name says these words.
  */
-export function WaitLineView({ line, end, className }: { line: WaitLine; end?: ReactNode; className?: string }) {
+export function WaitCardLines({ card }: { card: WaitCard }) {
   const { t } = useInterfaceTranslation();
-  const icon = line.kind === "ci" ? (() => {
-    const { icon: Icon, tone } = markLook(line.mark);
-    return <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
-  })() : <WaypointsIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-line-icon="mission" />;
-  const lead = line.kind === "ci" ? `↗${line.pr}` : line.mission;
-  const after = line.kind === "ci" ? t("mission.wait.ci") : line.kind === "mission" ? (line.progress ? t("mission.wait.progress", { done: String(line.progress.done), total: String(line.progress.total) }) : null) : line.node;
+  const open = card.state === "waiting" || card.state === "unread";
+  const { icon: Icon, tone } = aimLook(card);
+  const condition = waitConditionWords(card.aim, t);
+  const progress = open ? card.progress : null;
+  const foot = progress || (open && card.left != null) || card.state !== "waiting";
   return (
-    <span className={cn("flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground", className)} title={waitLineWords(line, t)} data-node-line="wait" data-wait-kind={line.kind} data-wait-failed={line.failed ?? undefined}>
-      <span aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-xxs">
-        {icon}
-        <span className={cn("shrink-0 tabular-nums", line.kind === "ci" ? "text-foreground" : "text-subtle-foreground")}>{lead}</span>
-        {after ? <span className={cn("min-w-0 truncate", line.kind === "node" && "text-subtle-foreground")}>· {after}</span> : null}
-        <FailedWord failed={line.failed} />
+    <>
+      <span aria-hidden="true" className="flex min-w-0 items-center gap-xs text-caption" data-node-line="wait" data-wait-kind={card.aim.kind}>
+        <Icon className={cn("size-(--size-icon-sm) shrink-0", card.state === "met" ? "text-muted-foreground" : tone)} data-line-icon={card.aim.kind} />
+        <span className={cn("min-w-0 truncate", open ? "text-foreground" : "text-muted-foreground")} title={condition} data-wait-condition="true">{condition}</span>
       </span>
-      {end}
-    </span>
+      {foot ? (
+        <span aria-hidden="true" className="flex min-w-0 items-center gap-xs border-t border-border pt-xs text-caption text-muted-foreground" data-node-foot="true" data-wait-foot={card.state}>
+          {progress ? (
+            <>
+              <ProgressCells tones={Array.from({ length: progress.total }, (_, at) => (at < progress.done ? "done" : "waiting"))} size="chip" />
+              <span className="shrink-0 tabular-nums" data-wait-progress="true">{t("mission.wait.progress", { done: String(progress.done), total: String(progress.total) })}</span>
+            </>
+          ) : null}
+          {card.state === "unread" ? <span className="min-w-0 truncate text-mission-hold" data-wait-unread="true">{t("mission.wait.unread")}</span> : null}
+          {card.state === "met" ? <span className="text-mission-done" data-wait-met="true">{t("mission.wait.met")}</span> : null}
+          {card.failure ? <span className="min-w-0 truncate text-mission-failed" data-wait-failed={card.failure.reason}>{waitFailureWords(card.failure, t)}</span> : null}
+          {open && card.left != null ? (
+            <span className="ml-auto flex shrink-0 items-center gap-xxs whitespace-nowrap text-mission-hold" data-wait-left={card.left}>
+              <ClockIcon className="size-(--size-icon-sm) shrink-0" />
+              {t("mission.wait.left", { hours: String(card.left) })}
+            </span>
+          ) : null}
+          {card.turn ? (
+            <span className={cn("ml-auto shrink-0 whitespace-nowrap", card.turn === "operator" ? "font-semibold text-mission-hold" : "text-foreground")} data-wait-turn={card.turn}>{waitTurnWords(card.turn, t)}</span>
+          ) : null}
+        </span>
+      ) : null}
+    </>
   );
 }

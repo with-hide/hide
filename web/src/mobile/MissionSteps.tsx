@@ -12,7 +12,7 @@ import { StatusMark } from "../components/status-mark";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { branchLine, linePrLabel, lineToWords, resultLine, resultLineWords, waitFailureWords, waitLine, waitLineWords } from "../missionLine";
+import { branchLine, linePrLabel, lineToWords, resultLine, resultLineWords, waitCard, waitCardWords, waitFootWords } from "../missionLine";
 import { PR_LOOK } from "../prMark";
 import type { PrState } from "../snapshot";
 import { statusText } from "../agentStatus";
@@ -56,10 +56,10 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
   // How long its worker has worked counts only while it works: a stopped or sleeping step's start says nothing of now.
   const elapsed = useElapsed(working ? node.worked_at_unix_ms : null);
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
-  const branch = useMemo(() => (line.kind === "wait" && !line.external ? null : branchLine(line, mission.destination ?? null)), [line, mission.destination]);
-  // A waiting step on CI, another mission or a node of one says what it waits on, as its map card does (PRD core-wait D-15, D-16).
-  const target = useMemo(() => waitLine(line), [line]);
-  const result = branch || target ? null : resultLine(line);
+  const branch = useMemo(() => branchLine(line, mission.destination ?? null), [line, mission.destination]);
+  // A waiting step says what it waits for, or once it failed how and whose turn that is, as its map card does (option A, operator decision on with-hide/hide pull request 2848; PRD core-wait D-15-D-17).
+  const waits = useMemo(() => waitCard(line, Date.now()), [line]);
+  const result = branch || waits || line.kind === "wait" ? null : resultLine(line);
   // The list's row counts a merge that is the operator's now as their turn too: it has no band to draw it in.
   const turn = owed || mergeDue;
   const why = reason ?? (mergeDue ? t("mission.merge.turn") : gate?.state === "open" ? gate.look : null);
@@ -69,9 +69,9 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
     ? [why ?? word, t("agents.mark.turn")].join(" · ")
     : look === "waiting" && !asleep ? null
       : look === "working" ? [agent?.title, word, elapsed].filter(Boolean).join(" · ")
-        : target ? waitLineWords(target, t)
-        // A waiting step whose wait failed says how in its state word's place (PRD core-wait D-17, B4).
-        : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.failed ? waitFailureWords(branch.failed, t) : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
+        // Once failed, how and whose turn, as the card's foot says it; else the condition and what its foot has.
+        : waits ? (waits.state === "failed" ? waitFootWords(waits, t).join(" · ") : waitCardWords(waits, t))
+        : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
           : result ? resultLineWords(result, t) : word;
   const pr = branch?.pr ? { label: linePrLabel(branch.pr), look: branch.mark in PR_LOOK ? PR_LOOK[branch.mark as PrState] : null } : null;
   const Icon = pr?.look?.icon;

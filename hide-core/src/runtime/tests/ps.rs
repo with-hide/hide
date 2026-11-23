@@ -324,6 +324,7 @@ fn mission(
             wait_progress: None,
             wait_reference: None,
             wait_outcome: None,
+            wait_checks: Vec::new(),
             outside: None,
             unread: false,
             reopened: 0,

@@ -187,17 +187,41 @@ function plan(state: string, now: number): MissionNode[] {
   ];
 }
 
-/** The `waits` state: the running mission's outside node and six more waiting nodes, one per target and failure. */
+/**
+ * The `waits` state (option A of the operator's decision on with-hide/hide
+ * pull request 2848; PRD core-wait D-15-D-17): beside the running mission's
+ * outside node, a waiting node for each target in each state its card draws:
+ * waiting, under a day, met and failed, then a read that could not say and a
+ * deadline that passed.
+ */
 function waits(fixture: ReturnType<typeof missionFixture>, now: number) {
-  const raise = (reason: "mission_cancelled" | "wait_expired" | "pr_closed") => ({ reason, pr: null, to: "conductor" as const, since_unix_ms: now - 4 * MINUTE, on_row: false, item: false, choices: ["leave" as const, "drop" as const] });
+  const raise = (reason: "ci_failed" | "mission_cancelled" | "node_dropped" | "wait_expired" | "pr_closed") => ({ reason, pr: null, to: "conductor" as const, since_unix_ms: now - 4 * MINUTE, on_row: false, item: false, choices: ["leave" as const, "drop" as const] });
   const waiting = (key: string, title: string, extra: Partial<MissionNode>) => node(key, title, { kind: "wait", delivery: null, status: "working", started_at_unix_ms: now - 50 * MINUTE, wait_until_unix_ms: now + 6 * 24 * 60 * MINUTE, ...extra });
+  const met = { status: "done" as const, finished_at_unix_ms: now - 12 * MINUTE };
+  const soon = { wait_until_unix_ms: now + 5 * 60 * MINUTE - MINUTE };
+  const pr = (number: number, state: "pending" | "merged" | "closed") => ({ wait_target: { pr: number }, external: { pr: number }, outside: { base: "main", state }, wait_reference: { label: `#${number}`, url: `https://github.com/with-hide/hide/pull/${number}` } });
+  const ci = (number: number) => ({ wait_target: { ci: number }, wait_reference: { label: `#${number}`, url: `https://github.com/with-hide/hide/pull/${number}` } });
+  const branch = { wait_target: { branch: "release/1.3" }, external: { branch: "release/1.3" }, outside: { base: "main" } };
+  const mission = { wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } };
+  const gitlab = { wait_target: { node: { mission: "mission-91", node: "gitlab-write" } } };
   fixture.mission.nodes.push(
-    waiting("release-ci", "릴리스 후보 CI 확인", { wait_target: { ci: 1232 }, wait_reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" }, wait_until_unix_ms: now + 5 * 60 * MINUTE - MINUTE }),
-    waiting("host", "코드 호스트 추상화 끝남", { wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } }),
-    waiting("gitlab", "GitLab 쓰기 들어오면", { wait_target: { node: { mission: "mission-91", node: "gitlab-write" } } }),
-    waiting("host-cancelled", "코드 호스트 추상화 끝남", { wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 }, wait_outcome: "mission_cancelled", attention: raise("mission_cancelled") }),
-    waiting("ci-expired", "릴리스 후보 CI 확인", { wait_target: { ci: 1232 }, wait_reference: { label: `#${1232}`, url: "https://github.com/with-hide/hide/pull/1232" }, wait_until_unix_ms: now - MINUTE, wait_outcome: "expired", attention: raise("wait_expired") }),
-    waiting("vendor-closed", "SDK 업데이트 들어오면", { wait_target: { pr: 2528 }, external: { pr: 2528 }, outside: { base: "main", state: "closed" }, wait_reference: { label: `#${2528}`, url: "https://github.com/with-hide/hide/pull/2528" }, wait_outcome: "closed_unmerged", attention: raise("pr_closed") }),
+    waiting("vendor-sdk", "SDK 업데이트 들어오면", pr(2528, "pending")),
+    waiting("vendor-merged", "SDK 업데이트 들어오면", { ...pr(2528, "merged"), ...met }),
+    waiting("vendor-closed", "SDK 업데이트 들어오면", { ...pr(2528, "closed"), wait_outcome: "closed_unmerged", attention: raise("pr_closed") }),
+    waiting("release-ci", "릴리스 후보 CI 확인", { ...ci(1232), ...soon }),
+    waiting("release-ci-passed", "릴리스 후보 CI 확인", { ...ci(1232), ...met }),
+    waiting("release-ci-failed", "릴리스 후보 CI 확인", { ...ci(1232), wait_outcome: "ci_failed", wait_checks: ["rust workspace", "web e2e"], attention: raise("ci_failed") }),
+    waiting("version-bump", "버전 올림 들어오면", branch),
+    waiting("version-bump-in", "버전 올림 들어오면", { ...branch, ...met }),
+    waiting("host", "코드 호스트 추상화 끝남", mission),
+    waiting("host-soon", "코드 호스트 추상화 끝남", { ...mission, ...soon }),
+    waiting("host-done", "코드 호스트 추상화 끝남", { ...mission, ...met }),
+    waiting("host-cancelled", "코드 호스트 추상화 끝남", { ...mission, wait_outcome: "mission_cancelled", attention: raise("mission_cancelled") }),
+    waiting("gitlab", "GitLab 쓰기 들어오면", gitlab),
+    waiting("gitlab-done", "GitLab 쓰기 들어오면", { ...gitlab, ...met }),
+    waiting("gitlab-dropped", "GitLab 쓰기 들어오면", { ...gitlab, wait_outcome: "node_dropped", attention: raise("node_dropped") }),
+    waiting("release-ci-unread", "릴리스 후보 CI 확인", { ...ci(1232), unread: true }),
+    waiting("vendor-expired", "SDK 업데이트 들어오면", { ...pr(2528, "pending"), wait_until_unix_ms: now - MINUTE, wait_outcome: "expired", attention: raise("wait_expired") }),
   );
   return fixture;
 }
@@ -450,8 +474,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
   // `decided`: nothing is the operator's turn and the Conductor's own skips are listed; `net`: one cause on five nodes behind one safety net card.
   if (shown === "decided" || shown === "net") return decidedOrNet(missionFixture("running", now), now, shown);
-  // `waits`: the running mission with a waiting node on each target the core waits on (PRD core-wait D-15-D-17): a pull request's CI
-  // with five hours left, another mission's progress, a node of one, a cancelled mission and a CI wait past its deadline.
+  // `waits`: the running mission with a waiting node for each target the core waits on in each state its card draws (PRD core-wait D-15-D-17, option A).
   if (shown === "waits") return waits(missionFixture("running", now), now);
   // `human-turn`: the running mission whose screen worker declared a step only a person can take; the scene gives its row.
   if (shown === "human-turn") return missionFixture("running", now);

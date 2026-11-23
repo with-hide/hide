@@ -1726,6 +1726,8 @@ export type MissionNode = {
   /** How the code host writes the change request a pull request or CI target names. */
   wait_reference?: MissionWaitReference;
   wait_outcome?: MissionWaitOutcome;
+  /** The checks a failed CI wait named (at most eight), for `CI 실패 · build 외 1`; absent for any other outcome. */
+  wait_checks?: string[];
   /** Where an outside node's work goes, for its branch line; absent for any other node and from a core before it. */
   outside?: MissionOutside;
   /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */

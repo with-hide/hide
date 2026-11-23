@@ -14,7 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import { lineNode, nodeKindWord, resultLine, waitLine, waitLineWords } from "./missionLine";
+import { lineNode, nodeKindWord, resultLine, waitCard, waitCardWords } from "./missionLine";
 import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
@@ -695,15 +695,10 @@ export function neighbours(edges: readonly { from: string; to: string }[], key: 
 export function cardLine(mission: Mission, node: MissionNode, planLine: string | null, t: TFunction<"translation">): { text: string; attention: boolean } | null {
   const look = nodeLook(mission, node);
   if (look === "cancelled" || look === "dropped") return null;
-  // A waiting node says where what it waits on is in every state, finished too (B19); one that failed says how (PRD core-wait D-17).
+  // A waiting node reads as its card does, the condition then its foot, finished too (B19); one that failed says how and whose turn it is (option A, PRD core-wait D-17).
   if (node.kind === "wait") {
-    if (node.attention?.reason === "pr_closed") return { text: t("mission.outside.closed"), attention: true };
-    if (node.wait_outcome && look !== "done") return { text: t(`mission.wait.failed.${node.wait_outcome}`), attention: true };
-    // CI, another mission or a node of one is named as the card's line names it, finished too.
-    const target = waitLine(lineNode(node));
-    if (target) return { text: waitLineWords(target, t), attention: false };
-    if (look === "done") return { text: t("mission.look.landed"), attention: false };
-    return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
+    const card = waitCard(lineNode(node), Date.now());
+    return card ? { text: waitCardWords(card, t), attention: card.state === "failed" } : null;
   }
   if (look === "done") return null;
   if (look === "working") {

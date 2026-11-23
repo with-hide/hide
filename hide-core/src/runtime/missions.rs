@@ -311,6 +311,10 @@ pub struct NodeView {
     /// waits and once it is met.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_outcome: Option<&'static str>,
+    /// The checks a failed CI wait named, at most eight, the card's `CI 실패
+    /// · build 외 1`; absent for any other outcome.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wait_checks: Vec<String>,
     /// Where an outside node's work goes, the end of its branch line (PRD
     /// mission-destination D-14, D-52); shown only, its done stays the merge or
     /// landing it waits on (D-07). Absent for a node that is not outside.
@@ -5381,6 +5385,10 @@ impl Runtime {
                         .wait_outcome
                         .as_ref()
                         .map(crate::waits::WaitOutcome::key),
+                    wait_checks: match &node.wait_outcome {
+                        Some(crate::waits::WaitOutcome::CiFailed { checks }) => checks.clone(),
+                        _ => Vec::new(),
+                    },
                     outside: node.wait_target.as_ref().and_then(|target| match target {
                         crate::waits::WaitTarget::Pr(number)
                         | crate::waits::WaitTarget::Ci(number) => {
