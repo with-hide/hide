@@ -97,6 +97,7 @@ pub(super) enum Origin {
     /// (`process::owned_elsewhere`). Outside, as far as the walk can say;
     /// nothing of its ancestry was read, so a check that needs it cannot
     /// clear it.
+    #[cfg_attr(not(windows), allow(dead_code))] // only Windows hides a caller from its own account
     Hidden,
 }
 
