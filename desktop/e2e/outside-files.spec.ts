@@ -18,6 +18,7 @@ import { chord } from "../../web/e2e/chords";
 import { runInPane } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { quietFor } from "../../web/e2e/wait";
 import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
 import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
@@ -306,7 +307,7 @@ test("hide file open and hide browser open of outside files open External tabs b
 
 // macOS only: the fixture agent (`agentPane`) has not been started in a
 // Windows pane yet; the system-specific path is the test above.
-test("an agent's outside file is its open: it waits in Needs You, view list names the agent, and the row brings it forward", async () => {
+test("an agent's outside file is its open: it waits in Needs You, view list names the agent, the row goes to the agent, and the chip opens it in focus mode", async () => {
   const shot = path.join(scratch!, "agent-shot.png");
   fs.writeFileSync(shot, PNG);
   const report = path.join(scratch!, "report.html");
@@ -323,20 +324,31 @@ test("an agent's outside file is its open: it waits in Needs You, view list name
   // An image opened behind the operator waits on the agent's row in Needs You as To look at.
   expect(await hide(["file", "open", shot])).toMatchObject({ ok: true });
   await expect(row.locator("[data-agent-status-mark]")).toHaveAttribute("data-agent-status-mark", "look");
-  await expect(row).toContainText("agent-shot.png");
+  const chip = row.locator("[data-look-chip]");
+  await expect(chip).toContainText("agent-shot.png");
   // `hide view list` names who opened it and nothing of the file.
   const listed = (await hide(["view", "list"])).result as { views: { kind: string; target: string; unseen: boolean; openers: { here: boolean }[] }[] };
   expect(listed.views.filter((view) => view.kind === "external")).toEqual([
     expect.objectContaining({ target: "", unseen: true, openers: [expect.objectContaining({ here: true })] }),
   ]);
 
-  // Pressing the row brings the image forward in its viewer as an External tab, which sees it.
+  // Pressing the row goes to the agent only: its pane takes the keyboard, and the image stays to look at, on no desk.
   await row.locator(`[data-agent-open="${pane}"]`).click();
+  await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
+  await quietFor(page, 1_000, "the row's press opens no View");
+  await expect(outsideTab(page, "agent-shot.png")).toHaveCount(0);
+  await expect(row.locator("[data-agent-status-mark]")).toHaveAttribute("data-agent-status-mark", "look");
+
+  // Pressing the chip opens the image in focus mode, the agent's pane beside it, in its viewer as an External tab,
+  // which sees it.
+  await chip.click();
+  await expect(page.locator(`[data-pair-pane="${pane}"]`)).toBeVisible();
   await expect(outsideTab(page, "agent-shot.png")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await expect(page.locator('[data-viewer="image"]')).toBeVisible();
   await expect(row.locator("[data-agent-status-mark]")).not.toHaveAttribute("data-agent-status-mark", "look");
+  await expect(chip).toHaveCount(0);
 
-  // With the operator in the agent's pane, an HTML page opens in front.
+  // With the operator in the agent's pane, here the left of focus mode, an HTML page opens in front.
   expect(await hide(["browser", "open", report])).toMatchObject({ ok: true });
   await expect(outsideTab(page, "report.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await screenshot(page, "agent-outside-external");
