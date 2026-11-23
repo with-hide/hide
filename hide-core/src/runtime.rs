@@ -148,6 +148,7 @@ mod view_areas;
 mod view_callers;
 mod view_feedback;
 mod view_sessions;
+mod waits;
 mod workspace_control;
 mod workspace_view;
 mod worktree_command;

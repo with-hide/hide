@@ -109,6 +109,10 @@ fn reason_word(reason: &Value) -> &'static str {
         Some("not_started") => "시작할 수 있는데 시작 안 함",
         Some("warning_stood") => "경고 뒤에도 일꾼이 움직이지 않음",
         Some("wait_stood") => "CI·리뷰·머지를 오래 기다림",
+        Some("ci_failed") => "기다리던 CI가 실패",
+        Some("mission_cancelled") => "기다리던 미션이 취소됨",
+        Some("node_dropped") => "기다리던 노드가 빠짐",
+        Some("wait_expired") => "기다림 기한이 지남",
         _ => "확인 필요",
     }
 }

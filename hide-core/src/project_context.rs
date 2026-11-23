@@ -1136,6 +1136,7 @@ mod tests {
             wake_available: true,
             checking: false,
             cause: None,
+            wait: None,
         }
     }
 

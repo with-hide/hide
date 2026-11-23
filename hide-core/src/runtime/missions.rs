@@ -22,8 +22,8 @@ use crate::mission_events::History;
 use crate::mission_store::{Restored, Visiting};
 use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Candidate, Checks, CiNews, CiResult,
-    Conductor, ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand,
-    MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
+    Conductor, ConductorSettings, Delivery, Mission, MissionBook, MissionCommand, MissionEnd,
+    MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{PrState, PullRequestBadge, ReviewDecision};
@@ -290,7 +290,31 @@ pub struct NodeView {
     /// `criteria_met - criteria_skipped` as `n`.
     pub criteria_met: u32,
     pub criteria_skipped: u32,
-    pub external: Option<External>,
+    /// A waiting node's pull request or branch, in the shape an outside
+    /// node had (`{"pr": n}`, `{"branch": name}`), which the branch line and
+    /// a phone bundle from before read; absent for every other target and
+    /// node.
+    pub external: Option<crate::waits::WaitTarget>,
+    /// What a waiting node waits on (PRD core-wait D-02, D-15); absent on
+    /// every other node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_target: Option<crate::waits::WaitTarget>,
+    /// When its wait passes its deadline (D-07, D-15); the card says the
+    /// time left only under a day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_until_unix_ms: Option<u64>,
+    /// The progress of the mission a waiting node waits on, `끝 2/7` (D-16);
+    /// absent for any other target and while the book does not hold it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_progress: Option<crate::waits::WaitProgress>,
+    /// How its wait failed (D-17), the card's `· CI 실패`; absent while it
+    /// waits and once it is met.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_outcome: Option<&'static str>,
+    /// The checks a failed CI wait named, at most eight, the card's `CI 실패
+    /// · build 외 1`; absent for any other outcome.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wait_checks: Vec<String>,
     /// Where an outside node's work goes, the end of its branch line (PRD
     /// mission-destination D-14, D-52); shown only, its done stays the merge or
     /// landing it waits on (D-07). Absent for a node that is not outside.
@@ -408,10 +432,7 @@ fn node_work(
             since_unix_ms: gone_since,
         });
     }
-    if !mission.status.open()
-        || view.status != NodeStatus::Working
-        || view.kind == NodeKind::External
-    {
+    if !mission.status.open() || view.status != NodeStatus::Working || view.kind == NodeKind::Wait {
         return None;
     }
     let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
@@ -927,8 +948,22 @@ pub(crate) struct MissionRuntime {
     /// (`mission_shown`, PRD mission-screen D-16): page navigation the core
     /// holds only to send that one mission's events, never saved (D-10).
     pub(crate) shown: Option<String>,
-    /// The outside nodes' reads (B19, B20).
+    /// The code host reads of every wait and waiting branch (PRD core-wait).
     pub(super) outside: super::mission_outside::Outside,
+    /// When the wait clock next runs (`Runtime::tick_waits`). Memory only.
+    pub(super) waits_next_tick_unix_ms: u64,
+    /// The code hosts whose watch rests at its rate limit's floor, by key,
+    /// with the unix second the rest ends, as its last answer said
+    /// (`code_host::WatchAnswer::resting_until`): a wait reads no change
+    /// request by number there before then (PRD core-wait D-13). Memory
+    /// only, one entry per host.
+    pub(super) hosts_resting: std::collections::BTreeMap<String, u64>,
+    /// The agents whose wait's sleep mark the sleep pass dropped for a
+    /// reason that lasts (an agent that cannot sleep, another session in
+    /// its pane), which the wait clock does not mark again until the agent
+    /// makes another wait (PRD core-wait D-09). Memory only, at most one
+    /// entry per agent with an open wait.
+    pub(super) wait_marks_refused: std::collections::BTreeSet<String>,
     /// The nodes finished as the book last read, by mission and node, so a
     /// save tells a node that has just finished (PRD mission-worker-sleep
     /// D-17). Set from the book read at start, so a restart sleeps nothing
@@ -1165,9 +1200,11 @@ pub(super) fn wake_words(
         |number| unit.change_request_name(number),
     );
     let node = mission.nodes.iter().find(|node| node.key == wake.node);
-    let outside = || match node.and_then(|node| node.external.as_ref()) {
-        Some(External::Branch(branch)) => format!("Branch {branch}"),
-        _ => pr.clone(),
+    let met = || match node.and_then(|node| node.wait_target.as_ref()) {
+        Some(crate::waits::WaitTarget::Branch(branch)) => format!("Branch {branch} is in main"),
+        Some(crate::waits::WaitTarget::Pr(number)) => format!("PR #{number} is in main"),
+        Some(target) => format!("The wait for {} is met", target.words()),
+        None => format!("{pr} is in main"),
     };
     let news = |what: String, act: &str| {
         format!(
@@ -1229,14 +1266,7 @@ pub(super) fn wake_words(
             };
             news(what, act)
         }
-        WakeEvent::OutsideDone => news(
-            format!("{} is in main", outside()),
-            "start the nodes that waited on it",
-        ),
-        WakeEvent::OutsideFailed => news(
-            format!("{} was closed without a merge", outside()),
-            "replan the nodes it blocks, or ask the operator",
-        ),
+        WakeEvent::OutsideDone => news(met(), "start the nodes that waited on it"),
         WakeEvent::Resumed => format!(
             "You conduct mission {} \"{}\" again: your pane had closed, and the operator brought your conversation back.\nRead `hide mission show {}` and `hide inbox`, check each worker's state, and go on from there.",
             mission.id, mission.title, mission.id
@@ -1545,7 +1575,7 @@ fn attention_words(
         Some(Reason::NotStarted) => stall(
             "it could start and was not started".to_owned(),
             &format!(
-                "{start}; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`"
+                "{start}; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on it with a waiting (`wait`) node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`"
             ),
         ),
         Some(Reason::WaitStood) => stall(
@@ -1556,6 +1586,22 @@ fn attention_words(
             "a warning you were told about its worker still stands, with no move from the worker"
                 .to_owned(),
             "send its worker on with a letter saying what is left, or give the node a fresh worker; when what is left is the operator's to decide, ask with `hide mission decide --node`",
+        ),
+        Some(Reason::CiFailed) => raise(
+            format!("the CI of {pr} it waits on failed"),
+            "read the failed checks on the node's line, then replan the node or the nodes it blocks, or ask the operator",
+        ),
+        Some(Reason::MissionCancelled) => raise(
+            "the mission it waits on was cancelled".to_owned(),
+            "replan the node or the nodes it blocks, or ask the operator",
+        ),
+        Some(Reason::NodeDropped) => raise(
+            "the node it waits on was dropped from its plan".to_owned(),
+            "replan the node or the nodes it blocks, or ask the operator",
+        ),
+        Some(Reason::WaitExpired) => raise(
+            "its wait passed its deadline".to_owned(),
+            "replan the node with a later \"for\", wait on something else, drop it, or ask the operator",
         ),
         Some(Reason::ConductorFailed) | None => raise(
             "the operator is asked to look".to_owned(),
@@ -2023,8 +2069,7 @@ fn wake_key(wake: &PendingWake) -> String {
         WakeEvent::Merged
         | WakeEvent::ChangesRequested
         | WakeEvent::NewHead
-        | WakeEvent::OutsideDone
-        | WakeEvent::OutsideFailed => fact,
+        | WakeEvent::OutsideDone => fact,
         _ => format!(
             "{fact}:{}:{}",
             wake.action
@@ -2136,6 +2181,7 @@ impl Runtime {
                 // A standing cell from before cells counts its time from now.
                 let now = super::unix_milliseconds();
                 settle_endless_delays(&mut book, now);
+                super::waits::settle_wait_deadlines(&mut book, now);
                 for mission in &mut book.missions {
                     super::mission_health::ensure_raise_cells(mission);
                     for wake in &mut mission.wakes {
@@ -2168,6 +2214,7 @@ impl Runtime {
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         self.missions.finished = super::agent_sleep::missions::finished_nodes(&self.missions.book);
+        self.mark_waiting_agents();
         self.follow_successors();
     }
 
@@ -2423,6 +2470,12 @@ impl Runtime {
             {
                 mission.reopened_on = None;
             }
+        }
+        // A wait on a mission or a node is judged the moment its record
+        // moves (PRD core-wait D-11), before the finishes it may make are
+        // noted.
+        if self.missions.unreadable.is_none() {
+            self.judge_book_waits(super::memory::now_ms());
         }
         self.note_mission_finishes();
         // A book that could not be read is kept as it is on disk: the empty
@@ -2806,6 +2859,7 @@ impl Runtime {
                 for node in nodes.iter_mut() {
                     super::mission_outside::begin_round(round_seq, current.node(&node.key), node);
                 }
+                self.check_planned_waits(&current, &next)?;
                 // A change node the plan newly makes wait for the whole of
                 // another change node gets its Conductor a suggestion to
                 // wait on one of that node's lines (PRD mission-speed-2
@@ -3382,7 +3436,78 @@ impl Runtime {
                 settings["candidates"] = self.candidate_items().into();
                 Ok((json!({ "settings": settings }), false))
             }
+            // A wait is an agent's: a bot has no turn to wake (PRD core-wait
+            // D-21).
+            MissionCommand::Wait { .. }
+            | MissionCommand::WaitList
+            | MissionCommand::WaitCancel { .. }
+                if every_project =>
+            {
+                Err("agent_pane_required".into())
+            }
+            command @ (MissionCommand::Wait { .. }
+            | MissionCommand::WaitList
+            | MissionCommand::WaitCancel { .. }) => {
+                self.wait_command(device, &actor, project.as_deref(), command, now)
+            }
         }
+    }
+
+    /// Refuses a plan whose waiting nodes name what cannot be waited on
+    /// (PRD core-wait B10, B12, B19): a mission or node this machine does
+    /// not hold, the mission itself or one that waits on it, a pull request
+    /// or CI its code host cannot read by number, or more open waits than
+    /// the machine holds. A wait the plan keeps as it was is not asked again.
+    fn check_planned_waits(&self, current: &Mission, next: &Mission) -> Result<(), String> {
+        let extra: Vec<(String, String)> = next
+            .nodes
+            .iter()
+            .filter(|node| super::mission_outside::judged(node))
+            .filter_map(|node| node.wait_target.as_ref()?.mission())
+            .map(|target| (next.id.clone(), target.to_owned()))
+            .collect();
+        for node in &next.nodes {
+            let Some(target) = &node.wait_target else {
+                continue;
+            };
+            if current
+                .node(&node.key)
+                .and_then(|before| before.wait_target.as_ref())
+                == Some(target)
+            {
+                continue;
+            }
+            let refused = self.wait_refusal(
+                target,
+                Some(&next.id),
+                &next.device_id,
+                Some(&next.project),
+                &extra,
+            );
+            let code = match refused {
+                None => continue,
+                Some("wait_mission_unknown") => "mission_wait_unknown",
+                Some("wait_self") => "mission_wait_self",
+                Some(_) => "mission_wait_unsupported",
+            };
+            return Err(crate::coordination::refusal(code, &node.key));
+        }
+        let judged = |mission: &Mission| {
+            mission
+                .nodes
+                .iter()
+                .filter(|node| super::mission_outside::judged(node))
+                .count()
+        };
+        let added = judged(next).saturating_sub(judged(current));
+        if added > 0 && self.open_wait_count() + added > crate::waits::MACHINE_WAIT_LIMIT {
+            crate::diagnostic!(json!({
+                "component": "waits", "kind": "wait.refused_full", "mission": next.id,
+                "cap": crate::waits::MACHINE_WAIT_LIMIT,
+            }));
+            return Err("mission_wait_full".into());
+        }
+        Ok(())
     }
 
     fn set_mission_delay(
@@ -5346,23 +5471,49 @@ impl Runtime {
                         .map(|brief| u32::try_from(brief.len()).unwrap_or(u32::MAX)),
                     criteria_met,
                     criteria_skipped,
-                    external: node.external.clone(),
-                    outside: node.external.as_ref().map(|external| match external {
-                        External::Pr(number) => {
+                    external: node.wait_target.clone().filter(|target| {
+                        matches!(
+                            target,
+                            crate::waits::WaitTarget::Pr(_) | crate::waits::WaitTarget::Branch(_)
+                        )
+                    }),
+                    wait_target: node.wait_target.clone(),
+                    wait_until_unix_ms: node.wait_until_unix_ms,
+                    wait_progress: node
+                        .wait_target
+                        .as_ref()
+                        .and_then(|target| match target {
+                            crate::waits::WaitTarget::Mission(id) => Some(id),
+                            _ => None,
+                        })
+                        .and_then(|id| crate::waits::progress(&self.missions.book, id)),
+                    wait_outcome: node
+                        .wait_outcome
+                        .as_ref()
+                        .map(crate::waits::WaitOutcome::key),
+                    wait_checks: match &node.wait_outcome {
+                        Some(crate::waits::WaitOutcome::CiFailed { checks }) => checks.clone(),
+                        _ => Vec::new(),
+                    },
+                    outside: node.wait_target.as_ref().and_then(|target| match target {
+                        crate::waits::WaitTarget::Pr(number)
+                        | crate::waits::WaitTarget::Ci(number) => {
                             let pull = pull_of(*number);
-                            OutsideView {
+                            Some(OutsideView {
                                 base: pull.map(|pull| pull.base_branch.clone()),
                                 state: pull.map(|pull| {
                                     PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                                 }),
                                 reference: reference_of(*number),
-                            }
+                            })
                         }
-                        External::Branch(_) => OutsideView {
+                        crate::waits::WaitTarget::Branch(_) => Some(OutsideView {
                             base: self.project_default_branch(&mission.device_id, &mission.project),
                             state: None,
                             reference: None,
-                        },
+                        }),
+                        crate::waits::WaitTarget::Mission(_)
+                        | crate::waits::WaitTarget::Node { .. } => None,
                     }),
                     unread: self.missions.outside.unread(&mission.id, &node.key),
                     reopened: node.reopened,

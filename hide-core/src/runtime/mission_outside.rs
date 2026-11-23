@@ -1,11 +1,20 @@
-//! Outside nodes (PRD mission-map-git-criteria B19, B20): a pull request or
-//! branch outside the mission that its nodes wait on, which Hide follows to
-//! main, the project's default branch. A merged pull request, or a branch whose own work reached main, is
-//! done and wakes the Conductor to start what waited; a branch only cut
-//! from main is in main without any work of its own, and waits. A pull
-//! request closed without a merge failed, which blocks the nodes after it.
-//! One Hide cannot read stays waiting, shown as unread, with the reason in
-//! the diagnostic log.
+//! The code host side of Hide's one wait (PRD core-wait), and the branches a
+//! waiting mission follows to its destination.
+//!
+//! A waiting node (`kind: wait`) or an agent's wait (`hide wait`) on a pull
+//! request, its CI or a branch is judged here, by the same reads: a pull
+//! request the project's list holds is judged from the list under the lock
+//! (`waits::judge_listed`: merged, closed, or the checks on its current head
+//! all ended); any other is read off the lock by its number through the
+//! project's code host (`ByNumber`); a branch is read against the default
+//! branch with a few git commands on the project's node, and is met once its
+//! own work reached it (`outside_branch` says when). A met node is done and
+//! wakes the Conductor to start what waited; a failed one stays in progress
+//! with its raise, the reason on its card (`MissionNode::wait_outcome`); an
+//! agent's wait ends with its notice (`runtime/waits.rs`). One Hide cannot
+//! read stays waiting, shown as unread, with the reason in the diagnostic
+//! log; a host whose rate limit is near its floor is not read by number
+//! until the next look (D-13, B25).
 //!
 //! The same read follows each done direct change's branch while its mission
 //! runs or waits (B17, B18), to the mission's destination (PRD
@@ -13,27 +22,19 @@
 //! none): the view shows it there as soon as it is, and once every one is
 //! there, and every done node's lines still hold, a waiting mission is done.
 //!
-//! A pull request the project's list holds is settled from it under the
-//! lock. Any other, and every branch, is read off the lock: one `gh pr view`
-//! for the pull request, and for the branch its commit against its base (the
-//! default branch, or its mission's destination) as this checkout and its
-//! last fetch have it, each base resolved to one commit once per read
-//! however many missions and nodes name it, or the head of a pull request
-//! GitHub merged into it
-//! (`outside_branch` says when an outside branch's commit in main is its
-//! own work). Each project has at most one read out, of at most
-//! `READ_LIMIT` nodes. A read starts on a plan, a start, a reopen, a close
-//! or node change of a waiting mission, a direct change finishing while its
-//! mission runs, a GitHub read, a fetch answer or a change in the local
-//! worktrees, and goes on at once with the nodes it left out
-//! until every node followed then was read once (a pass): `n` followed
-//! nodes take `ceil(n / READ_LIMIT)` reads back to back, each node one `gh
-//! pr view` or at most six git calls after the read's two that resolve each
-//! base its asks name (one base, the default branch, unless a mission's
-//! destination is another branch), every call bounded by
-//! `NODE_TIMEOUT`. A trigger that comes while the project's read is out
-//! starts another pass once the one out ends; an answer, read or unread,
-//! starts none.
+//! The judgment is a level, not a list of triggers (D-11): the core's tick
+//! looks again at every project with something followed, the project in
+//! front within a minute and every other within five (`Runtime::tick_waits`),
+//! with no window too (D-12); what the core already receives (a list read,
+//! the poll, a fetch, a change in the local worktrees, a plan or a node
+//! change) only makes the look come sooner. Each project has at most one
+//! read out, of at most `READ_LIMIT` asks, and goes on at once with the asks
+//! it left out until every ask followed then was read once (a pass): `n`
+//! asks take `ceil(n / READ_LIMIT)` reads back to back, each one change
+//! request read or at most six git calls after the read's two that resolve
+//! each base its asks name, every call bounded by `NODE_TIMEOUT`. A look that
+//! comes while the project's read is out starts another pass once the one
+//! out ends; an answer, read or unread, starts none.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -43,20 +44,68 @@ use hide_node_link::protocol::Call;
 use serde_json::json;
 
 use super::Runtime;
-use crate::missions::{
-    External, Mission, MissionBook, MissionNode, MissionStatus, NodeKind, NodeStatus, WakeEvent,
-};
-use crate::model::{GithubProjectSnapshot, PullRequestBadge};
+use crate::missions::{Mission, MissionBook, MissionNode, NodeKind, NodeStatus, WakeEvent};
+use crate::model::GithubProjectSnapshot;
 use crate::node_access::NodeLink;
+use crate::waits::{WaitOutcome, WaitTarget};
 
 const NODE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The nodes one project's read asks about; the pass goes on with those it
-/// left out.
+/// The asks one project's read takes; the pass goes on with those it left
+/// out.
 const READ_LIMIT: usize = 32;
 
+/// How long after a project's last look the tick looks again: the project
+/// in front within a minute, every other within five (D-11, D-12).
+pub(super) const LOOK_FRONT_MS: u64 = 60_000;
+pub(super) const LOOK_BEHIND_MS: u64 = 5 * 60_000;
+/// How long past its deadline a wait on the code host waits for the read
+/// its deadline asks before it fails without one (PRD core-wait D-07).
+const DEADLINE_READ_MS: u64 = 30 * 60_000;
+
+/// Where a wait past its deadline stands on its last read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeadlineRead {
+    /// Answered since, or too long past: it fails.
+    Fail,
+    /// Asked; the read is not back yet.
+    Wait,
+    /// Ask for it now.
+    Ask,
+}
+
+/// How old a stored pull request list may be and still answer a look: two
+/// of the slower look's periods, so a list a live read keeps replacing always
+/// answers and one nothing reads any more (another machine's, with no window)
+/// soon does not.
+const STORED_LIST_FRESH_MS: u64 = 2 * LOOK_BEHIND_MS;
+
 /// One project on one machine.
-type Place = (String, String);
+pub(crate) type Place = (String, String);
+
+/// Whose wait or branch an ask is about: a mission's node, or an agent's
+/// wait by its id.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Owner {
+    Node { mission: String, node: String },
+    Agent(String),
+}
+
+impl Owner {
+    pub(crate) fn node(mission: &str, node: &str) -> Self {
+        Self::Node {
+            mission: mission.to_owned(),
+            node: node.to_owned(),
+        }
+    }
+
+    fn fields(&self) -> serde_json::Value {
+        match self {
+            Self::Node { mission, node } => json!({"mission": mission, "node": node}),
+            Self::Agent(wait) => json!({"wait": wait}),
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Outside {
@@ -64,14 +113,14 @@ pub(crate) struct Outside {
     reading: BTreeSet<Place>,
     /// Where each project's next read starts in its list of asks, for a
     /// project with more than one read's worth; one entry per project.
-    pass: BTreeMap<Place, BTreeSet<(String, String)>>,
-    /// The projects a trigger came for while their read was out, which
-    /// read again from the start once that pass ends; one entry per
-    /// project, cleared by the pass it starts.
+    pass: BTreeMap<Place, BTreeSet<Owner>>,
+    /// The projects a look came for while their read was out, which read
+    /// again from the start once that pass ends; one entry per project,
+    /// cleared by the pass it starts.
     pending: BTreeSet<Place>,
-    /// The outside nodes the last read could not answer, by mission and
-    /// node, with why. Memory only: a restart reads them again.
-    unread: BTreeMap<(String, String), String>,
+    /// The asks the last read could not answer, with why. Memory only: a
+    /// restart reads them again.
+    unread: BTreeMap<Owner, String>,
     /// How often each mission was reopened while this core runs, so a
     /// branch read asked before a reopen proves nothing after it; memory
     /// only, as a read out does not outlive a restart.
@@ -81,6 +130,19 @@ pub(crate) struct Outside {
     /// D-33): Hide does not close one by itself. Memory only: a restart
     /// reads again.
     lost: BTreeSet<String>,
+    /// When each project with something followed was last looked at, which
+    /// the tick's level look counts from; one entry per followed project,
+    /// the rest let go each tick.
+    looked: BTreeMap<Place, u64>,
+    /// The waits past their deadline whose last read Hide asked for, with
+    /// when on the wait clock, and those a read has answered since (PRD
+    /// core-wait D-07); one entry per wait past its deadline, let go once it
+    /// ends.
+    deadline_asked: BTreeMap<Owner, u64>,
+    deadline_read: BTreeSet<Owner>,
+    /// The latest end of a host rest that held each such wait's read back,
+    /// kept after the rest ends so the half hour counts from it.
+    deadline_held: BTreeMap<Owner, u64>,
 }
 
 impl Outside {
@@ -92,8 +154,54 @@ impl Outside {
         *self.reopens.entry(mission.to_owned()).or_default() += 1;
     }
 
+    /// Where the wait `owner`, past its deadline since `until`, stands on
+    /// its last read at `now` (PRD core-wait D-07): a read answered it since
+    /// Hide asked, so it may fail; or it waits for that read, asked now when
+    /// none was or the last ask is a look's period old. `DEADLINE_READ_MS`
+    /// past the deadline, or past the end of the host's rest at its rate
+    /// floor (`held_until`, which holds the read back), it fails without
+    /// one, so a read that cannot start (a device away) never keeps a wait
+    /// open for good and a rest never fails one unread.
+    pub(super) fn deadline_read(
+        &mut self,
+        owner: &Owner,
+        until: u64,
+        held_until: Option<u64>,
+        now: u64,
+    ) -> DeadlineRead {
+        if let Some(end) = held_until {
+            let held = self.deadline_held.entry(owner.clone()).or_insert(end);
+            *held = (*held).max(end);
+        }
+        let from = until.max(self.deadline_held.get(owner).copied().unwrap_or(0));
+        if self.deadline_read.contains(owner) || now >= from.saturating_add(DEADLINE_READ_MS) {
+            return DeadlineRead::Fail;
+        }
+        match self.deadline_asked.get(owner) {
+            Some(asked) if now.saturating_sub(*asked) < LOOK_BEHIND_MS => DeadlineRead::Wait,
+            _ => {
+                self.deadline_asked.insert(owner.clone(), now);
+                DeadlineRead::Ask
+            }
+        }
+    }
+
+    /// A read answered `owner`: one its deadline asked for counts.
+    fn answered(&mut self, owner: &Owner) {
+        if self.deadline_asked.contains_key(owner) {
+            self.deadline_read.insert(owner.clone());
+        }
+    }
+
+    /// Keeps the deadline reads of the waits in `due` only.
+    pub(super) fn keep_deadline_reads(&mut self, due: &BTreeSet<Owner>) {
+        self.deadline_asked.retain(|owner, _| due.contains(owner));
+        self.deadline_read.retain(|owner| due.contains(owner));
+        self.deadline_held.retain(|owner, _| due.contains(owner));
+    }
+
     /// Whether `project` on `device` has no read out, no pass left and no
-    /// trigger waiting.
+    /// look waiting.
     #[cfg(test)]
     pub(crate) fn idle_for_test(&self, device: &str, project: &str) -> bool {
         let place = (device.to_owned(), project.to_owned());
@@ -114,18 +222,26 @@ impl Outside {
     /// Why the last read could not answer for `node` of `mission`.
     pub(super) fn unread_reason(&self, mission: &str, node: &str) -> Option<&str> {
         self.unread
-            .get(&(mission.to_owned(), node.to_owned()))
+            .get(&Owner::node(mission, node))
             .map(String::as_str)
     }
 
     pub(super) fn unread(&self, mission: &str, node: &str) -> bool {
-        self.unread
-            .contains_key(&(mission.to_owned(), node.to_owned()))
+        self.unread.contains_key(&Owner::node(mission, node))
+    }
+
+    /// Lets go of what is kept for agent wait `id`, which ended.
+    pub(super) fn forget_agent(&mut self, id: &str) {
+        let owner = Owner::Agent(id.to_owned());
+        self.unread.remove(&owner);
+        for read in self.pass.values_mut() {
+            read.remove(&owner);
+        }
     }
 }
 
-/// What a read found about one node; in main with the branch's commit
-/// when a branch was read.
+/// What a read found about one ask; in main with the branch's commit when a
+/// branch was read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Found {
     Open,
@@ -134,13 +250,14 @@ pub(crate) enum Found {
     Ahead(String),
     /// A branch whose head main holds, though no work Hide saw on it is in
     /// main: none seen yet (`replaced` false: cut from main, or merged
-    /// before the node named it), or what was seen was replaced (a rebase or
+    /// before the wait named it), or what was seen was replaced (a rebase or
     /// a force push). It waits.
     NoOwnWork {
         replaced: bool,
     },
     InMain(Option<String>),
-    Closed,
+    /// A change request, or its CI, ended so (met or failed).
+    Ended(WaitOutcome),
     Unread(String),
     /// The base the branch is judged against could not be read, with why:
     /// unread, and for a mission's own destination the mission does not
@@ -151,15 +268,22 @@ pub(crate) enum Found {
 /// What one ask follows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Watch {
-    /// An outside node, to main, with the branch head Hide last read ahead
-    /// of main (`MissionNode::branch_ahead`), asked after the mission's
-    /// `reopens`-th reopen and in the node's `round`: an answer that comes
-    /// back after either moved on proves nothing.
+    /// A waiting node's pull request, CI or branch, with the branch head
+    /// Hide last read ahead of main (`MissionNode::branch_ahead`), asked
+    /// after the mission's `reopens`-th reopen and in the node's `round`: an
+    /// answer that comes back after either moved on proves nothing.
     Outside {
-        external: External,
+        target: WaitTarget,
         ahead: Option<String>,
         reopens: u64,
         round: u64,
+    },
+    /// An agent's wait on a pull request, CI or branch, with the branch head
+    /// last read ahead of main (`AgentWait::branch_ahead`): an answer for a
+    /// wait that ended or was cancelled since is dropped.
+    Agent {
+        target: WaitTarget,
+        ahead: Option<String>,
     },
     /// A direct change's branch, as the node names it, to its mission's
     /// destination (`base`; none is the default branch), asked after the
@@ -173,20 +297,37 @@ pub(crate) enum Watch {
     },
 }
 
+impl Watch {
+    /// The wait target it reads, for a waiting node or an agent's wait.
+    fn target(&self) -> Option<&WaitTarget> {
+        match self {
+            Self::Outside { target, .. } | Self::Agent { target, .. } => Some(target),
+            Self::Landing { .. } => None,
+        }
+    }
+
+    /// The branch head last read ahead of main, for a wait on a branch.
+    fn ahead(&self) -> Option<&str> {
+        match self {
+            Self::Outside { ahead, .. } | Self::Agent { ahead, .. } => ahead.as_deref(),
+            Self::Landing { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Ask {
-    pub(crate) mission: String,
-    pub(crate) node: String,
+    pub(crate) owner: Owner,
     pub(crate) watch: Watch,
 }
 
-/// At most `READ_LIMIT` of `asks` that the pass has not read yet (`read`, by
-/// mission and node), in order, and whether any are left after them for
-/// the pass's next read (engineering 15).
-pub(crate) fn batch(asks: Vec<Ask>, read: &BTreeSet<(String, String)>) -> (Vec<Ask>, bool) {
+/// At most `READ_LIMIT` of `asks` that the pass has not read yet (`read`),
+/// in order, and whether any are left after them for the pass's next read
+/// (engineering 15).
+pub(crate) fn batch(asks: Vec<Ask>, read: &BTreeSet<Owner>) -> (Vec<Ask>, bool) {
     let mut left: Vec<Ask> = asks
         .into_iter()
-        .filter(|ask| !read.contains(&(ask.mission.clone(), ask.node.clone())))
+        .filter(|ask| !read.contains(&ask.owner))
         .collect();
     let more = left.len() > READ_LIMIT;
     left.truncate(READ_LIMIT);
@@ -204,11 +345,11 @@ struct Bases {
 }
 
 impl Bases {
-    /// The branch `watch`'s branch is judged against: an outside branch
+    /// The branch `watch`'s branch is judged against: a waited-on branch
     /// against the default branch, a direct change against its mission's
     /// destination, which is the default branch when it records none. The
     /// map draws the same branches: `Runtime::judged_destination` for the
-    /// mission and `NodeView::outside` for an outside branch.
+    /// mission and `NodeView::outside` for a waited-on branch.
     fn of<'a>(&'a self, watch: &'a Watch) -> Option<&'a str> {
         match watch {
             Watch::Landing {
@@ -219,7 +360,7 @@ impl Bases {
     }
 }
 
-/// An outside branch's line for what a read found, in plain words: why it
+/// A waited-on branch's line for what a read found, in plain words: why it
 /// waits and how a Conductor finishes it; none when it could not be read,
 /// which the node's unread mark and the log say.
 fn branch_line(found: &Found) -> Option<&'static str> {
@@ -232,23 +373,24 @@ fn branch_line(found: &Found) -> Option<&'static str> {
         ),
         Found::Ahead(_) => Some("Waiting: the branch has commits main does not have yet."),
         Found::InMain(_) => Some("In main: the branch's own work reached main."),
-        Found::Open | Found::Closed | Found::Unread(_) | Found::BaseUnread(_) => None,
+        Found::Open | Found::Ended(_) | Found::Unread(_) | Found::BaseUnread(_) => None,
     }
 }
 
-/// Starts a new round for `node` when it is an outside node that `before`
-/// (the same key before the change) did not have, named another branch or
+/// Starts a new round for `node` when it is a waiting node that `before`
+/// (the same key before the change) did not have, named another target or
 /// held settled while it is back at work now: what Hide saw of its branch
 /// is dropped and it takes the mission's next round from `seq`, never one
 /// given before, so a read asked in an earlier round, or for a node removed
 /// and added again under its key, is dropped when it comes back.
 pub(super) fn begin_round(seq: &mut u64, before: Option<&MissionNode>, node: &mut MissionNode) {
-    if node.kind != NodeKind::External {
+    if node.kind != NodeKind::Wait {
         return;
     }
     let new_round = before.is_none_or(|old| {
-        old.kind != NodeKind::External
-            || old.external != node.external
+        old.kind != NodeKind::Wait
+            || old.wait_target != node.wait_target
+            || old.wait_until_unix_ms != node.wait_until_unix_ms
             || (settled(old.status) && !settled(node.status))
     });
     if new_round {
@@ -262,18 +404,17 @@ fn settled(status: NodeStatus) -> bool {
     status.finished()
 }
 
-fn found_of(badge: PullRequestBadge) -> Found {
-    match badge {
-        PullRequestBadge::Merged => Found::InMain(None),
-        PullRequestBadge::Closed => Found::Closed,
-        _ => Found::Open,
-    }
+/// Whether a waiting node is still judged: in progress or not started,
+/// with no deadline passed (an expired wait waits on its Conductor's
+/// replan, not on what it named).
+pub(super) fn judged(node: &MissionNode) -> bool {
+    node.kind == NodeKind::Wait
+        && !settled(node.status)
+        && node.wait_outcome != Some(WaitOutcome::Expired)
 }
 
 /// The direct changes a mission follows to main (`mission_landing::reads_branch`).
-fn landing(
-    mission: &crate::missions::Mission,
-) -> impl Iterator<Item = &crate::missions::MissionNode> {
+fn landing(mission: &Mission) -> impl Iterator<Item = &MissionNode> {
     mission
         .nodes
         .iter()
@@ -281,22 +422,46 @@ fn landing(
 }
 
 /// Whether `mission` has a node this module follows.
-fn followed(mission: &crate::missions::Mission) -> bool {
-    !matches!(
-        mission.status,
-        MissionStatus::Done | MissionStatus::Cancelled
-    ) && (mission
-        .nodes
-        .iter()
-        .any(|node| node.kind == NodeKind::External && !settled(node.status))
-        || landing(mission).next().is_some())
+fn followed(mission: &Mission) -> bool {
+    mission.status.open()
+        && (mission.nodes.iter().any(|node| {
+            judged(node) && node.wait_target.as_ref().is_some_and(WaitTarget::code_host)
+        }) || landing(mission).next().is_some())
 }
 
-/// The nodes followed in `device`'s open missions in `project`: those
-/// `listed` answers, with what it says, and those it does not. A direct
-/// change that names no branch cannot be read and is answered so at once.
+/// How a listed change request answers `target`, when the list holds it.
+fn listed_found(target: &WaitTarget, listed: Option<&GithubProjectSnapshot>) -> Option<Found> {
+    let number = target.change_request()?;
+    let pull = listed?
+        .pull_requests
+        .iter()
+        .find(|pull| pull.number == number)?;
+    Some(found_of(target, pull))
+}
+
+/// How a change request's entry, listed or read by its number as the list
+/// would hold it, answers `target`: a CI target whose checks could not be
+/// read is unread, so a failure it holds stands and the mark says so, never
+/// open.
+fn found_of(target: &WaitTarget, pull: &crate::model::PullRequestSnapshot) -> Found {
+    match crate::waits::judge_listed(target, pull) {
+        Some(outcome) => Found::Ended(outcome),
+        None if matches!(target, WaitTarget::Ci(_))
+            && pull.ci_end() == crate::model::CiEnd::Unread =>
+        {
+            Found::Unread("The change request's checks could not be read or judged".to_owned())
+        }
+        None => Found::Open,
+    }
+}
+
+/// The asks followed in `device`'s open missions and agent waits in
+/// `project`: those `listed` answers, with what it says, and those it does
+/// not. A direct change that names no branch cannot be read and is answered
+/// so at once.
 fn outside_asks(
     book: &MissionBook,
+    waits: &crate::waits::WaitStore,
     outside: &Outside,
     device: &str,
     project: &str,
@@ -305,50 +470,58 @@ fn outside_asks(
     let listed = listed.filter(|listed| listed.pulls_current());
     let mut found = Vec::new();
     let mut asks = Vec::new();
+    let mut place = |ask: Ask| match ask
+        .watch
+        .target()
+        .and_then(|target| listed_found(target, listed))
+    {
+        Some(answer) => found.push((ask, answer)),
+        None => asks.push(ask),
+    };
     for mission in &book.missions {
-        if matches!(
-            mission.status,
-            MissionStatus::Done | MissionStatus::Cancelled
-        ) || mission.device_id != device
-            || mission.project != project
-        {
+        if !mission.status.open() || mission.device_id != device || mission.project != project {
             continue;
         }
         for node in &mission.nodes {
-            if node.kind != NodeKind::External || settled(node.status) {
+            if !judged(node) {
                 continue;
             }
-            let Some(external) = node.external.clone() else {
+            let Some(target) = node.wait_target.clone().filter(WaitTarget::code_host) else {
                 continue;
             };
-            let pull = match &external {
-                External::Pr(number) => listed.and_then(|listed| {
-                    listed
-                        .pull_requests
-                        .iter()
-                        .find(|pull| pull.number == *number)
-                }),
-                External::Branch(_) => None,
-            };
-            let ask = Ask {
-                mission: mission.id.clone(),
-                node: node.key.clone(),
+            place(Ask {
+                owner: Owner::node(&mission.id, &node.key),
                 watch: Watch::Outside {
-                    external,
+                    target,
                     ahead: node.branch_ahead.clone(),
                     reopens: outside.reopens_of(&mission.id),
                     round: node.outside_round,
                 },
-            };
-            match pull {
-                Some(pull) => found.push((ask, found_of(pull.badge))),
-                None => asks.push(ask),
-            }
+            });
+        }
+    }
+    for wait in waits.open() {
+        if wait.device != device
+            || wait.project.as_deref() != Some(project)
+            || !wait.target.code_host()
+        {
+            continue;
+        }
+        place(Ask {
+            owner: Owner::Agent(wait.id.clone()),
+            watch: Watch::Agent {
+                target: wait.target.clone(),
+                ahead: wait.branch_ahead.clone(),
+            },
+        });
+    }
+    for mission in &book.missions {
+        if !mission.status.open() || mission.device_id != device || mission.project != project {
+            continue;
         }
         for node in landing(mission) {
             let ask = Ask {
-                mission: mission.id.clone(),
-                node: node.key.clone(),
+                owner: Owner::node(&mission.id, &node.key),
                 watch: Watch::Landing {
                     branch: node.branch.clone(),
                     base: mission.destination.clone(),
@@ -368,28 +541,194 @@ fn outside_asks(
     (found, asks)
 }
 
+/// What a node's wait comes to on `found`: still open, or how it ended;
+/// none for an answer that says nothing of it (unread).
+fn outcome_of(found: &Found) -> Option<Option<WaitOutcome>> {
+    match found {
+        Found::Open | Found::Ahead(_) | Found::NoOwnWork { .. } => Some(None),
+        Found::InMain(_) => Some(Some(WaitOutcome::Merged)),
+        Found::Ended(outcome) => Some(Some(outcome.clone())),
+        Found::Unread(_) | Found::BaseUnread(_) => None,
+    }
+}
+
+/// Moves waiting node `at` of `mission` to `outcome` at `now` (D-08): open
+/// keeps it in progress and lets go of a failure a read no longer finds; met
+/// makes it done and wakes the Conductor; failed keeps it from done with the
+/// failure on its card and its raise to the Conductor. Returns the events it
+/// made and whether the node changed.
+pub(super) fn settle_wait_node(
+    mission: &mut Mission,
+    at: usize,
+    outcome: Option<WaitOutcome>,
+    now: u64,
+) -> (Vec<crate::mission_events::MissionEvent>, bool) {
+    let node = &mission.nodes[at];
+    let key = node.key.clone();
+    let pr = node
+        .wait_target
+        .as_ref()
+        .and_then(WaitTarget::change_request);
+    let mut next = node.clone();
+    let mut wake = false;
+    match &outcome {
+        None => {
+            next.status = NodeStatus::Working;
+            // Open again, as CI on a new push: the failed checks' line this
+            // wrote no longer stands.
+            if let Some(WaitOutcome::CiFailed { .. }) = next.wait_outcome.take() {
+                next.line = None;
+            }
+        }
+        Some(met) if met.met() => {
+            next.status = NodeStatus::Done;
+            next.finished_at_unix_ms = Some(now);
+            next.wait_outcome = None;
+            wake = true;
+        }
+        Some(failed) => {
+            next.status = NodeStatus::Working;
+            next.wait_outcome = Some(failed.clone());
+            if let (Some(target), WaitOutcome::CiFailed { .. }) = (&next.wait_target, failed) {
+                // The failed checks are the Conductor's to read.
+                next.line = Some(failed.sentence(target));
+            }
+        }
+    }
+    if *node == next {
+        return (Vec::new(), false);
+    }
+    let mut events = super::mission_events::node_events(node, &next, now);
+    mission.nodes[at] = next;
+    mission.updated_at_unix_ms = now;
+    if wake {
+        super::missions::record_wake(mission, key.clone(), pr, WakeEvent::OutsideDone, None, None);
+    }
+    if let Some(reason) = outcome.as_ref().and_then(WaitOutcome::attention) {
+        events.extend(super::mission_health::raise(mission, &key, reason, pr, now));
+    }
+    crate::diagnostic!(json!({
+        "component": "missions", "kind": "mission.wait_settled",
+        "mission": mission.id, "node": key,
+        "outcome": outcome.as_ref().map_or("open", WaitOutcome::key),
+    }));
+    (events, true)
+}
+
 impl Runtime {
-    /// The projects of `device` with an unsettled outside node or a branch
-    /// a waiting mission waits on.
+    /// The projects of `device` with a waiting node or agent wait on a pull
+    /// request, its CI or a branch, or a branch a waiting mission waits on.
     pub(super) fn outside_projects(&self, device: &str) -> BTreeSet<String> {
-        self.missions
+        let mut projects: BTreeSet<String> = self
+            .missions
             .book
             .missions
             .iter()
             .filter(|mission| mission.device_id == device && followed(mission))
             .map(|mission| mission.project.clone())
-            .collect()
+            .collect();
+        projects.extend(
+            self.snapshot
+                .ui_state
+                .waits
+                .open()
+                .filter(|wait| wait.device == device && wait.target.code_host())
+                .filter_map(|wait| wait.project.clone()),
+        );
+        projects
     }
 
-    /// Follows the outside nodes of `device`'s missions in `project`, with
-    /// the stored pull request list. Returns whether a mission changed.
+    /// Every followed project, with the machine it is on.
+    pub(super) fn followed_places(&self) -> BTreeSet<Place> {
+        let mut places: BTreeSet<Place> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| followed(mission))
+            .map(|mission| (mission.device_id.clone(), mission.project.clone()))
+            .collect();
+        places.extend(
+            self.snapshot
+                .ui_state
+                .waits
+                .open()
+                .filter(|wait| wait.target.code_host())
+                .filter_map(|wait| Some((wait.device.clone(), wait.project.clone()?))),
+        );
+        places
+    }
+
+    /// Looks again at each followed project whose last look is older than
+    /// its wait (D-11, D-12): the project in front a minute, every other
+    /// five. Returns whether anything changed.
+    pub(super) fn look_at_followed(&mut self, now: u64) -> bool {
+        let places = self.followed_places();
+        self.missions
+            .outside
+            .looked
+            .retain(|place, _| places.contains(place));
+
+        let front = self
+            .focused_local_checkout()
+            .map(|(workspace, _)| workspace.path.clone());
+        let mut changed = false;
+        for (device, project) in places {
+            let wait = if device == self.node.as_str() && front.as_deref() == Some(project.as_str())
+            {
+                LOOK_FRONT_MS
+            } else {
+                LOOK_BEHIND_MS
+            };
+            let place = (device.clone(), project.clone());
+            let due = self
+                .missions
+                .outside
+                .looked
+                .get(&place)
+                .is_none_or(|at| now.saturating_sub(*at) >= wait);
+            if due {
+                changed |= self.follow_outside_stored(&device, &project);
+            }
+        }
+        changed
+    }
+
+    /// Follows the waits and branches of `device`'s missions and agents in
+    /// `project`, with the stored pull request list. Returns whether
+    /// anything changed.
     pub(crate) fn follow_outside_stored(&mut self, device: &str, project: &str) -> bool {
+        self.follow_outside_with(device, project, true)
+    }
+
+    /// Follows them with no list at all, every ask read: the read a passed
+    /// deadline asks for (PRD core-wait D-07), which a list from before the
+    /// deadline must not answer.
+    pub(super) fn follow_outside_read(&mut self, device: &str, project: &str) -> bool {
+        self.follow_outside_with(device, project, false)
+    }
+
+    fn follow_outside_with(&mut self, device: &str, project: &str, use_list: bool) -> bool {
+        // A list no read has replaced for a while answers nothing: with no
+        // window another machine's list is not read again, and what it says
+        // of a change request is asked by its number instead.
+        let now = super::memory::now_ms();
+        let listed = self
+            .github_project_on(device, project)
+            .filter(|_| use_list)
+            .filter(|listed| {
+                listed
+                    .status
+                    .last_success_at_unix_ms
+                    .is_some_and(|at| now.saturating_sub(at) <= STORED_LIST_FRESH_MS)
+            });
         let (found, asks) = outside_asks(
             &self.missions.book,
+            &self.snapshot.ui_state.waits,
             &self.missions.outside,
             device,
             project,
-            self.github_project_on(device, project),
+            listed,
         );
         self.follow_outside(device, project, found, asks)
     }
@@ -403,11 +742,16 @@ impl Runtime {
     ) -> bool {
         let (found, asks) = outside_asks(
             &self.missions.book,
+            &self.snapshot.ui_state.waits,
             &self.missions.outside,
             device,
             project,
             listed,
         );
+        // A list just read answers what it holds, a deadline's read included.
+        for (ask, _) in &found {
+            self.missions.outside.answered(&ask.owner);
+        }
         self.follow_outside(device, project, found, asks)
     }
 
@@ -418,6 +762,11 @@ impl Runtime {
         found: Vec<(Ask, Found)>,
         asks: Vec<Ask>,
     ) -> bool {
+        let place = (device.to_owned(), project.to_owned());
+        self.missions
+            .outside
+            .looked
+            .insert(place.clone(), super::memory::now_ms());
         // A mission with no direct change read any more has no read that
         // could find its destination again, so nothing holds its close.
         let read: BTreeSet<&str> = found
@@ -425,7 +774,10 @@ impl Runtime {
             .map(|(ask, _)| ask)
             .chain(&asks)
             .filter(|ask| matches!(ask.watch, Watch::Landing { .. }))
-            .map(|ask| ask.mission.as_str())
+            .filter_map(|ask| match &ask.owner {
+                Owner::Node { mission, .. } => Some(mission.as_str()),
+                Owner::Agent(_) => None,
+            })
             .collect();
         let missions = &mut self.missions;
         let book = &missions.book;
@@ -437,8 +789,7 @@ impl Runtime {
         });
         let mut changed = self.settle_outside(found);
         if asks.is_empty() {
-            // Nothing left to read ends the pass and any trigger waiting.
-            let place = (device.to_owned(), project.to_owned());
+            // Nothing left to read ends the pass and any look waiting.
             self.missions.outside.pass.remove(&place);
             self.missions.outside.pending.remove(&place);
         } else {
@@ -448,7 +799,7 @@ impl Runtime {
     }
 
     /// The project's default branch as `device`'s worktree catalog lists
-    /// it, what an outside branch and a mission that records no
+    /// it, what a waited-on branch and a mission that records no
     /// destination are judged against; none until the catalog answered.
     pub(super) fn project_default_branch(&self, device: &str, project: &str) -> Option<String> {
         self.project_worktrees_on(device, project)
@@ -467,9 +818,9 @@ impl Runtime {
             .or_else(|| self.project_default_branch(&mission.device_id, &mission.project))
     }
 
-    /// Where `project` on `device` is read: its GitHub repository and what
-    /// the branches `asks` name are judged against, copied under the lock
-    /// as owned data. Each base is taken once however many nodes name it.
+    /// Where `project` on `device` is read: its code host repository and
+    /// what the branches `asks` name are judged against, copied under the
+    /// lock as owned data. Each base is taken once however many asks name it.
     fn outside_places(
         &self,
         device: &str,
@@ -507,6 +858,7 @@ impl Runtime {
     ) -> bool {
         let (mut answers, asks) = outside_asks(
             &self.missions.book,
+            &self.snapshot.ui_state.waits,
             &self.missions.outside,
             device,
             project,
@@ -517,8 +869,29 @@ impl Runtime {
         self.ingest_outside(&(device.to_owned(), project.to_owned()), answers)
     }
 
+    /// The asks of `asks` read by a change request's number that wait for
+    /// the next look while `project`'s host is near its rate limit's floor
+    /// (D-13, B25): they stay open, each told once in the log.
+    fn defer_at_floor(&self, device: &str, project: &str, asks: Vec<Ask>) -> Vec<Ask> {
+        if !self.code_host_resting(device, project, super::memory::now_ms()) {
+            return asks;
+        }
+        let (deferred, kept): (Vec<Ask>, Vec<Ask>) = asks.into_iter().partition(|ask| {
+            ask.watch
+                .target()
+                .is_some_and(|target| target.change_request().is_some())
+        });
+        if !deferred.is_empty() {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "wait.read_deferred_at_floor",
+                "project": project, "count": deferred.len(),
+            }));
+        }
+        kept
+    }
+
     /// Reads `asks` off the lock, unless this project's read is out; its
-    /// answer is followed when it comes back, and this trigger then too.
+    /// answer is followed when it comes back, and this look then too.
     fn read_outside(&mut self, device: &str, project: &str, asks: Vec<Ask>) -> bool {
         let place = (device.to_owned(), project.to_owned());
         if self.worker_context.is_none() {
@@ -526,9 +899,13 @@ impl Runtime {
             return false;
         }
         if self.missions.outside.reading.contains(&place) {
-            // The read out asked before this trigger: a node it added or
+            // The read out asked before this look: an ask it added or
             // changed is read in a pass from the start once that one ends.
             self.missions.outside.pending.insert(place);
+            return false;
+        }
+        let asks = self.defer_at_floor(device, project, asks);
+        if asks.is_empty() {
             return false;
         }
         let count = asks.len();
@@ -539,7 +916,7 @@ impl Runtime {
             .remove(&place)
             .unwrap_or_default();
         let (asks, more, mut read) = match batch(asks.clone(), &read) {
-            // Every node of a pass that ended unseen was read: a new one.
+            // Every ask of a pass that ended unseen was read: a new one.
             (left, _) if left.is_empty() => {
                 let fresh = BTreeSet::new();
                 let (left, more) = batch(asks, &fresh);
@@ -548,7 +925,7 @@ impl Runtime {
             (left, more) => (left, more, read),
         };
         if read.is_empty() {
-            // A pass that starts now answers every trigger before it.
+            // A pass that starts now answers every look before it.
             self.missions.outside.pending.remove(&place);
         }
         if more {
@@ -558,10 +935,7 @@ impl Runtime {
                     "device": device, "project": project, "count": count, "per_read": READ_LIMIT,
                 }));
             }
-            read.extend(
-                asks.iter()
-                    .map(|ask| (ask.mission.clone(), ask.node.clone())),
-            );
+            read.extend(asks.iter().map(|ask| ask.owner.clone()));
             self.missions.outside.pass.insert(place.clone(), read);
         }
         let (github, bases) = self.outside_places(device, project, &asks);
@@ -596,10 +970,13 @@ impl Runtime {
     /// The answer of one project's read.
     pub(crate) fn ingest_outside(&mut self, place: &Place, answers: Vec<(Ask, Found)>) -> bool {
         self.missions.outside.reading.remove(place);
+        for (ask, _) in &answers {
+            self.missions.outside.answered(&ask.owner);
+        }
         let mut changed = self.settle_outside(answers);
-        // A pass with nodes left reads them now, and a trigger that came
-        // while this read was out starts the next pass now, not at the next
-        // trigger; this answer itself, read or unread, sets neither.
+        // A pass with asks left reads them now, and a look that came while
+        // this read was out starts the next pass now, not at the next look;
+        // this answer itself, read or unread, sets neither.
         if self.missions.outside.pass.contains_key(place)
             || self.missions.outside.pending.contains(place)
         {
@@ -608,63 +985,100 @@ impl Runtime {
         changed
     }
 
-    /// Moves each node to what was found: an outside node open or unread
-    /// is in progress, in main is done and closed is raised to the
-    /// Conductor; a direct change in main
-    /// keeps the commit Hide read there, open or unread keeps none, and a
-    /// mission that was waiting only on such branches is done. A node a
-    /// replan changed or settled since the ask is left as it is.
+    /// Keeps or lets go of the unread mark of `owner` for `found`; whether
+    /// the mark came or went.
+    fn note_unread(&mut self, owner: &Owner, found: &Found) -> bool {
+        match found {
+            Found::Unread(reason) | Found::BaseUnread(reason) => {
+                let before = self
+                    .missions
+                    .outside
+                    .unread
+                    .insert(owner.clone(), reason.clone());
+                if before.as_deref() != Some(reason.as_str()) {
+                    let mut event = json!({
+                        "component": "missions", "kind": "mission.outside_unread",
+                        "reason": reason,
+                    });
+                    if let (Some(event), serde_json::Value::Object(fields)) =
+                        (event.as_object_mut(), owner.fields())
+                    {
+                        event.extend(fields);
+                    }
+                    crate::diagnostic!(event);
+                }
+                before.is_none()
+            }
+            _ => self.missions.outside.unread.remove(owner).is_some(),
+        }
+    }
+
+    /// Moves each ask to what was found: a waiting node open or unread is
+    /// in progress, met is done and failed is raised to the Conductor
+    /// (`settle_wait_node`); an agent's wait met or failed ends with its
+    /// notice (`end_agent_wait`); a direct change in main keeps the commit
+    /// Hide read there, open or unread keeps none, and a mission that was
+    /// waiting only on such branches is done. An ask a replan, a cancel or
+    /// an end settled since is left as it is.
     fn settle_outside(&mut self, answers: Vec<(Ask, Found)>) -> bool {
         let now = super::memory::now_ms();
         let mut changed = false;
         let mut flags_moved = false;
         let mut landed = BTreeSet::new();
         for (ask, found) in answers {
-            let key = (ask.mission.clone(), ask.node.clone());
+            let (mission_id, node_key) = match &ask.owner {
+                Owner::Agent(id) => {
+                    changed |= self.settle_agent_wait(id, &ask.watch, &found, now);
+                    flags_moved |= self.note_unread(&ask.owner, &found);
+                    continue;
+                }
+                Owner::Node { mission, node } => (mission.clone(), node.clone()),
+            };
             let Some(mission) = self
                 .missions
                 .book
                 .missions
-                .iter_mut()
-                .find(|mission| mission.id == ask.mission)
+                .iter()
+                .find(|mission| mission.id == mission_id)
             else {
-                self.missions.outside.unread.remove(&key);
+                self.missions.outside.unread.remove(&ask.owner);
                 continue;
             };
+            let reopens = self.missions.outside.reopens_of(&mission_id);
             let current = match &ask.watch {
                 Watch::Outside {
-                    external,
-                    reopens,
+                    target,
+                    reopens: asked,
                     round,
                     ..
                 } => mission
                     .nodes
                     .iter()
                     .position(|node| {
-                        node.key == ask.node
-                            && node.kind == NodeKind::External
-                            && node.external.as_ref() == Some(external)
+                        node.key == node_key
+                            && judged(node)
+                            && node.wait_target.as_ref() == Some(target)
                             && node.outside_round == *round
-                            && !settled(node.status)
                     })
-                    .filter(|_| self.missions.outside.reopens_of(&ask.mission) == *reopens),
+                    .filter(|_| reopens == *asked),
                 Watch::Landing {
                     branch,
                     base,
-                    reopens,
+                    reopens: asked,
                     done,
                 } => landing(mission)
                     .position(|node| {
-                        node.key == ask.node
+                        node.key == node_key
                             && node.branch == *branch
                             && mission.destination == *base
                             && node.finished_at_unix_ms == *done
-                            && self.missions.outside.reopens_of(&ask.mission) == *reopens
+                            && reopens == *asked
                     })
-                    .and_then(|_| mission.nodes.iter().position(|node| node.key == ask.node)),
+                    .and_then(|_| mission.nodes.iter().position(|node| node.key == node_key)),
+                Watch::Agent { .. } => None,
             };
             let Some(at) = current else {
-                self.missions.outside.unread.remove(&key);
+                self.missions.outside.unread.remove(&ask.owner);
                 continue;
             };
             if let Watch::Landing { base: Some(_), .. } = &ask.watch {
@@ -675,29 +1089,19 @@ impl Runtime {
                 // nothing of it.
                 match &found {
                     Found::BaseUnread(_) => {
-                        self.missions.outside.lost.insert(ask.mission.clone());
+                        self.missions.outside.lost.insert(mission_id.clone());
                     }
                     Found::Unread(_) => {}
                     _ => {
-                        self.missions.outside.lost.remove(&ask.mission);
+                        self.missions.outside.lost.remove(&mission_id);
                     }
                 }
             }
-            let flag_moved = match &found {
-                Found::Unread(reason) | Found::BaseUnread(reason) => {
-                    let before = self.missions.outside.unread.insert(key, reason.clone());
-                    if before.as_deref() != Some(reason.as_str()) {
-                        crate::diagnostic!(json!({
-                            "component": "missions", "kind": "mission.outside_unread",
-                            "mission": ask.mission, "node": ask.node, "reason": reason,
-                        }));
-                    }
-                    before.is_none()
-                }
-                _ => self.missions.outside.unread.remove(&key).is_some(),
+            flags_moved |= self.note_unread(&ask.owner, &found);
+            let Some(mission) = self.missions.book.get_mut(&mission_id) else {
+                continue;
             };
-            flags_moved |= flag_moved;
-            let Watch::Outside { external, .. } = &ask.watch else {
+            let Watch::Outside { target, .. } = &ask.watch else {
                 // A branch read now replaces what an earlier read proved: in
                 // main at its head now, or nothing, once it moved on or could
                 // not be read, as the branch may have moved past main unseen.
@@ -717,13 +1121,13 @@ impl Runtime {
                     };
                     crate::diagnostic!(json!({
                         "component": "missions", "kind": kind,
-                        "mission": ask.mission, "node": ask.node,
+                        "mission": mission_id, "node": node_key,
                     }));
                     node.in_main = proof;
                     mission.updated_at_unix_ms = now;
                     changed = true;
                 }
-                landed.insert(ask.mission.clone());
+                landed.insert(mission_id.clone());
                 continue;
             };
             let node = &mut mission.nodes[at];
@@ -735,8 +1139,8 @@ impl Runtime {
                     changed = true;
                 }
             }
-            if let (External::Branch(_), Some(line)) = (external, branch_line(&found)) {
-                // An outside branch has no worker: its line is what Hide
+            if let (WaitTarget::Branch(_), Some(line)) = (target, branch_line(&found)) {
+                // A waited-on branch has no worker: its line is what Hide
                 // read, so a Conductor tells a branch with nothing of its
                 // own yet from one waiting for its merge.
                 if node.line.as_deref() != Some(line) {
@@ -745,69 +1149,23 @@ impl Runtime {
                     changed = true;
                 }
             }
-            let (status, wake) = match found {
-                Found::Open
-                | Found::Ahead(_)
-                | Found::NoOwnWork { .. }
-                | Found::Unread(_)
-                | Found::BaseUnread(_) => (NodeStatus::Working, None),
-                Found::InMain(_) => (NodeStatus::Done, Some(WakeEvent::OutsideDone)),
-                // Closed without its merge, it stays in progress with the
-                // Conductor asked to look (PRD mission-node-simple D-04,
-                // B12); the raise is its letter.
-                Found::Closed => {
-                    let pr = match external {
-                        External::Pr(number) => Some(*number),
-                        External::Branch(_) => None,
-                    };
-                    let mut events = Vec::new();
-                    if mission.nodes[at].status == NodeStatus::Planned {
-                        let node = &mission.nodes[at];
-                        let mut next = node.clone();
-                        next.status = NodeStatus::Working;
-                        events = super::mission_events::node_events(node, &next, now);
-                        mission.nodes[at] = next;
-                    }
-                    events.extend(super::mission_health::raise(
-                        mission,
-                        &ask.node,
-                        crate::missions::AttentionReason::PrClosed,
-                        pr,
-                        now,
-                    ));
-                    if !events.is_empty() {
-                        mission.updated_at_unix_ms = now;
-                        self.record_mission_events(&ask.mission, events);
+            let Some(outcome) = outcome_of(&found) else {
+                // Unread: it keeps waiting as it stands, started if it had
+                // not, as a read answered.
+                if mission.nodes[at].status == NodeStatus::Planned {
+                    let (events, moved) = settle_wait_node(mission, at, None, now);
+                    if moved {
+                        self.record_mission_events(&mission_id, events);
                         changed = true;
                     }
-                    continue;
                 }
-            };
-            let node = &mission.nodes[at];
-            if node.status == status {
                 continue;
+            };
+            let (events, moved) = settle_wait_node(mission, at, outcome, now);
+            if moved {
+                self.record_mission_events(&mission_id, events);
+                changed = true;
             }
-            let mut next = node.clone();
-            next.status = status;
-            if settled(status) {
-                next.finished_at_unix_ms = Some(now);
-            }
-            let events = super::mission_events::node_events(node, &next, now);
-            mission.nodes[at] = next;
-            mission.updated_at_unix_ms = now;
-            if let Some(event) = wake {
-                let pr = match external {
-                    External::Pr(number) => Some(*number),
-                    External::Branch(_) => None,
-                };
-                super::missions::record_wake(mission, ask.node.clone(), pr, event, None, None);
-            }
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.outside_settled",
-                "mission": ask.mission, "node": ask.node, "status": status,
-            }));
-            self.record_mission_events(&ask.mission, events);
-            changed = true;
         }
         for id in landed {
             changed |= self.close_if_landed(&id, now);
@@ -901,7 +1259,11 @@ struct Against<'a> {
 fn branch_of(watch: &Watch) -> Option<&str> {
     match watch {
         Watch::Outside {
-            external: External::Branch(name),
+            target: WaitTarget::Branch(name),
+            ..
+        }
+        | Watch::Agent {
+            target: WaitTarget::Branch(name),
             ..
         }
         | Watch::Landing {
@@ -941,22 +1303,21 @@ fn read_one(
     head: Option<Result<String, String>>,
     watch: &Watch,
 ) -> Result<Found, String> {
-    if let Watch::Outside {
-        external: External::Pr(number),
-        ..
-    } = watch
-    {
+    if let Some(number) = watch.target().and_then(WaitTarget::change_request) {
         let place = github.as_ref().map_err(Clone::clone)?;
         let by_number = place.host().by_number().ok_or_else(|| {
             "The project's code host reads no change request by its number".to_owned()
         })?;
-        return by_number
-            .standing(node, place, *number)
-            .map(|standing| match standing {
-                crate::code_host::Standing::Open => Found::Open,
-                crate::code_host::Standing::Closed => Found::Closed,
-                crate::code_host::Standing::Merged => Found::InMain(None),
-            });
+        // A CI target the list does not hold (older than its newest) is read
+        // with its checks, as the list would hold it.
+        if let Some(target @ WaitTarget::Ci(_)) = watch.target() {
+            return by_number
+                .as_listed(node, place, number)
+                .map(|pull| found_of(target, &pull));
+        }
+        return by_number.standing(node, place, number).map(|standing| {
+            crate::waits::judge_standing(standing).map_or(Found::Open, Found::Ended)
+        });
     }
     let head = head.ok_or("The node names no branch")??;
     let against = against.ok_or("The project's default branch is not known yet")?;
@@ -965,8 +1326,8 @@ fn read_one(
         Err(reason) => return Ok(Found::BaseUnread(reason.clone())),
     };
     let merged = against.merged_heads;
-    if let Watch::Outside { ahead, .. } = watch {
-        return outside_branch(git, merged, mains, head, ahead.as_deref());
+    if watch.target().is_some() {
+        return outside_branch(git, merged, mains, head, watch.ahead());
     }
     // A done direct change's branch is its worker's finished work, so its
     // commit in its base is enough.
@@ -1066,25 +1427,27 @@ mod tests {
     fn a_read_pass_takes_the_nodes_left_out_next() {
         let asks: Vec<Ask> = (0..33)
             .map(|index| Ask {
-                mission: "mission-1".into(),
-                node: format!("n{index}"),
+                owner: Owner::node("mission-1", &format!("n{index}")),
                 watch: Watch::Outside {
-                    external: External::Branch(format!("b{index}")),
+                    target: WaitTarget::Branch(format!("b{index}")),
                     ahead: None,
                     reopens: 0,
                     round: 0,
                 },
             })
             .collect();
-        let keys =
-            |asks: &[Ask]| -> Vec<String> { asks.iter().map(|ask| ask.node.clone()).collect() };
+        let keys = |asks: &[Ask]| -> Vec<String> {
+            asks.iter()
+                .map(|ask| match &ask.owner {
+                    Owner::Node { node, .. } => node.clone(),
+                    Owner::Agent(id) => id.clone(),
+                })
+                .collect()
+        };
         let (first, more) = batch(asks.clone(), &BTreeSet::new());
         assert_eq!((first.len(), more), (READ_LIMIT, true));
         assert!(!keys(&first).contains(&"n32".to_owned()));
-        let read: BTreeSet<(String, String)> = first
-            .iter()
-            .map(|ask| (ask.mission.clone(), ask.node.clone()))
-            .collect();
+        let read: BTreeSet<Owner> = first.iter().map(|ask| ask.owner.clone()).collect();
         let (second, more) = batch(asks.clone(), &read);
         assert_eq!((keys(&second), more), (vec!["n32".to_owned()], false));
         // A list one read takes whole leaves nothing for another.

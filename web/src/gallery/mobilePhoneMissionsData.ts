@@ -77,7 +77,7 @@ function presets(): PhoneMission {
       general("copy", "사이트 문구 정리", "working", null),
       general("ship", "1.2.8 배포", "planned", "deploy", { depends_on: ["check"], gate: gate("open") }),
       general("store", "앱 스토어 제출", "planned", "deploy", { depends_on: ["survey"], gate: gate("ahead") }),
-      step("login", "로그인 수정 기다림", "working", { kind: "external", delivery: null, pr: null, worker_agent: null, agent_runtime: null, external_pr: 1232, external_base: "main", external_state: "pending" }),
+      step("login", "로그인 수정 기다림", "working", { kind: "wait", delivery: null, pr: null, worker_agent: null, agent_runtime: null, external_pr: 1232, external_base: "main", external_state: "pending" }),
     ],
   });
 }

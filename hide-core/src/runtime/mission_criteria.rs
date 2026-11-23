@@ -359,9 +359,9 @@ impl Runtime {
     }
 
     /// Whether the gate holds `node` (D-12): a mission made before criteria
-    /// and an external node, which Hide finishes itself, are not held.
+    /// and a waiting node, which Hide finishes itself, are not held.
     fn gated(mission: &Mission, node: &MissionNode) -> bool {
-        !mission.exempt && node.kind != NodeKind::External
+        !mission.exempt && node.kind != NodeKind::Wait
     }
 
     /// The gate on `node` as a command would leave it (D-12, B9): done only
@@ -925,11 +925,8 @@ impl Runtime {
             .position(|row| row.key == node)
             .ok_or("mission_node_unknown")?;
         let row = &mission.nodes[index];
-        if row.kind == NodeKind::External {
-            return Err(crate::coordination::refusal(
-                "mission_external_invalid",
-                node,
-            ));
+        if row.kind == NodeKind::Wait {
+            return Err(crate::coordination::refusal("mission_wait_invalid", node));
         }
         // The same defect from the same node while it is still open is the
         // same command again.

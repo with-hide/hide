@@ -276,7 +276,7 @@ it("leaves to 내 차례 the steps waiting on the operator, the decision's and a
     expect(map.q('[data-mission-summary-row="attention"]')).toBeNull();
     expect(row("working")).toEqual(["waits", "other"]);
     expect(map.q('[data-mission-summary-row="working"] dt')?.textContent).toBe("In progress 2");
-    expect(map.q('[data-mission-summary-line="waits"]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(map.q('[data-mission-summary-line="waits"]')?.textContent).toBe("Conductor's turn · Worker ended with work left");
     expect(map.q('[data-mission-summary-line="waits"]')?.getAttribute("data-mission-summary-attention")).toBe("conductor");
     // The decision and the raised worker stand in 내 차례 above the map.
     expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toContain("worker_blocked");
@@ -490,10 +490,10 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("on-branch", { status: "working", branch: "feat/engine-own-layout", worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false } }),
-    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }),
-    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, outside: { base: "release/1.2", state: "closed" }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
-    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, outside: { base: "main", state: "merged" }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
-    node("branch-out", { kind: "external", delivery: null, external: { branch: "feat/outside-work" }, outside: { base: "develop" }, status: "working" }),
+    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "wait", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }),
+    node("closed-out", { kind: "wait", delivery: null, external: { pr: 1605 }, outside: { base: "release/1.2", state: "closed" }, status: "working", wait_outcome: "closed_unmerged", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
+    node("merged-out", { kind: "wait", delivery: null, external: { pr: 1702 }, outside: { base: "main", state: "merged" }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
+    node("branch-out", { kind: "wait", delivery: null, external: { branch: "feat/outside-work" }, outside: { base: "develop" }, status: "working" }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
     // Finished: one whose launch the core kept (its pane long gone), one with no launch kept and only the plan left.
@@ -535,25 +535,34 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     expect([card(map, "away").querySelector("[data-node-tab] [data-device-chip]")?.getAttribute("data-device-chip"), card(map, "away").querySelector("[data-node-run] [data-device-chip]"), card(map, "away").querySelector("[data-node-remote]") !== null, card(map, "core").querySelector("[data-node-tab]")]).toEqual(["mini", null, true, null]);
     // A finished node with no launch kept, or a node with no worker, names no model and no mark.
     expect(["ran-unknown", "asked", "next"].map(worker)).toEqual([null, null, null]);
-    // A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13, B12).
-    expect([worker("outside"), card(map, "outside").querySelector("[data-node-run] [data-node-waiting]")?.textContent]).toEqual([["waiting", null, null, null], "Watching"]);
+    // A waiting node has no worker: its head's mark says how its wait stands (option A of the operator's decision on pull request 2848).
+    expect([worker("outside"), card(map, "outside").querySelector("[data-node-mark]"), card(map, "outside").querySelector("[data-node-wait-state]")?.getAttribute("data-node-wait-state")]).toEqual([null, null, "waiting"]);
     // The last row, under a hairline, is where the result goes: the pull request's mark as the PR list draws it, its number (the newest with +N), the branch when known and the destination (B55).
-    // An outside node's pull request or branch carries `↗` and goes to its own base, bold where that is not the destination; a node not started says its plan; no branch or base the core did not send is named (B60).
+    // A node not started says its plan; no branch or base the core did not send is named (B60).
     const branch = (key: string) => {
       const one = card(map, key).querySelector<HTMLElement>("[data-node-foot] [data-node-line='branch']");
       return one ? [one.dataset.lineMark, one.querySelector("[data-line-plan]")?.textContent ?? one.querySelector("[data-line-pr]")?.textContent ?? null, one.querySelector("[data-line-branch]")?.textContent ?? null, one.querySelector("[data-line-to]")?.textContent ?? null, one.querySelector("[data-line-to]")?.hasAttribute("data-line-elsewhere") ?? false, one.querySelector("[data-line-to] [data-line-direct]") ? "after-to" : one.querySelector("[data-line-direct]") ? "after-branch" : false] : null;
     };
-    expect(Object.fromEntries(["core", "asked", "api", "branch", "outside", "closed-out", "merged-out", "branch-out", "next"].map((key) => [key, branch(key)]))).toEqual({
+    expect(Object.fromEntries(["core", "asked", "api", "branch", "next"].map((key) => [key, branch(key)]))).toEqual({
       core: ["pull", `${"#"}1704 +1`, null, "→main", false, false],
       asked: ["branch", null, null, "→main", false, false],
       api: ["merged", `${"#"}1650`, null, "→main", false, false],
       // A direct change's `PR 없이` rides after the destination's name, so the two move together (D-56).
       branch: ["branch", null, "feat/a-very-long-branch-name-for-the-screen-node", "→main· No PR", false, "after-to"],
-      outside: ["pending", `↗${"#"}1232`, null, "→main", false, false],
-      "closed-out": ["closed", `↗${"#"}1605`, null, "→release/1.2", true, false],
-      "merged-out": ["merged", `↗${"#"}1702`, null, "→main", false, false],
-      "branch-out": ["branch", null, "↗ feat/outside-work", "→develop", true, false],
       next: ["plan_pr", "PR", null, "→main", false, false],
+    });
+    // A waiting node draws no branch line: what it waits for in one sentence, the pull request's icon lit by its state, then a foot
+    // only when it has something: `끝남` once met, how it failed and whose turn that is once it failed (option A, PRD core-wait D-15-D-17).
+    const wait = (key: string) => {
+      const one = card(map, key).querySelector<HTMLElement>("[data-node-line='wait']");
+      const foot = card(map, key).querySelector<HTMLElement>("[data-wait-foot]");
+      return [one?.querySelector("[data-line-icon]")?.getAttribute("class")?.match(/text-[a-z-]+/)?.[0] ?? null, one?.querySelector("[data-wait-condition]")?.textContent ?? null, foot?.textContent ?? null, card(map, key).querySelector("[data-node-line='branch']")];
+    };
+    expect(Object.fromEntries(["outside", "closed-out", "merged-out", "branch-out"].map((key) => [key, wait(key)]))).toEqual({
+      outside: ["text-pr-pending", `if ${"#"}1232 merges`, null, null],
+      "closed-out": ["text-pr-closed", `if ${"#"}1605 merges`, "closed without mergeConductor's turn", null],
+      "merged-out": ["text-muted-foreground", `if ${"#"}1702 merges`, "met", null],
+      "branch-out": ["text-muted-foreground", "if feat/outside-work lands in develop", null, null],
     });
     expect(card(map, "core").querySelector("[data-node-foot]")?.className).toContain("border-t");
     // The branch line's icon is the PR list's: its shape and colour by the same state.
@@ -562,7 +571,7 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     expect(card(map, "asked").querySelector("[data-node-foot] [data-node-foot-end] [data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("worker_ended");
     // The line is drawn for the eye; the card's name says it, the pull request's state in words, never only a colour (B55).
     expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · opus·high (planned) · PR ${"#"}1703 · PR ${"#"}1704 · Where it goes: ${"#"}1704 +1 → main`);
-    expect(card(map, "launched").getAttribute("aria-label")).toMatch(new RegExp(`^Node launched · In progress · Opus 5\\.5·high · PR ${"#"}1910 · Where it goes: ${"#"}1910 → main · CI running or review pending · Needs a look · Conductor · `));
+    expect(card(map, "launched").getAttribute("aria-label")).toMatch(new RegExp(`^Node launched · In progress · Opus 5\\.5·high · PR ${"#"}1910 · Where it goes: ${"#"}1910 → main · CI running or review pending · Needs a look · Conductor's turn · `));
     // The title is one line ending in an ellipsis with no native hover of its own: the whole of it is the card's hover and its name (B30).
     expect(card(map, "core").querySelector(".truncate")?.textContent).toBe("제안 core: 기록·공책·점수·반영");
     expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")).toBeNull();
@@ -574,7 +583,7 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // Its times, its finish lines, its line and its badges are the panel's (D-07).
     expect(card(map, "core").querySelector("[data-node-criteria], [data-node-line-text], [data-node-stage], [data-node-time], [data-node-reopened], [data-node-changed], [data-node-landing], [data-node-pr]")).toBeNull();
     // The operator's turn wears 내 차례's word and mark in the decision colour's border; one waiting on the Conductor names it quietly in its own border (B2).
-    expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["Needs you", "Conductor"]);
+    expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["Needs you", "Conductor's turn"]);
     expect(card(map, "raised").dataset.nodeAttention).toBe("operator");
     expect(card(map, "raised").className).toContain("border-mission-hold");
     expect(card(map, "raised").querySelector("[data-node-turn]")).not.toBeNull();
@@ -588,10 +597,10 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     // Finished work: a green disc on a faint green surface inside a plain border.
     expect(card(map, "api").className).toContain("bg-mission-done/10");
     expect(card(map, "api").className).not.toMatch(/border-mission-done/);
-    // Outside is the node's kind: a dotted border in every state; one closed unmerged waits on the Conductor (B12, B19).
-    expect(["outside", "closed-out", "merged-out"].map((key) => card(map, key).className.includes("border-dotted"))).toEqual([true, true, true]);
-    expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
-    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Watching · outside the mission · Where it goes: ↗${"#"}1702 → main · Merged`);
+    // A waiting node's border is dotted while its wait is open or failed, solid once met; one closed unmerged is the Conductor's turn at its foot's right (B12, B19, option A).
+    expect(["outside", "closed-out", "merged-out"].map((key) => card(map, key).className.includes("border-dotted"))).toEqual([true, true, false]);
+    expect(card(map, "closed-out").querySelector("[data-wait-turn]")?.getAttribute("data-wait-turn")).toBe("conductor");
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe(`Node merged-out · Done · Watching · outside the mission · if ${"#"}1702 merges · met`);
   } finally { await map.unmount(); }
 });
 
@@ -1228,7 +1237,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
-    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } }),
+    node("outside", { kind: "wait", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } }),
     // What waits on the Conductor stays on its card.
     node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
   ];
@@ -1320,7 +1329,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     const panel = map.q('[data-mission-detail="ended"]')!;
     // No connections and nothing to resume or open as a card: neither part is drawn.
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "attention", "now", "hide", "events"]);
-    expect(panel.querySelector("[data-panel-attention]")?.textContent).toBe("! Conductor · Worker ended with work left");
+    expect(panel.querySelector("[data-panel-attention]")?.textContent).toBe("! Conductor's turn · Worker ended with work left");
     expect(panel.querySelector("[data-panel-worker-life]")?.textContent).toBe("Worker ended");
     // The operator may settle it before the Conductor does (B17); a press away from 빼기 확인 puts it back.
     const drop = panel.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
@@ -1333,7 +1342,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop", since_unix_ms: expect.any(Number) }]);
     // The Conductor's line stays readable, dimmed, once Hide raised the node after it.
     expect(panel.querySelector("[data-panel-line-behind]")?.textContent).toBe("fixing the review");
-    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent)).toEqual([expect.stringContaining("! Conductor · Worker ended with work left")]);
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent)).toEqual([expect.stringContaining("! Conductor's turn · Worker ended with work left")]);
     await act(async () => card(map, "done").click());
     const done = map.q('[data-mission-detail="done"]')!;
     // The mission deletes no file; the panel has no worktree row (D-14).
@@ -1464,7 +1473,7 @@ it("sums up an open mission beside the map until a node is picked: in progress (
     const row = (field: string) => map.q(`[data-mission-summary-row="${field}"] dd`);
     const name = (field: string) => map.q(`[data-mission-summary-row="${field}"] dt`)?.textContent;
     expect([name("attention"), name("working"), name("done")]).toEqual([undefined, "In progress 2", "Done 1"]);
-    expect(row("working")?.textContent).toBe("DocsConductor · Worker ended with work leftScreenmoving tabs");
+    expect(row("working")?.textContent).toBe("DocsConductor's turn · Worker ended with work leftScreenmoving tabs");
     expect(row("done")?.textContent).toBe("API");
     expect(row("pr")?.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("merged");
     expect(row("workers")?.textContent).toBe("2 working / up to 3");
@@ -1733,26 +1742,29 @@ it("writes each change request a mission names as its host does: `!n` on gitlab.
     const at = (number: number) => (host ? ref(host, number) : null);
     return [
       node("guard", { status: "working", pr: 45, pr_state: "pending", pr_reference: at(45), prs: [{ number: 45, state: "pending", url: null, base: "main", reference: at(45) }], base_pr: 40, ...(host ? { base_reference: at(40) } : {}) }),
-      node("moved", { kind: "external", delivery: null, status: "working", external: { pr: 44 }, outside: { base: "main", state: "pending", ...(host ? { reference: ref(host, 44) } : {}) } }),
+      node("moved", { kind: "wait", delivery: null, status: "working", wait_target: { pr: 44 }, external: { pr: 44 }, outside: { base: "main", state: "pending", ...(host ? { reference: ref(host, 44) } : {}) } }),
+      node("checks", { kind: "wait", delivery: null, status: "working", wait_target: { ci: 46 }, ...(host ? { outside: { reference: ref(host, 46) } } : {}) }),
     ];
   };
-  for (const [host, own, outside, base, stack] of [
-    ["gitlab", "!45", "↗!44", "on !40", "MR 40"],
-    ["github", "#45", "↗#44", "on #40", "PR 40"],
-    [null, "#45", "↗#44", "on #40", "PR 40"],
+  for (const [host, own, waited, checked, base, stack] of [
+    ["gitlab", "!45", "!44", "!46", "on !40", "MR 40"],
+    ["github", "#45", "#44", "#46", "on #40", "PR 40"],
+    [null, "#45", "#44", "#46", "on #40", "PR 40"],
   ] as const) {
     const map = await mount({ items: [mission({ nodes: nodes(host) })] });
     try {
       // The summary's PR row and each card's line.
       expect(map.q('[data-mission-summary-row="pr"] dd')?.textContent, `${host}`).toBe(own);
       expect(card(map, "guard").querySelector("[data-line-pr]")?.textContent, `${host}`).toBe(own);
-      expect(card(map, "moved").querySelector("[data-line-pr]")?.textContent, `${host}`).toBe(outside);
+      // A waiting node's condition names the pull request it waits on, or whose CI it waits on, the same way.
+      expect(card(map, "moved").querySelector("[data-wait-condition]")?.textContent, `${host}`).toBe(`if ${waited} merges`);
+      expect(card(map, "checks").querySelector("[data-wait-condition]")?.textContent, `${host}`).toBe(`if ${checked} CI passes`);
       expect(card(map, "guard").querySelector("[data-line-to] [title]")?.getAttribute("title"), `${host}`).toBe(stack);
-      // The node panel: the base a change stacks on, and an outside node's pull request.
+      // The node panel: the base a change stacks on, and the pull request a waiting node waits on.
       await act(async () => card(map, "guard").click());
       expect(map.q("[data-panel-base]")?.textContent, `${host}`).toBe(base);
       await act(async () => card(map, "moved").click());
-      expect(map.q("[data-panel-prs]")?.textContent, `${host}`).toBe(outside.slice(1));
+      expect(map.q("[data-panel-prs]")?.textContent, `${host}`).toBe(waited);
     } finally { await map.unmount(); }
   }
 });

@@ -419,6 +419,16 @@ impl Runtime {
                 .dormant_status_check
                 .as_ref()
                 .is_some_and(|(id, _)| id == &row.sleep_id);
+            // The wait it sleeps on, by the registration its wake goes on
+            // with (PRD core-wait B18).
+            row.wait = self
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .dormant
+                .get(&row.sleep_id)
+                .and_then(|record| record.registration.as_ref())
+                .and_then(|registration| self.wait_line_of(&registration.id));
             // Wake is offered only where it would begin; a failed wake keeps
             // the reason it failed.
             if row.wake_available
