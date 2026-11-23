@@ -420,9 +420,9 @@ pub struct Screen {
     /// How the screen draws the ask's highlighted row; `None` where the
     /// agent's table does not say.
     rows: Option<Rows>,
-    /// The first line of the command a permission was shown with, spaces
-    /// and all: the ask on the screen is that command's.
-    command: Option<String>,
+    /// The lines of the command a permission was shown with, without the
+    /// spaces at their ends: the ask on the screen is that command's.
+    command: Option<Vec<String>>,
     /// Where the agent's approval dialog draws its command.
     slot: Option<hide_agent_adapter::definition::CommandSlot>,
     /// The row the choice picks by its words, with its place: the highlighted
@@ -446,18 +446,19 @@ struct Rows {
 const ROW_PLACES: usize = 16;
 
 impl Screen {
-    /// This screen, which also shows the first line of `command`, the one
-    /// the operator was shown, as the whole of the line where the agent's
-    /// approval dialog draws its command (its table's `command`), every
-    /// space as it is: another command that starts or ends the same way, or
-    /// differs by one space, is another ask, so a first line the agent's
-    /// screen wraps, cuts or scrolls off, or one that stands only in other
-    /// words or outside the dialog, is not read as shown, and types nothing;
-    /// nor does a screen whose dialog has no such place.
+    /// This screen, which also shows `command`, the one the operator was
+    /// shown, as the whole of the lines where the agent's approval dialog
+    /// draws its command (its table's `command`), line for line, every space
+    /// but those at a line's ends as it is: another command that starts or
+    /// ends the same way, has a line more or less, or differs by one space
+    /// is another ask, so a command the agent's screen wraps, cuts or
+    /// scrolls off, or one that stands only in other words or outside the
+    /// dialog, is not read as shown, and types nothing; nor does a screen
+    /// whose dialog has no such place.
     #[must_use]
     pub fn showing(mut self, command: &str) -> Self {
-        let first = command.trim().lines().next().unwrap_or_default();
-        self.command = Some(first.trim().to_owned());
+        let lines = command.trim().lines().map(|line| line.trim().to_owned());
+        self.command = Some(lines.collect());
         self
     }
 
@@ -467,13 +468,12 @@ impl Screen {
     pub fn shows(&self, visible: &str, place: Option<usize>) -> bool {
         // A command is read only where its dialog draws it, the dialog the
         // ask's rows close.
-        let command = self.command.as_ref().is_none_or(|first| {
+        let command = self.command.as_ref().is_none_or(|lines| {
             self.rows
                 .as_ref()
                 .zip(self.slot.as_ref())
-                .is_some_and(|(rows, slot)| {
-                    rows.dialog_command(visible, slot) == Some(first.as_str())
-                })
+                .and_then(|(rows, slot)| rows.dialog_command(visible, slot))
+                .is_some_and(|shown| shown == *lines)
         });
         let row = match (&self.rows, place) {
             (Some(rows), Some(place)) => {
@@ -546,17 +546,19 @@ impl Rows {
         }
     }
 
-    /// The first line of the command the last approval dialog on `screen`
-    /// draws, past its indent and a box's border: the dialog is the one the
-    /// ask's first row (its lowest, highlighted or not) closes, found by the
-    /// nearest `slot.title` above that row, and its command line is the one
-    /// after the title, or after the first line past it that `slot.opens`
-    /// begins. `None` when the screen shows no such dialog or no line there.
+    /// The lines of the command the last approval dialog on `screen` draws,
+    /// past their indent and a box's border: the dialog is the one the ask's
+    /// first row (its lowest, highlighted or not) closes, found by the
+    /// nearest `slot.title` above that row, and its command starts on the
+    /// line after the title, or after the first line past it that
+    /// `slot.opens` begins, and ends before the next line `slot.opens`
+    /// begins, or, with no `opens`, before the first empty line. `None` when
+    /// the screen shows no such dialog, no command there or no end to it.
     fn dialog_command<'a>(
         &self,
         screen: &'a str,
         slot: &hide_agent_adapter::definition::CommandSlot,
-    ) -> Option<&'a str> {
+    ) -> Option<Vec<&'a str>> {
         let lines: Vec<&str> = screen
             .lines()
             .map(|line| line.trim_matches(BORDER))
@@ -569,17 +571,18 @@ impl Rows {
             )
         })?;
         let title = lines[..row].iter().rposition(|line| *line == slot.title)?;
+        let closes = |line: &&str| match &slot.opens {
+            Some(opens) => line.starts_with(opens.as_str()),
+            None => line.is_empty(),
+        };
         let mut at = title + 1;
-        if let Some(opens) = &slot.opens {
-            at += lines[at..row]
-                .iter()
-                .position(|line| line.starts_with(opens.as_str()))?
-                + 1;
+        if slot.opens.is_some() {
+            at += lines[at..row].iter().position(closes)? + 1;
         }
-        lines[at..row]
-            .first()
-            .copied()
-            .filter(|line| !line.is_empty())
+        let end = at + lines[at..row].iter().position(closes)?;
+        let command = &lines[at..end];
+        command.first().filter(|line| !line.is_empty())?;
+        Some(command.to_vec())
     }
 }
 
@@ -918,7 +921,13 @@ mod tests {
                         "Yes, always",
                         "No, cancel",
                     ];
-                    let text = ["Requesting permission for:", "  cargo test --workspace"]
+                    let ask = [
+                        "Requesting permission for:",
+                        "   cargo test --workspace",
+                        "",
+                        "Run this command?",
+                    ];
+                    let text = ask
                         .into_iter()
                         .map(str::to_owned)
                         .chain(rows.iter().enumerate().map(|(row, words)| {
@@ -956,7 +965,7 @@ mod tests {
         let gate = Arc::new(PaneInputGate::default());
         let open = node(None);
         let screen = choice_screen("antigravity", Ask::Permission, "deny", &[])
-            .showing("cargo test --workspace\nmore");
+            .showing("cargo test --workspace");
         let keys = ["down", "down", "down", "enter"];
         let write_with = |fake: &Arc<FakeEngine<'static>>, keys: &[&str], screen: &Screen| {
             let engine = EngineHandle::new(fake.engine());
@@ -1069,16 +1078,16 @@ mod tests {
         assert_eq!(after.calls_of("send_keys").len(), 1);
     }
 
-    /// A permission's keys wait for the first line of the command the card
-    /// showed as the whole of the line where the agent's dialog draws its
-    /// command, spaces as they are: another command that starts the same way
-    /// however long, adds a command or an argument after it, or differs by
-    /// one space is another ask; so is the command named only in the
-    /// dialog's note, in output outside the dialog or inside quotes, a first
-    /// line the screen wraps, and a screen whose dialog has no title or no
-    /// separator to find the command by.
+    /// A permission's keys wait for the command the card showed as the
+    /// whole of the lines where the agent's dialog draws its command, line
+    /// for line, spaces as they are: another command that starts the same
+    /// way however long, adds a command, an argument or a line after it,
+    /// lacks one of its lines, or differs by one space is another ask; so is
+    /// the command named only in the dialog's note, in output outside the
+    /// dialog or inside quotes, a line the screen wraps, and a screen whose
+    /// dialog has no title, no separator or no end to find the command by.
     #[test]
-    fn a_permission_waits_for_its_command_in_its_dialogs_command_line() {
+    fn a_permission_waits_for_its_whole_command_in_its_dialogs_command_lines() {
         let claude = |card: &str, screen: &str| {
             choice_screen("claude", Ask::Permission, "allow", &[])
                 .showing(card)
@@ -1094,10 +1103,7 @@ mod tests {
         };
         let write =
             "python3 -c \"from pathlib import Path; Path('notes.txt').write_text('draft')\"";
-        assert!(claude(
-            &format!("{write}\nsecond line"),
-            &dialog("Write the draft", write)
-        ));
+        assert!(claude(write, &dialog("Write the draft", write)));
         assert!(claude(
             write,
             &dialog("Write the draft", &format!("│ {write} │"))
@@ -1141,6 +1147,21 @@ mod tests {
                 "python3 -c \"from pathlib import Path; Path('notes.txt')\n .write_text('draft')\""
             )
         ));
+        // A command of many lines is the whole of the dialog's command
+        // lines: one whose first line alone matches, with a line more or
+        // less, is another ask.
+        let script = "python3 - <<'EOF'\nfrom pathlib import Path\n\nPath('notes.txt').write_text('draft')\nEOF";
+        let indented = script.replace('\n', "\n   ");
+        assert!(claude(script, &dialog("Write the draft", &indented)));
+        let other = script.replace("write_text('draft')", "unlink()");
+        assert!(!claude(script, &dialog("Write the draft", &other)));
+        let longer = format!("{script}\nrm -r build");
+        assert!(!claude(script, &dialog("Write the draft", &longer)));
+        assert!(!claude(&longer, &dialog("Write the draft", script)));
+        assert!(!claude(
+            "touch /tmp/review-safe\nrm /tmp/review-important",
+            &dialog("Make the file", safe)
+        ));
         // No dialog to find the command by: the keys are not typed.
         assert!(!claude(
             safe,
@@ -1150,16 +1171,29 @@ mod tests {
             safe,
             &format!(" Bash command\n   {safe}\n Do you want to proceed?\n ❯ 1. Yes")
         ));
-        // Antigravity names its command right under its title.
-        let antigravity =
-            choice_screen("antigravity", Ask::Permission, "allow", &[]).showing("ls -la");
+        // Antigravity draws its command right under its title, up to an
+        // empty line, as 1.5.11 does.
+        let antigravity = |card: &str, screen: &str| {
+            choice_screen("antigravity", Ask::Permission, "allow", &[])
+                .showing(card)
+                .shows(screen, Some(0))
+        };
         let asks = |command: &str| {
             format!(
-                "Requesting permission for:\n   {command}\nRun this command?\n> 1. Yes, run command\n  2. No, cancel"
+                "Requesting permission for:\n   {command}\n\nRun this command?\n> 1. Yes, run command\n  2. No, cancel"
             )
         };
-        assert!(antigravity.shows(&asks("ls -la"), Some(0)));
-        assert!(!antigravity.shows(&asks("ls -la /"), Some(0)));
+        assert!(antigravity("ls -la", &asks("ls -la")));
+        assert!(antigravity("ls -la\npwd", &asks("ls -la\n   pwd")));
+        assert!(!antigravity("ls -la", &asks("ls -la /")));
+        assert!(!antigravity("ls -la", &asks("ls -la\n   rm -r build")));
+        assert!(!antigravity("ls -la\nrm -r build", &asks("ls -la")));
+        assert!(!antigravity(
+            "ls -la",
+            "Requesting permission for:\n   ls -la\nRun this command?\n> 1. Yes, run command"
+        ));
+        let antigravity =
+            choice_screen("antigravity", Ask::Permission, "allow", &[]).showing("ls -la");
         assert!(!antigravity.shows(
             "● Ran (ls -la)\n> 1. Yes, run command\n  2. No, cancel",
             Some(0)

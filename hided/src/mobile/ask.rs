@@ -306,7 +306,8 @@ mod tests {
                 "command": "cargo test\nTOKEN=x", "command_truncated": true, "answerable": true,
                 "choices": [{"id": "allow"}, {"id": "allow_always"}, {"id": "deny"}]})
         );
-        // Every key waits for the command's first line, Esc included.
+        // Every key waits for the whole command, not the card's cut of it,
+        // Esc included.
         let (typed, screen) =
             keys(agent(&claude), Some(&shown), "100", "permission", "deny").unwrap();
         assert_eq!(typed, ["esc"]);
@@ -315,10 +316,12 @@ mod tests {
                 " Bash command\n Run the tests\n╌╌╌╌\n {command}\n╌╌╌╌\n Do you want to proceed?\n ❯ 1. Yes"
             )
         };
+        let whole = "cargo test\n TOKEN=x\n more";
         assert!(!screen.shows(" Do you want to proceed?\n ❯ 1. Yes", None));
-        assert!(screen.shows(&dialog("cargo test"), None));
+        assert!(screen.shows(&dialog(whole), None));
         let (_, screen) = keys(agent(&claude), Some(&shown), "100", "permission", "allow").unwrap();
-        assert!(screen.shows(&dialog("cargo test"), Some(0)));
+        assert!(screen.shows(&dialog(whole), Some(0)));
+        assert!(!screen.shows(&dialog("cargo test\n TOKEN=x"), Some(0)));
         assert!(!screen.shows(&dialog("ls -la"), Some(0)));
 
         let plan = open("toolu_2", None, true);
