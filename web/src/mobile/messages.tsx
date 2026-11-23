@@ -7,7 +7,8 @@ import { cn } from "../lib/utils";
 import { renderMarkdown } from "./markdown";
 import { messageTime, type ConversationMessage } from "./protocol";
 import { SentFiles } from "./Attachments";
-import type { NamedFile, SentFile } from "./uploads";
+import type { NamedFile } from "./sentReplies";
+import type { SentFile } from "./uploads";
 
 /** Memoized: a message never changes once it arrived, so its Markdown is parsed once. */
 export const MessageItem = memo(function MessageItem({ message, timed, files }: {

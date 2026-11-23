@@ -5,10 +5,11 @@
 // fills the eight frames hided takes from it at once, not even across a cancel and the next file. A lost connection takes the
 // computer's copies with it (hided releases a connection's uploads no reply committed), so every file not yet sent is uploaded again
 // under a new stage once the phone is back; the relay's daily limit ends the upload with its own line. A reply owns the files it
-// named when it was sent: only those leave the bar once it lands, and a file picked while it was on its way stays. A sent reply's
-// thumbnails stay on this phone only, for the conversation they were sent in, found by the stage in each file's path.
+// named when it was sent: only those leave the bar once it lands, and a file picked while it was on its way stays; the reply is kept
+// with its files' thumbnails for the conversation it went to (`sentReplies.ts`).
 
-import type { AgentKey, PhoneMessage } from "./protocol";
+import { keyTag, type AgentKey, type PhoneMessage } from "./protocol";
+import { withReply, type SentReply } from "./sentReplies";
 import { patch, usePhone } from "./store";
 
 /** The largest file one reply attaches, after a photo was made smaller (hided `uploads::FILE_BYTES`). */
@@ -54,7 +55,6 @@ export type PreparedFile = { name: string; bytes: Uint8Array; kind: "photo" | "f
 
 /** A file of a sent reply, kept for its conversation on this phone. */
 export type SentFile = { stage: string; name: string; size: number; kind: "photo" | "file"; thumb: string | null };
-type SentReply = { tag: string; files: SentFile[] };
 
 type Upload = { id: string; stage: string; bytes: Uint8Array; chunks: number; next: number; acked: number; ended: boolean };
 
@@ -68,10 +68,6 @@ let unanswered = 0;
 /** Stages to drop on the computer, sent ahead of any other upload frame once the window has room. */
 const cancels: string[] = [];
 let fileCounter = 0;
-/** The sent replies whose files this phone still draws, oldest first. */
-const sentReplies: SentReply[] = [];
-/** How many sent replies keep their files on this phone; an older one's files are named from its paths alone. */
-export const SENT_REPLIES = 32;
 
 /** The connection's sender; set once by `connection.ts`. */
 export function bindUploads(send: (message: PhoneMessage) => boolean): void {
@@ -298,63 +294,24 @@ export function reuploadFiles(): void {
   pump();
 }
 
-function tagOf(key: AgentKey): string {
-  return `${key.device_id}|${key.pane_id}`;
-}
-
 /**
- * The reply that named the files `ids` landed: those files leave the bar, and their thumbnails stay for this agent's conversation on
- * this phone, under the stages the reply named. A file picked while the reply was on its way is not the reply's, and stays.
+ * The reply that named the files `ids` landed in `key`'s conversation: those files leave the bar, and the reply is kept with their
+ * thumbnails under the stages it named (`sentReplies.ts`). A file picked while the reply was on its way is not the reply's, and stays.
  */
 export function filesSent(key: AgentKey, ids: readonly string[]): void {
   const mine = files().filter((file) => ids.includes(file.id));
   if (mine.length === 0) return;
-  sentReplies.push({ tag: tagOf(key), files: mine.map((file) => ({ stage: stages.get(file.id) ?? "", name: file.name, size: file.size, kind: file.kind, thumb: file.thumb })) });
-  while (sentReplies.length > SENT_REPLIES) sentReplies.shift();
+  const reply: SentReply = {
+    tag: keyTag(key),
+    files: mine.map((file) => ({ stage: stages.get(file.id) ?? "", name: file.name, size: file.size, kind: file.kind, thumb: file.thumb })),
+  };
+  patch({ sent: withReply(usePhone.getState().sent, reply) });
   for (const id of ids) {
     held.delete(id);
     stages.delete(id);
   }
   const left = files().filter((file) => !ids.includes(file.id));
   patch(left.length > 0 ? { files: left } : { files: [], fileNotice: null });
-}
-
-const STAGE_NAME = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(.+)$/;
-
-/** A file an operator's message names: the name the operator picked and the stage it was uploaded under, when it was. */
-export type NamedFile = { name: string; stage: string | null };
-
-/**
- * The files an operator's message attached, read from the front of its words: each a path in double quotes, as the computer types an
- * attached file, then the words. A message that does not start with one is all words.
- */
-export function attachedOf(text: string): { files: NamedFile[]; words: string } {
-  const named: NamedFile[] = [];
-  let rest = text;
-  for (;;) {
-    const match = /^"((?:[^"\\]|\\.)*)"(?: |$)/.exec(rest);
-    if (!match) break;
-    const path = match[1]!.replace(/\\(.)/g, "$1");
-    if (!/^(?:\/|[A-Za-z]:[\\/])/.test(path)) break;
-    const base = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
-    const staged = STAGE_NAME.exec(base);
-    named.push(staged ? { name: staged[2]!, stage: staged[1]! } : { name: base, stage: null });
-    rest = rest.slice(match[0].length);
-  }
-  return { files: named, words: named.length > 0 ? rest : text };
-}
-
-/**
- * The files an operator's message of `key`'s conversation attached, as this phone draws them: a reply this phone sent, found by a
- * stage in one of the message's paths (a stage names one upload, so it names one reply), with all its files and their thumbnails;
- * any other message's files by their names alone, and a message with no path in front attaches none.
- */
-export function shownFiles(key: AgentKey, text: string): { files: (SentFile | NamedFile)[]; words: string } {
-  const { files: named, words } = attachedOf(text);
-  const tag = tagOf(key);
-  const stagesNamed = named.flatMap((file) => (file.stage ? [file.stage] : []));
-  const sent = stagesNamed.length > 0 ? sentReplies.find((reply) => reply.tag === tag && reply.files.some((file) => stagesNamed.includes(file.stage))) : undefined;
-  return { files: sent ? sent.files : named, words };
 }
 
 /** Forgets what this module holds; for tests. */
@@ -364,6 +321,6 @@ export function resetUploads(): void {
   cancels.length = 0;
   held.clear();
   stages.clear();
-  sentReplies.length = 0;
+  patch({ sent: [] });
   sender = () => false;
 }

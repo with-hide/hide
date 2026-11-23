@@ -3,26 +3,24 @@
 // end as the operator can act on; a reply takes only the files it named, and its thumbnails stay for its own conversation.
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { attachPicked } from "./pickFiles";
-import { MAX_FRAME_BYTES, type PhoneMessage } from "./protocol";
-import { patch, usePhone } from "./store";
+import { MAX_FRAME_BYTES, type AgentKey, type ConversationMessage, type PhoneMessage } from "./protocol";
+import { SENT_REPLIES, attachedOf, shownFiles } from "./sentReplies";
+import { applyFrame, patch, usePhone } from "./store";
 import {
   BATCH_BYTES,
   CHUNK,
   FILE_BYTES,
   addFile,
-  attachedOf,
   bindUploads,
   fileName,
-  filesSent,
   onAttachAck,
+  filesSent,
   removeFile,
   replyFiles,
   reserveFile,
   resetUploads,
   retryFile,
   reuploadFiles,
-  SENT_REPLIES,
-  shownFiles,
   uploadsConnected,
   uploadsLost,
 } from "./uploads";
@@ -32,7 +30,7 @@ let sent: PhoneMessage[] = [];
 beforeEach(() => {
   sent = [];
   resetUploads();
-  patch({ connected: true, files: [], fileNotice: null });
+  patch({ connected: true, files: [], fileNotice: null, detail: null });
   bindUploads((message) => {
     if (!usePhone.getState().connected) return false;
     sent.push(message);
@@ -224,45 +222,133 @@ it("reads the quoted paths in front of an operator's message as its files and th
   expect(attachedOf('"not a path" 그대로')).toEqual({ files: [], words: '"not a path" 그대로' });
 });
 
-/** Uploads one file to the end and sends it with a reply; its stage. */
-function sendOne(key: { device_id: string; pane_id: string }, name: string, kind: "photo" | "file" = "file"): string {
-  const id = attach(name, 4, kind);
-  const stage = ofType("attach_begin").at(-1)!.stage;
-  onAttachAck({ stage, begun: true });
-  onAttachAck({ stage, seq: 0 });
-  onAttachAck({ stage, done: true });
-  filesSent(key, [id]);
-  return stage;
+const KEY: AgentKey = { device_id: "local", pane_id: "w1:p1" };
+
+/** Opens `key`'s detail on a conversation of `messages`, as its first page reaches the phone. */
+function openConversation(messages: ConversationMessage[], key: AgentKey = KEY): void {
+  patch({ detail: { key, view: "conversation", tab: "conversation", rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null } });
+  applyFrame({ type: "conversation", ...key, state: "ok", mode: "reset", messages, before: null });
 }
 
+/** Messages the computer reads from the agent's session after the page the phone holds. */
+function arrive(...messages: ConversationMessage[]): void {
+  applyFrame({ type: "conversation", ...KEY, state: "ok", mode: "append", messages });
+}
+
+/** The operator's message as hided projects it: its words, the images the agent recorded it with, and the files it recorded beside it. */
+function you(id: number, text: string, images = 0, files: string[] = []): ConversationMessage {
+  return { id, who: "you", text, truncated: false, at_ms: 1_000 + id, ...(images > 0 ? { images } : {}), ...(files.length > 0 ? { files } : {}) };
+}
+
+function agentSaid(id: number, text: string): ConversationMessage {
+  return { id, who: "agent", text, truncated: false, at_ms: 1_000 + id };
+}
+
+/** What the open conversation draws over `message`: its files and the words after them. */
+function shown(message: ConversationMessage, key: AgentKey = KEY) {
+  return shownFiles(usePhone.getState().sent, key, message);
+}
+
+/** Uploads files to the end and sends them with a reply from the open conversation as it stands; their stages. */
+function sendFiles(names: readonly string[], kind: "photo" | "file" = "file", key: AgentKey = KEY): string[] {
+  const ids: string[] = [];
+  const stages: string[] = [];
+  for (const name of names) {
+    ids.push(attach(name, 4, kind));
+    const stage = ofType("attach_begin").at(-1)!.stage;
+    stages.push(stage);
+    onAttachAck({ stage, begun: true });
+    onAttachAck({ stage, seq: 0 });
+    onAttachAck({ stage, done: true });
+  }
+  filesSent(key, ids);
+  return stages;
+}
+
+const THUMB = "data:image/jpeg;base64,AA==";
+
 it("draws this phone's thumbnails only for the reply whose stage the message names, in its own conversation, and names any other file", () => {
-  const key = { device_id: "local", pane_id: "w1:p1" };
-  const stage = sendOne(key, "screen.jpg", "photo");
+  openConversation([agentSaid(10, "화면을 봐야 해요")]);
+  const [stage] = sendFiles(["screen.jpg"], "photo");
   expect(usePhone.getState().files).toEqual([]);
 
-  const recorded = `"/state/attachments/${stage}-screen.jpg" 확인해 줘.`;
-  const mine = shownFiles(key, recorded);
+  const recorded = you(20, `"/state/attachments/${stage}-screen.jpg" 확인해 줘.`);
+  arrive(recorded);
+  const mine = shown(recorded);
   expect(mine.words).toBe("확인해 줘.");
-  expect(mine.files).toEqual([expect.objectContaining({ name: "screen.jpg", kind: "photo", thumb: "data:image/jpeg;base64,AA==" })]);
-  // The same words sent again with no file are another reply, which attached nothing.
-  expect(shownFiles(key, "확인해 줘.")).toEqual({ files: [], words: "확인해 줘." });
+  expect(mine.files).toEqual([expect.objectContaining({ name: "screen.jpg", kind: "photo", thumb: THUMB })]);
+  // The same words sent again with no file are another message, which attached nothing.
+  const again = you(30, "확인해 줘.");
+  arrive(again);
+  expect(shown(again)).toEqual({ files: [], words: "확인해 줘." });
   // A second photo under the same words is its own reply, found by its own stage.
-  const later = sendOne(key, "other.jpg", "photo");
-  expect(shownFiles(key, `"/state/attachments/${later}-other.jpg" 확인해 줘.`).files).toEqual([expect.objectContaining({ name: "other.jpg", stage: later })]);
+  const [later] = sendFiles(["other.jpg"], "photo");
+  const other = you(40, `"/state/attachments/${later}-other.jpg" 확인해 줘.`);
+  arrive(other);
+  expect(shown(other).files).toEqual([expect.objectContaining({ name: "other.jpg", stage: later })]);
   // Another agent's conversation shows the file by its name alone.
-  expect(shownFiles({ device_id: "local", pane_id: "w1:p2" }, recorded).files).toEqual([{ name: "screen.jpg", stage }]);
+  expect(shown(recorded, { device_id: "local", pane_id: "w1:p2" }).files).toEqual([{ name: "screen.jpg", stage }]);
+});
+
+it("finds a reply by the upload id of a file the agent recorded beside the words, and draws images with no path as photos with no name", () => {
+  openConversation([agentSaid(100, "버퍼를 줄였어요")]);
+  const [photo] = sendFiles(["IMG_0001.jpg"], "photo");
+  // Codex took the photo in as an image and kept its path beside the words.
+  const recorded = you(200, "확인해줘", 1, [`${photo}-IMG_0001.jpg`]);
+  arrive(recorded);
+  expect(shown(recorded)).toEqual({ files: [expect.objectContaining({ name: "IMG_0001.jpg", thumb: THUMB })], words: "확인해줘" });
+  // A photo sent alone right after, one photo like the first, is a message of the image alone, found by its own id only.
+  const [alone] = sendFiles(["IMG_0002.jpg"], "photo");
+  const onlyPhoto = you(300, "", 1, [`${alone}-IMG_0002.jpg`]);
+  arrive(onlyPhoto);
+  expect(shown(onlyPhoto).files).toEqual([expect.objectContaining({ name: "IMG_0002.jpg", thumb: THUMB })]);
+  expect(shown(recorded).files).toEqual([expect.objectContaining({ name: "IMG_0001.jpg" })]);
+
+  // A photo pasted on the computer lands first with as many images as this phone's next reply: it names no upload, so it is a photo
+  // with no name, and the phone's reply still finds its own. The same words later with an image whose path the agent dropped take none
+  // of this phone's files either.
+  const [third] = sendFiles(["IMG_0003.jpg"], "photo");
+  const pasted = you(400, "", 1);
+  const mine = you(450, "이것도", 1, [`${third}-IMG_0003.jpg`]);
+  const pathless = you(500, "확인해줘", 2);
+  arrive(pasted, mine, pathless);
+  expect(shown(pasted)).toEqual({ files: [{ name: null, stage: null }], words: "" });
+  expect(shown(mine).files).toEqual([expect.objectContaining({ name: "IMG_0003.jpg", thumb: THUMB })]);
+  expect(shown(pathless)).toEqual({
+    files: [
+      { name: null, stage: null },
+      { name: null, stage: null },
+    ],
+    words: "확인해줘",
+  });
+  // Another phone's file the agent recorded is named, with no thumbnail.
+  const elsewhere = you(600, "", 1, ["01234567-0123-4123-8123-0123456789ab-shot.jpg"]);
+  arrive(elsewhere);
+  expect(shown(elsewhere).files).toEqual([{ name: "shot.jpg", stage: "01234567-0123-4123-8123-0123456789ab" }]);
 });
 
 it("takes off the bar only the files the landed reply named, and keeps a file picked while it was on its way", () => {
-  const key = { device_id: "local", pane_id: "w1:p1" };
+  openConversation([]);
   attach("sent.log", 2);
   const stage = ofType("attach_begin")[0]!.stage;
   onAttachAck({ stage, done: true });
   const reply = replyFiles()!;
   const picked = attach("later.log", CHUNK * 2);
-  filesSent(key, reply.ids);
+  filesSent(KEY, reply.ids);
   expect(usePhone.getState().files.map((file) => [file.id, file.state])).toEqual([[picked, "uploading"]]);
-  expect(shownFiles(key, `"/state/attachments/${stage}-sent.log" 봐 줘.`).files.map((file) => file.name)).toEqual(["sent.log"]);
+  const recorded = you(10, `"/state/attachments/${stage}-sent.log" 봐 줘.`);
+  arrive(recorded);
+  expect(shown(recorded).files.map((file) => file.name)).toEqual(["sent.log"]);
+});
+
+it("keeps the files of the last 32 replies, and names an older reply's files from its paths alone", () => {
+  openConversation([]);
+  const stages = Array.from({ length: SENT_REPLIES + 1 }, (_, index) => sendFiles([`shot-${index}.jpg`], "photo")[0]!);
+  const messages = stages.map((stage, index) => you(index + 1, `"/state/attachments/${stage}-shot-${index}.jpg" 봐 줘.`));
+  arrive(...messages);
+  expect(shown(messages[0]!).files).toEqual([{ name: "shot-0.jpg", stage: stages[0] }]);
+  expect(shown(messages[1]!).files).toEqual([expect.objectContaining({ name: "shot-1.jpg", thumb: THUMB })]);
+  expect(shown(messages[SENT_REPLIES]!).files).toEqual([expect.objectContaining({ name: `shot-${SENT_REPLIES}.jpg`, thumb: THUMB })]);
 });
 
 it("leaves out a photo the phone cannot make smaller with its line, and never sends the original", async () => {
@@ -273,11 +359,4 @@ it("leaves out a photo the phone cannot make smaller with its line, and never se
   expect(ofType("attach_begin")).toEqual([]);
 });
 
-it("keeps the files of the last 32 replies, and names an older reply's files from its paths alone", () => {
-  const key = { device_id: "local", pane_id: "w1:p1" };
-  const stages = Array.from({ length: SENT_REPLIES + 1 }, (_, index) => sendOne(key, `shot-${index}.jpg`, "photo"));
-  const message = (index: number) => `"/state/attachments/${stages[index]}-shot-${index}.jpg" 봐 줘.`;
-  expect(shownFiles(key, message(0)).files).toEqual([{ name: "shot-0.jpg", stage: stages[0] }]);
-  expect(shownFiles(key, message(1)).files).toEqual([expect.objectContaining({ name: "shot-1.jpg", thumb: "data:image/jpeg;base64,AA==" })]);
-  expect(shownFiles(key, message(SENT_REPLIES)).files).toEqual([expect.objectContaining({ name: `shot-${SENT_REPLIES}.jpg`, thumb: "data:image/jpeg;base64,AA==" })]);
-});
+

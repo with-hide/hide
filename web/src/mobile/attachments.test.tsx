@@ -120,3 +120,50 @@ it("sends the words and the files as one input once every file is in, and draws 
     await unmount();
   }
 });
+
+it("draws a photo the agent took in as an image over the message that names its upload, an image with no path as a photo with no name, and a photo sent alone with no bubble", async () => {
+  const { container, serve, type, submit, of, uploads, unmount } = await openDetail({ attachments: true });
+  try {
+    const at = Date.now();
+    const said = (id: number, who: "you" | "agent", text: string, images = 0, files: string[] = []) => ({
+      id, who, text, truncated: false, at_ms: at + id, ...(images > 0 ? { images } : {}), ...(files.length > 0 ? { files } : {}),
+    });
+    const conversation = (mode: "reset" | "append", ...messages: ReturnType<typeof said>[]) =>
+      serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode, before: null, running: null, messages });
+    const reply = async (name: string, words: string) => {
+      const photo = uploads.reserveFile(name, "photo")!;
+      await act(async () => uploads.addFile(photo, { name, bytes: new Uint8Array([1, 2, 3]), kind: "photo", thumb: "data:image/jpeg;base64,AA==" }));
+      const stage = (of("attach_begin").at(-1) as { stage: string }).stage;
+      await serve({ type: "attach_ack", stage, done: true });
+      await type(words);
+      await submit();
+      const requestId = (of("input").at(-1) as { request_id: string }).request_id;
+      await serve({ type: "input_result", request_id: requestId, ok: true, reason: null });
+      return stage;
+    };
+    await conversation("reset", said(100, "agent", "버퍼를 줄였어요"));
+    const first = await reply("IMG_0001.jpg", "확인해줘");
+    // The agent took the photo in as an image and recorded its path beside the words; later the same words come with a photo whose
+    // path no record kept, and a photo pasted on the computer stands alone.
+    await conversation("append", said(200, "you", "확인해줘", 1, [`${first}-IMG_0001.jpg`]), said(300, "agent", "봤어요"), said(400, "you", "확인해줘", 1), said(500, "you", "", 1));
+    const mine = () => [...container.querySelectorAll<HTMLElement>('[data-phone-message="you"]')];
+    const drawn = (message: HTMLElement) => [
+      message.querySelector("p")?.textContent ?? null,
+      message.querySelectorAll("[data-phone-sent-photo]").length,
+      [...message.querySelectorAll("[data-phone-sent-image]")].map((chip) => chip.textContent),
+    ];
+    expect(mine().map(drawn)).toEqual([
+      ["확인해줘", 1, []],
+      ["확인해줘", 0, ["Photo"]],
+      [null, 0, ["Photo"]],
+    ]);
+
+    const second = await reply("IMG_0002.jpg", "");
+    await conversation("append", said(600, "you", "", 1, [`${second}-IMG_0002.jpg`]));
+    const alone = mine().at(-1)!;
+    expect(alone.querySelector<HTMLImageElement>('[data-phone-sent-photo="IMG_0002.jpg"] img')!.src).toBe("data:image/jpeg;base64,AA==");
+    expect(alone.querySelector("p")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

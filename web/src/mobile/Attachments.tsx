@@ -10,7 +10,8 @@ import { formatBytes } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import type { ComposerFile, FileNotice, NamedFile, SentFile } from "./uploads";
+import type { NamedFile } from "./sentReplies";
+import type { ComposerFile, FileNotice, SentFile } from "./uploads";
 
 function useSize(): (bytes: number) => string {
   const { i18n } = useInterfaceTranslation();
@@ -133,15 +134,24 @@ function isSent(file: SentFile | NamedFile): file is SentFile {
 
 /**
  * The files over the operator's bubble, right-aligned: the photos this phone sent as their thumbnails, any other file as its mark,
- * name and size; a file read back from the record alone by its name.
+ * name and size; a file read back from the record alone by its name, and an image the agent recorded with no path as a photo.
  */
 export function SentFiles({ files }: { files: readonly (SentFile | NamedFile)[] }) {
+  const { t } = useInterfaceTranslation();
   const size = useSize();
   if (files.length === 0) return null;
   return (
     <ul className="flex max-w-5/6 flex-wrap justify-end gap-sm pb-sm" data-phone-sent-files="true">
       {files.map((file, index) => {
         const sent = isSent(file) ? file : null;
+        if (file.name === null) {
+          return (
+            <li key={`image-${index}`} className="flex items-center gap-sm rounded-xl bg-secondary px-lg py-sm" data-phone-sent-image="true">
+              <ImageIcon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 text-muted-foreground" />
+              <span className="text-body text-foreground">{t("mobile.attach.photo")}</span>
+            </li>
+          );
+        }
         if (sent?.kind === "photo" && sent.thumb) {
           return (
             <li key={`${file.name}-${index}`} className="overflow-hidden rounded-lg border border-border bg-secondary" data-phone-sent-photo={file.name}>

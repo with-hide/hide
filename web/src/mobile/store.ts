@@ -4,6 +4,7 @@
 // agent it opened by id, never by name (D-17).
 
 import type { ComposerFile, FileNotice } from "./uploads";
+import type { SentReply } from "./sentReplies";
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
 import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneAsk, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, Running, ServerFrame, StartCatalog } from "./protocol";
@@ -219,6 +220,8 @@ type PhoneState = {
   files: ComposerFile[];
   /** The one line under them: what was left out, or why an upload stopped. */
   fileNotice: FileNotice | null;
+  /** The replies with files this phone sent, oldest first, kept for their thumbnails (`sentReplies.ts`). */
+  sent: readonly SentReply[];
   /** The other machines the open computer opens that run work of their own, as its last meta frame named them (B56). */
   otherMachines: readonly OtherMachine[];
   missionOpen: string | null;
@@ -314,6 +317,7 @@ const initial: PhoneState = {
   takesFiles: false,
   files: [],
   fileNotice: null,
+  sent: [],
   otherMachines: [],
   missionOpen: null,
   missions: null,

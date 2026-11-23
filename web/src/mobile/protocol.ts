@@ -307,6 +307,10 @@ export type ConversationMessage = {
   text: string;
   truncated: boolean;
   at_ms: number;
+  /** The images an operator's message carries as the agent recorded them (a photo it took in from its path); absent at none. */
+  images?: number;
+  /** The files the agent recorded beside an operator's message by their paths, the last part of each; absent at none. */
+  files?: string[];
 };
 
 /** The agent kinds a phone may start (hided/src/mobile/start.rs KINDS). */

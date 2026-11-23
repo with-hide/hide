@@ -61,10 +61,24 @@ pub struct Message {
     pub text: String,
     pub truncated: bool,
     pub at_ms: u64,
+    /// The images the operator's message carries as the agent recorded them
+    /// (a photo whose path the agent took in as an image), never their
+    /// bytes; absent at none. A phone finds its own reply's photos by it.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub images: u32,
+    /// The names of the files the agent recorded beside the operator's
+    /// message with their paths (`ConversationEvent::attached`); absent at
+    /// none. A phone finds its own reply by the upload id in such a name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
     /// The native message this record is a part of (Grok writes a prompt's
     /// blocks and an answer's text runs as separate records).
     #[serde(skip)]
     part: Option<String>,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 impl Message {
@@ -79,6 +93,8 @@ fn join(messages: Vec<Message>) -> Vec<Message> {
     for message in messages {
         match joined.last_mut() {
             Some(last) if last.continued_by(&message) => {
+                last.images += message.images;
+                last.files.extend(message.files);
                 if !last.truncated {
                     last.text
                         .push_str(if last.who == "agent" { "\n\n" } else { "\n" });
@@ -672,29 +688,39 @@ fn messages_from(parsed: hide_session::ParsedSession) -> Vec<Message> {
                 EventKind::Interrupted => "stopped",
                 EventKind::Injected => return None,
             };
+            let part = event.part().map(str::to_owned);
             message(
                 id,
                 who,
                 &event.text,
+                event.images,
+                event.attached,
                 event.at_unix_ms,
-                event.part().map(str::to_owned),
+                part,
             )
         })
         .collect()
 }
 
 /// The message a phone shows, cut at `MESSAGE_CHARS`; `None` for one with
-/// no text, such as a message of images alone. `part` names the native
+/// neither text nor, from the operator, an image. `part` names the native
 /// message a split record belongs to.
 fn message(
     id: u64,
     who: &'static str,
     text: &str,
+    images: u32,
+    files: Vec<String>,
     at_ms: u64,
     part: Option<String>,
 ) -> Option<Message> {
     let text = text.trim();
-    if text.is_empty() {
+    let (images, files) = if who == "you" {
+        (images, files)
+    } else {
+        (0, Vec::new())
+    };
+    if text.is_empty() && images == 0 {
         return None;
     }
     let truncated = text.chars().nth(MESSAGE_CHARS).is_some();
@@ -709,6 +735,8 @@ fn message(
         text,
         truncated,
         at_ms,
+        images,
+        files,
         part,
     })
 }
@@ -918,6 +946,105 @@ mod tests {
             ["you", "agent"]
         );
         assert_eq!(page.before, None);
+    }
+
+    /// A photo whose path the agent took in as an image: the message keeps
+    /// the operator's words and says how many images it carries, and a
+    /// photo sent alone still reaches the phone, with no words. Claude Code
+    /// keeps no path beside an image, so such a message names no file.
+    #[test]
+    fn an_operators_images_reach_the_phone_as_a_count_and_a_photo_alone_is_kept() {
+        let pasted = |text: &str, images: usize, second: u32| {
+            let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+            content.retain(|_| !text.is_empty());
+            content.extend((0..images).map(|_| {
+                serde_json::json!({"type": "image", "source": {"type": "base64",
+                    "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="}})
+            }));
+            serde_json::json!({
+                "type": "user", "origin": {"kind": "human"},
+                "timestamp": format!("2026-09-29T10:00:{second:02}Z"),
+                "message": {"role": "user", "content": content},
+            })
+            .to_string()
+        };
+        let lines = [
+            pasted("확인해줘", 1, 1),
+            assistant("봤어요", 2),
+            pasted("", 2, 3),
+            human("확인해줘", 4),
+        ];
+        let (_directory, path) = transcript(&lines);
+        let (page, _) = page_before(&path, Agent::Claude, None).unwrap();
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| (message.who, message.text.as_str(), message.images))
+                .collect::<Vec<_>>(),
+            [
+                ("you", "확인해줘", 1),
+                ("agent", "봤어요", 0),
+                ("you", "", 2),
+                ("you", "확인해줘", 0),
+            ]
+        );
+        let wire = serde_json::to_value(&page.messages).unwrap();
+        assert_eq!(wire[0]["images"], 1);
+        assert!(wire[3].get("images").is_none(), "{wire}");
+        assert!(wire[0].get("files").is_none(), "{wire}");
+        assert!(!wire.to_string().contains("/9j/"), "{wire}");
+    }
+
+    /// Codex keeps the path of each file it attached beside the message: the
+    /// phone gets each file's name (with the upload id a phone sent it
+    /// under), never the folders, and the words without Codex's wrappers.
+    #[test]
+    fn the_files_codex_recorded_with_a_message_reach_the_phone_by_name() {
+        let user = |content: serde_json::Value, second: u32| {
+            serde_json::json!({
+                "timestamp": format!("2026-10-03T01:00:{second:02}.000Z"), "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": content},
+            })
+            .to_string()
+        };
+        let photo = "0199a000-0000-4000-8000-000000000001-IMG_0001.jpg";
+        let log = "0199a000-0000-4000-8000-000000000002-holder.log";
+        let wrapped = |name: &str| {
+            [
+                serde_json::json!({"type": "input_text",
+                    "text": format!("<image name=[Image #1] path=\"/Users/me/.hide/state/attachments/{name}\">")}),
+                serde_json::json!({"type": "input_image", "image_url": "data:image/jpeg;base64,/9j/4AAQ", "detail": "auto"}),
+                serde_json::json!({"type": "input_text", "text": "</image>"}),
+            ]
+        };
+        let mut both = vec![serde_json::json!({"type": "input_text",
+            "text": format!("\n# Files mentioned by the user:\n\n## holder.log: /Users/me/.hide/state/attachments/{log}\n")})];
+        both.extend(wrapped(photo));
+        both.push(serde_json::json!({"type": "input_text", "text": "확인해줘"}));
+        let lines = [
+            user(serde_json::Value::Array(both), 1),
+            user(serde_json::Value::Array(wrapped(photo).to_vec()), 2),
+            user(
+                serde_json::json!([{"type": "input_text", "text": "확인해줘"}]),
+                3,
+            ),
+        ];
+        let (_directory, path) = transcript(&lines);
+        let (page, _) = page_before(&path, Agent::Codex, None).unwrap();
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| (message.text.as_str(), message.images, message.files.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("확인해줘", 1, vec![log.to_owned(), photo.to_owned()]),
+                ("", 1, vec![photo.to_owned()]),
+                ("확인해줘", 0, Vec::new()),
+            ]
+        );
+        let wire = serde_json::to_string(&page.messages).unwrap();
+        assert!(!wire.contains("/Users/me"), "{wire}");
+        assert!(!wire.contains("/9j/"), "{wire}");
     }
 
     #[test]

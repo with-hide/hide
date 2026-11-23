@@ -457,6 +457,12 @@ pub struct ConversationEvent {
     /// Images attached to the message; their bytes never enter `text`, and
     /// a message of images alone has empty `text`.
     pub images: u32,
+    /// The names of the files the agent recorded beside the operator's
+    /// message with their paths (Codex's image wrappers and its list of
+    /// files mentioned), the last part of each path only; never read from
+    /// the words, which keep their own paths.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attached: Vec<String>,
     /// The native message this record is a part of, for a format that
     /// writes one message as several records (Grok's prompt blocks and an
     /// answer's text runs); consecutive parts become one event.
@@ -473,6 +479,8 @@ struct OwnedConversationEvent {
     at_unix_ms: u64,
     text: String,
     images: u32,
+    #[serde(default)]
+    attached: Vec<String>,
     part: Option<String>,
 }
 
@@ -493,6 +501,7 @@ impl TryFrom<OwnedConversationEvent> for ConversationEvent {
             at_unix_ms: event.at_unix_ms,
             text: event.text,
             images: event.images,
+            attached: event.attached,
             part: event.part,
         })
     }
@@ -523,6 +532,7 @@ impl ConversationEvent {
             at_unix_ms,
             text: text.into(),
             images: 0,
+            attached: Vec::new(),
             part: None,
         }
     }
@@ -542,6 +552,11 @@ impl ConversationEvent {
 
     fn with_images(mut self, images: u32) -> Self {
         self.images = images;
+        self
+    }
+
+    fn with_attached(mut self, attached: Vec<String>) -> Self {
+        self.attached = attached;
         self
     }
 
@@ -572,6 +587,7 @@ impl ConversationEvent {
             self.text.push_str(&next.text);
         }
         self.images += next.images;
+        self.attached.extend(next.attached);
         self.provider_injected |= next.provider_injected;
     }
 
@@ -1800,6 +1816,7 @@ fn parse_codex_line(item: &Value) -> LineResult {
         _ => return LineResult::Ignore,
     };
     let images = image_blocks(payload.get("content"), "input_image");
+    let attached = codex_attached(role, payload.get("content"));
     let text = match session_text(codex_own_text(role, payload.get("content")).as_ref()) {
         Some(text) => text,
         None if role == "user" && images > 0 => String::new(),
@@ -1852,7 +1869,51 @@ fn parse_codex_line(item: &Value) -> LineResult {
     } else {
         text
     };
-    LineResult::Event(ConversationEvent::new(role, kind, timestamp, text).with_images(images))
+    LineResult::Event(
+        ConversationEvent::new(role, kind, timestamp, text)
+            .with_images(images)
+            .with_attached(attached),
+    )
+}
+
+/// The names of the files a Codex user message attached, from the paths
+/// Codex wrote around them (`codex_own_text`): an image's
+/// `<image name=[Image #N] path="...">` and each `## name: path` line of
+/// `# Files mentioned by the user:`, each name once, in order.
+fn codex_attached(role: &str, content: Option<&Value>) -> Vec<String> {
+    let (true, Some(Value::Array(blocks))) = (role == "user", content) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<&str> = Vec::new();
+    for text in blocks
+        .iter()
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .map(str::trim)
+    {
+        if let Some(path) = text
+            .strip_prefix("<image name=")
+            .and_then(|rest| rest.split_once(" path=\""))
+            .and_then(|(_, path)| path.strip_suffix("\">"))
+        {
+            paths.push(path);
+        } else if let Some(listed) = text.strip_prefix("# Files mentioned by the user:") {
+            paths.extend(
+                listed
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("## "))
+                    .filter_map(|line| line.split_once(": "))
+                    .map(|(_, path)| path.trim()),
+            );
+        }
+    }
+    let mut names: Vec<String> = Vec::new();
+    for path in paths {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        if !name.is_empty() && !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 /// What a Codex user message wrapped in `<codex_internal_context>` is.

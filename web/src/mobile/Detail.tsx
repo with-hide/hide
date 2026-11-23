@@ -28,7 +28,8 @@ import { AskCardView, AskStrip } from "./AskCard";
 import { MessageItem } from "./messages";
 import { AttachButton, ComposerFiles, FileNoticeLine } from "./Attachments";
 import { attachPicked, pickFiles } from "./pickFiles";
-import { removeFile, retryFile, shownFiles } from "./uploads";
+import { shownFiles, type NamedFile } from "./sentReplies";
+import { removeFile, retryFile, type SentFile } from "./uploads";
 import {
   MAX_MESSAGES,
   askIdentity,
@@ -38,6 +39,7 @@ import {
   noticeText,
   rowsProblem,
   type Conversation,
+  type ConversationMessage,
   type PhoneAsk,
   type Running,
   sleepTarget,
@@ -425,14 +427,17 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   const answered = usePhone((s) => (key && ask ? s.answers[askIdentity(key, ask)] : undefined)) ?? null;
   const content = useMemo(() => ({ messages, thinking, ask, answered }), [messages, thinking, ask, answered]);
   const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
+  const sent = usePhone((s) => s.sent);
   // The operator's messages that attached files: the files over the bubble, with this phone's thumbnails where it sent them (Doop 09).
+  // A message of images alone that this phone did not send, or whose photos it no longer holds, draws nothing.
   const shown = useMemo(
     () =>
-      messages.map((message) => {
-        const attached = key && message.who === "you" ? shownFiles(key, message.text) : null;
-        return attached && attached.files.length > 0 ? { message: { ...message, text: attached.words }, files: attached.files } : { message, files: undefined };
+      messages.flatMap((message): { message: ConversationMessage; files?: (SentFile | NamedFile)[] }[] => {
+        const attached = key && message.who === "you" ? shownFiles(sent, key, message) : null;
+        if (attached && attached.files.length > 0) return [{ message: { ...message, text: attached.words }, files: attached.files }];
+        return message.who === "you" && message.text.trim().length === 0 ? [] : [{ message }];
       }),
-    [messages, key],
+    [messages, key, sent],
   );
   const capped = before !== null && messages.length >= MAX_MESSAGES;
   return (
@@ -444,9 +449,9 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
       ) : null}
       {messages.length === 0 ? <p className="text-body text-muted-foreground">{t("mobile.noConversation")}</p> : null}
       <ol aria-label={t("mobile.tab.conversation")} className="flex flex-col gap-md">
-        {messages.map((message, index) => (
+        {shown.map(({ message, files }, index) => (
           // The time closes each turn: after the operator's message and after the agent's last one.
-          <MessageItem key={message.id} message={shown[index]?.message ?? message} files={shown[index]?.files} timed={messages[index + 1]?.who !== message.who} />
+          <MessageItem key={message.id} message={message} files={files} timed={shown[index + 1]?.message.who !== message.who} />
         ))}
       </ol>
       {commandSince ? <ActivityLine word={t("mobile.runningCommand")} since={commandSince} clock /> : null}
