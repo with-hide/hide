@@ -90,6 +90,8 @@ fn child_role() {
     let _watch = OwnerWatch::from_launch().unwrap();
     match role.as_str() {
         "proof" => println!("GUARDED {}", _watch.is_some()),
+        #[cfg(windows)]
+        "account_boundary" => account_boundary(),
         "echo" => {
             let mut input = Vec::new();
             std::io::stdin().read_to_end(&mut input).unwrap();
@@ -2933,7 +2935,8 @@ fn set_process_access(pid: u32, sddl: &str) {
     assert_ne!(made, 0, "{sddl} is no security descriptor");
     let (mut present, mut acl, mut defaulted) = (0, std::ptr::null_mut(), 0);
     // SAFETY: `descriptor` is the one made above; the out pointers are live.
-    let read = unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) };
+    let read =
+        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) };
     assert_ne!(read, 0);
     // SAFETY: a plain open of a process this test started, which it owns.
     let process = unsafe { OpenProcess(WRITE_DAC, 0, pid) };
@@ -2959,17 +2962,70 @@ fn set_process_access(pid: u32, sddl: &str) {
     assert_eq!(status, 0, "the access list of {pid} was not set");
 }
 
-/// The SSH service's own process runs as SYSTEM and starts the account's
-/// login, and Windows will not describe it to the account: the boundary a
-/// root sshd is on Unix. A parent that refuses this account and whose
-/// access list, the owner's own right, the account may not read either is
-/// another account's; one the account owns that only refuses the query is
-/// not, and a parent the account reads is read by `parent_of`.
+/// Takes the debug privilege out of this process's token, so the system's
+/// access lists decide what it may open, as for the account's own daemon: an
+/// administrator's SSH login holds it turned on, which opens every process.
 #[cfg(windows)]
-#[test]
-fn a_parent_that_refuses_this_account_and_is_not_its_own_is_another_accounts() {
+fn without_debug_privilege() {
+    use windows_sys::Win32::Foundation::{CloseHandle, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_REMOVED,
+        TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let name: Vec<u16> = "SeDebugPrivilege".encode_utf16().chain([0]).collect();
+    let mut luid = LUID {
+        LowPart: 0,
+        HighPart: 0,
+    };
+    // SAFETY: `name` is NUL-terminated and `luid` is writable.
+    assert_ne!(
+        unsafe { LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) },
+        0
+    );
+    let mut token = std::ptr::null_mut();
+    // SAFETY: the current-process pseudo handle is always valid.
+    assert_ne!(
+        unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut token,
+            )
+        },
+        0
+    );
+    let removed = TOKEN_PRIVILEGES {
+        PrivilegeCount: 1,
+        Privileges: [LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_REMOVED,
+        }],
+    };
+    // SAFETY: the token is open for adjusting and `removed` is one entry;
+    // a token without the privilege is left as it is.
+    let adjusted = unsafe {
+        AdjustTokenPrivileges(
+            token,
+            0,
+            &removed,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    // SAFETY: the token was opened above and is not used again.
+    unsafe { CloseHandle(token) };
+    assert_ne!(adjusted, 0, "{}", std::io::Error::last_os_error());
+}
+
+/// What `a_parent_that_refuses_this_account_and_is_not_its_own_is_another_accounts`
+/// checks, in a child of the test that holds no debug privilege.
+#[cfg(windows)]
+fn account_boundary() {
     use hide_platform::process::{same_account, started_by_other_account};
-    let _serial = serial();
+    without_debug_privilege();
 
     let (_readable, under_readable) = owned_tree();
     assert_eq!(
@@ -2997,6 +3053,29 @@ fn a_parent_that_refuses_this_account_and_is_not_its_own_is_another_accounts() {
     let (foreign, under_foreign) = owned_tree();
     set_process_access(foreign.id(), "D:P(D;;0x1fffff;;;OW)");
     assert!(started_by_other_account(under_foreign).unwrap());
+    println!("BOUNDARY CHECKED");
+}
+
+/// The SSH service's own process runs as SYSTEM and starts the account's
+/// login, and Windows will not describe it to the account: the boundary a
+/// root sshd is on Unix. A parent that refuses this account and whose
+/// access list, the owner's own right, the account may not read either is
+/// another account's; one the account owns that only refuses the query is
+/// not, and a parent the account reads is read by `parent_of`.
+#[cfg(windows)]
+#[test]
+fn a_parent_that_refuses_this_account_and_is_not_its_own_is_another_accounts() {
+    let _serial = serial();
+    let output = role_command("account_boundary")
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("BOUNDARY CHECKED"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Windows names no foreground for a console: the program a shell runs now,

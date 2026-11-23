@@ -400,7 +400,10 @@ fn an_app_older_than_the_core_its_login_item_runs_puts_its_own_build_there() {
     assert!(ok, "the older app's connect replaces the core: {line}");
     let app_build = build_of(&machine.app_daemon);
     let replaced = machine.health_until(|health| health["build"] == app_build.as_str());
-    assert!(program_of(&replaced).starts_with(&machine.core_root), "{replaced}");
+    assert!(
+        program_of(&replaced).starts_with(&machine.core_root),
+        "{replaced}"
+    );
     assert_ne!(
         machine.workspace_info_as(hide_agent_hooks::route::APP_INSTALL),
         Some("other_install".to_owned())

@@ -737,7 +737,9 @@ mod sys {
 }
 
 #[cfg(windows)]
-pub(crate) use sys::{current_user_profile, current_user_sid, process_is_current_user};
+pub(crate) use sys::{
+    current_user_profile, current_user_sid, process_is_current_user, process_owned_elsewhere,
+};
 
 #[cfg(windows)]
 mod sys {
