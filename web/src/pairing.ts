@@ -50,7 +50,7 @@ export type PairJoin = {
 export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch" | "rename";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
-export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string; code?: string };
+export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string };
 
 /** The daemon's answer to one `pairing_*` event, for the window that sent it. */
 export type PairingResult = {

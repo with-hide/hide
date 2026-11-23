@@ -359,13 +359,13 @@ fn unknown_there(answer: &Value) -> bool {
 
 /// The code of a refusal that does not say the Hide there is older, logged
 /// with the step it ended, and the reason a switch or a pairing gives.
-fn refused_there(login: &dyn Login, step: &str, answer: &Value) -> &'static str {
+fn refused_there(login: &dyn Login, step: &str, code: &str) -> &'static str {
     hide_core::diagnostic!(serde_json::json!({
         "component": "pairing",
         "kind": "ssh.refused_there",
         "step": step,
         "alias": login.name(),
-        "code": answer["error"]["code"].as_str().unwrap_or_default(),
+        "code": code,
     }));
     "ssh_refused_there"
 }
@@ -442,7 +442,7 @@ pub(crate) fn look_on(login: &dyn Login, reach: &Reach) -> Looked {
 /// `looked`, with a refusal the look did not know logged.
 fn logged_look(login: &dyn Login, looked: Looked) -> Looked {
     if let Looked::Refused { code } = &looked {
-        refused_there(login, "look", &serde_json::json!({"error": {"code": code}}));
+        refused_there(login, "look", code);
     }
     looked
 }
@@ -548,7 +548,11 @@ pub(crate) fn accept_on(
             Some("invalid_request") => "invalid_request",
             Some("device_unknown") => "device_unknown",
             Some("usage") => "ssh_update_there",
-            _ => refused_there(login, "accept", &answer),
+            _ => refused_there(
+                login,
+                "accept",
+                answer["error"]["code"].as_str().unwrap_or_default(),
+            ),
         });
     }
     Ok(answer["value"].take())
