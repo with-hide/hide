@@ -2354,7 +2354,10 @@ mod tests {
         assert!(
             evaluate(
                 &raised,
-                &facts(Some(&open), vec![NodeFacts::default(), NodeFacts::default()])
+                &facts(
+                    Some(&open),
+                    vec![NodeFacts::default(), NodeFacts::default()]
+                )
             )
             .contains(&Act::Clear { node: 1 }),
             "a raise made before goes"
