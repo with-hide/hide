@@ -100,9 +100,9 @@ it("says 외 N건 on a finished row with no sentence of its own", async () => {
   const finished = (id: string, asks: number) => row(id, { status_code: "stopped", mark: "done", group: "done", unread: true, activity: "stopped", asks_behind: asks } as Partial<AgentRow>, { group: "done" });
   const agents = [finished("behind", 1), finished("bare", 0)];
   const { container } = await render(snapshot(agents, [card("behind", "done", "hide-main"), card("bare", "done", "hide-main")]), agents);
-  const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`)?.textContent;
-  expect(line("behind")).toBe("herdr-ide외 1건");
-  expect(line("bare")).toBe("herdr-ide");
+  const parts = (pane: string) => [...container.querySelectorAll(`[data-task-row="${pane}"] [data-task-line] [data-line-part]`)].map((part) => part.textContent);
+  expect(parts("behind")).toEqual(["외 1건"]);
+  expect(parts("bare")).toEqual([]);
 });
 
 it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and 작업 중 (a wait included, under the working ones), drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
