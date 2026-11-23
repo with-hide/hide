@@ -7,13 +7,13 @@ import type { AgentScope } from "./agentScope";
 
 import { addressUrl } from "./browserViews";
 import { checkoutPlaces } from "./navigation";
-import { deviceConnected, frontDeviceId, localDeviceId, thisMachineKey } from "./devices";
+import { deviceConnected, frontDeviceId, localDeviceId } from "./devices";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import { PR_LOOK } from "./prMark";
-import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
+import { machineName, ownMachineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import { listedWorkspaces, type AgentRow, type Checkout, type Device, type GithubSearchResult, type PrState, type PullRequest, type SessionWorkSearch, type SnapshotRest, type Task, type WorkSession, type Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
 import { askSubjectText } from "./askSubject";
@@ -170,7 +170,7 @@ export function searchDevices(rest: SnapshotRest): SearchDevice[] {
   const devices = listed?.length ? windowFirst(listed) : [{ id: localDeviceId(rest), label: null, kind: "local" } as Device];
   const own = windowDeviceId(listed);
   for (const device of devices) {
-    const named = { name: listed?.length ? machineName(listed, device.id, translate) : translate(thisMachineKey(null)), own: device.id === own };
+    const named = { name: listed?.length ? machineName(listed, device.id, translate) : ownMachineName(null, translate), own: device.id === own };
     if (device.id === localDeviceId(rest)) {
       // An automation's own folder is no project to find (PRD automations B30).
       const all = listedWorkspaces(rest.navigator?.workspaces ?? []);

@@ -8,7 +8,7 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { machineName, thisMachineKey, windowDeviceId, windowFirst } from "./screenMachine";
+import { machineName, ownMachineName, windowDeviceId, windowFirst } from "./screenMachine";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 /** `offline`: a device that is not connected now, listed dimmed and not chosen (PRD device-add-project B31). */
@@ -21,7 +21,7 @@ export function addProjectHosts(devices: readonly Device[] | undefined, t: TFunc
   // The machine this window runs on is reachable whatever its row says: the window is drawn from it.
   const hosts = rows.map((device) => ({ id: device.id, label: machineName(devices, device.id, t), offline: device.id !== own && deviceOffline(device) }));
   // Before the snapshot names this machine, it is the core's own node by the empty id.
-  return rows.some((device) => device.id === own) ? hosts : [{ id: own, label: t(thisMachineKey(null)), offline: false }, ...hosts];
+  return rows.some((device) => device.id === own) ? hosts : [{ id: own, label: ownMachineName(null, t), offline: false }, ...hosts];
 }
 
 /** A device whose connection is not up now: its node cannot list, clone or create. The core's own row is never offline. */

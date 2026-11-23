@@ -108,3 +108,39 @@ describe("a window on the machine the core moved off", () => {
     expect((awayDevice(rest("mbp")) as { id: string } | null)?.id).toBe("mbp");
   });
 });
+
+// A Windows PC's screen that a Mac's desktop app shows (UI_BEHAVIOR.md, Settings
+// and the Device rail): the page runs in the Mac's window, so the browser's
+// system is the Mac's, and the PC is named as that window calls it. The page
+// hears the showing window once per load, so the test loads the modules afresh.
+describe("a screen another computer's window shows of this one", () => {
+  const pc = [{ id: "pc", kind: "local", label: null, machine_name: "DESKTOP-7Q2" }, { id: "box", kind: "remote", label: "build-box" }] as never;
+  const t = ((key: string) => ({ "common.thisMac": "이 Mac", "common.thisPc": "이 PC", "common.thisComputer": "이 컴퓨터" })[key] ?? key) as never;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("names its own machine as the showing window does, and never by that window's system", async () => {
+    vi.resetModules();
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    let tell: ((viewer: { language: string; name: string | null }) => void) | null = null;
+    vi.stubGlobal("hideRemote", { bridge: 1, onViewer: (listener: typeof tell) => { tell = listener; } });
+    const { subscribeViewer } = await import("./remoteView");
+    const fresh = await import("./screenMachine");
+    const stop = subscribeViewer(() => undefined);
+    // Before the window has said its name, and with no system on the row: a computer, not the viewer's Mac.
+    expect(fresh.machineName(pc, "pc", t)).toBe("이 컴퓨터");
+    tell!({ language: "ko", name: "window" });
+    // Settings' title and its core machine group, and every other own-machine name.
+    expect(fresh.machineName(pc, "pc", t)).toBe("window");
+    expect(fresh.coreMachineName(pc, t)).toBe("window");
+    // The row's own system does not outrank what the showing window calls it.
+    const told = [{ id: "pc", kind: "local", label: null, host: { platform: "windows x86_64" } }] as never;
+    expect(fresh.machineName(told, "pc", t)).toBe("window");
+    // Another machine keeps its own name.
+    expect(fresh.machineName(pc, "box", t)).toBe("build-box");
+    stop();
+  });
+});
