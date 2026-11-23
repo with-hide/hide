@@ -437,16 +437,16 @@ impl Guests {
                     key: key.to_hex(),
                     panes: hosted
                         .tap
-                        .panes()
+                        .marked()
                         .into_iter()
-                        .map(|pane| hide_core::guest_panes::GuestPane {
+                        .map(|(pane, mark)| hide_core::guest_panes::GuestPane {
                             id: guest_pane_id(device, &pane.pane),
                             pane: pane.pane,
                             since_unix_ms: pane.since_unix_ms,
                             folder: pane.folder,
                             name: pane.name,
                             branch: pane.branch,
-                            mark: pane.mark,
+                            mark,
                         })
                         .collect(),
                 }
@@ -2350,7 +2350,6 @@ mod tests {
                     folder: Some("/work/shop-api".to_owned()),
                     name: Some("로그인 고치기".to_owned()),
                     branch: Some("main".to_owned()),
-                    mark: None,
                 }],
             })
             .unwrap(),

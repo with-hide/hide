@@ -90,8 +90,9 @@ pub fn branch_is_shown(branch: &str) -> bool {
         && !branch.chars().any(char::is_control)
 }
 
-/// The longest mark a list carries: one short lower-case word.
-const MAX_MARK_BYTES: usize = 16;
+/// The longest mark a list carries: one short lower-case word, as the peer
+/// link bounds it (`hide_peer_protocol::core::MAX_WORK_MARK_BYTES`).
+pub const MAX_MARK_BYTES: usize = 16;
 
 /// Whether `mark` is one a list carries: a short lower-case word. Which
 /// words a screen draws is the screen's to know; one it does not know is

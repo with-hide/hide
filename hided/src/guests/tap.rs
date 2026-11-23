@@ -73,11 +73,19 @@ struct State {
     /// What the guest's core last told of its panes, by the node's pane
     /// ids, so a pane the node lists after it came is named as it joins;
     /// `None` until the core tells any after this daemon started, and the
-    /// names and branches `panes.json` kept stand until it does.
+    /// names and branches `panes.json` kept stand until it does. Each
+    /// pane's mark is read from here and nowhere else: it is where the work
+    /// stands now, which only a connected guest can say, so it is never
+    /// written to the file.
     told: Option<HashMap<String, Work>>,
 }
 
 impl State {
+    /// The mark the guest's core last told for `pane`, while it tells one.
+    fn mark(&self, pane: &str) -> Option<String> {
+        self.told.as_ref()?.get(pane)?.mark.clone()
+    }
+
     /// Lists `pane` at the grid the node said, keeping when it was first
     /// seen. False for a pane the list has no room or no name for.
     fn list(&mut self, pane: PaneSize, now: u64) -> bool {
@@ -99,7 +107,6 @@ impl State {
                 folder: None,
                 name: told.and_then(|told| told.name.clone()),
                 branch: told.and_then(|told| told.branch.clone()),
-                mark: told.and_then(|told| told.mark.clone()),
                 pane: pane.pane,
             },
         );
@@ -172,6 +179,17 @@ impl GuestTap {
         lock(&self.state).panes.values().cloned().collect()
     }
 
+    /// The guest's panes with the mark its core last told each, while it
+    /// tells them (B10).
+    pub fn marked(&self) -> Vec<(Pane, Option<String>)> {
+        let state = lock(&self.state);
+        state
+            .panes
+            .values()
+            .map(|pane| (pane.clone(), state.mark(&pane.pane)))
+            .collect()
+    }
+
     /// Names and marks the guest's panes as its core told them, whole
     /// (B10): a pane the list leaves out has no name, branch or mark, and a
     /// pane the node lists later takes them as it joins. Names and branches
@@ -179,21 +197,19 @@ impl GuestTap {
     /// mark is not, and a mark alone moving writes nothing.
     pub fn name(&self, work: &HashMap<String, Work>) {
         let mut state = lock(&self.state);
+        let marked = state.panes.keys().any(|pane| {
+            state.mark(pane).as_ref() != work.get(pane).and_then(|told| told.mark.as_ref())
+        });
         state.told = Some(work.clone());
-        let (mut kept, mut marked) = (false, false);
+        let mut kept = false;
         for (pane, known) in &mut state.panes {
             let told = work.get(pane);
             let name = told.and_then(|told| told.name.as_ref());
             let branch = told.and_then(|told| told.branch.as_ref());
-            let mark = told.and_then(|told| told.mark.as_ref());
             if known.name.as_ref() != name || known.branch.as_ref() != branch {
                 known.name = name.cloned();
                 known.branch = branch.cloned();
                 kept = true;
-            }
-            if known.mark.as_ref() != mark {
-                known.mark = mark.cloned();
-                marked = true;
             }
         }
         if kept {
@@ -210,10 +226,7 @@ impl GuestTap {
     /// the core tells again (B10).
     pub fn away(&self) {
         let mut state = lock(&self.state);
-        let mut marked = false;
-        for known in state.panes.values_mut() {
-            marked |= known.mark.take().is_some();
-        }
+        let marked = state.panes.keys().any(|pane| state.mark(pane).is_some());
         if let Some(told) = &mut state.told {
             for work in told.values_mut() {
                 work.mark = None;
@@ -345,12 +358,11 @@ impl GuestTap {
                     .filter(|pane| !state.panes.contains_key(*pane))
                     .cloned()
                     .collect();
-                // A pane that joined, or one whose name, branch or mark
-                // moved with it.
+                // A pane that joined, or one whose name or branch moved
+                // with it.
                 let joined = state.panes.iter().any(|(pane, known)| {
                     earlier.get(pane).is_none_or(|earlier| {
-                        (&earlier.name, &earlier.branch, &earlier.mark)
-                            != (&known.name, &known.branch, &known.mark)
+                        (&earlier.name, &earlier.branch) != (&known.name, &known.branch)
                     })
                 });
                 self.save(&state);
@@ -845,9 +857,9 @@ pub(crate) mod tests {
     }
 
     fn standing(tap: &GuestTap) -> Vec<(String, Option<String>, Option<String>)> {
-        tap.panes()
+        tap.marked()
             .into_iter()
-            .map(|pane| (pane.pane, pane.branch, pane.mark))
+            .map(|(pane, mark)| (pane.pane, pane.branch, mark))
             .collect()
     }
 

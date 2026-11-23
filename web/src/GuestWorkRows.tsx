@@ -21,7 +21,7 @@ import { useUiStore } from "./ui";
  * machine's letters at its end. It opens the pane in the center. A machine
  * that told no mark leaves the mark's slot empty, so names line up.
  */
-function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; /** Where the name starts, to line up under a checkout's own rows. */ inset?: string }) {
+function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; /** Where the row's mark starts, to line up under a checkout's own rows. */ inset?: string }) {
   const { t } = useInterfaceTranslation();
   const selected = useUiStore((s) => s.screen?.kind === "guest" && s.screen.paneId === pane.id);
   return (
@@ -81,13 +81,12 @@ export function GuestCheckoutRows({ projectId, checkoutId, inset, actions }: { p
 /**
  * The panes of other machines' work that stand under no project of this
  * computer, grouped by the machine that asked for them (B10). `projects`
- * are the projects whose rows draw their own; with none given every pane is
- * listed here, for a list that draws no projects.
+ * are the projects whose rows draw their own.
  */
-export function GuestMachineGroups({ actions, projects = null }: { actions: Actions; projects?: ReadonlySet<string> | null }) {
+export function GuestMachineGroups({ actions, projects }: { actions: Actions; projects: ReadonlySet<string> }) {
   const { t } = useInterfaceTranslation();
   const panes = useGuestPanes();
-  const groups = useMemo(() => guestGroups(panes.map((pane) => (pane.projectId !== null && projects?.has(pane.projectId) ? pane : { ...pane, projectId: null }))), [panes, projects]);
+  const groups = useMemo(() => guestGroups(panes.map((pane) => (pane.projectId !== null && projects.has(pane.projectId) ? pane : { ...pane, projectId: null }))), [panes, projects]);
   if (groups.length === 0) return null;
   return (
     <>

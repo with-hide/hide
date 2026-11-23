@@ -35,9 +35,4 @@ pub struct Pane {
     /// while the guest is away, as the name is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// The mark the guest's core told the pane's row is drawn with (B10).
-    /// Never kept: it is where the work stands now, which only a connected
-    /// guest can say, so a pane read from the file has none.
-    #[serde(skip)]
-    pub mark: Option<String>,
 }

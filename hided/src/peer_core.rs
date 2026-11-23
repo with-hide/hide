@@ -758,7 +758,15 @@ impl PeerCore {
             self.desktop.peer_gone(&key.to_hex());
             if let Some(kept) = &self.names.kept {
                 let (kept, key) = (Arc::clone(kept), *key);
-                tokio::task::spawn_blocking(move || kept.away(&key));
+                tokio::spawn(async move {
+                    if let Err(error) = tokio::task::spawn_blocking(move || kept.away(&key)).await {
+                        record(
+                            "peer_core.work_marks_not_dropped",
+                            &key,
+                            json!({"reason": error.to_string()}),
+                        );
+                    }
+                });
             }
         }
         if tells_no_more {
@@ -1767,6 +1775,97 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// B10: every mark a row is drawn with crosses as a word both the peer
+    /// link and the receiving core carry, so a new mark never has the whole
+    /// list refused there. The match names every mark: a new one does not
+    /// build until it is listed here too.
+    #[test]
+    fn every_row_mark_crosses_as_a_word_both_sides_carry() {
+        use hide_core::agent_state::RowMark;
+        fn listed(mark: RowMark) -> RowMark {
+            match mark {
+                RowMark::Turn
+                | RowMark::Going
+                | RowMark::Waiting
+                | RowMark::Done
+                | RowMark::Unread
+                | RowMark::Quiet
+                | RowMark::Unknown
+                | RowMark::Asleep
+                | RowMark::Look => mark,
+            }
+        }
+        let every = [
+            RowMark::Turn,
+            RowMark::Going,
+            RowMark::Waiting,
+            RowMark::Done,
+            RowMark::Unread,
+            RowMark::Quiet,
+            RowMark::Unknown,
+            RowMark::Asleep,
+            RowMark::Look,
+        ];
+        let told: Vec<_> = every
+            .into_iter()
+            .enumerate()
+            .map(|(n, mark)| hide_core::work_names::WorkName {
+                pane: format!("w1:p{n}"),
+                name: None,
+                branch: None,
+                mark: listed(mark),
+            })
+            .collect();
+        let CoreMessage::WorkNames { work, .. } = names_out(&told) else {
+            panic!("work names");
+        };
+        assert_eq!(work.len(), every.len());
+        assert!(hide_peer::protocol::core::valid_work(&work), "{work:?}");
+        for told in &work {
+            let mark = told.mark.as_deref().expect("every pane is told a mark");
+            assert!(hide_core::guest_panes::mark_is_carried(mark), "{mark}");
+        }
+    }
+
+    /// B10: an earlier build tells `names` alone; the machine its work runs
+    /// on keeps each name, with no branch or mark.
+    #[tokio::test]
+    async fn an_earlier_builds_names_are_kept_without_a_branch_or_mark() {
+        let mut pair = Pair::new(Duration::from_secs(30)).await;
+        within(
+            "the Mac's stream to the PC",
+            pair.mac_wants.wait_for(|wants| *wants),
+        )
+        .await
+        .unwrap();
+        let mut kept = pair.pc_kept.1.subscribe();
+        let earlier = CoreMessage::WorkNames {
+            names: vec![hide_peer::protocol::core::WorkName {
+                pane: "w1:p1".to_owned(),
+                name: "로그인 고치기".to_owned(),
+            }],
+            work: Vec::new(),
+        };
+        assert!(pair.mac_service.tell(&pair.pc_key, earlier));
+        within("the names on the PC", kept.wait_for(|told| *told >= 1))
+            .await
+            .unwrap();
+        let (from, work) = lock(&pair.pc_kept.0).last().cloned().expect("kept");
+        assert_eq!(from, pair.mac_key);
+        assert_eq!(
+            work,
+            HashMap::from([(
+                "w1:p1".to_owned(),
+                Work {
+                    pane: "w1:p1".to_owned(),
+                    name: Some("로그인 고치기".to_owned()),
+                    branch: None,
+                    mark: None,
+                }
+            )])
+        );
     }
 
     /// B10: a plain terminal crosses by its branch and mark, with no name

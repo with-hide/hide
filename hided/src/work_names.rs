@@ -28,6 +28,7 @@ const _: () = assert!(
         && hide_core::work_names::MAX_NAME_CHARS == hide_peer::protocol::core::MAX_WORK_NAME_CHARS
         && hide_core::work_names::MAX_BRANCH_BYTES
             == hide_peer::protocol::core::MAX_WORK_BRANCH_BYTES
+        && hide_core::guest_panes::MAX_MARK_BYTES == hide_peer::protocol::core::MAX_WORK_MARK_BYTES
 );
 
 /// Each machine's names by its connection key, as the core last read.
