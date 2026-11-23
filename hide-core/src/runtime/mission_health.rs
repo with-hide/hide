@@ -2266,8 +2266,9 @@ impl Runtime {
     /// no work of its own (a background task, a reply, checks, subagents).
     /// Its workers at work are not its move (`AgentWait::Children`): they
     /// carry the mission's nodes, not what the Conductor owes on a raise. A
-    /// sleeping Conductor rests. False while its device does not answer or
-    /// its row is not its session's.
+    /// sleeping Conductor rests. False while its device does not answer; the
+    /// row read is its pane's, which `conductor_present` holds to its
+    /// session.
     pub(super) fn conductor_rests(&self, mission: &Mission) -> bool {
         let actor = &mission.conductor.actor;
         if !mission.status.open()
@@ -2276,16 +2277,14 @@ impl Runtime {
         {
             return false;
         }
-        self.agent_row(&actor.pane_id)
-            .filter(|row| row.lineage_session == actor.session)
-            .is_some_and(|row| {
-                row.activity == "stopped"
-                    && !matches!(row.demand.as_str(), "question" | "approval")
-                    && !row.blocked
-                    && row.human_turn.is_none()
-                    && row.declared_human_turn.is_none()
-                    && matches!(row.wait, None | Some(crate::model::AgentWait::Children))
-            })
+        self.agent_row(&actor.pane_id).is_some_and(|row| {
+            row.activity == "stopped"
+                && !matches!(row.demand.as_str(), "question" | "approval")
+                && !row.blocked
+                && row.human_turn.is_none()
+                && row.declared_human_turn.is_none()
+                && matches!(row.wait, None | Some(crate::model::AgentWait::Children))
+        })
     }
 
     /// Since when this daemon has seen the mission's Conductor present, `now`

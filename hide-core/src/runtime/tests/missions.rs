@@ -9145,6 +9145,8 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
+    // The Conductor rests, so a raise it leaves comes to the safety net.
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
     command(
         &mut runtime,
         "sender",
@@ -9153,7 +9155,7 @@ fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
     .unwrap();
     command(&mut runtime, "sender", criteria_plan()).unwrap();
     let now = crate::runtime::unix_milliseconds();
-    // The Conductor has been there 21 minutes.
+    // The Conductor has been there, resting, 21 minutes.
     runtime.drive_mission_health(now - 21 * MINUTE);
     let raise = |runtime: &mut Runtime, reason, since_unix_ms| {
         runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].attention = Some(Attention {
