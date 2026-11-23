@@ -17,7 +17,11 @@
 //! When it is full: a background read is not made this pass (the project
 //! keeps its previous answer, with no failure clock); a read the operator
 //! opened is refused with its reason only when its reserved share is spent
-//! too. The record holds at most [`HIDE_PER_MINUTE`] entries, the oldest
+//! too. A merge the operator asked for takes its read, its write and its
+//! reads after from the opened share together, or is refused before
+//! anything leaves. The reads a mission's waiting node and a worktree's
+//! cleanup make on the core's own clock (a merge request by its number, a
+//! branch's merged merge requests, a merge base) are background reads. The record holds at most [`HIDE_PER_MINUTE`] entries, the oldest
 //! dropped as they leave the minute.
 
 use std::collections::VecDeque;
@@ -56,6 +60,14 @@ impl Budget {
 
     /// Takes one request for `share` at `now`, or says the share is spent.
     pub(crate) fn take(&mut self, now: Instant, share: Share) -> bool {
+        self.take_many(now, share, 1)
+    }
+
+    /// Takes `count` requests for `share` at `now` together, or none and
+    /// says the share cannot hold them: a merge takes its read, its write
+    /// and its reads after at once, so a write never leaves without the
+    /// read that decides it.
+    pub(crate) fn take_many(&mut self, now: Instant, share: Share, count: usize) -> bool {
         while self
             .taken
             .front()
@@ -68,14 +80,15 @@ impl Budget {
             .iter()
             .filter(|(_, taken)| *taken == Share::Background)
             .count();
+        let total = self.taken.len() + count;
         let room = match share {
             Share::Background => {
-                background < BACKGROUND_PER_MINUTE && self.taken.len() < HIDE_PER_MINUTE
+                background + count <= BACKGROUND_PER_MINUTE && total <= HIDE_PER_MINUTE
             }
-            Share::Opened => self.taken.len() < HIDE_PER_MINUTE,
+            Share::Opened => total <= HIDE_PER_MINUTE,
         };
         if room {
-            self.taken.push_back((now, share));
+            self.taken.extend(std::iter::repeat_n((now, share), count));
         }
         room
     }
@@ -113,6 +126,19 @@ mod tests {
         let later = start + WINDOW;
         assert!(budget.take(later, Share::Background));
         assert_eq!(budget.taken.len(), 1);
+    }
+
+    /// A merge's requests are taken together or not at all: with two left,
+    /// a merge that needs four takes none and leaves the two.
+    #[test]
+    fn requests_taken_together_are_all_or_none() {
+        let start = Instant::now();
+        let mut budget = Budget::new();
+        assert!(budget.take_many(start, Share::Opened, HIDE_PER_MINUTE - 2));
+        assert!(!budget.take_many(start, Share::Opened, 4));
+        assert_eq!(budget.taken.len(), HIDE_PER_MINUTE - 2);
+        assert!(budget.take_many(start, Share::Opened, 2));
+        assert!(!budget.take(start, Share::Opened));
     }
 
     #[test]

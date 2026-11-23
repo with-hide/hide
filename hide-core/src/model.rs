@@ -6071,6 +6071,11 @@ pub struct PrCardMerge {
     pub queue: bool,
     /// The signed-in account may write to the repository.
     pub can_merge: bool,
+    /// The host merges by the method its own settings name and applies none
+    /// Hide sends, so the confirm line names no method. Left out when false,
+    /// so GitHub's card and an older core's read the same.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_sets_method: bool,
 }
 
 /// One GitHub write asked for from a card (D-22, B31-B34).
@@ -6084,8 +6089,14 @@ pub struct PrWriteSnapshot {
     /// `working`, `done` or `failed`.
     pub phase: &'static str,
     /// Why it failed, as a code the card words with what to do:
-    /// `head_moved`, `denied`, `conflict`, `not_mergeable`, `unreachable`
-    /// or `failed`. The text GitHub gave goes to the diagnostic log.
+    /// `head_moved`, `denied`, `conflict`, `not_mergeable`, `unreachable`,
+    /// `unsupported` (the host or the node does not offer it), `auto_merge`
+    /// (gitlab.com set auto-merge and merged nothing), `budget_spent`
+    /// (Hide's share of the account's gitlab.com requests this minute is
+    /// spent, and nothing was sent) or `failed`. On gitlab.com
+    /// `unreachable` can follow a merge that landed, whose answer was lost;
+    /// asking again then succeeds without a second write. The host's own
+    /// text goes to the diagnostic log.
     pub reason: Option<&'static str>,
 }
 
@@ -7340,6 +7351,19 @@ impl GithubStatusSnapshot {
         self.host
             .as_ref()
             .is_none_or(|host| host.operations.contains(&operation))
+    }
+
+    /// The unit of the host that answered, whose words a text about the
+    /// project takes (`PR #12`, `MR !12`); GitHub's with no declaration, as
+    /// [`GithubStatusSnapshot::offers`] reads one.
+    pub(crate) fn unit(&self) -> &'static dyn crate::code_host::CodeHost {
+        self.host
+            .as_ref()
+            .and_then(|host| crate::code_host::CodeHosts::STANDARD.host(&host.key))
+            .map_or(
+                &crate::github::host::GITHUB as &dyn crate::code_host::CodeHost,
+                crate::code_host::Host::unit,
+            )
     }
 }
 

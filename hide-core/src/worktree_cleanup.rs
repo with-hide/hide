@@ -718,10 +718,14 @@ fn inspect(
                 let proof = github.place.host().merge_proof().ok_or_else(|| {
                     "GitHub merge proof is unavailable: the code host proves no merge".to_owned()
                 })?;
-                Ok(heads_into(
-                    proof.merged_heads(github.node.as_ref(), &github.place, branch)?,
+                branch_proof(
+                    proof,
+                    github.node.as_ref(),
+                    &github.place,
+                    branch,
+                    head,
                     base,
-                ))
+                )
             })?;
             if heads.contains(head) && merge.heads.as_ref().is_none_or(|list| !list.contains(head))
             {
@@ -751,6 +755,27 @@ fn merge_proof(
         None => by_branch(),
         Some(heads) => Ok(heads.iter().cloned().chain(by_branch()?).collect()),
     }
+}
+
+/// The heads the host proves `branch` merged into `base` at. A cut answer
+/// that does not hold `head` cannot say it was not merged: an older merge
+/// past the cut is not read, so the worktree stays unverified.
+fn branch_proof(
+    proof: &dyn crate::code_host::MergeProof,
+    node: &dyn crate::node_access::NodeLink,
+    place: &crate::code_host::Place,
+    branch: &str,
+    head: &str,
+    base: &str,
+) -> Result<BTreeSet<String>, String> {
+    let answer = proof.merged_heads(node, place, branch)?;
+    let heads = heads_into(answer.heads, base);
+    if answer.cut && !heads.contains(head) {
+        return Err(format!(
+            "the host's merge proof of {branch} was cut before this HEAD; an older merge is not read"
+        ));
+    }
+    Ok(heads)
 }
 
 /// The heads of the pull requests that merged into `base`; one merged into
@@ -3542,6 +3567,146 @@ mod tests {
         assert_eq!(
             attempt(Err("the node did not answer".into())),
             (Some("unverified"), false)
+        );
+    }
+
+    /// gitlab.com's answer for a branch's merged merge requests, recorded
+    /// on the test project for !21, merged with the merge request's own
+    /// squash setting into `main`, with its head set to `head`, after
+    /// `others` newer merged merge requests of the same branch at other heads.
+    struct GitlabMerged {
+        head: Option<String>,
+        others: usize,
+    }
+
+    impl crate::node_access::NodeLink for GitlabMerged {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let hide_node_link::protocol::Call::Glab { args } = call else {
+                panic!("the merge proof is read with glab: {call:?}");
+            };
+            assert_eq!(
+                Some(args),
+                hide_node_link::glab::merged_arguments(
+                    "example-user/hide-code-host-check",
+                    "squashed"
+                ),
+                "the branch's merged merge requests, as the node allows"
+            );
+            let recorded: serde_json::Value = serde_json::from_str(include_str!(
+                "../tests/fixtures/gitlab/merged-of-branch.json"
+            ))
+            .unwrap();
+            let at = |sha: String| {
+                let mut item = recorded[0].clone();
+                item["sha"] = serde_json::json!(sha);
+                item
+            };
+            let mut items: Vec<_> = (0..self.others).map(|n| at(format!("{n:040x}"))).collect();
+            items.extend(self.head.clone().map(at));
+            Ok(
+                serde_json::to_value(hide_node_link::glab::GlabAnswer::Output {
+                    stdout: serde_json::Value::Array(items).to_string(),
+                    cut: false,
+                })
+                .unwrap()
+                .into(),
+            )
+        }
+    }
+
+    fn gitlab_place() -> crate::code_host::Place {
+        use crate::code_host::CodeHosts;
+        let host = CodeHosts::STANDARD.host("gitlab").unwrap();
+        crate::code_host::Place::Repository {
+            host,
+            repository: host
+                .repository("gitlab.com/example-user/hide-code-host-check")
+                .unwrap(),
+        }
+    }
+
+    /// The cleanup review of `f`'s worktrees with gitlab.com answering as
+    /// `link` does, through the proof the review itself takes.
+    fn review_gitlab(f: &Fixture, link: &GitlabMerged) -> CleanupSnapshot {
+        use crate::code_host::CodeHost;
+        let place = gitlab_place();
+        inspect_with_merge_proofs(
+            &node(),
+            &f.main,
+            Some(&f.main),
+            Ok(Vec::new()),
+            &Usage::default(),
+            None,
+            Some("main"),
+            |branch, head| {
+                let proof = crate::gitlab::host::GITLAB.merge_proof().unwrap();
+                branch_proof(proof, link, &place, branch, head, "main")
+            },
+        )
+        .unwrap()
+    }
+
+    /// A worktree whose branch gitlab.com squash-merged into main is proved
+    /// merged by gitlab.com's merge request at exactly its head, through the
+    /// unit's merge proof as GitHub's is; the same merge request at another
+    /// head proves nothing.
+    #[test]
+    fn a_gitlab_squash_merge_is_proved_by_its_merge_request_at_this_head() {
+        let f = Fixture::new();
+        let squashed = f.add("squashed");
+        commit(&squashed, "Feature");
+        let feature_head = head_of(&squashed);
+        let review = |head: &str| {
+            review_gitlab(
+                &f,
+                &GitlabMerged {
+                    head: Some(head.into()),
+                    others: 0,
+                },
+            )
+        };
+        assert_eq!(code_of(&review(&feature_head), &squashed), None);
+        assert_eq!(
+            code_of(&review(&"a".repeat(40)), &squashed),
+            Some("not_merged")
+        );
+    }
+
+    /// A full page of 100 merged merge requests may have cut an older one:
+    /// a HEAD it holds is still proved, and a HEAD it does not hold is not
+    /// known, so the worktree stays, never read as not merged.
+    #[test]
+    fn a_cut_gitlab_merge_proof_proves_what_it_holds_and_leaves_the_rest_unverified() {
+        let f = Fixture::new();
+        let squashed = f.add("squashed");
+        commit(&squashed, "Feature");
+        let feature_head = head_of(&squashed);
+        let held = GitlabMerged {
+            head: Some(feature_head),
+            others: 99,
+        };
+        assert_eq!(code_of(&review_gitlab(&f, &held), &squashed), None);
+        // Its merge is the 101st, past the page.
+        let past = GitlabMerged {
+            head: None,
+            others: 100,
+        };
+        assert_eq!(
+            code_of(&review_gitlab(&f, &past), &squashed),
+            Some("unverified")
+        );
+        // A page that is not full and does not hold it disproves it.
+        let short = GitlabMerged {
+            head: None,
+            others: 99,
+        };
+        assert_eq!(
+            code_of(&review_gitlab(&f, &short), &squashed),
+            Some("not_merged")
         );
     }
 }

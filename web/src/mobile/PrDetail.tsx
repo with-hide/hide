@@ -333,7 +333,9 @@ function MergeSheet() {
   const open = confirm !== null && pr !== null;
   const base = pr?.base_branch ?? "";
   const words = pullWords(pr ?? { number: 0 });
-  const detail = confirm ? [confirm.queue || !confirm.method ? null : t(`work.card.method.${confirm.method}`), confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
+  // A host that merges by its own settings' method takes none from Hide: the sheet names none.
+  const named = confirm && !confirm.queue && confirm.method && pr?.card?.merge?.host_sets_method !== true ? confirm.method : null;
+  const detail = confirm ? [named ? t(`work.card.method.${named}`) : null, confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
   return (
     <Sheet open={open} onOpenChange={(next) => !next && cancelMerge()}>
       <SheetContent

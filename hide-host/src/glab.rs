@@ -367,7 +367,8 @@ esac"#,
     #[ignore = "needs the minimum glab release named in HIDE_TEST_GLAB_BIN"]
     fn every_command_line_parses_on_the_oldest_glab_hide_supports() {
         use hide_node_link::glab::{
-            GlabVersion, MINIMUM_VERSION, card_arguments, commit_checks_arguments,
+            GlabVersion, MINIMUM_VERSION, card_arguments, commit_checks_arguments, merge_arguments,
+            merge_base_arguments, merge_request_arguments, merged_arguments,
         };
         const PROJECT: &str = "acme/sub/app";
         const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -416,6 +417,12 @@ esac"#,
             card_arguments(PROJECT, 12),
             commit_checks_arguments(PROJECT, &[HEAD.to_owned()]),
             commit_checks_arguments(PROJECT, &[HEAD.to_owned(), "f".repeat(40)]),
+            merge_request_arguments(PROJECT, 12),
+            merged_arguments(PROJECT, "topic/one"),
+            merge_base_arguments(PROJECT, HEAD, &"f".repeat(40)),
+            // The write reads the merge request first, which the proxy
+            // stops: nothing is merged.
+            merge_arguments(PROJECT, 12, HEAD),
         ];
         for (index, line) in built.into_iter().enumerate() {
             lines.push(line.unwrap_or_else(|| panic!("built line {index} is not a valid line")));

@@ -705,6 +705,7 @@ fn a_merge_is_one_write_and_its_failure_is_a_code_on_the_card() {
         Err(crate::code_host::WriteFailure {
             reason: "head_moved",
             detail: "Head branch was modified".into(),
+            read_again: true,
         }),
     );
     let write = card(&runtime, 2).write.unwrap();
@@ -1145,7 +1146,7 @@ fn a_teammates_pending_checks_the_list_does_not_show_are_not_read_for() {
 
 /// The project `/repo` connected, through its repository setting, to a
 /// gitlab.com project: the setting takes a gitlab.com repository, and the
-/// card writes and the feedback hand-over gitlab.com does not declare are
+/// branch update and the feedback hand-over gitlab.com does not declare are
 /// refused at the event, before any host is asked and whatever surface sent
 /// it (an old phone bundle, a direct event).
 #[test]
@@ -1191,27 +1192,22 @@ fn an_operation_gitlab_com_does_not_offer_is_refused_at_its_event() {
         });
     runtime.apply_pull_requests();
 
-    for (kind, payload) in [
-        (
-            "pr_merge",
-            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
-        ),
-        (
-            "pr_update_branch",
-            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD}),
-        ),
-    ] {
-        runtime.pr_card_slot("w", 2).write = None;
-        assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
-        let write = card(&runtime, 2)
-            .write
-            .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
-        assert_eq!(
-            (write.phase, write.reason),
-            ("failed", Some("unsupported")),
-            "{kind}"
-        );
-    }
+    // gitlab.com offers the merge; the method it does not take (an old
+    // phone's squash) is refused by its unit with nothing sent
+    // (`gitlab::merge_request` tests). The branch update it does not offer
+    // is refused here.
+    let kind = "pr_update_branch";
+    let payload = serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD});
+    runtime.pr_card_slot("w", 2).write = None;
+    assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
+    let write = card(&runtime, 2)
+        .write
+        .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
+    assert_eq!(
+        (write.phase, write.reason),
+        ("failed", Some("unsupported")),
+        "{kind}"
+    );
 
     assert!(runtime.dispatch_json(&event(
         "pr_feedback_read",
@@ -1269,4 +1265,139 @@ fn a_gitlab_com_card_keeps_its_last_body_when_the_description_is_refused() {
     let card = card(&runtime, 2);
     assert_eq!(card.body.as_deref(), Some("The earlier body"));
     assert_eq!(card.failed, ["body"]);
+}
+
+/// A node answering each `glab` line from its queue, counting the merge
+/// lines it was asked.
+struct GlabQueue {
+    answers: std::sync::Mutex<std::collections::VecDeque<String>>,
+    merges: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::node_access::NodeLink for GlabQueue {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        _timeout: std::time::Duration,
+    ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+        let hide_node_link::protocol::Call::Glab { args } = call else {
+            panic!("only glab is asked: {call:?}");
+        };
+        let words: Vec<&str> = args.iter().map(String::as_str).collect();
+        assert!(hide_node_link::glab::allowed(&words), "{words:?}");
+        if args[0] == "mr" {
+            self.merges
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let stdout = self.answers.lock().unwrap().pop_front().expect("an answer");
+        Ok(
+            serde_json::to_value(hide_node_link::glab::GlabAnswer::Output { stdout, cut: false })
+                .unwrap()
+                .into(),
+        )
+    }
+}
+
+/// The core reads a change request again by one rule, the read-again its
+/// host's unit puts on the answer, naming no host and no reason: gitlab.com's
+/// merge whose outcome is not known after its write, or that only set
+/// auto-merge, reads the list and the card again; a refusal that changed
+/// nothing reads nothing. Asked again after the lost answer, the merge is
+/// done with no second write.
+#[test]
+fn a_write_answer_that_asks_to_read_again_reads_the_list_and_the_card() {
+    use crate::code_host::{CodeHosts, Place};
+    const MERGED: &str =
+        include_str!("../../../tests/fixtures/gitlab/merge-request-merged-squash.json");
+    let host = CodeHosts::STANDARD.host("gitlab").unwrap();
+    let place = Place::Repository {
+        host,
+        repository: host
+            .repository("gitlab.com/example-user/hide-code-host-check")
+            .unwrap(),
+    };
+    let item = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut value: serde_json::Value = serde_json::from_str(MERGED).unwrap();
+        edit(&mut value[0]);
+        value.to_string()
+    };
+    let head = item(&|_| {});
+    let head = serde_json::from_str::<serde_json::Value>(&head).unwrap()[0]["sha"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let open = item(&|item| {
+        item["state"] = "opened".into();
+        item["detailed_merge_status"] = "mergeable".into();
+    });
+    let auto = item(&|item| {
+        item["state"] = "opened".into();
+        item["merge_when_pipeline_succeeds"] = true.into();
+    });
+    let closed = item(&|item| item["state"] = "closed".into());
+    let link = GlabQueue {
+        answers: std::sync::Mutex::new(
+            [
+                // Merged, but the read after it named nothing.
+                open.clone(),
+                "✓ Merged!".to_owned(),
+                "[]".to_owned(),
+                // Asked again: merged at the head, nothing written.
+                MERGED.to_owned(),
+                // Only auto-merge set.
+                open,
+                String::new(),
+                auto,
+                // Closed before anything was written.
+                closed,
+            ]
+            .into(),
+        ),
+        merges: Default::default(),
+    };
+    let merge = || {
+        crate::code_host::HeadMerge::merge(
+            crate::code_host::CodeHost::merge(host.unit()).unwrap(),
+            &link,
+            &place,
+            21,
+            Some(hide_node_link::change_request::PrMergeMethod::Merge),
+            &head,
+        )
+    };
+    let mut runtime = pr_runtime(vec![pull_request(
+        2,
+        "open-work",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    let generation = |runtime: &Runtime| runtime.github_generations.get("/repo").copied();
+    // Ingests `answer` for a merge in flight and says whether the list and
+    // the card were read again.
+    let mut ingest = |answer| {
+        let slot = runtime.pr_card_slot("w", 2);
+        slot.failed = Vec::new();
+        slot.write = Some(crate::model::PrWriteSnapshot {
+            action: "merge",
+            head: head.clone(),
+            method: Some(hide_node_link::change_request::PrMergeMethod::Merge),
+            phase: "working",
+            reason: None,
+        });
+        let before = generation(&runtime);
+        runtime.ingest_pr_write("w", 2, None, "/repo", answer);
+        let write = card(&runtime, 2).write.unwrap();
+        // No worker: a card read that started ends at once, naming its parts.
+        let read_again = generation(&runtime) != before || !card(&runtime, 2).failed.is_empty();
+        (write.phase, write.reason, read_again)
+    };
+    assert_eq!(ingest(merge()), ("failed", Some("unreachable"), true));
+    assert_eq!(ingest(merge()), ("done", None, true));
+    assert_eq!(ingest(merge()), ("failed", Some("auto_merge"), true));
+    assert_eq!(ingest(merge()), ("failed", Some("not_mergeable"), false));
+    assert_eq!(
+        link.merges.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "one merge line for the lost answer and one for auto-merge"
+    );
 }

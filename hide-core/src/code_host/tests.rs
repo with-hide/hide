@@ -121,6 +121,14 @@ impl CodeHost for Plain {
         format!("!{number}")
     }
 
+    fn change_request_name(&self, number: u32) -> String {
+        format!("change !{number}")
+    }
+
+    fn create_command(&self, base: &str) -> String {
+        format!("plain open --into {base}")
+    }
+
     fn access(&self) -> HostAccess {
         HostAccess {
             program: "plain".to_owned(),
@@ -341,6 +349,26 @@ fn holds_the_base_contract(host: Host, stored: &str, remotes: &[&str]) {
     );
     assert!(host.number_label(12).contains("12"));
     assert_ne!(host.number_label(12), host.number_label(13));
+    assert!(
+        host.change_request_name(12)
+            .ends_with(&host.number_label(12)),
+        "a text names a change request by its label"
+    );
+    assert!(host.create_command("m91/low").ends_with(" m91/low"));
+}
+
+/// The texts each unit writes for a mission's agents, one per unit.
+#[test]
+fn each_unit_names_a_change_request_and_its_create_command_in_its_own_words() {
+    let github = host(BOTH, "github");
+    assert_eq!(github.change_request_name(12), "PR #12");
+    assert_eq!(
+        github.create_command("m91/low"),
+        "gh pr create --base m91/low"
+    );
+    let plain = host(BOTH, "plain");
+    assert_eq!(plain.change_request_name(12), "change !12");
+    assert_eq!(plain.create_command("m91/low"), "plain open --into m91/low");
 }
 
 #[test]
@@ -1009,7 +1037,7 @@ fn a_hosts_declaration_travels_by_these_names_and_an_old_payload_carries_none() 
         serde_json::json!({
             "key": "gitlab",
             "name": "GitLab",
-            "operations": ["commit_checks"],
+            "operations": ["merge", "merge_proof", "commit_checks", "by_number"],
             "access": {
                 "program": "glab",
                 "minimum_version": "1.78.0",

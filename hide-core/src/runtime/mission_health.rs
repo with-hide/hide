@@ -474,20 +474,42 @@ fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
     event
 }
 
-/// The report Hide gives a mission it closed (B18): each node's result,
-/// its pull requests and its lines met.
+/// The report Hide gives a mission it closed (B18), in GitHub's words: what
+/// the mission tests of this module read.
+#[cfg(test)]
 pub(super) fn closing_report(mission: &Mission) -> String {
+    closing_report_in(mission, &crate::github::host::GITHUB)
+}
+
+/// A node's change requests as the report names them: the first by its
+/// name (`PR #12`, `MR !12`), the rest by their labels after it.
+fn named_pulls(
+    unit: &dyn crate::code_host::CodeHost,
+    numbers: impl IntoIterator<Item = u32>,
+) -> String {
+    let mut numbers = numbers.into_iter();
+    let Some(first) = numbers.next() else {
+        return String::new();
+    };
+    std::iter::once(unit.change_request_name(first))
+        .chain(numbers.map(|number| unit.number_label(number)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The report Hide gives a mission it closed (B18): each node's result,
+/// its pull requests and its lines met, named as `unit`, the host of the
+/// mission's project, names them.
+pub(super) fn closing_report_in(
+    mission: &Mission,
+    unit: &dyn crate::code_host::CodeHost,
+) -> String {
     let mut lines = vec![format!(
         "Hide closed the mission: every node is done or dropped ({} nodes).",
         mission.nodes.len()
     )];
     for node in &mission.nodes {
-        let prs = node
-            .prs
-            .iter()
-            .map(|number| format!("#{number}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let prs = named_pulls(unit, node.prs.iter().copied());
         let met = node
             .criteria
             .iter()
@@ -507,7 +529,7 @@ pub(super) fn closing_report(mission: &Mission) -> String {
             if prs.is_empty() {
                 String::new()
             } else {
-                format!(" · PR {prs}")
+                format!(" · {prs}")
             },
             if node.criteria.is_empty() {
                 String::new()
@@ -530,11 +552,12 @@ pub(super) fn closing_report(mission: &Mission) -> String {
             )
         })
         .map(|node| {
-            let prs = super::mission_landing::open_pulls(node)
-                .map(|pr| format!("#{pr}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let pr = format!(" · PR {prs}");
+            let named = named_pulls(unit, super::mission_landing::open_pulls(node));
+            let pr = if named.is_empty() {
+                " · PR ".to_owned()
+            } else {
+                format!(" · {named}")
+            };
             let why = node
                 .operator_merge
                 .as_deref()
@@ -1608,7 +1631,11 @@ impl Runtime {
         if self.missions.outside.destination_lost(id) {
             return false;
         }
-        let report = mission.report.is_none().then(|| closing_report(mission));
+        let unit = self.mission_unit(mission);
+        let report = mission
+            .report
+            .is_none()
+            .then(|| closing_report_in(mission, unit));
         let key = close_key(mission);
         let wake_key = key.clone();
         // The close, the refused close it settles, its letter and its
