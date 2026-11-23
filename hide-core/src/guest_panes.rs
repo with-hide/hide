@@ -54,6 +54,16 @@ pub struct GuestPane {
     /// (`work_names`, B10): what its row is called here, else its folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The branch the guest's core says the pane stands on (`work_names`,
+    /// B10): what a plain terminal's row is called by when it has no name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The mark the guest's core draws the pane's row with (`work_names`,
+    /// B10), while the guest is connected and has told one: the row's
+    /// status dot here. A build of the guest that tells none leaves it out,
+    /// and the row is drawn without a dot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
 }
 
 /// Whether `id` can name a guest in a pane's address: not empty, bounded,
@@ -70,6 +80,29 @@ pub fn name_is_shown(name: &str) -> bool {
     !name.trim().is_empty()
         && name.chars().count() <= crate::work_names::MAX_NAME_CHARS
         && !name.chars().any(char::is_control)
+}
+
+/// Whether `branch` is one a row draws: one line, not blank, bounded as
+/// the guest's core bounds what it tells (`work_names::MAX_BRANCH_BYTES`).
+pub fn branch_is_shown(branch: &str) -> bool {
+    !branch.trim().is_empty()
+        && branch.len() <= crate::work_names::MAX_BRANCH_BYTES
+        && !branch.chars().any(char::is_control)
+}
+
+/// The longest mark a list carries: one short lower-case word, as the peer
+/// link bounds it (`hide_peer_protocol::core::MAX_WORK_MARK_BYTES`).
+pub const MAX_MARK_BYTES: usize = 16;
+
+/// Whether `mark` is one a list carries: a short lower-case word. Which
+/// words a screen draws is the screen's to know; one it does not know is
+/// left out there.
+pub fn mark_is_carried(mark: &str) -> bool {
+    !mark.is_empty()
+        && mark.len() <= MAX_MARK_BYTES
+        && mark
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
 /// Whether `pane` is a pane id a list carries.
@@ -101,6 +134,8 @@ pub fn valid(guests: &[GuestPanes]) -> bool {
                             .as_deref()
                             .is_none_or(|folder| folder.len() <= MAX_FOLDER_BYTES)
                         && pane.name.as_deref().is_none_or(name_is_shown)
+                        && pane.branch.as_deref().is_none_or(branch_is_shown)
+                        && pane.mark.as_deref().is_none_or(mark_is_carried)
                         && panes.insert(pane.pane.as_str())
                         && pane.id
                             == hide_node_link::address::guest_pane_id(&guest.device_id, &pane.pane)
@@ -183,6 +218,8 @@ mod tests {
                     since_unix_ms: 1,
                     folder: None,
                     name: None,
+                    branch: None,
+                    mark: None,
                 })
                 .collect(),
         }
@@ -216,6 +253,21 @@ mod tests {
         assert!(!named("가".repeat(crate::work_names::MAX_NAME_CHARS + 1)));
         assert!(!named("  ".to_owned()));
         assert!(!named("one\ntwo".to_owned()));
+        // A told branch and mark are one line and one word.
+        let told = |branch: &str, mark: &str| {
+            let mut told = guest("macbook", &["w1:p1"]);
+            told.panes[0].branch = Some(branch.to_owned());
+            told.panes[0].mark = Some(mark.to_owned());
+            valid(&[told])
+        };
+        assert!(told("feat/login", "going"));
+        assert!(!told(
+            &"b".repeat(crate::work_names::MAX_BRANCH_BYTES + 1),
+            "going"
+        ));
+        assert!(!told("a\nb", "going"));
+        assert!(!told("main", "Going"));
+        assert!(!told("main", &"a".repeat(MAX_MARK_BYTES + 1)));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

@@ -28,9 +28,9 @@ const PANE = "guest:macbook:pane:w1:p1";
 const GUEST_PANES: GuestPanes[] = [{
   device_id: "macbook", key: key("a"),
   panes: [
-    { id: PANE, pane: "w1:p1", since_unix_ms: 1, folder: "/work/shop-api" },
-    { id: "guest:macbook:pane:w1:p2", pane: "w1:p2", since_unix_ms: 2, folder: "/work/shop-api/web" },
-    { id: "guest:macbook:pane:w2:p1", pane: "w2:p1", since_unix_ms: 3, folder: "/Users/me/scratch" },
+    { id: PANE, pane: "w1:p1", since_unix_ms: 1, folder: "/work/shop-api", name: "결제 재시도 고치기", branch: "main", mark: "going" },
+    { id: "guest:macbook:pane:w1:p2", pane: "w1:p2", since_unix_ms: 2, folder: "/work/shop-api/web", branch: "web-login", mark: "quiet" },
+    { id: "guest:macbook:pane:w2:p1", pane: "w2:p1", since_unix_ms: 3, folder: "/Users/me/scratch", mark: "quiet" },
   ],
 }];
 const PEER_WORK: PeerWork[] = [{
