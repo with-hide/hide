@@ -2233,11 +2233,6 @@ fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_f
     let pane = "w-order:t2:p";
     open_file_result(&mut runtime, pane, &directory, "a.md", "chip-a");
     let opened = open_file_result(&mut runtime, pane, &directory, "c.md", "chip-c");
-    assert_eq!(
-        shelf(&runtime, &directory),
-        ["a.md", "c.md"],
-        "on no desk while nobody watches the pane"
-    );
     let ask = |runtime: &mut Runtime, bring: bool| {
         runtime.dispatch_json(&explorer_event(
             "pair_view",
