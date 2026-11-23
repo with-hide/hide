@@ -2362,8 +2362,8 @@ pub struct SidebarAgentSnapshot {
     /// leads with and those counted behind it, each by the event that raised
     /// it (`runtime/plans.rs::core_asks`); empty while none is. What the read
     /// record compares, so a question the operator read stays read while the
-    /// agent works and rests under it (docs/status-model.md, A question the
-    /// core lays stays read).
+    /// agent works under it and rests on work in progress (docs/status-model.md,
+    /// A question laid on a row stays read).
     #[serde(skip)]
     pub(crate) laid_asks: BTreeSet<String>,
     /// Whether the operator read every question laid on the row
@@ -2378,15 +2378,16 @@ pub struct SidebarAgentSnapshot {
     /// with (`axes.rs::look_calls`).
     #[serde(skip)]
     pub(crate) views_unread: bool,
-    /// How many of the session's open questions on the row (`open_asks`)
-    /// the operator read, leaving out the ones the row's turn only asked
-    /// again; decided with the read axis.
+    /// How many of the questions standing on the row, the ones laid on it
+    /// and the session's open ones (`axes.rs::asks_on`), the operator read,
+    /// leaving out the ones the row's turn only asked again; decided with
+    /// the read axis.
     #[serde(skip)]
-    pub(crate) open_asks_read: usize,
-    /// Derived: the open questions the operator read that wait behind what
-    /// leads an unread row, its own news or ask, which its line counts as
-    /// `외 N건` (docs/status-model.md, A question still waiting); absent at
-    /// zero, and on a row a laid question leads, whose ask counts its own.
+    pub(crate) asks_read: usize,
+    /// Derived: the questions the operator read that wait behind what leads
+    /// an unread row, its own news or ask, which its line counts as `외 N건`
+    /// (docs/status-model.md, A question laid on a row stays read); absent
+    /// at zero, and on a row a laid question leads, whose ask counts its own.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub asks_behind: u32,
     /// The questions the row's session put to the operator that still wait
@@ -2572,6 +2573,12 @@ pub struct SidebarAgentSnapshot {
     /// axis (`axes.rs::settle_wait`).
     #[serde(skip_serializing)]
     pub children_moving: bool,
+    /// The lineage's answer for the read rule: the row, a question the core
+    /// laid on it set aside, rests on work still in progress after its turn
+    /// ended (`axes.rs::rests_on_work`), so a read question stays read over
+    /// that turn (`axes.rs::record_covers_turn`).
+    #[serde(skip_serializing)]
+    pub rests_on_work: bool,
     /// What the row waits on for itself (`axes.rs::own_wait`), which is its
     /// wait whenever it does not wait on its children.
     #[serde(skip_serializing)]

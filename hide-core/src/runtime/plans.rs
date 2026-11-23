@@ -130,7 +130,7 @@ struct Laid {
 /// What names each of the core's questions: the event that raised it, never
 /// its words or when it was laid, so the operator's read of a question
 /// holds while it stands and a question raised again or anew is news
-/// (docs/status-model.md, A question the core lays stays read). Each names
+/// (docs/status-model.md, A question laid on a row stays read). Each names
 /// one raise: a plan put up for review again, a mission's next question or
 /// next raise, is another.
 mod ask_id {

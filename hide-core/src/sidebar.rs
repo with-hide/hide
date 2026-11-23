@@ -897,7 +897,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         laid_asks: BTreeSet::new(),
         laid_read: false,
         views_unread: false,
-        open_asks_read: 0,
+        asks_read: 0,
         asks_behind: 0,
         open_asks: None,
         human_turn: None,
@@ -967,6 +967,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         wait_subagents: 0,
         replies_in_progress: 0,
         children_moving: false,
+        rests_on_work: false,
         own_wait: None,
         own_unread: false,
         descendant_signals: BTreeSet::new(),
@@ -3346,14 +3347,15 @@ mod tests {
         }
     }
 
-    /// A question the core laid on a row the operator read stays read while
-    /// the agent works and rests under it, and only its own turn is let go:
-    /// another question laid, a descendant's news and the end of its checks
-    /// still turn it unread, and a record from before the questions were kept
-    /// is judged by the turn as it was (docs/status-model.md, A question the
-    /// core lays stays read).
+    /// A question laid on a row the operator read stays read over the
+    /// agent's turn only while the row rests on work in progress, here its
+    /// working child; a turn that ends with nothing in progress under it is
+    /// news, and so are another question laid, a descendant's news and the
+    /// end of its checks. A record from before the questions were kept is
+    /// judged by the turn as it was (docs/status-model.md, A question laid on
+    /// a row stays read).
     #[test]
-    fn a_read_core_question_lets_go_of_the_agents_own_turn_and_nothing_else() {
+    fn a_read_laid_question_stays_read_while_its_agent_rests_on_work_and_any_other_turn_is_news() {
         let session = "c0ffee00-0000-4000-8000-000000000001";
         // A pass with `asks` laid on the resting root as the core lays
         // them, a working root carrying none, and the child `child`.
@@ -3417,10 +3419,21 @@ mod tests {
         read(&mut saved);
         assert!(laid(("working", 5), &[], quiet, None, &mut saved, None).unread);
         let rested = laid(("done", 6), &["a"], quiet, None, &mut saved, None);
-        assert!(!rested.unread, "its own work and rest under the question");
+        assert!(!rested.unread, "its rest on its working child");
         assert_eq!(
             saved.records["root"].read_asks,
             Some(BTreeSet::from(["a".to_owned()]))
+        );
+
+        // A turn that ends with nothing in progress under it is news, the
+        // question behind it.
+        let mut saved = Saved::default();
+        read(&mut saved);
+        let ended = laid(("done", 6), &["a"], ("idle", 1), None, &mut saved, None);
+        assert_eq!(
+            (ended.group.as_str(), ended.own_unread, ended.asks_behind),
+            ("done", true, 1),
+            "a turn that ends is news"
         );
 
         for (what, asks, child, checks) in [

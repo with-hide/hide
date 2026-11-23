@@ -1153,11 +1153,12 @@ fn a_pane_the_move_worker_focuses_as_the_move_ends_is_read_with_no_window() {
 }
 
 /// A question the core laid on a device's row is read as on this machine's
-/// (docs/status-model.md, A question the core lays stays read): the plan the
-/// operator read stays read while the device's agent works and rests under
-/// it, and the plan put up for review again is news.
+/// (docs/status-model.md, A question laid on a row stays read): the plan the
+/// operator read stays read while the device's agent works and rests on its
+/// working child, its turn that ends with nothing in progress is news, and
+/// the plan put up for review again is news.
 #[test]
-fn a_device_rows_read_plan_review_stays_read_through_its_agents_turns() {
+fn a_device_rows_read_plan_review_stays_read_while_its_agent_rests_on_work_and_a_finish_is_news() {
     let t = tree();
     let (mut runtime, _views) = device(origins()[0].clone(), true);
     let put_up = |runtime: &mut Runtime, at: u64| {
@@ -1171,29 +1172,46 @@ fn a_device_rows_read_plan_review_stays_read_through_its_agents_turns() {
         runtime.plans.book.insert(plan.session.clone(), plan);
         runtime.plans.edit += 1;
     };
-    let arrive = |runtime: &mut Runtime, t1: (&str, u64), focused: &str| {
-        runtime.ingest_remote_session(
-            DEVICE,
-            Ok(device_session(
-                &t.main,
-                &[("t1", t1.0, t1.1), ("t2", "working", 1)],
-                focused,
-            )),
-        );
+    // t2 is the child t1 started.
+    let arrive = |runtime: &mut Runtime, t1: (&str, u64), t2: (&str, u64), focused: &str| {
+        let mut session =
+            device_session(&t.main, &[("t1", t1.0, t1.1), ("t2", t2.0, t2.1)], focused);
+        session.agents[0].lineage_session = Some("t1-lineage".into());
+        let child = &mut session.agents[1];
+        child.spawned_from_pane_id = Some(pane_id("t1"));
+        child.declared_parent_pane_id = Some("t1".into());
+        child.declared_parent_session = Some("t1-lineage".into());
+        runtime.ingest_remote_session(DEVICE, Ok(session));
         publish(runtime);
     };
     put_up(&mut runtime, 1);
-    arrive(&mut runtime, ("idle", 1), "t2");
+    arrive(&mut runtime, ("idle", 1), ("working", 1), "t2");
     assert!(unread(&runtime, "t1"), "the plan waits to be read");
-    arrive(&mut runtime, ("idle", 1), "t1");
+    arrive(&mut runtime, ("idle", 1), ("working", 1), "t1");
     assert!(!unread(&runtime, "t1"), "the device's keyboard read it");
 
-    arrive(&mut runtime, ("working", 2), "t2");
-    arrive(&mut runtime, ("done", 3), "t2");
+    arrive(&mut runtime, ("working", 2), ("working", 1), "t2");
+    arrive(&mut runtime, ("done", 3), ("working", 1), "t2");
     assert!(
         !unread(&runtime, "t1"),
-        "the agent's own work and rest under the plan are not news"
+        "the agent's work and its rest on its working child are not news"
     );
+
+    // The child finishes, which is news; read, the agent then finishes a
+    // turn with nothing in progress under it, which is news too.
+    arrive(&mut runtime, ("done", 3), ("idle", 2), "t2");
+    assert!(unread(&runtime, "t1"), "the child's finish is news");
+    arrive(&mut runtime, ("done", 3), ("idle", 2), "t1");
+    assert!(!unread(&runtime, "t1"));
+    arrive(&mut runtime, ("working", 4), ("idle", 2), "t2");
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
+    assert!(
+        unread(&runtime, "t1"),
+        "a turn that ends with nothing in progress is news"
+    );
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t1");
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
+    assert!(!unread(&runtime, "t1"));
 
     put_up(&mut runtime, 2);
     publish(&mut runtime);

@@ -263,7 +263,7 @@ pub fn apply_lineage(
     let own_waits = agents
         .iter()
         .zip(&replies)
-        .map(|(agent, replies)| own_wait(agent, *replies > 0))
+        .map(|(agent, replies)| own_wait(agent, *replies > 0, false))
         .collect::<Vec<_>>();
     let mut descendant_counts =
         vec![crate::model::DescendantCountsSnapshot::default(); agents.len()];
@@ -333,6 +333,11 @@ pub fn apply_lineage(
             .iter()
             .map(|descendant| agents[*descendant].pane_id.clone())
             .collect();
+        let rests = rests_on_work(
+            &agents[index],
+            replies[index] > 0,
+            depth == 0 && progress_below[index],
+        );
         let agent = &mut agents[index];
         // Ownership is the depth and nothing else. An orphan resolved to no
         // parent, so it is a root here and the dimming lifts with it.
@@ -364,6 +369,7 @@ pub fn apply_lineage(
         agent.children_moving = depth == 0 && quiet_itself(agent) && progress_below[index];
         agent.own_wait = own_waits[index];
         agent.wait = own_waits[index];
+        agent.rests_on_work = rests;
         agent.replies_in_progress = u32::try_from(replies[index]).unwrap_or(u32::MAX);
         agent.descendant_signals = std::mem::take(&mut descendant_signals[index]);
     }
@@ -405,16 +411,26 @@ fn close_order(children: &[Vec<usize>], parents: &[Option<usize>]) -> Vec<Vec<us
 /// A row with no demand of its own that is stopped, idle or done: the half
 /// of the waiting-on-children judgement the row answers for itself.
 fn quiet_itself(agent: &SidebarAgentSnapshot) -> bool {
+    quiet(agent, false)
+}
+
+/// [`quiet_itself`], and with `laid_aside` a question the core laid on the
+/// row not counted as its demand: the core lays one only over a row that
+/// asks nothing and is not working (`Runtime::lay_plan_reviews`), so the row
+/// under it is as quiet as it was.
+fn quiet(agent: &SidebarAgentSnapshot, laid_aside: bool) -> bool {
     let (demand, activity, _) = axes_of(agent);
-    demand == AgentDemand::None && activity == AgentActivity::Stopped && !agent.blocked
+    (demand == AgentDemand::None || laid_aside && !agent.laid_asks.is_empty())
+        && activity == AgentActivity::Stopped
+        && !agent.blocked
 }
 
 /// A quiet row whose session proves a background task it started is still
 /// running in the process that started it, on a turn the label did not read
 /// as finished: a finished turn is not hidden by tasks it left behind
 /// (status-marks D-16, B27, B28).
-fn background_wait(agent: &SidebarAgentSnapshot) -> bool {
-    quiet_itself(agent) && background_left(agent) > 0 && !turn_read_finished(agent)
+fn background_wait(agent: &SidebarAgentSnapshot, laid_aside: bool) -> bool {
+    quiet(agent, laid_aside) && background_left(agent) > 0 && !turn_read_finished(agent)
 }
 
 /// How many background tasks the row's session proves still run, less the
@@ -493,14 +509,14 @@ fn progressing(agent: &SidebarAgentSnapshot) -> bool {
     let (demand, activity, _) = axes_of(agent);
     (demand == AgentDemand::None && activity == AgentActivity::Working)
         || subagents_running(agent)
-        || background_wait(agent)
-        || checks_wait(agent)
+        || background_wait(agent, false)
+        || checks_wait(agent, false)
 }
 
 /// Whether a quiet row waits on its pull request's running checks, or on the
 /// GitHub read a turn that printed its address set off (`lay_checks`).
-fn checks_wait(agent: &SidebarAgentSnapshot) -> bool {
-    agent.checks_wait.is_some() && quiet_itself(agent)
+fn checks_wait(agent: &SidebarAgentSnapshot, laid_aside: bool) -> bool {
+    agent.checks_wait.is_some() && quiet(agent, laid_aside)
 }
 
 /// Whether the answer to one letter is still being made: the recipient, the
@@ -524,17 +540,31 @@ fn answer_in_progress(
 /// What a quiet row waits for on its own account, whatever its depth: a
 /// background task its session proves will wake it, else a reply someone is
 /// still making for it. Waiting on its children outranks both and is decided
-/// with the read axis (`settle_wait`).
-fn own_wait(agent: &SidebarAgentSnapshot, answering: bool) -> Option<AgentWait> {
-    if background_wait(agent) {
+/// with the read axis (`settle_wait`). `laid_aside` as for [`quiet`].
+fn own_wait(agent: &SidebarAgentSnapshot, answering: bool, laid_aside: bool) -> Option<AgentWait> {
+    if background_wait(agent, laid_aside) {
         Some(AgentWait::Background)
-    } else if checks_wait(agent) {
+    } else if checks_wait(agent, laid_aside) {
         Some(AgentWait::Checks)
-    } else if answering && quiet_itself(agent) {
+    } else if answering && quiet(agent, laid_aside) {
         Some(AgentWait::Reply)
     } else {
         None
     }
+}
+
+/// Whether the row's turn ended with the row still in progress on a proven
+/// wait, a question the core laid on it set aside: what keeps a quiet row
+/// in progress once its turn is news (`own_wait`, and `settle_wait` with the
+/// turn unread), its own background tasks, its pull request's running
+/// checks or a reply still being made, or, on a turn not read as finished,
+/// its working children (`children`) or its own subagents. Decided on the
+/// lineage pass, with no Hide AI needed beyond the finished reading the
+/// waits already take; read by `record_covers_turn`.
+fn rests_on_work(agent: &SidebarAgentSnapshot, answering: bool, children: bool) -> bool {
+    let finished = agent.completed && turn_read_finished(agent);
+    own_wait(agent, answering, true).is_some()
+        || (!finished && quiet(agent, true) && (children || agent.subagents > 0))
 }
 
 /// How the label read a stopped turn that nothing proven will wake: finished,
@@ -1033,49 +1063,40 @@ fn record_covers(
 /// turn sent (`SidebarAgentSnapshot::own_unread`). The one comparison both
 /// `record_covers` and the children wait read.
 ///
-/// A question the core laid on the row is judged apart from the agent's
-/// turn: one the record has not read is news, and while every one laid was
-/// read and one of them is the core's own (a plan review, a mission
-/// decision or raise, input not taken), the agent working and resting under
-/// it is not, since the row still asks what the operator read
-/// (docs/status-model.md, A question the core lays stays read). A question
-/// the session itself put to the operator covers nothing of the agent's:
-/// only a turn that asks the same open questions again and does nothing
-/// else is no news (A question still waiting).
+/// One read rule holds for every question laid on the row, whoever laid it
+/// (docs/status-model.md, A question laid on a row stays read): one the
+/// record has not read is news. While every one laid was read, the agent's
+/// turn under them is no news only when it asked again nothing but questions
+/// the record read (`asks_again`, Hide AI's `only_asks_again`), or when it
+/// ended with the row still in progress on a proven wait
+/// (`SidebarAgentSnapshot::rests_on_work`), as a Conductor a worker's letter
+/// woke rests on its workers again. Any other turn is news, with the read
+/// questions behind it (`laid_ask_steps_back`).
 fn record_covers_turn(
     record: &PaneReadRecord,
     current: &PaneReadRecord,
     agent: &SidebarAgentSnapshot,
 ) -> bool {
-    match asks_read(record, agent) {
-        Some(false) => false,
-        Some(true) if agent.laid_asks.iter().any(|ask| !is_open_ask(ask)) => true,
-        _ => {
-            turn_covered(record, current)
-                || asks_again(agent).is_some_and(|again| {
-                    record
-                        .read_asks
-                        .as_ref()
-                        .is_some_and(|read| again.is_subset(read))
-                })
-        }
-    }
+    let laid = asks_read(record, agent);
+    laid != Some(false)
+        && (turn_covered(record, current)
+            || laid == Some(true) && agent.rests_on_work
+            || asks_again(agent).is_some_and(|again| {
+                record
+                    .read_asks
+                    .as_ref()
+                    .is_some_and(|read| again.is_subset(read))
+            }))
 }
 
-/// Whether the record read the core's questions laid on the row now: Some
-/// (true) when one is laid and the record read them all, Some(false) when
-/// one is laid that it did not read, and None when none is laid or the
-/// record was written before it kept them.
+/// Whether the record read the questions laid on the row now: Some(true)
+/// when one is laid and the record read them all, Some(false) when one is
+/// laid that it did not read, and None when none is laid or the record was
+/// written before it kept them.
 fn asks_read(record: &PaneReadRecord, agent: &SidebarAgentSnapshot) -> Option<bool> {
     let read = record.read_asks.as_ref()?;
     let laid = Some(&agent.laid_asks).filter(|laid| !laid.is_empty())?;
     Some(laid.is_subset(read))
-}
-
-/// Whether a laid question is one the session put to the operator
-/// (`runtime/plans.rs::ask_id::open_ask`) rather than one of the core's own.
-fn is_open_ask(ask: &str) -> bool {
-    ask.starts_with(crate::model::OPEN_ASK_ID_PREFIX)
 }
 
 /// Whether a question laid on the row steps behind the agent's own turn:
@@ -1387,16 +1408,13 @@ pub(crate) fn derive_read_state(
                     .is_none_or(|read| read < opened)
             });
         agent.laid_read = !agent.laid_asks.is_empty() && agent.laid_asks.iter().all(asks_read_now);
-        // The open questions read that wait behind whatever leads the row,
-        // the ones its turn only asked again being that turn itself.
+        // The questions read that wait behind whatever leads the row, the
+        // ones its turn only asked again being that turn itself.
         let again = asks_again(agent).unwrap_or_default();
-        agent.open_asks_read = agent.open_asks.as_ref().map_or(0, |open| {
-            open.items
-                .iter()
-                .map(|item| open.ask_id(&item.id))
-                .filter(|ask| asks_read_now(ask) && !again.contains(ask))
-                .count()
-        });
+        agent.asks_read = asks_on(agent)
+            .iter()
+            .filter(|ask| asks_read_now(ask) && !again.contains(*ask))
+            .count();
         derive_from_axes(agent);
     }
     sort_agents(agents);

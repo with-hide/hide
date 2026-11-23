@@ -968,7 +968,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     // operator already read behind its own news or ask.
     let stepped_back = super::axes::laid_ask_steps_back(agent);
     agent.asks_behind = if unread && (agent.laid_asks.is_empty() || stepped_back) {
-        u32::try_from(agent.open_asks_read).unwrap_or(u32::MAX)
+        u32::try_from(agent.asks_read).unwrap_or(u32::MAX)
     } else {
         0
     };
