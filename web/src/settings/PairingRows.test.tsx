@@ -116,6 +116,16 @@ it("lists a paired machine with its state, its direction and the one action its 
   await unmount();
 });
 
+it("names a paired machine's system as its device reports it, and none before that device exists", async () => {
+  const linux = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux" });
+  const fresh = peer();
+  const { q, unmount } = await mount(idle, [linux, fresh], [], [{ id: "office", label: "Office Linux", kind: "remote", state: "ready", peer_key: linux.key, host: { platform: "linux x86_64" } as Device["host"] }]);
+  expect(q('[data-peer-system="office"]')?.textContent).toBe("Linux");
+  // This computer's own system is never said of another machine.
+  expect(q('[data-peer-system="windows-pc"]')).toBeNull();
+  await unmount();
+});
+
 it("says the Tailscale tip only on a row connected through the relay, and keeps the path and direction in Connection details (D-86)", async () => {
   const relayed = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux", path: "relay" });
   const direct = peer({ path: "tailscale" });

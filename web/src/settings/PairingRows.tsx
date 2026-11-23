@@ -203,8 +203,12 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
   const asked = requestLine(request);
   const device = peer.device_id;
   const named = peer.key;
-  // The machine's system, as the device the core made of it reports it.
-  const system = useShellStore((s) => machineSystem(s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key)) ?? null);
+  // The machine's system, as the device the core made of it reports it;
+  // none before that device exists, never this computer's own.
+  const system = useShellStore((s) => {
+    const machine = s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key);
+    return machine ? machineSystem(machine) : null;
+  });
   const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
   const ask = () => {
     if (request) actions.pairing("dismiss_request", { device: named });
