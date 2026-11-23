@@ -2576,7 +2576,12 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         state: "connected".into(),
         message: None,
         session: Some(crate::model::RemoteSessionSnapshot {
-            workspaces: vec![workspace("hide", "hide", "/Users/grab/hide", vec![checkout])],
+            workspaces: vec![workspace(
+                "hide",
+                "hide",
+                "/Users/grab/hide",
+                vec![checkout],
+            )],
             agents: vec![],
             active_tab_ids: Default::default(),
             focused_workspace_id: None,

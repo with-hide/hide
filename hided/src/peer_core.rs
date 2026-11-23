@@ -1012,9 +1012,7 @@ impl PeerCore {
             // The names of a machine's work here, from a machine that may
             // open this one (B10): only its own panes take them.
             CoreMessage::WorkNames { names } => {
-                if !self.has(&key, false)
-                    || !hide_peer::protocol::core::valid_work_names(&names)
-                {
+                if !self.has(&key, false) || !hide_peer::protocol::core::valid_work_names(&names) {
                     record("peer_core.work_names_refused", &key, Value::Null);
                     return None;
                 }
@@ -1619,9 +1617,12 @@ mod tests {
                 .collect()
         };
         let mut pair = Pair::new(Duration::from_secs(30)).await;
-        within("the Mac reads its names", pair.mac_wants.wait_for(|wants| *wants))
-            .await
-            .unwrap();
+        within(
+            "the Mac reads its names",
+            pair.mac_wants.wait_for(|wants| *wants),
+        )
+        .await
+        .unwrap();
         assert!(!*pair.pc_wants.borrow(), "the PC opens nothing");
 
         let kept = |pair: &Pair| lock(&pair.pc_kept.0).clone();
@@ -1659,10 +1660,10 @@ mod tests {
 
         // The PC may not open the Mac: names it tells are not kept there.
         // A letter follows on the same stream, so the names were read.
-        assert!(pair.pc_service.tell(
-            &pair.mac_key,
-            names_out(&named(&[("w1:p1", "theirs")]))
-        ));
+        assert!(
+            pair.pc_service
+                .tell(&pair.mac_key, names_out(&named(&[("w1:p1", "theirs")])))
+        );
         lock(&pair.pc_core.waiting).push((pair.mac_key.clone(), letter("letter-1")));
         pair.pc_service.outbox_moved();
         pair.mac_core
@@ -1672,9 +1673,12 @@ mod tests {
 
         // The connection ends: the Mac reads its names no more.
         pair.pc.shutdown.end();
-        within("the Mac stops reading", pair.mac_wants.wait_for(|wants| !*wants))
-            .await
-            .unwrap();
+        within(
+            "the Mac stops reading",
+            pair.mac_wants.wait_for(|wants| !*wants),
+        )
+        .await
+        .unwrap();
     }
 
     /// D-70 (security pre-review O2): a phone paired with the PC reaches

@@ -888,7 +888,10 @@ mod tests {
         assert!(!store.take_name(&key(2), "nobody").unwrap());
         assert_eq!(store.state_of(&key(1), 1), before);
         let reopened = Grants::open(dir.path().join("grants.json")).unwrap();
-        assert_eq!(reopened.current(&key(1)).unwrap().name, "hoyeon의 MacBook Pro");
+        assert_eq!(
+            reopened.current(&key(1)).unwrap().name,
+            "hoyeon의 MacBook Pro"
+        );
 
         let mut known = Known::open(dir.path().join("known.json")).unwrap();
         let host = |key: PeerKey, started: Option<Login>| Host {

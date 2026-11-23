@@ -1083,7 +1083,10 @@ mod sys {
 mod tests {
     #[test]
     fn a_host_name_loses_only_the_local_networks_suffix() {
-        assert_eq!(super::without_local("hoyeonui-MacBookPro.local"), "hoyeonui-MacBookPro");
+        assert_eq!(
+            super::without_local("hoyeonui-MacBookPro.local"),
+            "hoyeonui-MacBookPro"
+        );
         assert_eq!(super::without_local("Mac-mini.LOCAL"), "Mac-mini");
         assert_eq!(super::without_local("build-box"), "build-box");
         assert_eq!(super::without_local("box.localdomain"), "box.localdomain");

@@ -281,7 +281,10 @@ pub(crate) fn apply_names(
 /// The names of `path` from its last back, `/` between names on every
 /// system.
 fn names_of(path: &str) -> Vec<&str> {
-    path.split('/').filter(|name| !name.is_empty()).rev().collect()
+    path.split('/')
+        .filter(|name| !name.is_empty())
+        .rev()
+        .collect()
 }
 
 /// `path`'s last `count` names, outermost first: `projects/hide`.
@@ -302,7 +305,10 @@ fn last_names(names: &[&str], count: usize) -> String {
 fn tell_apart(projects: &mut [crate::model::WorkspaceSnapshot]) {
     // Each project's names, and whether its label is its folder's: its
     // last name, or its last names with their parents.
-    let names: Vec<Vec<&str>> = projects.iter().map(|project| names_of(&project.path)).collect();
+    let names: Vec<Vec<&str>> = projects
+        .iter()
+        .map(|project| names_of(&project.path))
+        .collect();
     let folders: Vec<Option<usize>> = projects
         .iter()
         .zip(&names)

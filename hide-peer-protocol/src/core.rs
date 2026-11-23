@@ -339,7 +339,10 @@ mod tests {
         );
         assert_eq!(CoreMessage::parse(&body).unwrap(), Some(told));
         assert!(valid_work_names(&[]));
-        assert!(valid_work_names(&[named("w1:p1", "a"), named("w1:p2", "a")]));
+        assert!(valid_work_names(&[
+            named("w1:p1", "a"),
+            named("w1:p2", "a")
+        ]));
         for wrong in [
             vec![named("w1:p1", "a"), named("w1:p1", "b")],
             vec![named("", "a")],

@@ -4895,7 +4895,10 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
 #[test]
 fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() {
     let labels = |projects: &[WorkspaceSnapshot]| -> Vec<String> {
-        projects.iter().map(|project| project.label.clone()).collect()
+        projects
+            .iter()
+            .map(|project| project.label.clone())
+            .collect()
     };
     let mut projects = vec![
         workspace("a", "hide", "/Users/grab/projects/hide", vec![]),
@@ -4910,7 +4913,14 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
     crate::project_settings::apply_names(&none, &mut projects);
     assert_eq!(
         labels(&projects),
-        ["projects/hide", "grab/hide", "one/app/web", "two/app/web", "hide", "shop"]
+        [
+            "projects/hide",
+            "grab/hide",
+            "one/app/web",
+            "two/app/web",
+            "hide",
+            "shop"
+        ]
     );
     crate::project_settings::apply_names(&none, &mut projects);
     assert_eq!(labels(&projects)[..2], ["projects/hide", "grab/hide"]);
