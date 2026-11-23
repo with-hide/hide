@@ -673,6 +673,11 @@ pub struct HeldNodeView {
     pub title: String,
     pub reason: crate::mission_health::HeldReason,
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it, as `NodeView::pr_reference` is
+    /// made; absent with none, while the project's repository is not read
+    /// and from a core before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub since_unix_ms: u64,
 }
 
@@ -728,6 +733,12 @@ pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
 pub struct AttentionView {
     pub reason: crate::missions::AttentionReason,
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it, as `NodeView::pr_reference` is
+    /// made, so an unplanned change request no node holds reads `!12` on
+    /// gitlab.com; absent with none, while the project's repository is not
+    /// read and from a core before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     /// The operator only for a reason only they settle
     /// (`AttentionReason::operator_first`); every other raise is the
     /// Conductor's, and the safety net is the mission's.
@@ -5213,35 +5224,38 @@ impl Runtime {
         let conductor_present = self.conductor_present(&mission.conductor.actor);
         let operator_waits = self.operator_waits(mission);
         let lines = self.lines_now(mission);
+        let pull_of = |number: u32| {
+            github?
+                .pull_requests
+                .iter()
+                .find(|pull| pull.number == number)
+        };
+        // The repository the project's read named and its host, found once.
+        let project = github
+            .and_then(|github| github.repository.as_ref()?.repository.as_ref())
+            .and_then(|repository| Some((self.code_hosts.of(repository)?, repository)));
+        // A number of the mission's project as its host's unit names it: the
+        // read's own reference, else the one the unit makes from the
+        // repository the read named, so a change request the list does not
+        // hold (one no longer listed, an outside one, a stack's base, an
+        // unplanned one) reads `!12` on gitlab.com too.
+        let reference_of = |number: u32| {
+            pull_of(number)
+                .and_then(|pull| pull.reference.clone())
+                .or_else(|| {
+                    let (host, repository) = project?;
+                    Some(crate::code_host::change_request(
+                        host.unit(),
+                        repository.clone(),
+                        number,
+                    ))
+                })
+        };
         let nodes = mission
             .nodes
             .iter()
             .map(|node| {
                 let record = node.agent_id.as_deref().and_then(|id| agents.get(id));
-                let pull_of = |number: u32| {
-                    github?
-                        .pull_requests
-                        .iter()
-                        .find(|pull| pull.number == number)
-                };
-                // A number of the mission's project as its host's unit names
-                // it: the read's own reference, else the one the unit makes
-                // from the repository the read named, so a change request the
-                // list no longer holds, an outside one and a stack's base read
-                // `!12` on gitlab.com too.
-                let reference_of = |number: u32| {
-                    pull_of(number)
-                        .and_then(|pull| pull.reference.clone())
-                        .or_else(|| {
-                            let repository = github?.repository.as_ref()?.repository.clone()?;
-                            let host = self.code_hosts.of(&repository)?;
-                            Some(crate::code_host::change_request(
-                                host.unit(),
-                                repository,
-                                number,
-                            ))
-                        })
-                };
                 let pull = node.current_pr().and_then(pull_of);
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
@@ -5359,6 +5373,7 @@ impl Runtime {
                         AttentionView {
                             reason: attention.reason,
                             pr: attention.pr,
+                            reference: attention.pr.and_then(reference_of),
                             to: if operator {
                                 AttentionTo::Operator
                             } else {
@@ -5565,6 +5580,7 @@ impl Runtime {
                                 title: node.title.clone(),
                                 reason,
                                 pr,
+                                reference: pr.and_then(reference_of),
                                 since_unix_ms,
                             })
                         })

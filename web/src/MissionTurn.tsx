@@ -149,7 +149,7 @@ function HeldRow({ mission, held, onSelect }: { mission: Mission; held: MissionH
   const { t } = useInterfaceTranslation();
   const age = useElapsed(mission.stale ? null : held.since_unix_ms);
   const node = mission.nodes.find((one) => one.key === held.key) ?? null;
-  const reason = attentionReasonText(held.reason, held.pr, t, 0, pullsByNumber(mission.nodes));
+  const reason = attentionReasonText(held.reason, held.pr, t, 0, pullsByNumber([...mission.nodes, { attention: held }]));
   return (
     <li className="flex min-w-0 items-center gap-sm text-body" data-mission-held-node={held.key} data-mission-turn-reason={held.reason}>
       {node ? <NodeChip node={node} onSelect={onSelect} /> : <span className="min-w-0 shrink truncate text-caption">{held.title}</span>}

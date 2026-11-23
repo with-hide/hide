@@ -13,6 +13,7 @@ import {
   type NodeLook, type NodePace, type WorkerEscalation,
 } from "../missions";
 import type { LineNode } from "../missionLine";
+import type { MissionHeldNode } from "../snapshot";
 import type { AgentKey, PhoneMission, PhoneMissionNode, PhonePr } from "./protocol";
 import { usePhone } from "./store";
 
@@ -64,9 +65,9 @@ export function phoneLineNode(node: PhoneMissionNode, nodes: readonly Pick<Phone
   return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0, base_state: base?.pr_state ?? null };
 }
 
-/** The references a phone mission's steps carry, by number, so a reason names a gitlab.com merge request `!12`. */
-export function phonePulls(mission: PhoneMission): MissionPulls {
-  return pullsByNumber(mission.nodes.map((node) => phoneLineNode(node)));
+/** The references a phone mission's steps carry, by number, and a held cell's, so a reason names a gitlab.com merge request `!12`. */
+export function phonePulls(mission: PhoneMission, held?: Pick<MissionHeldNode, "pr" | "reference">): MissionPulls {
+  return pullsByNumber([...mission.nodes.map((node) => phoneLineNode(node)), ...(held ? [{ attention: held }] : [])]);
 }
 
 /** The progress words and counts of the head: `n / m` of the steps in the plan. */

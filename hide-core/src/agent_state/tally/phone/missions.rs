@@ -119,6 +119,10 @@ pub struct PhoneHeldNode {
     pub reason: String,
     #[serde(default)]
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it (`HeldNodeView::reference`); absent
+    /// with none and from a core before it, which the phone reads as `#n`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub since_unix_ms: u64,
 }
 
@@ -162,6 +166,10 @@ pub struct PhoneAttention {
     pub reason: String,
     #[serde(default)]
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it (`AttentionView::reference`); absent
+    /// with none and from a core before it, which the phone reads as `#n`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub to: String,
     pub since_unix_ms: u64,
     pub on_row: bool,
@@ -1191,8 +1199,8 @@ mod tests {
     }
 
     /// Every pull request a step names reaches the phone with the reference
-    /// its host's unit made, its current one, the one it is stacked on and
-    /// the one an outside step watches, so the phone names a gitlab.com one
+    /// its host's unit made, its current one, the one it is stacked on, the
+    /// one an outside step watches and the one its raise is about, so the phone names a gitlab.com one
     /// `!12` (docs/ARCHITECTURE.md, Code hosts); a step with none sends no
     /// key, which the phone reads as `#n`.
     #[test]
@@ -1214,9 +1222,14 @@ mod tests {
                 vec![
                     node(
                         "a",
-                        json!({"pr": 12, "pr_reference": reference(12), "base_pr": 11, "base_reference": reference(11)}),
+                        json!({"pr": 12, "pr_reference": reference(12), "base_pr": 11, "base_reference": reference(11),
+                            "attention": {"reason": "unplanned_pr", "pr": 13, "reference": reference(13), "to": "operator", "since_unix_ms": 1, "on_row": false, "item": true}}),
                     ),
-                    node("b", json!({"pr": 7, "base_pr": 6})),
+                    node(
+                        "b",
+                        json!({"pr": 7, "base_pr": 6,
+                            "attention": {"reason": "unplanned_pr", "pr": 8, "to": "operator", "since_unix_ms": 1, "on_row": false, "item": true}}),
+                    ),
                     node(
                         "c",
                         json!({"kind": "external", "delivery": null, "external": {"pr": 44}, "outside": {"base": "main", "reference": reference(44)}}),
@@ -1231,19 +1244,30 @@ mod tests {
         );
         let sent = serde_json::to_value(projected(&rest)).unwrap();
         let labels = |at: usize| {
-            ["pr_reference", "base_reference", "external_reference"].map(|key| {
-                sent["items"][0]["nodes"][at]
-                    .get(key)
-                    .map(|one| one["label"].clone())
-            })
+            let node = &sent["items"][0]["nodes"][at];
+            let [own, base, outside] = ["pr_reference", "base_reference", "external_reference"]
+                .map(|key| node.get(key).map(|one| one["label"].clone()));
+            [
+                own,
+                base,
+                outside,
+                node["attention"]
+                    .get("reference")
+                    .map(|one| one["label"].clone()),
+            ]
         };
         assert_eq!(
             [labels(0), labels(1), labels(2), labels(3)],
             [
-                [Some(json!("!12")), Some(json!("!11")), None],
-                [None, None, None],
-                [None, None, Some(json!("!44"))],
-                [None, None, None],
+                [
+                    Some(json!("!12")),
+                    Some(json!("!11")),
+                    None,
+                    Some(json!("!13"))
+                ],
+                [None, None, None, None],
+                [None, None, Some(json!("!44")), None],
+                [None, None, None, None],
             ]
         );
     }

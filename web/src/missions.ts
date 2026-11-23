@@ -995,7 +995,7 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">, pul
       return { what: t("mission.hide.mark", { what: t("mission.hide.closed") }), line };
     case "raised":
     case "raised_to_operator":
-      return { what: `! ${t(event.kind === "raised" ? "mission.attention.to.conductor" : "mission.attention.to.operator")}`, line: event.reason ? attentionReasonText(event.reason, event.pr ?? null, t) : line };
+      return { what: `! ${t(event.kind === "raised" ? "mission.attention.to.conductor" : "mission.attention.to.operator")}`, line: event.reason ? attentionReasonText(event.reason, event.pr ?? null, t, 0, pulls) : line };
     case "resolved":
       return { what: event.action ? `${t("mission.operator")} · ${t(`mission.operator.${event.action}`)}` : t("mission.operator"), line };
   }
@@ -1046,10 +1046,11 @@ export function nodeQuestion(mission: Mission, node: MissionNode): string | null
 /** A mission's pull requests by number, each with the reference its node carries: events and marks name a number only. */
 export type MissionPulls = ReadonlyMap<number, ChangeRequestRef>;
 
-/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds, the one it is stacked on and an outside one. */
+/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds, the one it is stacked on, an outside one and the one a raise or a held cell is about. */
 export function pullsByNumber(nodes: readonly PulledNode[]): MissionPulls {
   const pulls = new Map<number, ChangeRequestRef>();
   for (const node of nodes) {
+    if (node.attention?.pr != null && node.attention.reference) pulls.set(node.attention.pr, node.attention.reference);
     if (node.base_pr != null && node.base_reference) pulls.set(node.base_pr, node.base_reference);
     if (node.external && "pr" in node.external && node.outside?.reference) pulls.set(node.external.pr, node.outside.reference);
     for (const pr of node.prs ?? []) if (pr.reference) pulls.set(pr.number, pr.reference);
@@ -1059,7 +1060,7 @@ export function pullsByNumber(nodes: readonly PulledNode[]): MissionPulls {
 }
 
 /** What `pullsByNumber` reads of a node: the desktop's node, or the phone's as `phoneLineNode` reads it. */
-type PulledNode = { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[]; base_pr?: number | null; base_reference?: ChangeRequestRef | null; external?: MissionExternal | null; outside?: MissionOutside | null };
+type PulledNode = { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[]; base_pr?: number | null; base_reference?: ChangeRequestRef | null; external?: MissionExternal | null; outside?: MissionOutside | null; attention?: { pr: number | null; reference?: ChangeRequestRef | null } | null };
 
 /** Pull request `number` of a mission, named by the reference a node carries for it (`!12` on gitlab.com). */
 export function missionPull(number: number, pulls: MissionPulls | undefined): { number: number; reference: ChangeRequestRef | null } {

@@ -1503,7 +1503,7 @@ export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
 /** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; /** `pr` as its host's unit names it; absent with none and from an older core, which reads as `#n`. */ reference?: ChangeRequestRef | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -1834,7 +1834,7 @@ export type MissionWarningKind = "review_fails" | "stopped";
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
 /** One node the safety net holds (`HeldNodeView`): its unresolved cell (a raise's reason or a standing cell's fact) and since when it stands. */
-export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; since_unix_ms: number };
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; /** `pr` as its host's unit names it; absent with none and from an older core, which reads as `#n`. */ reference?: ChangeRequestRef | null; since_unix_ms: number };
 /** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
 export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
 /** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */

@@ -136,7 +136,7 @@ function HeldStep({ mission, held }: { mission: PhoneMission; held: MissionHeldN
     <li className="flex min-w-0 flex-col" data-phone-held-step={held.key}>
       <span className="break-keep text-body text-foreground wrap-anywhere">{held.title}</span>
       <span className="break-keep text-caption text-muted-foreground wrap-anywhere">
-        {attentionReasonText(held.reason, held.pr, t, 0, phonePulls(mission))}
+        {attentionReasonText(held.reason, held.pr, t, 0, phonePulls(mission, held))}
         {age ? ` · ${t("mission.net.age", { age })}` : null}
       </span>
     </li>

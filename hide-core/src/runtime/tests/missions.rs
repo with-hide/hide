@@ -20866,11 +20866,13 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
 /// Every change request a mission's node names reaches the screen with the
 /// reference its project's host's unit makes, so a gitlab.com project's map
 /// writes `!n` and a GitHub project's `#n`: the node's own, held in the
-/// project's list or not, the one it is stacked on and an outside one. While
-/// the project's repository is not read none is made, which a screen reads
-/// as `#n`.
+/// project's list or not, the one it is stacked on, an outside one and an
+/// unplanned one its raise is about. The list's own reference wins while it
+/// holds the change request. While the project's repository is not read none
+/// is made, which a screen reads as `#n`.
 #[test]
 fn a_missions_change_requests_carry_their_hosts_reference() {
+    use crate::missions::{Attention, AttentionReason};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -20887,6 +20889,20 @@ fn a_missions_change_requests_carry_their_hosts_reference() {
         json!({"op": "node", "node": "fix", "patch": {"pr": 45, "base_pr": 40}}),
     )
     .unwrap();
+    let fix = runtime.missions.book.missions[0]
+        .nodes
+        .iter()
+        .position(|node| node.key == "fix")
+        .unwrap();
+    runtime.missions.book.missions[0].nodes[fix].attention = Some(Attention {
+        reason: AttentionReason::UnplannedPr,
+        pr: Some(50),
+        agent: None,
+        key: 1,
+        since_unix_ms: 1,
+        notified: false,
+    });
+    runtime.missions.book_edit += 1;
     let labels = |runtime: &mut Runtime| {
         runtime.missions.github_edit += 1;
         runtime.refresh_missions();
@@ -20898,29 +20914,42 @@ fn a_missions_change_requests_carry_their_hosts_reference() {
             label(fix.prs.last().and_then(|pr| pr.reference.clone())),
             label(fix.base_reference),
             label(parser.outside.and_then(|outside| outside.reference)),
+            label(fix.attention.and_then(|attention| attention.reference)),
         ]
     };
-    assert_eq!(labels(&mut runtime), [None, None, None, None]);
+    assert_eq!(labels(&mut runtime), [None, None, None, None, None]);
     let some = |label: &str| Some(label.to_owned());
-    for (stored, expected) in [
-        ("gitlab.com/acme/app", ["!45", "!45", "!40", "!1232"]),
-        ("acme/app", ["#45", "#45", "#40", "#1232"]),
+    for (stored, expected, page) in [
+        (
+            "gitlab.com/acme/app",
+            ["!45", "!45", "!40", "!1232", "!50"],
+            "https://gitlab.com/acme/app/-/merge_requests/45",
+        ),
+        (
+            "acme/app",
+            ["#45", "#45", "#40", "#1232", "#50"],
+            "https://github.com/acme/app/pull/45",
+        ),
     ] {
         runtime.github = read_as(stored);
         assert_eq!(labels(&mut runtime), expected.map(some), "{stored}");
-        // The list's own reference is the one carried while it holds the change request.
+        assert_eq!(
+            node_view(&runtime, "fix").pr_reference.map(|one| one.url),
+            Some(page.to_owned()),
+            "{stored}"
+        );
+        // The list's own reference is the one carried while it holds the
+        // change request, whatever the unit would make.
         let mut held = pull(45, "a1", PullRequestBadge::Open, None);
-        held.reference = runtime.github.projects[0]
-            .repository
-            .as_ref()
-            .and_then(|identity| identity.repository.clone())
-            .map(|repository| {
-                let host = crate::code_host::CodeHosts::STANDARD
-                    .of(&repository)
-                    .unwrap();
-                crate::code_host::change_request(host.unit(), repository, 45)
-            });
+        let mut listed = node_view(&runtime, "fix").pr_reference.unwrap();
+        listed.url = "https://example.invalid/listed/45".into();
+        held.reference = Some(listed);
         runtime.github.projects[0].pull_requests = vec![held];
         assert_eq!(labels(&mut runtime), expected.map(some), "{stored}");
+        assert_eq!(
+            node_view(&runtime, "fix").pr_reference.map(|one| one.url),
+            Some("https://example.invalid/listed/45".to_owned()),
+            "{stored}"
+        );
     }
 }
