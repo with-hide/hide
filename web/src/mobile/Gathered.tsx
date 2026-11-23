@@ -11,13 +11,13 @@ import { RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { AskLine, AutomationAskRows } from "./AutomationsScreen";
-import { MissionAskRows } from "./MissionsScreen";
+import { MissionAskRows, OtherMissionAskRow } from "./MissionsScreen";
 import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type HostLine } from "./gather";
-import { automationLink, dropHostPush, hostLink, hostStore, type PairedHost } from "./hosts";
+import { automationLink, dropHostPush, hostLink, hostStore, missionLink, type PairedHost } from "./hosts";
 import { FoldButton, GatheredRowItem } from "./ListRows";
 import { DeviceTag } from "./parts";
 import { watchHost, type Presence } from "./presence";
-import { GROUP_TITLE } from "./protocol";
+import { GROUP_TITLE, type PhoneMission } from "./protocol";
 import { setListScope, usePhone } from "./store";
 
 /** A saved computer this phone can connect to: one that refused this phone's credential is not listed. */
@@ -111,6 +111,9 @@ function usePresences(hosts: readonly ConnectableHost[], activeRoom: string, wat
 /** Another computer's automation that stopped for a person, in the gathered view's 내 차례 with that computer's mark. */
 type OtherAsk = { host: GatheredHost; ask: GatheredAsk };
 
+/** Another computer's mission that is its own 내 차례 item, in the gathered view's 내 차례 with that computer's mark. */
+type OtherMission = { host: GatheredHost; mission: PhoneMission };
+
 /**
  * 모두: 내 차례 and 읽을 것 of this computer and of every other one whose list arrived, each row with its computer's mark, then one
  * line for each computer still connecting, out of reach or speaking another phone protocol (B62), this one included, so a page
@@ -131,7 +134,8 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
     ...listed.map((host) => ({ host, here: false, groups: presence[host.room]!.gathered! })),
   ]);
   const otherAsks: OtherAsk[] = listed.flatMap((host) => (presence[host.room]?.asks ?? []).map((ask) => ({ host, ask })));
-  const asks = asksHere + otherAsks.length;
+  const otherMissions: OtherMission[] = listed.flatMap((host) => (presence[host.room]?.missions ?? []).map((mission) => ({ host, mission })));
+  const asks = asksHere + otherAsks.length + otherMissions.length;
   const ownLine = here ? hereLine(groups !== null, unreachable) : null;
   const lines = [
     ...(here && ownLine ? [{ host: here, line: ownLine }] : []),
@@ -148,7 +152,7 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
     }),
   ];
   const needs = gathered.find((group) => group.group === "needs_you");
-  const askRows = <AskRows here={here} others={otherAsks} />;
+  const askRows = <AskRows here={here} others={otherAsks} missions={otherMissions} />;
   return (
     <div data-phone-gathered-list="">
       {asks > 0 && !needs ? (
@@ -173,8 +177,11 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
   );
 }
 
-/** The automations that stopped for a person on every computer: this one's with their [다시 켜기], another's opening on that computer. */
-function AskRows({ here, others }: { here: GatheredHost | undefined; others: readonly OtherAsk[] }) {
+/**
+ * The automations that stopped for a person and the missions that are their own item, on every computer: this one's with their
+ * [다시 켜기] and opening here, another's opening on that computer.
+ */
+function AskRows({ here, others, missions }: { here: GatheredHost | undefined; others: readonly OtherAsk[]; missions: readonly OtherMission[] }) {
   return (
     <>
       <AutomationAskRows computer={here?.name} />
@@ -182,6 +189,15 @@ function AskRows({ here, others }: { here: GatheredHost | undefined; others: rea
       {others.length > 0 ? (
         <ul className="divide-y divide-border border-b border-border" data-phone-gathered-asks={others.length}>
           {others.map(({ host, ask }) => <OtherAskRow key={`${host.room}|${ask.id}`} host={host} ask={ask} />)}
+        </ul>
+      ) : null}
+      {missions.length > 0 ? (
+        <ul data-phone-gathered-missions={missions.length}>
+          {missions.map(({ host, mission }) => (
+            <li key={`${host.room}|${mission.id}`} data-phone-gathered-mission={`${host.room}|${mission.id}`}>
+              <OtherMissionAskRow mission={mission} computer={host.name} onOpen={() => window.location.assign(missionLink(host, mission.id))} />
+            </li>
+          ))}
         </ul>
       ) : null}
     </>

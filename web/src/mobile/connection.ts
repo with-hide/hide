@@ -39,7 +39,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prHostOf, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openMission, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
@@ -1242,6 +1242,9 @@ async function startRelay(): Promise<void> {
     // Another computer's automation that stopped for a person, pressed in the gathered view, opens on its page here.
     const automation = query.get("automation");
     if (automation) openAutomation(automation);
+    // Likewise another computer's mission that is its own 내 차례 item.
+    const mission = query.get("mission");
+    if (mission) openMission(mission);
     if (relayPair) {
       relayHost = { room: relayPair.room, noiseKey: relayPair.noise_key, name: relayPair.name,
         credential: null, protocol: PHONE_PROTOCOL, lastSeen: null };

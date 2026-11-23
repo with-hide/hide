@@ -18,7 +18,7 @@ import { gatesAhead, missionCells } from "../missions";
 import { cn } from "../lib/utils";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
-import { openCount, progress, useMissionEntries } from "./missionModel";
+import { missionEntries, openCount, progress, useMissionEntries } from "./missionModel";
 import type { PhoneMission } from "./protocol";
 import { TabBar } from "./TabBar";
 import { ScreenHead, TwoLineRow } from "./layout";
@@ -113,12 +113,19 @@ export function MissionAskRows({ computer }: { computer?: string } = {}) {
   );
 }
 
+/** Another computer's mission that is its own 내 차례 item, in the gathered view with that computer's mark; `onOpen` opens it there. */
+export function OtherMissionAskRow({ mission, computer, onOpen }: { mission: PhoneMission; computer: string; onOpen: () => void }) {
+  const [entry] = missionEntries([mission]);
+  return entry ? <OpenRow entry={entry} computer={computer} onOpen={onOpen} /> : null;
+}
+
 /**
  * An open mission's row (B31): its state, title, one line of what waits, works
  * or merges, a cell per step with `n/m`, and its time; a mission whose device
- * does not answer keeps its last values dimmed and counts no time.
+ * does not answer keeps its last values dimmed and counts no time. It opens the
+ * mission's page here unless `onOpen` says otherwise.
  */
-function OpenRow({ entry, computer }: { entry: MissionEntry<PhoneMission>; computer?: string }) {
+function OpenRow({ entry, computer, onOpen }: { entry: MissionEntry<PhoneMission>; computer?: string; onOpen?: () => void }) {
   const { t } = useInterfaceTranslation();
   const { mission, group, turn } = entry;
   const { done, total } = progress(mission);
@@ -133,7 +140,7 @@ function OpenRow({ entry, computer }: { entry: MissionEntry<PhoneMission>; compu
       data-phone-mission={mission.id}
       data-phone-mission-state={group}
       className={cn("min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent", mission.stale && "opacity-(--opacity-dimmed)")}
-      onClick={() => openMission(mission.id)}
+      onClick={onOpen ?? (() => openMission(mission.id))}
     >
       <TwoLineRow
         head={
