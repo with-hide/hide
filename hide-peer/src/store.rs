@@ -386,6 +386,24 @@ impl Grants {
         }))
     }
 
+    /// Keeps `name`, what the guest under `key` calls itself now, as the
+    /// name of its grants. A name opens nothing, so the generation stays
+    /// and no stream is told. Whether anything changed.
+    pub fn take_name(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let mut changed = false;
+        for grant in next.grants.iter_mut().filter(|grant| grant.key == *key) {
+            if grant.name != name {
+                grant.name = name.to_owned();
+                changed = true;
+            }
+        }
+        if changed {
+            self.commit(next)?;
+        }
+        Ok(changed)
+    }
+
     pub fn pause(&mut self, key: &PeerKey) -> Result<Option<Change>, StoreError> {
         self.settle(key, GrantStatus::Paused)
     }
@@ -556,6 +574,24 @@ struct KnownRecord {
     hosts: Vec<Host>,
 }
 
+/// The version `peers/known.json` is written at. 2: a host's name follows
+/// what it calls itself on every connection, and the name a switched host
+/// had here is its `chosen_name`.
+const KNOWN_VERSION: u32 = 2;
+
+/// A record written before [`KNOWN_VERSION`] 2 kept a switched host's name
+/// by never replacing `name`; that name moves to `chosen_name`, where it
+/// stays shown while `name` follows the host. Read in memory on every open
+/// of such a record, and saved with the first change to it, so it happens
+/// once.
+fn switched_names_chosen(record: &mut KnownRecord) {
+    for host in &mut record.hosts {
+        if host.started.is_some() && host.chosen_name.is_none() {
+            host.chosen_name = Some(host.name.clone());
+        }
+    }
+}
+
 /// `peers/known.json`.
 pub struct Known {
     path: PathBuf,
@@ -564,7 +600,10 @@ pub struct Known {
 
 impl Known {
     pub fn open(path: PathBuf) -> io::Result<Self> {
-        let record = load(&path)?;
+        let mut record: KnownRecord = load(&path)?;
+        if record.version < KNOWN_VERSION {
+            switched_names_chosen(&mut record);
+        }
         Ok(Self { path, record })
     }
 
@@ -577,7 +616,7 @@ impl Known {
     }
 
     fn commit(&mut self, mut next: KnownRecord) -> Result<(), StoreError> {
-        next.version = VERSION;
+        next.version = KNOWN_VERSION;
         save(&self.path, &next)?;
         self.record = next;
         Ok(())
@@ -628,6 +667,23 @@ impl Known {
             host.chosen_name = chosen.map(str::to_owned);
             self.commit(next)?;
         }
+        Ok(true)
+    }
+
+    /// Keeps `name`, what the host under `key` calls itself now, as its
+    /// name. A name the operator chose, or the one its device had here when
+    /// this machine switched it (B36), is its `chosen_name` and stays shown.
+    /// Whether anything changed.
+    pub fn take_name(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let Some(host) = next.hosts.iter_mut().find(|host| host.key == *key) else {
+            return Ok(false);
+        };
+        if host.name == name {
+            return Ok(false);
+        }
+        host.name = name.to_owned();
+        self.commit(next)?;
         Ok(true)
     }
 
@@ -910,6 +966,105 @@ mod tests {
         assert_eq!(Known::open(path).unwrap().of(&key(7)), Some(&host));
         assert!(known.remove(&key(7)).unwrap());
         assert!(!known.remove(&key(7)).unwrap());
+    }
+
+    /// A machine's own name moves its grant's and its host record's, and
+    /// nothing else; a name chosen here, or the one a switched host's
+    /// device had here, stays shown.
+    #[test]
+    fn a_name_a_machine_says_moves_its_own_name_and_never_the_one_chosen_here() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Grants::open(dir.path().join("grants.json")).unwrap();
+        let pending = store
+            .grant_pending(key(1), "dev", "example-MacBook-Pro.local", Via::Ssh, 0)
+            .unwrap();
+        store.confirm(&key(1), &pending.id, 1).unwrap();
+        let before = store.state_of(&key(1), 1);
+        assert!(store.take_name(&key(1), "작업용 MacBook Pro").unwrap());
+        assert!(!store.take_name(&key(1), "작업용 MacBook Pro").unwrap());
+        assert!(!store.take_name(&key(2), "nobody").unwrap());
+        assert_eq!(store.state_of(&key(1), 1), before);
+        let reopened = Grants::open(dir.path().join("grants.json")).unwrap();
+        assert_eq!(
+            reopened.current(&key(1)).unwrap().shown_name(),
+            "작업용 MacBook Pro"
+        );
+
+        let path = dir.path().join("known.json");
+        let mut known = Known::open(path.clone()).unwrap();
+        let host = |key: PeerKey, chosen_name: Option<&str>| Host {
+            key,
+            device: "host-device".into(),
+            name: "mini".into(),
+            chosen_name: chosen_name.map(str::to_owned),
+            grant: "g1".into(),
+            state: KnownState::Active,
+            candidates: Vec::new(),
+            started: chosen_name.map(|_| Login::Ssh("mini".into())),
+        };
+        known.put(host(key(7), None)).unwrap();
+        known.put(host(key(8), Some("작업실 Mac mini"))).unwrap();
+        assert!(known.take_name(&key(7), "studio의 Mac mini").unwrap());
+        assert!(known.take_name(&key(8), "studio의 Mac mini").unwrap());
+        assert!(!known.take_name(&key(9), "nobody").unwrap());
+        let reopened = Known::open(path).unwrap();
+        let shown = |key: PeerKey| {
+            let host = reopened.of(&key).unwrap();
+            (host.name.clone(), host.shown_name().to_owned())
+        };
+        assert_eq!(
+            shown(key(7)),
+            ("studio의 Mac mini".into(), "studio의 Mac mini".into())
+        );
+        assert_eq!(
+            shown(key(8)),
+            ("studio의 Mac mini".into(), "작업실 Mac mini".into())
+        );
+    }
+
+    /// An older build kept a switched host's name by never replacing it:
+    /// read here, that name becomes the one chosen for it, once, so the
+    /// host's own name can follow it from then on.
+    #[test]
+    fn a_host_an_older_build_switched_keeps_its_name_as_the_one_chosen_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known.json");
+        let mut known = Known::open(path.clone()).unwrap();
+        let host = |key: PeerKey, started: Option<Login>| Host {
+            key,
+            device: "host-device".into(),
+            name: "WSL Ubuntu".into(),
+            chosen_name: None,
+            grant: "g1".into(),
+            state: KnownState::Active,
+            candidates: Vec::new(),
+            started,
+        };
+        known
+            .put(host(key(7), Some(Login::Wsl("Ubuntu".into()))))
+            .unwrap();
+        known.put(host(key(8), None)).unwrap();
+        // As the older build wrote it.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""version": 2"#), "{text}");
+        std::fs::write(&path, text.replace(r#""version": 2"#, r#""version": 1"#)).unwrap();
+
+        let mut known = Known::open(path.clone()).unwrap();
+        assert!(known.take_name(&key(7), "DESKTOP-7Q2").unwrap());
+        assert!(known.take_name(&key(8), "DESKTOP-7Q2").unwrap());
+        let reopened = Known::open(path.clone()).unwrap();
+        let switched = reopened.of(&key(7)).unwrap();
+        assert_eq!(
+            (switched.name.as_str(), switched.shown_name()),
+            ("DESKTOP-7Q2", "WSL Ubuntu")
+        );
+        // A host it paired without a switch follows its own name.
+        assert_eq!(reopened.of(&key(8)).unwrap().shown_name(), "DESKTOP-7Q2");
+        // Once: the name taken back after the move is not chosen again.
+        let mut known = reopened;
+        assert!(known.rename(&key(7), None).unwrap());
+        let again = Known::open(path).unwrap();
+        assert_eq!(again.of(&key(7)).unwrap().shown_name(), "DESKTOP-7Q2");
     }
 
     #[test]

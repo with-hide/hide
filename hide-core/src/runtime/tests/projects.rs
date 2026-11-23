@@ -4885,3 +4885,74 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
     runtime.refresh_worktree_projection();
     assert_ne!(merged(&runtime), Some(true));
 }
+
+/// Two projects of one machine whose folders share a name are told apart
+/// by their parent folders, as few as make them differ, and every screen
+/// reads that label; a name the operator gave stays theirs and still takes
+/// the name; another machine's project of the same name is told by its
+/// machine and keeps its folder's name; and telling apart again, or after
+/// the other is gone, gives the folder's name back.
+#[test]
+fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() {
+    let labels = |projects: &[WorkspaceSnapshot]| -> Vec<String> {
+        projects
+            .iter()
+            .map(|project| project.label.clone())
+            .collect()
+    };
+    let mut projects = vec![
+        workspace("a", "hide", "/Users/example/projects/hide", vec![]),
+        workspace("b", "hide", "/Users/example/hide", vec![]),
+        workspace("c", "web", "/work/one/app/web", vec![]),
+        workspace("d", "web", "/work/two/app/web", vec![]),
+        workspace("e", "hide", "/home/example/hide", vec![]),
+        workspace("f", "shop", "/srv/shop", vec![]),
+    ];
+    projects[4].device_id = "macbook".to_owned();
+    let none = std::collections::BTreeMap::new();
+    crate::project_settings::apply_names(&none, &mut projects);
+    assert_eq!(
+        labels(&projects),
+        [
+            "projects/hide",
+            "example/hide",
+            "one/app/web",
+            "two/app/web",
+            "hide",
+            "shop"
+        ]
+    );
+    crate::project_settings::apply_names(&none, &mut projects);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "example/hide"]);
+
+    // The operator names the first `shop`: the folder `shop` beside it is
+    // told apart, and the operator's name is kept as given.
+    let given = |name: &str| {
+        let path = "/Users/example/projects/hide";
+        let mut record =
+            crate::project_settings::ProjectSettings::new(crate::node::TEST_NODE, path);
+        record.name = Some(name.to_owned());
+        std::collections::BTreeMap::from([(
+            crate::project_settings::key(crate::node::TEST_NODE, path),
+            record,
+        )])
+    };
+    crate::project_settings::apply_names(&given("shop"), &mut projects);
+    assert_eq!(labels(&projects)[..2], ["shop", "hide"]);
+    assert_eq!(labels(&projects)[5], "srv/shop");
+    // A name that reads as a folder's is the operator's all the same: kept
+    // beside the folder of that name, and kept whole when alone.
+    crate::project_settings::apply_names(&given("hide"), &mut projects);
+    assert_eq!(labels(&projects)[..2], ["hide", "example/hide"]);
+    crate::project_settings::apply_names(&given("projects/hide"), &mut projects);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "hide"]);
+
+    // The name taken back, the catalog's folder name is told apart again;
+    // with one gone, the other is its folder's name alone.
+    projects[0].label = "hide".to_owned();
+    crate::project_settings::apply_names(&none, &mut projects);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "example/hide"]);
+    projects.remove(0);
+    crate::project_settings::apply_names(&none, &mut projects);
+    assert_eq!(labels(&projects)[0], "hide");
+}

@@ -2534,8 +2534,12 @@ A split that did not happen leaves the window as it was, the node of its core, a
 Web owner: `web/src/guestWork.ts`, `web/src/GuestWorkRows.tsx`, `web/src/GuestPaneScreen.tsx`.
 
 A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's sidebar whether or not that machine is connected (PRD device-connect-iroh B10, B68).
-A pane started in a folder one of this computer's projects holds stands right under that project's row, whatever the project has folded; every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`), and the 태스크 list, which draws no projects, lists them all so.
-The row is the folder's own name, or the pane's id on its machine when its node said no folder, with the machine's letters in the other-device colour (`MB`) and its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
+A pane started in a folder one of this computer's projects holds stands in that project: under the checkout row whose folder holds it (the longest such path), after that checkout's own rows, and at the project's end when that checkout has no row (the project's row stands for its main checkout, the project is folded, or the checkout waits in the 다른 체크아웃 fold), so no fold hides it (`guestPlaces`).
+Every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`).
+In the 태스크 list, 프로젝트별 ends each project's section with that project's panes, and a pane whose project has no section there, like every pane in 상태별, stands in its machine's group at the end.
+The row is the name that machine shows the work by, its agent's label or else the name its tab was given, and follows it when it changes there; with none told it is the folder's own name, or the pane's id on its machine when its node said no folder.
+Beside it stand the machine's letters in the other-device colour (`MB`) with its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
+A name told is kept while that machine is away, and a machine that tells none (a build before names) keeps its rows' folder names.
 Screen copy never calls that machine a guest: it is named, or its work is `<machine>에서 시킨 일`.
 Pressing a row shows the pane in the center as the window's own page (`Screen` `guest`), since the pane is no tab of this core's: a tab strip of that machine's panes in the same place (the project, or the machine's own group), the pane's folder with the machine's chip, and its terminal.
 The operator reads it, types into it, and it follows this window's size while this window is the one typing; this computer's tile is ringed.
@@ -3014,7 +3018,8 @@ Choices are scoped to the owning device and canonical main-worktree root, shared
 Connections opens with the project's name: a field showing the name the operator gave it, with the folder's name as its placeholder while it has none, applied by Enter or `Apply` and saved like every other choice, pending, saved or failed beside it.
 The name is what every surface calls the project: the sidebar's project and folder rows, the Overview and its Projects tab, the command palette, the phone, the dialogs that name it, and what agents read, such as `hide ps` and an agent's project; the folder on disk, its path and Hide's registration keep their names.
 Leading and trailing spaces are dropped, an empty name gives the project its folder's name back, and a name over 64 characters or holding a line break or another control character is refused in place with its reason, nothing sent.
-Two projects may share a name; their paths tell them apart where it matters.
+Two projects of one machine whose folders share a name are told apart by their parent folders, as few as make them differ (`projects/hide` and `example/hide`), and every surface that names the project reads that name (`project_settings::tell_apart`); a name the operator gave stays as given and still takes the name, so a folder of that name beside it is told apart, and two projects the operator gave one name keep it.
+Another machine's project is told apart by its machine, so it keeps its folder's name.
 A device's project is named here, on this core, for its device id and root: the device itself and any other machine that reaches it keep showing the folder's name.
 Each change saves immediately through the core's existing state writer, shows pending, saved or failed beside its row, and keeps the last confirmed value until durable acknowledgment.
 Closing does not cancel a save, and reopening preserves the failed intent's Retry.
