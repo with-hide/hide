@@ -7325,7 +7325,7 @@ fn an_agents_session_is_read_in_the_account_its_hook_reported() {
 /// leaves `only_asks_again` out, says false, or lists anything new beside the
 /// repeated ask is news, so a finish misread as a question is never buried,
 /// and a question asked again is never a new demand: such a turn ends with
-/// work left, its question's line dropped, unless it also asks a new one.
+/// work left, keeping Hide AI's line, unless it also asks a new one.
 #[test]
 fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
     use super::analysis::LabelEnd;
@@ -7340,40 +7340,40 @@ fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
     let finished = format!("판례 3건을 반영해서 PR #41 올렸어요. {ask}");
     let with_new = format!("{ask} {new_ask}");
     let line = "진정서 미룰지 정하기";
-    for (answer, work, end, kept_line, expected) in [
+    for (answer, work, line, end, expected) in [
         (
             finished.as_str(),
             json!({"missed": [again], "resolved": []}),
+            "판례 3건 반영 PR #41 올림",
             LabelEnd::Unfinished,
-            "",
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again], "resolved": [], "only_asks_again": false}),
+            line,
             LabelEnd::Unfinished,
-            "",
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again, follow_up], "resolved": [], "only_asks_again": true}),
-            LabelEnd::Question,
             line,
+            LabelEnd::Question,
             &[][..],
         ),
         (
             with_new.as_str(),
             json!({"missed": [again, asked_new], "resolved": []}),
-            LabelEnd::Question,
             line,
+            LabelEnd::Question,
             &[][..],
         ),
         (
             ask,
             json!({"missed": [again], "resolved": [], "only_asks_again": true}),
-            LabelEnd::Question,
             line,
+            LabelEnd::Question,
             &["m1"][..],
         ),
     ] {
@@ -7393,7 +7393,7 @@ fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
         settle(&mut worker, &woken);
         let record = &store.target(LOCAL_TARGET)["w1:p1"];
         assert_eq!(record.end, Some(end), "{work}");
-        assert_eq!(record.line, kept_line, "{work}");
+        assert_eq!(record.line, line, "only the end changes: {work}");
         assert_eq!(record.asks_again, expected, "{work}");
     }
 }

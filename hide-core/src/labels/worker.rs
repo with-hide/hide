@@ -2779,9 +2779,9 @@ impl LabelWorker {
             Ok((provider, mut analysis)) => {
                 // A question the turn only asked again is never a new
                 // demand: unless Hide AI said the answer did nothing else,
-                // the turn ends with work left (`end_without_repeats`), and
-                // the line written as that question's action goes with it,
-                // since the row already counts the question behind.
+                // the turn ends with work left (`end_without_repeats`). Only
+                // the end changes: Hide AI judges the line from the rest of
+                // the turn, and the row counts the question behind it.
                 if let Some(end) = analysis
                     .work
                     .as_ref()
@@ -2798,7 +2798,6 @@ impl LabelWorker {
                         "end": end,
                     }));
                     analysis.end = end;
-                    analysis.line.clear();
                 }
                 // The questions are checked against the turn's own answer
                 // before anything keeps them; what the checks dropped or

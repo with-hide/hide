@@ -521,9 +521,9 @@ mod letter_woken {
      {
         let again = json!({"kind": "ask", "text": "진정서 승인 뒤로 미룰지 정하기", "same_as": "m1",
             "quote": QUESTION, "ask_type": "decision", "addressed_to": "operator"});
-        let judged = |work: serde_json::Value| {
+        let judged = |line: &str, work: serde_json::Value| {
             json!({"goal": "진정서 초안 작성", "goal_update": "keep",
-                   "line": "진정서 승인 뒤로 미룰지 정하기", "end": "question", "work": work})
+                   "line": line, "end": "question", "work": work})
         };
 
         // #13: the answer only asks the read question again, and says so.
@@ -531,7 +531,10 @@ mod letter_woken {
         lead.engine(labeled(
             4,
             QUESTION,
-            judged(json!({"missed": [again], "resolved": [], "only_asks_again": true})),
+            judged(
+                "진정서 승인 뒤로 미룰지 정하기",
+                json!({"missed": [again], "resolved": [], "only_asks_again": true}),
+            ),
         ));
         let (rests, notices) = lead.shown();
         assert_eq!((rests.group.as_str(), rests.unread), ("seen", false));
@@ -546,23 +549,24 @@ mod letter_woken {
         );
 
         // #14: a finish that asks the same question again, which Hide AI
-        // still judged a question, is news with the question behind it.
+        // still judged a question with the finish as its line (the eval's
+        // c_done_and_same.2), is news with that line and the question behind.
         let mut lead = Lead::read_and_woken();
         lead.engine(labeled(
             4,
             &format!("판례 3건 반영해서 PR #41 올렸어요. {QUESTION}"),
-            judged(json!({"missed": [again], "resolved": []})),
+            judged(
+                "판례 3건 반영 PR #41 올림",
+                json!({"missed": [again], "resolved": []}),
+            ),
         ));
         let (news, notices) = lead.shown();
         assert_eq!(
             (news.group.as_str(), news.unread, news.asks_behind),
             ("done", true, 1)
         );
-        assert_eq!(
-            news.detail, None,
-            "the question's line is not the turn's; the row says its word"
-        );
-        assert!(news.status_word_visible);
+        assert_eq!(news.detail.as_deref(), Some("판례 3건 반영 PR #41 올림"));
+        assert!(!news.status_word_visible);
         assert_eq!(notices.len(), 1, "the turn is announced once");
         assert_eq!(notices[0].state, push::NoticeState::Done);
     }
