@@ -693,6 +693,79 @@ fn pull_request(
     })
 }
 
+// ---- One merge request by its number ---------------------------------------
+
+#[derive(Deserialize)]
+struct ListedAnswer {
+    data: Option<ListedData>,
+    #[serde(default)]
+    errors: Vec<GraphqlError>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedData {
+    current_user: Option<User>,
+    project: Option<ListedProject>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedProject {
+    merge_request: Option<MergeRequest>,
+}
+
+/// Merge request `number` of `repository` as the list reads an open one
+/// (`hide_node_link::glab::listed_query`), judged as the list judges it:
+/// what a CI wait on one the list no longer holds is judged from (PRD
+/// core-wait D-05). Read on the core's own clock, a background read of the
+/// account's budget. `None` when the project has no such merge request.
+fn listed_one(
+    node: &dyn NodeLink,
+    repository: &RepositoryRef,
+    number: u32,
+) -> Result<Option<PullRequestSnapshot>, Refusal> {
+    let arguments =
+        hide_node_link::glab::listed_arguments(&repository.path, number).ok_or_else(|| {
+            Refusal::Unreadable(format!(
+                "merge request {number} of {} cannot be named",
+                repository.path
+            ))
+        })?;
+    let output = glab(node, arguments, Share::Background)?;
+    Ok(parse_listed_one(&output, repository)?)
+}
+
+fn parse_listed_one(
+    output: &str,
+    repository: &RepositoryRef,
+) -> Result<Option<PullRequestSnapshot>, HostFailure> {
+    let answer: ListedAnswer = serde_json::from_str(output).map_err(|error| {
+        unreadable(format!(
+            "glab returned a merge request Hide could not read: {error}"
+        ))
+    })?;
+    if let Some(error) = answer.errors.first() {
+        return Err(unreadable(format!(
+            "gitlab.com answered with an error: {}",
+            error.message
+        )));
+    }
+    let data = answer
+        .data
+        .ok_or_else(|| unreadable("gitlab.com answered with no data".to_owned()))?;
+    let project = data.project.ok_or_else(|| {
+        unreadable("gitlab.com has no such project this account can read".to_owned())
+    })?;
+    let Some(listed) = project.merge_request else {
+        return Ok(None);
+    };
+    // A merged or closed one ends a wait by its state, never by its checks,
+    // so no checks it was last seen open with are carried in.
+    let viewer = data.current_user.map(|user| user.username);
+    pull_request(repository, listed, viewer.as_deref(), &KnownChecks::new()).map(Some)
+}
+
 // ---- Verdicts ---------------------------------------------------------------
 
 /// What a head pipeline adds up to, by its own status. Its jobs only count
