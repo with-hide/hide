@@ -68,6 +68,7 @@ test("an agent's open the operator has not looked at waits on its row until its 
     await quietFor(page, 1_000, "the row's press opens no View");
     await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-label*="login.md"]')).toHaveCount(0);
     await expect(mark).toHaveAttribute("data-agent-status-mark", "look");
+    await screenshot(page, "unseen-view-row-press");
 
     // The chip opens the View in focus mode: the agent's pane on the left, the View in front of its desk with the
     // keyboard, and the look goes once it is in front.
