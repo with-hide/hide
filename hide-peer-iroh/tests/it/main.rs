@@ -63,6 +63,7 @@ impl Machine {
             build: "1.3.0-test",
             device: name,
             release: false,
+            name: None,
             clock: Clock::system(),
         };
         let (peers, incoming) = Peers::start(transport, config).unwrap();

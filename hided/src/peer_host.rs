@@ -61,6 +61,9 @@ pub struct Settings {
     pub device: String,
     /// Whether this build is an official release.
     pub release: bool,
+    /// What this machine calls itself, said in every hello
+    /// (`hide_platform::host::computer_name`).
+    pub name: Option<String>,
     /// `HIDE_PEER_DIRECT`: bind this one address and use no relay and no
     /// local network search. `None` is the product's endpoint.
     pub direct: Option<SocketAddr>,
@@ -101,6 +104,7 @@ impl Settings {
     pub fn of(
         env: &crate::env::Env,
         device: &str,
+        name: Option<String>,
         wsl: Option<Arc<crate::pairing_wsl::Carriers>>,
     ) -> Self {
         let release = crate::build_order::Release::of_this_build();
@@ -109,6 +113,7 @@ impl Settings {
             release: release.is_official(),
             build: release.version,
             device: device.to_owned(),
+            name,
             direct: env.peer_direct,
             relay: env.peer_relay.clone(),
             relay_only: env.peer_relay_only,
@@ -198,6 +203,7 @@ impl Settings {
                 build: &self.build,
                 device: &self.device,
                 release: self.release,
+                name: self.name.as_deref(),
                 clock: Clock::system(),
             },
         )?;
@@ -562,6 +568,7 @@ pub(crate) mod fixture {
                     build: "1.3.0-test".to_owned(),
                     device: name.to_owned(),
                     release: false,
+                    name: None,
                     direct: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
                     relay: None,
                     relay_only: false,
@@ -742,6 +749,7 @@ mod tests {
             build: "1.3.0-test".to_owned(),
             device: "macbook".to_owned(),
             release: false,
+            name: None,
             direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
             relay: None,
             relay_only: false,

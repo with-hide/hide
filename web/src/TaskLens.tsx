@@ -55,7 +55,7 @@ import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
 import { toolProjectChoice, toolTaskList } from "./toolCells";
-import { GuestMachineGroups, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
+import { GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
@@ -329,6 +329,8 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         </Fragment>
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      {/* Another machine's panes started in this project's folders end its section (PRD device-connect-iroh B10). */}
+      {!tool && view === "project" && group.project ? <ul className="flex min-w-0 flex-col"><GuestProjectRows projectId={group.project.id} actions={actions} /></ul> : null}
       {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
       {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} treeIndent /></ul> : null}
     </section>
@@ -340,13 +342,15 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // stay, stacked under the ones already passed, so a scrolled list still says what
   // is above it and pressing a head goes back to its rows.
   const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
+  // In 프로젝트별 another machine's panes end the section of the project that holds them; the rest keep their machine's group.
+  const sectionProjects = new Set(sections.flatMap(({ group }) => (group.project ? [group.project.id] : [])));
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
       <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
         {peerOnly("needs_you")}
         {peerOnly("done")}
         {sections.map(drawSection)}
-        {tool ? null : <ul className="flex min-w-0 flex-col"><GuestMachineGroups actions={actions} /></ul>}
+        {tool ? null : <ul className="flex min-w-0 flex-col"><GuestMachineGroups actions={actions} projects={view === "project" ? sectionProjects : null} /></ul>}
         {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
       </div>
     </div>

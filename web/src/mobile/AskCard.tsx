@@ -23,6 +23,8 @@ const CHOICE_WORDS: Record<string, { label: MessageKey; note?: MessageKey }> = {
   keep_planning: { label: "mobile.ask.keepPlanning", note: "mobile.ask.keepPlanningNote" },
 };
 
+const ALLOW_COMMAND_ALWAYS = { label: "mobile.ask.allowCommandAlways", note: "mobile.ask.allowCommandAlwaysNote" } as const satisfies { label: MessageKey; note: MessageKey };
+
 /** The suffix Claude Code's question tool asks the agent to put on the choice it recommends, read off the label it wrote. */
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
@@ -34,7 +36,8 @@ function shownChoices(ask: PhoneAsk, t: TFunction<"translation">): Shown[] {
       const recommended = RECOMMENDED.test(choice.label);
       return { id: choice.id, label: choice.label.replace(RECOMMENDED, ""), note: choice.note ?? null, recommended };
     }
-    const words = CHOICE_WORDS[choice.id];
+    // A command shown on the card is what `allow_always` keeps allowing (Doop 04); a card with none names no command.
+    const words = choice.id === "allow_always" && ask.command !== undefined ? ALLOW_COMMAND_ALWAYS : CHOICE_WORDS[choice.id];
     return { id: choice.id, label: words ? t(words.label) : choice.id, note: words?.note ? t(words.note) : null, recommended: false };
   });
 }

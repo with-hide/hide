@@ -10,7 +10,8 @@
 // (D-12): there is no merge order on the phone.
 
 import { pullHost, pullLabel, pullWords } from "../codeHost";
-import { ChevronRightIcon, ExternalLinkIcon, GitMergeIcon, Loader2Icon, UserRoundCheckIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { ChevronRightIcon, ExternalLinkIcon, Loader2Icon } from "lucide-react";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
@@ -81,9 +82,12 @@ function Page({ pr }: { pr: PhonePr }) {
           <p className="mt-xs text-body text-muted-foreground">{project.device_label ? `${project.device_label} · ${project.label}` : project.label}</p>
         ) : null}
         <Agents pr={pr} />
-        <Checks pr={pr} />
-        <Review pr={pr} />
-        <Files pr={pr} />
+        {/* The checks, the review and the changed files read as one table of ruled rows across the page (Doop 18). */}
+        <div className="-mx-lg mt-lg border-t border-border" data-phone-pr-table="true">
+          <Checks pr={pr} />
+          <Review pr={pr} />
+          <Files pr={pr} />
+        </div>
       </div>
       <Buttons pr={pr} projects={projects} connected={connected} />
       <MergeSheet />
@@ -92,17 +96,26 @@ function Page({ pr }: { pr: PhonePr }) {
   );
 }
 
-/** The pull request's state under its title: what it can do now for an open one (the phone's group), its own word once settled. */
+/** The pull request's state under its title, in words alone (Doop 18): what it can do now for an open one (the phone's group), its own word once settled. */
 function StatePill({ pr }: { pr: PhonePr }) {
   const { t } = useInterfaceTranslation();
   const open = !settled(pr);
   const group = open ? prGroupOf(pr.reason.kind) : null;
-  const { icon: Icon, tone } = PR_LOOK[pr.state];
+  const { tone } = PR_LOOK[pr.state];
   return (
-    <span className="mt-md inline-flex items-center gap-xs rounded-full bg-secondary px-md py-xxs text-caption font-semibold" data-phone-pr-pill={pr.state}>
-      <Icon aria-hidden="true" className={cn("size-(--size-icon-sm)", tone)} />
-      <span className={tone}>{group ? t(`mobile.prs.group.${group}`) : t(PR_LOOK[pr.state].word)}</span>
+    <span className={cn("mt-md inline-flex rounded-md bg-secondary px-sm py-xxs text-caption font-semibold", tone)} data-phone-pr-pill={pr.state}>
+      {group ? t(`mobile.prs.group.${group}`) : t(PR_LOOK[pr.state].word)}
     </span>
+  );
+}
+
+/** One ruled row of the page's table: its name at the left, its value at the right (Doop 18). */
+function TableRow({ name, value, mark, className }: { name: ReactNode; value: ReactNode; mark?: Record<string, string | number>; className?: string }) {
+  return (
+    <div className={cn("flex min-h-(--size-touch-target) items-center justify-between gap-md border-b border-border px-lg py-sm text-body", className)} {...mark}>
+      <span className="min-w-0 break-keep text-muted-foreground wrap-anywhere">{name}</span>
+      <span className="min-w-0 break-keep text-right wrap-anywhere">{value}</span>
+    </div>
   );
 }
 
@@ -151,15 +164,12 @@ function Checks({ pr }: { pr: PhonePr }) {
   const summary = checkSummary(pr);
   const failed = pr.work?.failed_checks ?? [];
   return (
-    <section className="pt-lg" data-phone-pr-checks={pr.checks ?? "unknown"}>
-      <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
-        <span>{t("mobile.prs.checks")}</span>
-        <span className="text-subtle-foreground">{t(summary.key, summary.values)}</span>
-      </h2>
+    <section data-phone-pr-checks={pr.checks ?? "unknown"}>
+      <TableRow name={t("mobile.prs.checks")} value={<span className="text-foreground">{t(summary.key, summary.values)}</span>} />
       {failed.length > 0 ? (
-        <ul className="divide-y divide-border border-b border-border">
+        <ul>
           {failed.map((check, index) => (
-            <li key={`${check.name ?? ""}:${index}`} className="flex min-h-(--size-touch-target) items-center gap-sm py-sm text-title text-pr-failed" data-phone-pr-failed-check={check.name ?? ""}>
+            <li key={`${check.name ?? ""}:${index}`} className="flex min-h-(--size-touch-target) items-center border-b border-border px-lg py-sm text-body text-pr-failed" data-phone-pr-failed-check={check.name ?? ""}>
               <span className="min-w-0 break-all">{check.name ?? t("githubReason.unnamedCheck")}</span>
             </li>
           ))}
@@ -169,32 +179,34 @@ function Checks({ pr }: { pr: PhonePr }) {
   );
 }
 
-/** The review: the approvals out of what the base requires when GitHub said so, and each reviewer's state (B39). */
+/**
+ * The review in one row (B39, Doop 18): the approvals out of what the base requires when GitHub said so, then the reviewers on
+ * the same line, `승인 1/1 · reviewer`. A reviewer's state follows the name unless the count already says it, an approval.
+ */
 function Review({ pr }: { pr: PhonePr }) {
   const { t } = useInterfaceTranslation();
   const review = prReview(pr);
   if (!review) return null;
   const count = approvalCount(review);
+  const parts: ReactNode[] = [];
+  if (count) parts.push(<span key="count" className={count.approved ? "text-pr-mergeable" : "text-pr-pending"}>{t("work.review.count", count)}</span>);
+  for (const reviewer of review.reviewers) {
+    const name = reviewer.team ? t("work.review.team", { name: reviewer.login }) : reviewer.login;
+    const state = count && reviewer.state === "approved" ? null : t(`work.review.state.${reviewer.state}`);
+    parts.push(
+      <span key={`${reviewer.team}:${reviewer.login}`} className="text-subtle-foreground" data-phone-pr-reviewer={reviewer.login} data-phone-pr-reviewer-state={reviewer.state}>
+        {state ? `${name} ${state}` : name}
+      </span>,
+    );
+  }
+  if (review.more > 0) parts.push(<span key="more" className="text-subtle-foreground">{t("work.review.more", { count: review.more })}</span>);
+  if (review.reviewers.length === 0 && review.nobodyAsked) parts.push(<span key="nobody" className="text-subtle-foreground">{t("work.review.nobodyAsked")}</span>);
   return (
-    <section className="pt-lg" data-phone-pr-review={review.decision ?? "none"}>
-      <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
-        <span>{t("work.review.title")}</span>
-        {count ? <span className={cn("font-mono", count.approved ? "text-pr-mergeable" : "text-pr-pending")}>{t("work.review.count", count)}</span> : null}
-      </h2>
-      {review.reviewers.length > 0 ? (
-        <ul className="divide-y divide-border border-b border-border">
-          {review.reviewers.map((reviewer) => (
-            <li key={`${reviewer.team}:${reviewer.login}`} className="flex min-h-(--size-touch-target) items-center gap-sm py-sm text-title" data-phone-pr-reviewer={reviewer.login} data-phone-pr-reviewer-state={reviewer.state}>
-              <UserRoundCheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-foreground">{reviewer.team ? t("work.review.team", { name: reviewer.login }) : reviewer.login}</span>
-              <span className="shrink-0 text-body text-subtle-foreground">{t(`work.review.state.${reviewer.state}`)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : review.nobodyAsked ? (
-        <p className="py-sm text-body text-subtle-foreground">{t("work.review.nobodyAsked")}</p>
-      ) : null}
-    </section>
+    <TableRow
+      name={t("work.review.title")}
+      mark={{ "data-phone-pr-review": review.decision ?? "none" }}
+      value={parts.flatMap((part, index) => (index === 0 ? [part] : [<span key={`dot${index}`} aria-hidden="true" className="text-subtle-foreground"> · </span>, part]))}
+    />
   );
 }
 
@@ -205,9 +217,8 @@ function Files({ pr }: { pr: PhonePr }) {
   if (!card) return null;
   if (card.files === null) {
     return card.reading || card.failed.includes("files") ? (
-      <section className="pt-lg" data-phone-pr-files="pending">
-        <h2 className="pb-xs text-body text-muted-foreground">{t("work.card.changedFiles")}</h2>
-        <p className="py-sm text-body text-subtle-foreground">{t(card.reading ? "work.card.part.pending" : "work.card.part.failed")}</p>
+      <section data-phone-pr-files="pending">
+        <TableRow name={t("work.card.changedFiles")} value={<span className="text-subtle-foreground">{t(card.reading ? "work.card.part.pending" : "work.card.part.failed")}</span>} />
       </section>
     ) : null;
   }
@@ -217,28 +228,25 @@ function Files({ pr }: { pr: PhonePr }) {
   const additions = card.files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = card.files.reduce((sum, file) => sum + file.deletions, 0);
   return (
-    <section className="pt-lg" data-phone-pr-files={card.files_total}>
-      <h2 className="flex items-baseline justify-between gap-md pb-xs text-body text-muted-foreground">
-        <span>{t("work.card.filesCount", { count: card.files_total })}</span>
-        {complete ? <Lines additions={additions} deletions={deletions} /> : null}
-      </h2>
-      <ul className="divide-y divide-border border-b border-border">
+    <section data-phone-pr-files={card.files_total}>
+      <TableRow name={t("work.card.filesCount", { count: card.files_total })} value={complete ? <Lines additions={additions} deletions={deletions} /> : null} />
+      <ul>
         {shown.map((file) => (
-          <li key={file.path} className="flex min-h-(--size-touch-target) items-center justify-between gap-md py-sm text-body" data-phone-pr-file={file.path}>
+          <li key={file.path} className="flex min-h-(--size-touch-target) items-center justify-between gap-md border-b border-border px-lg py-sm text-body" data-phone-pr-file={file.path}>
             <span className="min-w-0 break-all font-mono text-foreground">{file.path}</span>
             <Lines additions={file.additions} deletions={file.deletions} />
           </li>
         ))}
       </ul>
-      {generated > 0 ? <p className="pt-sm text-body text-subtle-foreground">{t("work.card.generated", { count: generated })}</p> : null}
-      {!complete ? <p className="pt-sm text-body text-subtle-foreground" data-phone-pr-files-more="true">{t("work.card.filesMore", { total: card.files_total, shown: card.files.length, host: pullHost(pr).name })}</p> : null}
+      {generated > 0 ? <p className="px-lg pt-sm text-body text-subtle-foreground">{t("work.card.generated", { count: generated })}</p> : null}
+      {!complete ? <p className="px-lg pt-sm text-body text-subtle-foreground" data-phone-pr-files-more="true">{t("work.card.filesMore", { total: card.files_total, shown: card.files.length, host: pullHost(pr).name })}</p> : null}
     </section>
   );
 }
 
 function Lines({ additions, deletions }: { additions: number; deletions: number }) {
   return (
-    <span className="flex shrink-0 gap-sm font-mono text-body" data-phone-pr-lines={`+${additions} -${deletions}`}>
+    <span className="inline-flex shrink-0 gap-sm font-mono text-body" data-phone-pr-lines={`+${additions} -${deletions}`}>
       <span className="text-pr-mergeable">+{additions}</span>
       <span className="text-pr-failed">−{deletions}</span>
     </span>
@@ -277,7 +285,7 @@ function Buttons({ pr, projects, connected }: { pr: PhonePr; projects: readonly 
               className="h-(--size-touch-target) flex-1 rounded-lg text-title font-semibold"
               data-phone-pr-merge={view.queue ? "queue" : "merge"}
             >
-              {pending || view.working ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : <GitMergeIcon aria-hidden="true" className="size-(--size-icon-lg)" />}
+              {pending || view.working ? <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) animate-spin" /> : null}
               {view.queue ? t("work.card.mergeQueue") : t("work.card.merge")}
             </Button>
           ) : null}

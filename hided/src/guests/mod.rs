@@ -401,6 +401,18 @@ impl Guests {
         Ok(())
     }
 
+    /// Names `guest`'s panes here as its core told them (B10), whole; a
+    /// guest with no work here has nothing to name. Blocking: the core is
+    /// told when a name moved.
+    pub fn name_panes(&self, guest: &PeerKey, names: &HashMap<String, String>) {
+        let tap = lock(&self.hosted)
+            .get(guest)
+            .map(|hosted| Arc::clone(&hosted.tap));
+        if let Some(tap) = tap {
+            tap.name(names);
+        }
+    }
+
     /// Every guest's panes on this machine, as each guest's node last
     /// said; a guest with none is not in the list.
     pub fn panes(&self) -> Vec<hide_core::guest_panes::GuestPanes> {
@@ -420,6 +432,7 @@ impl Guests {
                             pane: pane.pane,
                             since_unix_ms: pane.since_unix_ms,
                             folder: pane.folder,
+                            name: pane.name,
                         })
                         .collect(),
                 }
@@ -2321,6 +2334,7 @@ mod tests {
                     cols: 80,
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
+                    name: Some("로그인 고치기".to_owned()),
                 }],
             })
             .unwrap(),
@@ -2542,6 +2556,7 @@ mod tests {
                     pane: "w1:p1".to_owned(),
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
+                    name: Some("로그인 고치기".to_owned()),
                 }],
             }],
             "the panes show before the node is back"

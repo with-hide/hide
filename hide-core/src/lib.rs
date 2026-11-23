@@ -112,6 +112,7 @@ pub mod usage_ledger;
 pub mod view_feedback;
 mod view_layout;
 pub mod whose_work;
+pub mod work_names;
 pub mod workspace;
 pub mod workspace_control;
 pub mod workspace_views;
