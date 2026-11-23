@@ -585,7 +585,7 @@
     "example": "hide device switch mini --install"
   },
   "phone pair": {
-    "line": "Draws the pairing QR in this terminal, turning Mobile on when it is off, and waits until a phone scans it; for a computer with no window. Run it in a terminal outside Hide's panes.",
+    "line": "Draws the pairing QR in this terminal, turning Open hide from your phone on when it is off, and waits until a phone scans it; for a computer with no window. Run it in a terminal outside Hide's panes.",
     "example": "hide phone pair"
   },
   "phone list": {
