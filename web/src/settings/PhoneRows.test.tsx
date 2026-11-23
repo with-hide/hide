@@ -3,7 +3,7 @@
 // Settings › Devices' phones): a phone is one more device, Add device › 폰 is
 // the one way to pair one, and a screen another machine shows of this one
 // lists the phones with 연결 해제 alone.
-import { act } from "react";
+import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
@@ -53,7 +53,7 @@ afterEach(() => {
 const LOCAL = { agent_scope: { kind: "none" }, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
 
 /** `own`: this machine's own window, which hided sends the `pairing` frame; a screen another machine shows of this one gets none. */
-async function mount(mobile: MobileState | null, own = true) {
+async function mount(mobile: MobileState | null, own = true, strict = false) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -68,7 +68,8 @@ async function mount(mobile: MobileState | null, own = true) {
   const saved = useShellStore.getState();
   await act(async () => {
     useShellStore.setState({ connection: "live", mobile, pairing: own ? NOTHING_UNDER_WAY : null, rest: { navigator: { focused_device_id: "local", devices: [LOCAL], peers: [] }, status: { remote: [] }, ui_state: {} } } as never);
-    root.render(<TooltipProvider><DevicesTab actions={actions} /></TooltipProvider>);
+    const tab = <TooltipProvider><DevicesTab actions={actions} /></TooltipProvider>;
+    root.render(strict ? <StrictMode>{tab}</StrictMode> : tab);
   });
   const q = (selector: string) => document.body.querySelector(selector) as HTMLElement | null;
   const press = async (selector: string) => { await act(async () => { q(selector)?.click(); }); };
@@ -149,6 +150,16 @@ it("asks computer or phone first; Phone turns phone access on, shows one code on
   await set({ qr: null, code_expires_at_ms: null, phones: [phone()] });
   expect(q("[data-mobile-pair-dialog]")).toBeNull();
   expect(kinds(events).at(-1)).toBe("mobile_hide_code");
+  await unmount();
+});
+
+it("still shows a code when the window is mounted twice, as React does in development", async () => {
+  const { events, press, unmount } = await mount(frame(), true, true);
+  await press('[data-device-add-open="true"]');
+  await press('[data-add-choice="phone"]');
+  const codes = kinds(events).filter((kind) => kind === "mobile_show_code" || kind === "mobile_hide_code");
+  expect(codes.at(-1)).toBe("mobile_show_code");
+  await escape();
   await unmount();
 });
 

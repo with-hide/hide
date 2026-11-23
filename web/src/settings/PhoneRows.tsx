@@ -239,12 +239,16 @@ function PairDialog({ state, actions, onClose }: { state: MobileState; actions: 
   const phones = useRef(state.phones.length);
   const ready = state.exposure === "exposed";
   // As the window opens it turns phone access on when it is off, and as it
-  // closes it takes the code it showed with it.
+  // closes it takes the code it showed with it; a window mounted again (React
+  // runs a mount twice in development) asks for a code again.
   const opened = useRef({ enabled: state.enabled, actions });
   useEffect(() => {
     const { enabled, actions: atOpen } = opened.current;
     if (!enabled) atOpen.setMobileEnabled(true);
-    return () => atOpen.hideMobileCode();
+    return () => {
+      asked.current = false;
+      atOpen.hideMobileCode();
+    };
   }, []);
   useEffect(() => {
     if (!ready || asked.current) return;
