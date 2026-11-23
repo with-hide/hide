@@ -333,8 +333,8 @@ pub enum DeviceFailure {
     Connect,
     /// Another machine answers the device's address.
     IdentityChanged,
-    /// This build cannot serve the device's system.
-    Unsupported,
+    /// This build cannot serve the device, by why.
+    Unsupported(hide_node_link::device::UnsupportedCause),
     /// The release kit for the device's system could not be downloaded.
     Download,
     /// The helper could not be installed on the device, by where the
@@ -577,7 +577,25 @@ fn device_failure_name(failure: DeviceFailure) -> &'static str {
         DeviceFailure::MachineStopped => "machine_stopped",
         DeviceFailure::Connect => "connect",
         DeviceFailure::IdentityChanged => "identity_changed",
-        DeviceFailure::Unsupported => "unsupported",
+        DeviceFailure::Unsupported(cause) => {
+            use hide_node_link::device::UnsupportedCause;
+            match cause {
+                UnsupportedCause::Platform => "unsupported_platform",
+                UnsupportedCause::Build => "unsupported_build",
+                UnsupportedCause::Probe => "unsupported_probe",
+                UnsupportedCause::UserName => "unsupported_user_name",
+                UnsupportedCause::Home => "unsupported_home",
+                UnsupportedCause::Checksum => "unsupported_checksum",
+                UnsupportedCause::MachineId => "unsupported_machine_id",
+                UnsupportedCause::Wsl1 => "unsupported_wsl1",
+                UnsupportedCause::WslInstalling => "unsupported_wsl_installing",
+                UnsupportedCause::WslSetup => "unsupported_wsl_setup",
+                UnsupportedCause::WslMissing => "unsupported_wsl_missing",
+                UnsupportedCause::PeerUpdate => "unsupported_peer_update",
+                UnsupportedCause::PeerFolder => "unsupported_peer_folder",
+                UnsupportedCause::PeerFull => "unsupported_peer_full",
+            }
+        }
         DeviceFailure::Download => "download",
         DeviceFailure::Install(stop) => {
             use hide_node_link::device::InstallStop;
@@ -762,6 +780,47 @@ mod tests {
         ] {
             let event = Event::DeviceConnected {
                 outcome: DeviceOutcome::Failed(DeviceFailure::Install(stop)),
+                platform: DevicePlatform::Unknown,
+            };
+            assert_eq!(
+                event.properties(),
+                [
+                    ("outcome", "failed"),
+                    ("failed_step", "install"),
+                    ("failure", name),
+                    ("platform", "unknown"),
+                ]
+            );
+        }
+    }
+
+    /// A device this build cannot serve names why, so a WSL distribution
+    /// left on WSL 1 is told from one nobody finished setting up, and from
+    /// another machine's Hide that needs an update.
+    #[test]
+    fn an_unsupported_device_names_why() {
+        use hide_node_link::device::UnsupportedCause;
+        for (cause, name) in [
+            (UnsupportedCause::Platform, "unsupported_platform"),
+            (UnsupportedCause::Build, "unsupported_build"),
+            (UnsupportedCause::Probe, "unsupported_probe"),
+            (UnsupportedCause::UserName, "unsupported_user_name"),
+            (UnsupportedCause::Home, "unsupported_home"),
+            (UnsupportedCause::Checksum, "unsupported_checksum"),
+            (UnsupportedCause::MachineId, "unsupported_machine_id"),
+            (UnsupportedCause::Wsl1, "unsupported_wsl1"),
+            (
+                UnsupportedCause::WslInstalling,
+                "unsupported_wsl_installing",
+            ),
+            (UnsupportedCause::WslSetup, "unsupported_wsl_setup"),
+            (UnsupportedCause::WslMissing, "unsupported_wsl_missing"),
+            (UnsupportedCause::PeerUpdate, "unsupported_peer_update"),
+            (UnsupportedCause::PeerFolder, "unsupported_peer_folder"),
+            (UnsupportedCause::PeerFull, "unsupported_peer_full"),
+        ] {
+            let event = Event::DeviceConnected {
+                outcome: DeviceOutcome::Failed(DeviceFailure::Unsupported(cause)),
                 platform: DevicePlatform::Unknown,
             };
             assert_eq!(

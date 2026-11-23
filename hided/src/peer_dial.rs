@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
-use hide_node_link::device::{Cancel, EstablishError, InstallStop, RemoteError, RemoteStage, Wake};
+use hide_node_link::device::{
+    Cancel, EstablishError, InstallStop, RemoteError, RemoteStage, UnsupportedCause, Wake,
+};
 use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
 use hide_peer::protocol::event::Event;
@@ -507,19 +509,24 @@ where
 fn stopped(reason: NodeStop, detail: Option<String>) -> EstablishError {
     let detail = detail.unwrap_or_default();
     match reason {
-        NodeStop::UpdateNeeded => EstablishError::Unsupported(format!(
-            "That machine's Hide cannot run this Hide's node; update it there. {detail}"
-        )),
-        NodeStop::FolderRefused => EstablishError::Unsupported(format!(
-            "That machine could not make this Hide's folder there. {detail}"
-        )),
+        NodeStop::UpdateNeeded => EstablishError::unsupported(
+            UnsupportedCause::PeerUpdate,
+            format!("That machine's Hide cannot run this Hide's node; update it there. {detail}"),
+        ),
+        NodeStop::FolderRefused => EstablishError::unsupported(
+            UnsupportedCause::PeerFolder,
+            format!("That machine could not make this Hide's folder there. {detail}"),
+        ),
         NodeStop::BuildMissing => EstablishError::install(
             InstallStop::Refused,
             format!("That machine does not have this Hide's build and did not take it. {detail}"),
         ),
-        NodeStop::HostFull => EstablishError::Unsupported(format!(
-            "That machine already runs as many other machines' work as it carries at once; end one's work there first. {detail}"
-        )),
+        NodeStop::HostFull => EstablishError::unsupported(
+            UnsupportedCause::PeerFull,
+            format!(
+                "That machine already runs as many other machines' work as it carries at once; end one's work there first. {detail}"
+            ),
+        ),
         NodeStop::Crashed => EstablishError::Helper(format!(
             "This Hide's node there crashed too often and is left stopped. {detail}"
         )),
@@ -1033,10 +1040,13 @@ mod away_tests {
             }
             other => panic!("{other:?}"),
         }
-        let refused = EstablishError::Unsupported("old".to_owned());
+        let refused = EstablishError::unsupported(UnsupportedCause::PeerUpdate, "old");
         assert!(matches!(
             not_yet("mini", refused),
-            EstablishError::Unsupported(_)
+            EstablishError::Unsupported {
+                cause: UnsupportedCause::PeerUpdate,
+                ..
+            }
         ));
     }
 }

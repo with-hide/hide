@@ -77,7 +77,7 @@ impl Runtime {
             EstablishError::Ssh(failure) => DeviceFailure::Ssh(failure.problem),
             EstablishError::Stopped(_) => DeviceFailure::MachineStopped,
             EstablishError::IdentityChanged { .. } => DeviceFailure::IdentityChanged,
-            EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
+            EstablishError::Unsupported { cause, .. } => DeviceFailure::Unsupported(*cause),
             EstablishError::Install { stop, .. } => DeviceFailure::Install(*stop),
             EstablishError::Helper(_) | EstablishError::NotStarted { .. } => DeviceFailure::Helper,
             EstablishError::MachineName(_) => DeviceFailure::MachineName,

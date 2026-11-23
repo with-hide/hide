@@ -3119,7 +3119,7 @@ mod tests {
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
         assert!(matches!(
             packages.payload_for(os, arch),
-            Err(EstablishError::Unsupported(_))
+            Err(EstablishError::Unsupported { .. })
         ));
 
         write(&directory.path().join(HOLDER_NAME), b"holder", 0o755);
@@ -3147,7 +3147,7 @@ mod tests {
         assert!(
             matches!(
                 packages.payload_for("windows", "x86_64"),
-                Err(EstablishError::Unsupported(reason)) if reason.contains("ConPTY")
+                Err(EstablishError::Unsupported { reason, .. }) if reason.contains("ConPTY")
             ),
             "a holder without its ConPTY runtime runs no pane"
         );
@@ -3175,7 +3175,8 @@ mod tests {
         // refusal names the file.
         let (gone, _) = &runtime[0];
         std::fs::remove_file(conpty.join(gone.split_once('/').unwrap().1)).unwrap();
-        let Err(EstablishError::Unsupported(reason)) = packages.payload_for("windows", "x86_64")
+        let Err(EstablishError::Unsupported { reason, .. }) =
+            packages.payload_for("windows", "x86_64")
         else {
             panic!("a ConPTY runtime short of {gone} was sent");
         };
