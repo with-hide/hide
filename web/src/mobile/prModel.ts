@@ -9,8 +9,10 @@
 
 import type { PrReasonKind } from "../agentScope";
 import { confirmHolds, defaultMethod, mergeWhy, primaryAction, type Confirmed, type MergeWhy } from "../prCardModel";
-import { readingOfStatuses, type PrReading } from "../prWork";
-import type { PrMergeMethod } from "../snapshot";
+import { hostLines, readingOfStatuses, type PrReading } from "../prWork";
+import type { TFunction } from "i18next";
+import { actionHost, offers } from "../codeHost";
+import type { HostDeclaration, PrMergeMethod } from "../snapshot";
 import type { PhonePr, PhonePrProject } from "./protocol";
 
 /** The phone's groups, in the order the tab draws them (F9). */
@@ -88,9 +90,31 @@ export function prsReading(projects: readonly PhonePrProject[], now: number): Pr
   return readingOfStatuses(projects.flatMap((project) => project.github), now);
 }
 
+/**
+ * The tab's status line over the list, beside a reading that is not refused
+ * whole: each refused host's refusal, and each failed host "read again",
+ * named by its host; a read in part says nothing here, as before hosts.
+ */
+export function prsStatusLines(reading: PrReading, t: TFunction<"translation">): string[] {
+  if (reading.state === "blocked") return [];
+  return (reading.hosts ?? []).flatMap((host) => {
+    if (host.reading.state === "blocked") return hostLines([host], t);
+    if (host.reading.state === "stale") return [t("mobile.prs.readFailed", { host: host.name })];
+    return [];
+  });
+}
+
 /** The pull request's page, from the current list; null once it left the list. */
 export function prOf(items: readonly PhonePr[] | null, key: string | null): PhonePr | null {
   return items?.find((pr) => pr.key === key) ?? null;
+}
+
+/**
+ * The host a pull request is on, as the core declared it: the card's once read, else its project's read, so a page drawn
+ * before its card arrives offers no button its host refuses; null on a core that names no host, which is GitHub's.
+ */
+export function prHostOf(pr: PhonePr, projects: readonly PhonePrProject[]): HostDeclaration | null {
+  return actionHost(pr.card?.host, projects.find((candidate) => candidate.id === pr.project)?.github ?? []);
 }
 
 /** Whether this pull request's projects name their device: a project away from the paired Mac does. */
@@ -101,12 +125,15 @@ export function projectTag(project: PhonePrProject): string {
 /**
  * What a page's buttons do for this pull request (B39-B44): whether Merge is shown (the desktop card shows it on the
  * operator's own pull requests that are not a review), why it is off, the method it will use, whether the repository has a
- * merge queue, and whether a merge is already in. Hand over is for any open pull request.
+ * merge queue, and whether a merge is already in. Hand over is for any open pull request. A button its host does not offer
+ * is not drawn (`codeHost.offers`).
  */
 export type PrActions = {
   open: boolean;
   /** The operator wrote it and it is not waiting on their review: the desktop card's own condition for a Merge button. */
   mergeShown: boolean;
+  /** The host takes a hand-over to an agent. */
+  handover: boolean;
   why: MergeWhy | null;
   head: string | null;
   method: PrMergeMethod | null;
@@ -117,7 +144,7 @@ export type PrActions = {
   repeats: boolean;
 };
 
-export function prActions(pr: PhonePr): PrActions {
+export function prActions(pr: PhonePr, host: HostDeclaration | null): PrActions {
   const card = pr.card;
   const open = !settled(pr);
   const mine = pr.work?.mine === true;
@@ -127,7 +154,8 @@ export function prActions(pr: PhonePr): PrActions {
   const write = card?.write ?? null;
   return {
     open,
-    mergeShown: open && mine && primaryAction(kind) !== "review",
+    mergeShown: open && mine && primaryAction(kind) !== "review" && offers(host, "merge"),
+    handover: offers(host, "handover"),
     why: mergeWhy(pr, card, agentWorking),
     head: card?.head ?? null,
     method: defaultMethod(card),
@@ -146,8 +174,8 @@ function mergeBlocked(view: PrActions): boolean {
 }
 
 /** Opens a confirmation for what the page shows now, or null while Merge cannot be asked. */
-export function confirmOf(pr: PhonePr): MergeConfirm | null {
-  const view = prActions(pr);
+export function confirmOf(pr: PhonePr, host: HostDeclaration | null): MergeConfirm | null {
+  const view = prActions(pr, host);
   if (mergeBlocked(view) || view.head === null) return null;
   return { key: pr.key, action: "merge", head: view.head, method: view.method, queue: view.queue };
 }
@@ -157,8 +185,8 @@ export function confirmOf(pr: PhonePr): MergeConfirm | null {
  * method, and Merge still allowed. Else it closes and nothing is sent, so a press on the confirm never writes what the operator
  * was not shown.
  */
-export function holds(confirm: MergeConfirm, pr: PhonePr | null): boolean {
+export function holds(confirm: MergeConfirm, pr: PhonePr | null, host: HostDeclaration | null): boolean {
   if (!pr || pr.key !== confirm.key) return false;
-  const view = prActions(pr);
+  const view = prActions(pr, host);
   return confirmHolds(confirm, { head: view.head, queue: view.queue, method: view.method, mergeBlocked: mergeBlocked(view), behind: pr.work?.merge_state === "behind" });
 }

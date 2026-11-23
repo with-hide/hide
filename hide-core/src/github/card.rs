@@ -177,16 +177,16 @@ fn review_at(pull_request: &Value) -> Option<u64> {
 /// How much of a body the card keeps: GitHub allows 65,536 characters, and
 /// up to eight cards are kept and sent whole, so the tail past this is cut
 /// at a character boundary (engineering principle 15).
-const BODY_CAP_CHARS: usize = 20_000;
+pub(crate) const BODY_CAP_CHARS: usize = 20_000;
 
-fn capped_body(body: &str) -> String {
+pub(crate) fn capped_body(body: &str) -> String {
     match body.char_indices().nth(BODY_CAP_CHARS) {
         Some((end, _)) => body[..end].to_owned(),
         None => body.to_owned(),
     }
 }
 
-fn first_sentence(text: &str) -> String {
+pub(crate) fn first_sentence(text: &str) -> String {
     let line = text
         .lines()
         .map(str::trim)

@@ -41,16 +41,16 @@ export const taskLensEnglish = {
   "taskLens.menu.pane": "Go to terminal",
   "taskLens.menu.close": "Close session",
   "taskLens.unresponsive": "{{device}} not responding",
-  "detail.pr": "PR #{{number}} · {{project}}",
-  "detail.prTab": "PR #{{number}}",
-  "detail.prPath": "PR #{{number}} · {{title}}",
+  "detail.pr": "{{pull}} · {{project}}",
+  "detail.prTab": "{{pull}}",
+  "detail.prPath": "{{pull}} · {{title}}",
   "detail.recordPath": "Session record · {{title}}",
   "detail.recordPathUntitled": "Session record",
   "detail.readInFront": "Shown once this tab is in front",
   "detail.costPath": "{{project}} · last 7 days",
   "detail.record": "Record · {{title}}",
   "detail.recordUntitled": "Record",
-  "prs.noRemote": "No GitHub remote",
+  "prs.noRemote": "No remote Hide can read",
 } as const;
 
 type Messages = Catalog<typeof taskLensEnglish>;
@@ -94,16 +94,16 @@ const ko: Messages = {
   "taskLens.menu.pane": "터미널로 이동",
   "taskLens.menu.close": "세션 닫기",
   "taskLens.unresponsive": "{{device}} 응답 없음",
-  "detail.pr": "PR #{{number}} · {{project}}",
-  "detail.prTab": "PR #{{number}}",
-  "detail.prPath": "PR #{{number}} · {{title}}",
+  "detail.pr": "{{pull}} · {{project}}",
+  "detail.prTab": "{{pull}}",
+  "detail.prPath": "{{pull}} · {{title}}",
   "detail.recordPath": "세션 기록 · {{title}}",
   "detail.recordPathUntitled": "세션 기록",
   "detail.readInFront": "이 탭을 앞에 두면 보여요",
   "detail.costPath": "{{project}} · 지난 7일",
   "detail.record": "기록 · {{title}}",
   "detail.recordUntitled": "기록",
-  "prs.noRemote": "GitHub 원격 없음",
+  "prs.noRemote": "Hide가 읽을 수 있는 원격 저장소 없음",
 };
 
 const zh: Messages = {
@@ -145,16 +145,16 @@ const zh: Messages = {
   "taskLens.menu.pane": "前往终端",
   "taskLens.menu.close": "关闭会话",
   "taskLens.unresponsive": "{{device}} 无响应",
-  "detail.pr": "PR #{{number}} · {{project}}",
-  "detail.prTab": "PR #{{number}}",
-  "detail.prPath": "PR #{{number}} · {{title}}",
+  "detail.pr": "{{pull}} · {{project}}",
+  "detail.prTab": "{{pull}}",
+  "detail.prPath": "{{pull}} · {{title}}",
   "detail.recordPath": "会话记录 · {{title}}",
   "detail.recordPathUntitled": "会话记录",
   "detail.readInFront": "此标签页在前面时显示",
   "detail.costPath": "{{project}} · 最近 7 天",
   "detail.record": "记录 · {{title}}",
   "detail.recordUntitled": "记录",
-  "prs.noRemote": "没有 GitHub 远程仓库",
+  "prs.noRemote": "没有 Hide 能读取的远程仓库",
 };
 
 const ja: Messages = {
@@ -196,16 +196,16 @@ const ja: Messages = {
   "taskLens.menu.pane": "ターミナルへ",
   "taskLens.menu.close": "セッションを閉じる",
   "taskLens.unresponsive": "{{device}} 応答なし",
-  "detail.pr": "PR #{{number}} · {{project}}",
-  "detail.prTab": "PR #{{number}}",
-  "detail.prPath": "PR #{{number}} · {{title}}",
+  "detail.pr": "{{pull}} · {{project}}",
+  "detail.prTab": "{{pull}}",
+  "detail.prPath": "{{pull}} · {{title}}",
   "detail.recordPath": "セッション記録 · {{title}}",
   "detail.recordPathUntitled": "セッション記録",
   "detail.readInFront": "このタブを前面にすると表示されます",
   "detail.costPath": "{{project}} · 過去 7 日間",
   "detail.record": "記録 · {{title}}",
   "detail.recordUntitled": "記録",
-  "prs.noRemote": "GitHub リモートなし",
+  "prs.noRemote": "Hide が読めるリモートなし",
 };
 
 export const taskLensCatalogs = { en: taskLensEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof taskLensEnglish>;

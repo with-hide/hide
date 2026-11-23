@@ -108,13 +108,13 @@ describe("project guardrails", () => {
     expect(names).toEqual(["codex", "grok"]);
   });
 
-  it("names the GitHub repository a Git project is connected to: the confirmed one, else the detected one, never a folder's", () => {
+  it("names the repository a Git project is connected to: the confirmed one, else the one its host's read named, never a folder's", () => {
     const rest = snapshot();
-    const git = { ...project, is_git: true } as Workspace;
+    const git = { ...project, is_git: true, checkouts: [] } as unknown as Workspace;
     expect(projectRepository(rest, git)).toBeNull();
-    expect(projectRepository(rest, { ...git, tasks: { source: { kind: "github", name: "acme/tasks" } } } as Workspace)).toBe("acme/tasks");
-    expect(projectRepository(rest, { ...git, tasks: { source: { kind: "local", name: "memos" } } } as Workspace)).toBeNull();
-    const detected = { ...git, home_issues: { repository: "acme/detected" } } as Workspace;
+    const read = (name: string) => ({ ...git, checkouts: [{ github: { repository: { name, url: `https://example.invalid/${name}` } } }] }) as unknown as Workspace;
+    expect(projectRepository(rest, read("gitlab.com/acme/shop/api"))).toBe("gitlab.com/acme/shop/api");
+    const detected = read("acme/detected");
     expect(projectRepository(rest, detected)).toBe("acme/detected");
     rest.ui_state!.project_settings!.original!.repository = { mode: "repository", repository: "acme/chosen" };
     expect(projectRepository(rest, detected)).toBe("acme/chosen");

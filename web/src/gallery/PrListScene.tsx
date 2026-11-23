@@ -1,6 +1,7 @@
 // The real PR list over invented pull requests in each review state (PRD
 // pr-review-status B1-B4, B9, B11, B15), and with `gh=<refusal>` the line a
-// refusal of `gh` itself draws instead (B42). No GitHub read or write leaves it.
+// refusal of `gh` itself draws instead (B42); with `host=gitlab` they are a
+// gitlab.com project's merge requests. No read or write leaves it.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { PrList } from "../PrList";
@@ -12,7 +13,7 @@ import { isGhRefusal } from "../githubFailure";
 import type { GithubFailureCategory, PullRequest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { AT, applyReview, reviewPlace } from "./PrCardScene";
+import { AT, applyReview, GITLAB, gitlabReference, reviewPlace } from "./PrCardScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
 /** Each row's review state, and the one whose reviewers could not be read. */
@@ -33,7 +34,8 @@ export function PrListScene({ params }: { params: URLSearchParams }) {
     const base = sidebarScene("reference", REFERENCE_FOLDS, AT);
     const project = base.rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
     const checkout = project.checkouts[0]!;
-    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT, unread_queries: params.get("unread") === "reviews" ? ["merge_queue", "reviews"] : [] };
+    const gitlab = params.get("host") === "gitlab";
+    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT, unread_queries: params.get("unread") === "reviews" ? ["merge_queue", "reviews"] : [], ...(gitlab ? { host: GITLAB } : {}) };
     // A refusal of `gh` itself is the same for every checkout the core reads.
     const refusal = params.get("gh") as GithubFailureCategory | null;
     if (isGhRefusal(refusal)) {
@@ -44,6 +46,10 @@ export function PrListScene({ params }: { params: URLSearchParams }) {
         number: row.number, title: row.title, url: `https://github.com/example/hide/pull/${row.number}`, badge: "open", state: "pending", is_draft: row.draft === true, review: null, checks: "passing", head_branch: `feat/${row.number}`, base_branch: "main", closing_issues: [], created_at_unix_ms: AT - 86_400_000, updated_at_unix_ms: AT - 1_800_000,
         work: { author: "maintainer", author_is_bot: false, mine: true, merge_state: "clean", review_requests: [], asked_of_me: "none", failed_checks: [], pending_checks: 0, queue: { state: "not_queued" }, review_requested_at_unix_ms: null },
       };
+      if (gitlab) {
+        pr.reference = gitlabReference(row.number);
+        pr.url = pr.reference.url;
+      }
       if (row.review) applyReview(pr, row.review);
       if (row.draft) pr.state = "draft";
       if (row.unread || params.get("unread") === "reviews") { pr.work!.reviewers = null; pr.work!.required_approvals = null; }

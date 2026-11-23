@@ -1,0 +1,698 @@
+{
+ "data": {
+  "currentUser": {
+   "username": "example-user"
+  },
+  "project": {
+   "id": "gid://gitlab/Project/34675721",
+   "fullPath": "gitlab-org/cli",
+   "visibility": "public",
+   "webUrl": "https://gitlab.com/gitlab-org/cli",
+   "repository": {
+    "rootRef": "main"
+   },
+   "open": {
+    "count": 110,
+    "nodes": [
+     {
+      "iid": "4226",
+      "title": "Change 4226",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4226",
+      "sourceBranch": "mr-update-rereview",
+      "targetBranch": "main",
+      "diffHeadSha": "1ffd1c45e015da46af0d35d86cca73cc44d16c08",
+      "sourceProjectId": 34675721,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-10-27T15:03:13Z",
+      "updatedAt": "2026-11-22T07:17:27Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "REQUESTED_CHANGES",
+      "approved": false,
+      "approvalsRequired": 2,
+      "author": {
+       "username": "member-2",
+       "bot": false
+      },
+      "approvedBy": {
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 2,
+       "nodes": [
+        {
+         "username": "member-3",
+         "mergeRequestInteraction": {
+          "reviewState": "REQUESTED_CHANGES"
+         }
+        },
+        {
+         "username": "member-4",
+         "mergeRequestInteraction": {
+          "reviewState": "REQUESTED_CHANGES"
+         }
+        }
+       ]
+      },
+      "headPipeline": {
+       "sha": "445d6a9a244639e7cb6a609ced71f9fac555c286",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 18,
+        "nodes": [
+         {
+          "name": "review-docs-cleanup",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235820"
+         },
+         {
+          "name": "review-docs-deploy",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235819"
+         },
+         {
+          "name": "tests:coverage",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235818"
+         },
+         {
+          "name": "tests:integration",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235817"
+         },
+         {
+          "name": "tests:unit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235816"
+         },
+         {
+          "name": "lint",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235815"
+         },
+         {
+          "name": "lint:comments",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235814"
+         },
+         {
+          "name": "docs hugo_build",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235813"
+         },
+         {
+          "name": "check_docs_markdown",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235812"
+         },
+         {
+          "name": "check_docs_update",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235811"
+         },
+         {
+          "name": "check_args",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235810"
+         },
+         {
+          "name": "check_embed",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235809"
+         },
+         {
+          "name": "lint_commit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235808"
+         },
+         {
+          "name": "check_go_generated_code",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235807"
+         },
+         {
+          "name": "dependency-scanning-profile-0",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235806"
+         },
+         {
+          "name": "govulncheck",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235805"
+         },
+         {
+          "name": "secret_detection",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235804"
+         },
+         {
+          "name": "gitlab-advanced-sast",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18255235803"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "4429",
+      "title": "Change 4429",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4429",
+      "sourceBranch": "8640-unauthenticated-client-factory",
+      "targetBranch": "main",
+      "diffHeadSha": "0cbef831a9cfc3512e2124f6adf1f5512b9030e5",
+      "sourceProjectId": 45049979,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-15T14:53:12Z",
+      "updatedAt": "2026-11-22T06:20:45Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "REQUESTED_CHANGES",
+      "approved": false,
+      "approvalsRequired": 3,
+      "author": {
+       "username": "member-5",
+       "bot": false
+      },
+      "approvedBy": {
+       "nodes": [
+        {
+         "username": "member-4"
+        }
+       ]
+      },
+      "reviewers": {
+       "count": 2,
+       "nodes": [
+        {
+         "username": "member-6",
+         "mergeRequestInteraction": {
+          "reviewState": "UNREVIEWED"
+         }
+        },
+        {
+         "username": "member-4",
+         "mergeRequestInteraction": {
+          "reviewState": "APPROVED"
+         }
+        }
+       ]
+      },
+      "headPipeline": {
+       "sha": "0cbef831a9cfc3512e2124f6adf1f5512b9030e5",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 13,
+        "nodes": [
+         {
+          "name": "tests:coverage",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146588"
+         },
+         {
+          "name": "tests:integration",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146587"
+         },
+         {
+          "name": "tests:unit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146586"
+         },
+         {
+          "name": "lint",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146585"
+         },
+         {
+          "name": "lint:comments",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146584"
+         },
+         {
+          "name": "docs hugo_build",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146583"
+         },
+         {
+          "name": "check_docs_markdown",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146582"
+         },
+         {
+          "name": "check_docs_update",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146581"
+         },
+         {
+          "name": "check_args",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146580"
+         },
+         {
+          "name": "check_embed",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146579"
+         },
+         {
+          "name": "lint_commit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146578"
+         },
+         {
+          "name": "check_go_generated_code",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146577"
+         },
+         {
+          "name": "govulncheck",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-community/gitlab-org/cli/-/jobs/18172146576"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "4526",
+      "title": "Change 4526",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4526",
+      "sourceBranch": "refactor/pagination-flags",
+      "targetBranch": "main",
+      "diffHeadSha": "d4a8f6b3a0a5e504a652a49727d05350b87e55c5",
+      "sourceProjectId": 85083980,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-21T22:13:00Z",
+      "updatedAt": "2026-11-21T23:14:56Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "NOT_APPROVED",
+      "approved": false,
+      "approvalsRequired": 2,
+      "author": {
+       "username": "member-7",
+       "bot": false
+      },
+      "approvedBy": {
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "d4a8f6b3a0a5e504a652a49727d05350b87e55c5",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 13,
+        "nodes": [
+         {
+          "name": "tests:coverage",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818796"
+         },
+         {
+          "name": "tests:integration",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818795"
+         },
+         {
+          "name": "tests:unit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818794"
+         },
+         {
+          "name": "lint",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818793"
+         },
+         {
+          "name": "lint:comments",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818792"
+         },
+         {
+          "name": "docs hugo_build",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818791"
+         },
+         {
+          "name": "check_docs_markdown",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818790"
+         },
+         {
+          "name": "check_docs_update",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818789"
+         },
+         {
+          "name": "check_args",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818788"
+         },
+         {
+          "name": "check_embed",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818787"
+         },
+         {
+          "name": "lint_commit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818786"
+         },
+         {
+          "name": "check_go_generated_code",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818784"
+         },
+         {
+          "name": "govulncheck",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/member-7/gitlab-cli/-/jobs/18250818783"
+         }
+        ]
+       }
+      }
+     },
+     {
+      "iid": "4518",
+      "title": "Change 4518",
+      "state": "opened",
+      "draft": true,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4518",
+      "sourceBranch": "8770-df-unreachable-fallback",
+      "targetBranch": "main",
+      "diffHeadSha": "0bbb2d4013ebcf507ff6f90b0af11f164f951abd",
+      "sourceProjectId": 34675721,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-20T17:11:00Z",
+      "updatedAt": "2026-11-20T17:11:02Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "DRAFT_STATUS",
+      "approved": false,
+      "approvalsRequired": 3,
+      "author": {
+       "username": "member-8",
+       "bot": false
+      },
+      "approvedBy": {
+       "nodes": []
+      },
+      "reviewers": {
+       "count": 0,
+       "nodes": []
+      },
+      "headPipeline": {
+       "sha": "9efcf90cfd76c9807fa56a1cd3eb4a758b977085",
+       "status": "SKIPPED",
+       "jobs": {
+        "count": 0,
+        "nodes": []
+       }
+      }
+     },
+     {
+      "iid": "4505",
+      "title": "Change 4505",
+      "state": "opened",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4505",
+      "sourceBranch": "df-npm-yarn-cafile",
+      "targetBranch": "main",
+      "diffHeadSha": "46194a2838c5d35f5ac219f914d045770424b323",
+      "sourceProjectId": 34675721,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-19T06:27:22Z",
+      "updatedAt": "2026-11-20T16:55:20Z",
+      "mergedAt": null,
+      "closedAt": null,
+      "detailedMergeStatus": "NOT_APPROVED",
+      "approved": false,
+      "approvalsRequired": 3,
+      "author": {
+       "username": "member-9",
+       "bot": false
+      },
+      "approvedBy": {
+       "nodes": [
+        {
+         "username": "member-4"
+        }
+       ]
+      },
+      "reviewers": {
+       "count": 2,
+       "nodes": [
+        {
+         "username": "member-4",
+         "mergeRequestInteraction": {
+          "reviewState": "APPROVED"
+         }
+        },
+        {
+         "username": "member-10",
+         "mergeRequestInteraction": {
+          "reviewState": "UNREVIEWED"
+         }
+        }
+       ]
+      },
+      "headPipeline": {
+       "sha": "f3be3eea2220e63ebbfbe3e9fdffab07b77e6410",
+       "status": "SUCCESS",
+       "jobs": {
+        "count": 18,
+        "nodes": [
+         {
+          "name": "review-docs-cleanup",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889872"
+         },
+         {
+          "name": "review-docs-deploy",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889871"
+         },
+         {
+          "name": "tests:coverage",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889870"
+         },
+         {
+          "name": "tests:integration",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889869"
+         },
+         {
+          "name": "tests:unit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889868"
+         },
+         {
+          "name": "lint",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889867"
+         },
+         {
+          "name": "lint:comments",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889866"
+         },
+         {
+          "name": "docs hugo_build",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889865"
+         },
+         {
+          "name": "check_docs_markdown",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889864"
+         },
+         {
+          "name": "check_docs_update",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889863"
+         },
+         {
+          "name": "check_args",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889862"
+         },
+         {
+          "name": "check_embed",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889861"
+         },
+         {
+          "name": "lint_commit",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889860"
+         },
+         {
+          "name": "check_go_generated_code",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889859"
+         },
+         {
+          "name": "dependency-scanning-profile-0",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889858"
+         },
+         {
+          "name": "govulncheck",
+          "status": "MANUAL",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889857"
+         },
+         {
+          "name": "secret_detection",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889856"
+         },
+         {
+          "name": "gitlab-advanced-sast",
+          "status": "SUCCESS",
+          "allowFailure": true,
+          "webPath": "/gitlab-org/cli/-/jobs/18223889855"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "settled": {
+    "nodes": [
+     {
+      "iid": "4524",
+      "title": "Change 4524",
+      "state": "closed",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4524",
+      "sourceBranch": "fix/8789-refactor-update-test-seams",
+      "targetBranch": "main",
+      "diffHeadSha": "9a0e856f5d94e82172b9a09336ecdf3e9072d74f",
+      "sourceProjectId": 88914105,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-21T20:35:17Z",
+      "updatedAt": "2026-11-21T21:40:26Z",
+      "mergedAt": null,
+      "closedAt": "2026-11-21T21:40:25Z",
+      "author": {
+       "username": "member-11",
+       "bot": false
+      }
+     },
+     {
+      "iid": "4489",
+      "title": "Change 4489",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4489",
+      "sourceBranch": "mnohr-main-patch-edf1",
+      "targetBranch": "main",
+      "diffHeadSha": "4b8d2c3051198d412dd12325477b4c1fb7e1bb1b",
+      "sourceProjectId": 34675721,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-18T18:27:39Z",
+      "updatedAt": "2026-11-20T15:10:23Z",
+      "mergedAt": "2026-11-20T15:10:23Z",
+      "closedAt": null,
+      "author": {
+       "username": "member-12",
+       "bot": false
+      }
+     },
+     {
+      "iid": "4516",
+      "title": "Change 4516",
+      "state": "merged",
+      "draft": false,
+      "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4516",
+      "sourceBranch": "renovate/gitlab.com-gitlab-org-protos-gen-go-gitlab-autoflow-0.x",
+      "targetBranch": "main",
+      "diffHeadSha": "f9a5071b070a2e21e71449d5d59dc1e7d07c1ed5",
+      "sourceProjectId": 57963790,
+      "targetProjectId": 34675721,
+      "createdAt": "2026-11-20T14:13:32Z",
+      "updatedAt": "2026-11-20T14:44:44Z",
+      "mergedAt": "2026-11-20T14:44:47Z",
+      "closedAt": null,
+      "author": {
+       "username": "member-13",
+       "bot": false
+      }
+     }
+    ]
+   }
+  }
+ }
+}

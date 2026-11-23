@@ -31,6 +31,7 @@ pub mod git;
 pub mod git_command;
 pub mod git_run;
 pub mod git_watch;
+pub mod glab;
 pub mod herdr_save;
 pub mod home;
 pub mod importable;

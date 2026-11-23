@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { ToolRail } from "./Tools";
+import { GITLAB } from "./gallery/PrCardScene";
 import { MemorySettings, MemoryTab, useMemoryProject } from "./MemoryTab";
 import { clientI18n } from "./i18n/translator";
 import type { MemoryRow, ProjectMemory, SnapshotRest } from "./snapshot";
@@ -236,6 +237,14 @@ describe("the Memory tab", () => {
     events.length = 0;
     await click("[data-memory-row-toggle='3']");
     expect(sent("memory_expand")).toEqual([{ workspace_id: "p", number: 3 }]);
+  });
+
+  it("names the program of a gitlab.com project's host when it could not say whether the promotion's pull request came", async () => {
+    await render(memory({ rows: [row(5, { promotion: { state: "unconfirmed", agent: null, pr_number: null, target_path: null, github_failure: "not_logged_in" } })] }));
+    const onGitlab = structuredClone(rest);
+    onGitlab.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null, host: GITLAB };
+    await act(async () => useShellStore.setState({ rest: onGitlab }));
+    expect(container.querySelector("[data-memory-card='5'] [data-memory-unconfirmed]")?.textContent).toBe("Couldn't check for a PR·glab not logged in");
   });
 
   it("shows a promotion's agent and a merged card dimmed with its file", async () => {

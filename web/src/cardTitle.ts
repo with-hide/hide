@@ -3,6 +3,7 @@
 // holds of that subject now, the same on its tab, its menus and the recent
 // tabs list.
 
+import { projectPullWords } from "./codeHost";
 import type { TFunction } from "i18next";
 import { summariesEnabled } from "./hideAi";
 import { missionOf } from "./missions";
@@ -33,7 +34,7 @@ export function cardTitle(s: ShellState, t: Translate, item: DetailItem | null, 
   if (!item) return "";
   if (item.kind === "pull_request") {
     const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
-    return bare ? t("detail.prTab", { number: item.number }) : t("detail.pr", { number: item.number, project: project?.label ?? "" });
+    return bare ? t("detail.prTab", projectPullWords(project, item.number)) : t("detail.pr", { ...projectPullWords(project, item.number), project: project?.label ?? "" });
   }
   if (item.kind === "mission") {
     const title = missionOf(s.rest, item.mission)?.title ?? item.mission;
@@ -71,7 +72,7 @@ export function cardPath(s: ShellState, t: Translate, item: DetailItem): string 
   switch (item.kind) {
     case "pull_request": {
       const title = workspace?.pull_requests?.find((row) => row.number === item.number)?.title;
-      return title ? t("detail.prPath", { number: item.number, title }) : cardTitle(s, t, item);
+      return title ? t("detail.prPath", { ...projectPullWords(workspace, item.number), title }) : cardTitle(s, t, item);
     }
     case "record": {
       const title = sessionTitle(s, item.session);

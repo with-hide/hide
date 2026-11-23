@@ -144,17 +144,18 @@ pub struct PermissionKeys {
     pub command: Option<CommandSlot>,
 }
 
-/// The place of a command in an agent's approval dialog: the first line
-/// after the dialog's `title`, or, with `opens`, after the first line past
-/// the title that begins with it (Claude Code draws a separator before the
-/// command, with a note between it and the title). Each is a line's whole
-/// text past its indent and a box's border.
+/// The place of a one-line command in an agent's approval dialog: under the
+/// dialog's `title`, the first line that begins with `separator`, the
+/// command on the line after it, and that same separator line again after
+/// the command (Claude Code draws a note between the title and the first
+/// separator). `title` is a line's whole text past its indent. A dialog
+/// that marks no end under its command has no such place: a command of
+/// more lines could not be told from one.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CommandSlot {
     pub title: String,
-    #[serde(default)]
-    pub opens: Option<String>,
+    pub separator: String,
 }
 
 /// The key names an `[answer]` table may name, as the core's own engine
@@ -223,12 +224,9 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     }
     if let Some(permission) = &answer.permission {
         match &permission.command {
-            Some(slot)
-                if !text(&slot.title)
-                    || slot.opens.as_deref().is_some_and(|opens| !text(opens)) =>
-            {
+            Some(slot) if !text(&slot.title) || !text(&slot.separator) => {
                 return Err(format!(
-                    "{name}: answer.permission.command names its title and opener in 1 to {MAX_ROW_BYTES} bytes of text"
+                    "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
                 ));
             }
             None if permission.row.is_some() && !permission.unnamed => {
@@ -1221,7 +1219,9 @@ mod tests {
             "marker = \"❯\"\npermission = { allow = [\"enter\"], allow_always = [\"right\", \"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
-            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \", separator = \"╌\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\", separator = \" \" } }\n",
             "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], row = \"{n}.\", approve_label = \" \" }\n",
         ] {

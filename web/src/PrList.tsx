@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, PlayIcon } from "lucide-react";
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
+import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import type { PrGroupId } from "./agentScope";
 import { markTone, rowLine, lineTone } from "./agentRow";
@@ -11,17 +12,18 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Hint } from "./components/ui/tooltip";
 import { Elapsed } from "./components/elapsed";
 import { useInterfaceTranslation } from "./i18n/client";
-import { GH_REFUSAL_KEY, type GhRefusal } from "./githubFailure";
+import { type GhRefusal } from "./githubFailure";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { holdsCommandKey } from "./host";
 import { cn } from "./lib/utils";
 import { issueDate } from "./projectBoard";
-import { FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
+import { blockedLines, FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
 import { GROUP_TONE, ReasonLine } from "./prReason";
 import { approvalCount, prReview } from "./prReview";
 import { ApprovalCount, ReviewerMarks } from "./PrReviewers";
 import { IssuePicker } from "./PrLinks";
 import { beginAgentDrag } from "./agentReference";
+import type { HostDeclaration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -50,13 +52,19 @@ export function PrList({ model, actions, onlyCheckout, showProject, onAllCheckou
 }) {
   const { t } = useInterfaceTranslation();
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  // The host each read card declared, found once for the whole list rather than by every row.
+  const cards = useShellStore((state) => state.rest?.pr_work?.cards);
+  const cardHosts = useMemo<CardHosts>(() => {
+    const hosts = new Map((cards ?? []).map((card) => [`${card.workspace_id}#${card.number}`, card.host] as const));
+    return (workspaceId, number) => hosts.get(`${workspaceId}#${number}`);
+  }, [cards]);
   const toggle = (key: string) => setOpened((before) => {
     const next = new Set(before);
     if (!next.delete(key)) next.add(key);
     return next;
   });
   const { reading } = model;
-  if (reading.state === "blocked") return <GithubLine category={reading.category} actions={actions} />;
+  if (reading.state === "blocked") return <GithubLine category={reading.category} lines={blockedLines(reading, t)} actions={actions} />;
   if (reading.state === "reading" && model.groups.length === 0) {
     return (
       <div className="flex flex-col gap-xs px-md py-sm" role="status" aria-label={t("work.reading")} data-prs-view="reading">
@@ -87,13 +95,16 @@ export function PrList({ model, actions, onlyCheckout, showProject, onAllCheckou
         </div>
       ) : null}
       {model.groups.map((view) => (
-        <Group key={view.group} view={view} opened={opened} onToggle={toggle} actions={actions} showProject={showProject} />
+        <Group key={view.group} view={view} opened={opened} onToggle={toggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
       ))}
     </div>
   );
 }
 
-function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroupView; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean }) {
+/** The host the read card of `workspaceId`'s pull request `number` declared, if one was read. */
+type CardHosts = (workspaceId: string, number: number) => HostDeclaration | null | undefined;
+
+function Group({ view, opened, onToggle, actions, showProject, cardHosts }: { view: PrGroupView; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean; cardHosts: CardHosts }) {
   const { t } = useInterfaceTranslation();
   const count = view.entries.length + view.team.length + view.old.length;
   // Everything after Blocked starts folded (B7); a click turns it the other way.
@@ -110,9 +121,9 @@ function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroup
       </button>
       {expanded ? (
         <ul className="flex min-w-0 flex-col" role="list">
-          {view.entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} />)}
-          <Fold view={view} kind="team" entries={view.team} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} />
-          <Fold view={view} kind="old" entries={view.old} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} />
+          {view.entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} cardHosts={cardHosts} />)}
+          <Fold view={view} kind="team" entries={view.team} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
+          <Fold view={view} kind="old" entries={view.old} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
         </ul>
       ) : null}
     </section>
@@ -120,7 +131,7 @@ function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroup
 }
 
 /** A folded line inside a group: team review requests, or pull requests nothing moved on (B15, B16). */
-function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: { view: PrGroupView; kind: "team" | "old"; entries: PrEntry[]; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean }) {
+function Fold({ view, kind, entries, opened, onToggle, actions, showProject, cardHosts }: { view: PrGroupView; kind: "team" | "old"; entries: PrEntry[]; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean; cardHosts: CardHosts }) {
   const { t } = useInterfaceTranslation();
   if (entries.length === 0) return null;
   const key = `${view.group}:${kind}`;
@@ -134,7 +145,7 @@ function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: {
           <span className="min-w-0 truncate">{t(`work.fold.${kind}`, { count: entries.length })}</span>
         </button>
       </li>
-      {expanded ? entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} folded={kind} />) : null}
+      {expanded ? entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} folded={kind} cardHosts={cardHosts} />) : null}
     </>
   );
 }
@@ -145,7 +156,7 @@ function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: {
  * one button that opens the card (⌘-click and ⌘↵: GitHub); every part above
  * it is its own destination.
  */
-function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; actions: Actions; showProject: boolean; folded?: "team" | "old" }) {
+function PrRow({ entry, actions, showProject, folded, cardHosts }: { entry: PrEntry; actions: Actions; showProject: boolean; folded?: "team" | "old"; cardHosts: CardHosts }) {
   const { t, i18n } = useInterfaceTranslation();
   const devices = useShellStore((state) => state.rest?.navigator?.devices);
   const { pr, project, row, reason } = entry;
@@ -162,7 +173,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
   return (
     <li className="flex flex-col" data-pr={pr.number} data-pr-project={project.id} data-pr-row-group={group}>
       <div className={cn("group/pr-row relative flex min-w-0 flex-col gap-xxs rounded-xs px-xs py-xs hover:bg-accent focus-within:bg-accent", group === "merged" && "opacity-(--opacity-secondary)")}>
-        <button type="button" data-pr-focus="row" data-pr-row={pr.number} aria-label={t("work.row.open", { number: pr.number, title: pr.title })}
+        <button type="button" data-pr-focus="row" data-pr-row={pr.number} aria-label={t("work.row.open", { ...pullWords(pr), title: pr.title })}
           className="absolute inset-0 rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={(event) => (holdsCommandKey(event) ? github() : open())}
           onKeyDown={(event) => {
@@ -172,7 +183,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
             }
           }} />
         <div className="pointer-events-none relative flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <PrMark state={pr.state} number={pr.number} />
+          <PrMark state={pr.state} label={pullLabel(pr)} />
           <Hint label={pr.title} reveals>
             <span className="pointer-events-auto min-w-0 flex-1 cursor-pointer truncate text-caption font-medium text-foreground" onClick={(event) => (holdsCommandKey(event) ? github() : open())} data-pr-title={pr.number}>{pr.title}</span>
           </Hint>
@@ -182,7 +193,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
           {review ? <ReviewerMarks review={review} /> : null}
           <span className="relative flex shrink-0 items-center justify-end">
             <Elapsed since={pr.updated_at_unix_ms} className={cn("shrink-0 text-micro text-muted-foreground", "group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible", entry.agents.length > 0 && "absolute right-0")} data-pr-age={pr.number} />
-            <RowActions entry={entry} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
+            <RowActions entry={entry} cardHosts={cardHosts} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
           </span>
         </div>
         <div className="pointer-events-none relative flex min-w-0 pl-[calc(var(--size-pr-icon)+var(--spacing-xs))]">
@@ -227,7 +238,7 @@ function AgentMarks({ entry, actions }: { entry: PrEntry; actions: Actions }) {
  * still here, else GitHub, each with `⋯` for Link issue, New issue, Copy
  * branch name and Assign (B19).
  */
-function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrEntry; actions: Actions; linking: boolean; onLinking: (open: boolean) => void; inFlow: boolean }) {
+function RowActions({ entry, cardHosts, actions, linking, onLinking, inFlow }: { entry: PrEntry; cardHosts: CardHosts; actions: Actions; linking: boolean; onLinking: (open: boolean) => void; inFlow: boolean }) {
   const { t } = useInterfaceTranslation();
   const { pr, project, row } = entry;
   // Over the time slot, or, beside agent marks, holding its own width so a
@@ -239,7 +250,11 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   const folderGone = checkout !== null && (!checkout.exists || checkout.worktree?.missing === true);
   const worktree = checkout?.is_worktree === true && checkout.is_primary !== true;
   const local = project.tasks?.source?.kind === "local";
-  const linkable = !merged && row.issue === null && (!local || (worktree && !folderGone));
+  // An action the pull request's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts): its card's
+  // declaration once read, else its project's.
+  const host = projectActionHost(project, cardHosts(project.id, pr.number));
+  const linkable = !merged && row.issue === null && offers(host, "issues") && (!local || (worktree && !folderGone));
+  const handover = offers(host, "handover");
   const delegate = () => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number });
   const cleanup = merged && worktree ? () => useUiStore.getState().setWorkspaceDialog({ kind: "delete_worktree", workspaceId: project.id, checkoutId: checkout!.id }) : null;
   const rowMenu = (
@@ -252,17 +267,17 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-            {row.group !== "merged" ? <DropdownMenuItem onSelect={delegate} data-pr-menu-delegate="true">{t("prList.delegate")}</DropdownMenuItem> : null}
+            {row.group !== "merged" && handover ? <DropdownMenuItem onSelect={delegate} data-pr-menu-delegate="true">{t("prList.delegate")}</DropdownMenuItem> : null}
             {linkable ? <DropdownMenuItem onSelect={() => onLinking(true)} data-pr-menu-link="true">{t("prList.linkIssue")}</DropdownMenuItem> : null}
             {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })} data-pr-menu-new-issue="true">{t("prList.newIssue")}</DropdownMenuItem> : null}
-            <DropdownMenuItem onSelect={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-menu-github="true">{t("work.card.github")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-menu-github="true">{t("work.card.github", pullWords(pr))}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-menu-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </span>
     </IssuePicker>
   );
-  if (row.group === "blocked") {
+  if (row.group === "blocked" && handover) {
     return (
       <span className={cn(reveal, pointer)} data-pr-actions="delegate">
         <Hint label={t("prList.takeHint")}>
@@ -287,8 +302,8 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   }
   return (
     <span className={cn(reveal, pointer)} data-pr-actions="default">
-      <Hint label={t("prList.gitHubHint")}>
-        <Button variant="ghost" size="icon-sm" aria-label="GitHub" onClick={own(() => actions.openPullRequest(pr.url, project.device_id, true))} data-pr-github={pr.number}>
+      <Hint label={t("prList.gitHubHint", pullWords(pr))}>
+        <Button variant="ghost" size="icon-sm" aria-label={pullHost(pr).name} onClick={own(() => actions.openPullRequest(pr.url, project.device_id, true))} data-pr-github={pr.number}>
           <ExternalLinkIcon aria-hidden="true" />
         </Button>
       </Hint>
@@ -297,12 +312,12 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   );
 }
 
-/** `gh` is not installed, too old or not signed in: one line and where to fix it (B42). */
-function GithubLine({ category, actions }: { category: GhRefusal; actions: Actions }) {
+/** The host's program is not installed, too old or not signed in: one line per host and where to fix it (B42). */
+function GithubLine({ category, lines, actions }: { category: GhRefusal; lines: string[]; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-prs-view="blocked" data-prs-gh={category}>
-      <p>{t(GH_REFUSAL_KEY[category])}</p>
+      {lines.map((line) => <p key={line}>{line}</p>)}
       <Button variant="secondary" size="sm" onClick={() => actions.openSettings("github")} data-prs-open-settings="true">{t("work.gh.settings")}</Button>
     </div>
   );

@@ -8,15 +8,19 @@ the addresses the core carries. This check reads the sources and fails when,
 outside the files named below as a host's implementation or a parser it owns:
 
 - Rust starts a host's program by one of its three doors: constructing its
-  node call (`Call::Gh`), naming the program (`"gh"`), or using the node
-  link's module for it (`hide_node_link::gh`) beyond the items that start
+  node call (`Call::Gh`, `Call::Glab`), naming the program (`"gh"`,
+  `"glab"`), or using the node link's module for it (`hide_node_link::gh`,
+  `hide_node_link::glab`) beyond the items that start
   nothing (`HOST_MODULE_ITEMS`). A list of argument words that reaches none of
   the doors is dead data and is not read: no operation of a unit takes
   argument words from common code.
-- Rust names a host's failure or place type (`GhFailure`, `github::Where`);
+- Rust names a host's failure or place type (`GhFailure`, `github::Where`,
+  `GlabAnswer`);
 - Rust or TypeScript spells a host's address (`github.com`, a change request's
-  `/pull/` path or its `/checks` and `/files` pages, a `/commit/` page);
-- Rust spells a host's key (`"github"`) in any form: compared, matched,
+  `/pull/` path or its `/checks` and `/files` pages, a `/commit/` page;
+  `gitlab.com`, a merge request's `/-/merge_requests/` path or its
+  `/pipelines` and `/diffs` pages);
+- Rust spells a host's key (`"github"`, `"gitlab"`) in any form: compared, matched,
   `matches!`, looked up or passed on. The files in `KEY_FILES` name GitHub's
   issues or its store, and the files in `COMPONENT_FILES` name a diagnostic's
   component, each with why and, while it is temporary, the node that ends it.
@@ -41,9 +45,17 @@ IMPLEMENTATION = (
     "hide-node-link/src/gh.rs",
     "hide-host/src/gh.rs",
     "hide-host/src/serve.rs",
+    "hide-core/src/gitlab.rs",
+    "hide-core/src/gitlab/",
+    # The node side of gitlab.com's CLI: its allowlist and the runner.
+    "hide-node-link/src/glab.rs",
+    "hide-host/src/glab.rs",
+    # Each host's reading of a session's calls and printed addresses, which
+    # runs on the node that holds the session file (`hide_session::hosts`).
+    "hide-session/src/hosts/",
 )
 
-RUST_ROOTS = ("hide-core/src", "hided/src")
+RUST_ROOTS = ("hide-core/src", "hided/src", "hide-session/src")
 WEB_ROOTS = ("web/src",)
 
 # The node link's module for GitHub's program holds its argument builders,
@@ -60,48 +72,66 @@ KEY_FILES = {
     "hide-core/src/github_store.rs": "the GitHub snapshot store's file label",
 }
 
-# Files whose diagnostics name their component "github". Common code does so
-# only while GitHub is the one host, until the node that makes it take the
-# component from the host it reads; GitHub's own files keep it for good.
+# Files whose diagnostics name their component by a host's key: GitHub's
+# own files, which keep it for good. Common code takes the component from
+# the host it reads, or `code_host::COMPONENT` for a line about no one host.
 COMPONENT_FILES = {
-    "hide-core/src/code_host/read.rs": "gitlab-read takes the component from the host it reads",
-    "hide-core/src/runtime/events.rs": "gitlab-read takes the component from the host it reads",
-    "hide-core/src/runtime/projects.rs": "gitlab-read takes the component from the host it reads",
     "hide-core/src/github_store.rs": "GitHub's own snapshot store",
-    "hide-core/src/runtime/github_poll.rs": "GitHub's own advisory poll",
 }
 
 # Each rule: what it finds, its pattern, and the files outside the units that
 # may still match it.
 RUST_RULES = (
-    ("a host's program started", re.compile(r'\bCall::Gh\b|\bCall::\{[^}]*\bGh\b|"gh"'), {}),
+    (
+        "a host's program started",
+        re.compile(r'\bCall::(?:Gh|Glab)\b|\bCall::\{[^}]*\b(?:Gh|Glab)\b|"(?:gh|glab)"'),
+        {},
+    ),
     (
         "the node link's module for a host's program",
         # The module by its path, in a one-line `use` group, or as a line of
         # a group rustfmt wrapped.
         re.compile(
-            r"\bhide_node_link::gh\b(?!::(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b)"
-            r"|\bhide_node_link::\{[^}]*\bgh\b"
-            r"|^\s*gh(?:\s*[,}]|\s+as\b|::(?!(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b))"
+            r"\bhide_node_link::(?:gh|glab)\b(?!::(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b)"
+            r"|\bhide_node_link::\{[^}]*\b(?:gh|glab)\b"
+            r"|^\s*(?:gh|glab)(?:\s*[,}]|\s+as\b|::(?!(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b))"
         ),
         {},
     ),
-    ("a host's failure or place type", re.compile(r"\bGhFailure\b|\bgithub::Where\b"), {}),
+    (
+        "a host's failure or place type",
+        re.compile(r"\bGhFailure\b|\bgithub::Where\b|\bGlabAnswer\b"),
+        {},
+    ),
     (
         "a host's address",
-        re.compile(r"github\.com|/(pull|issues|commit)/(\{|\"|\d)|/checks\"|/files\""),
+        re.compile(
+            r"github\.com|gitlab\.com|/-/merge_requests/|/(pull|issues|commit)/(\{|\"|\d)"
+            r"|/checks\"|/files\"|/pipelines\"|/diffs\""
+        ),
         {},
     ),
     # A diagnostic's component is its own rule below; rustfmt leaves a
     # `json!` body as written, so the field may have no space.
-    ("a host's key", re.compile(r'(?<!"component": )(?<!"component":)"github"'), KEY_FILES),
-    ("a host's key as a log's component", re.compile(r'"component":\s*"github"'), COMPONENT_FILES),
+    (
+        "a host's key",
+        re.compile(r'(?<!"component": )(?<!"component":)"(?:github|gitlab)"'),
+        KEY_FILES,
+    ),
+    (
+        "a host's key as a log's component",
+        re.compile(r'"component":\s*"(?:github|gitlab)"'),
+        COMPONENT_FILES,
+    ),
 )
 
 WEB_RULES = (
     (
         "a host's address",
-        re.compile(r"github\\?\.com|\\?/(pull|issues)\\?/|[`\"]/checks[`\"]|/checks`|[`\"]/files[`\"]|/files`"),
+        re.compile(
+            r"github\\?\.com|gitlab\\?\.com|\\?/-\\?/merge_requests|\\?/(pull|issues)\\?/"
+            r"|[`\"]/checks[`\"]|/checks`|[`\"]/files[`\"]|/files`"
+        ),
         {},
     ),
 )
@@ -118,6 +148,8 @@ SAMPLES = (
     "web/src/mobile/demoData.ts",
     "web/src/mobile/prFixture.ts",
     "web/src/i18n/resources/whatsNewScenes.ts",
+    # A practice chapter's words, which name its world's sample hosts.
+    "web/src/i18n/resources/practice/",
     # A skill's source is a git address the skills format names, not a
     # project's code host.
     "web/src/settings/skillsMcp.ts",
@@ -126,14 +158,9 @@ SAMPLES = (
 # A file that still reads or makes a host's address outside its unit, with
 # the mission node that removes it, or why it stays.
 KNOWN_FILES = {
-    "web/src/pullRequestIdentity.ts": "gitlab-screens compares the carried reference",
-    "web/src/actions.ts": "gitlab-screens opens the repository page the core carries",
-    "web/src/PrCard.tsx": "gitlab-screens opens the reference's checks and files pages",
-    "web/src/prCardModel.ts": "gitlab-screens opens the reference's files page",
     # Issues stay GitHub's in this plan (a GitHub issue key and its page).
     "web/src/PrLinks.tsx": "issue keys stay GitHub's",
     "hide-core/src/issues.rs": "issue references stay GitHub's",
-    "web/src/SuggestionsTab.tsx": "gitlab-screens reads the suggestion's carried reference",
 }
 
 # A line a rule matches that is not a host's address in use, with why.
@@ -146,6 +173,25 @@ KNOWN_LINES = {
     "hided/src/server.rs": {
         # An example of a page a person acts on, in an AI prompt's prose.
         '"Name where the person acts: the page\'s address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"',
+    },
+    "web/src/i18n/resources/projectSettings.ts": {
+        # The repository field's hint and refusal: the forms a person types
+        # (`owner/repository`, `gitlab.com/group/project`), in each language.
+        '"projectSettings.repositoryHint": "owner/repository or gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "Enter owner/repository or gitlab.com/group/project, without a URL.",',
+        '"projectSettings.repositoryHint": "owner/repository 또는 gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "URL 대신 owner/repository 또는 gitlab.com/group/project를 입력하세요.",',
+        '"projectSettings.repositoryHint": "owner/repository 或 gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "请输入 owner/repository 或 gitlab.com/group/project，而不是 URL。",',
+        '"projectSettings.repositoryHint": "owner/repository または gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "URLではなく owner/repository または gitlab.com/group/project を入力してください。",',
+    },
+    "hide-core/src/product_analytics.rs": {
+        # The usage statistics' names of the GitLab feature and practice
+        # chapter, spelled like every other feature's and chapter's.
+        'Self::Gitlab => "gitlab",',
+        '"gitlab" => Self::Gitlab,',
+        'PracticeChapter::Gitlab => "gitlab",',
     },
     "web/src/CloneFromUrl.tsx": {
         # The clone field's placeholder: an example the person replaces.

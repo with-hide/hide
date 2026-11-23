@@ -1345,6 +1345,14 @@ impl Runtime {
         (projects, total)
     }
 
+    /// The diagnostic component of a line about the project at `path` on
+    /// `node` (this machine when `None`): its host's key, or
+    /// [`crate::code_host::COMPONENT`] while no host places it.
+    pub(super) fn read_component(&self, node: Option<&str>, path: &str) -> &'static str {
+        self.github_place(node, path)
+            .map_or(crate::code_host::COMPONENT, |place| place.host().key())
+    }
+
     /// The read clock of a local project's host; a project no host reads has
     /// the slowest registered one.
     fn read_clock_of(&self, path: &str) -> crate::code_host::ReadClock {
@@ -1379,7 +1387,7 @@ impl Runtime {
                         .take(crate::issues::ISSUE_LIMIT)
                         .collect(),
                     root: PathBuf::from(&workspace.path),
-                    place: self.github_place(None, &workspace.path).ok(),
+                    place: self.github_placement(None, &workspace.path),
                     generation: self
                         .github_generations
                         .get(&workspace.path)
@@ -1409,7 +1417,7 @@ impl Runtime {
             self.github_over_limit = over_limit;
             if over_limit > 0 {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "projects.over_limit",
                     "read": paths.len(),
                     "local_git_projects": total,
@@ -1445,7 +1453,7 @@ impl Runtime {
             let before = self.github_clock.get(&path).copied();
             if self.github_remotes_moved(&path) {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": self.read_component(None, &path),
                     "kind": "read.remotes_changed",
                     "project": path,
                 }));
@@ -1455,7 +1463,9 @@ impl Runtime {
             }
             if let Some(outcome) = self.github_answered.remove(&path) {
                 let failures = match outcome {
-                    GithubReadOutcome::Read | GithubReadOutcome::NoRemote => 0,
+                    GithubReadOutcome::Read
+                    | GithubReadOutcome::NoRemote
+                    | GithubReadOutcome::Held => 0,
                     GithubReadOutcome::IssuesFailed | GithubReadOutcome::Failed => {
                         before.map_or(0, GithubClock::failures).saturating_add(1)
                     }
@@ -1490,7 +1500,7 @@ impl Runtime {
                 {
                     if failures > 0 {
                         crate::diagnostic!(serde_json::json!({
-                            "component": "github",
+                            "component": self.read_component(None, &path),
                             "kind": "read.retry",
                             "project": path,
                             "attempt": failures,
@@ -1546,7 +1556,7 @@ impl Runtime {
                 // Not remembered: an address no read project owns must not
                 // take a place a project's own pull request needs.
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "read.sighted_unowned",
                     "repository": sighting.repository,
                     "number": sighting.number,
@@ -1556,7 +1566,7 @@ impl Runtime {
             }
             if self.github_sighted.len() >= SIGHTED_ASKED_LIMIT {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": crate::code_host::COMPONENT,
                     "kind": "read.sighted_over_limit",
                     "limit": SIGHTED_ASKED_LIMIT,
                     "repository": sighting.repository,
@@ -1584,7 +1594,7 @@ impl Runtime {
                 }
             }
             crate::diagnostic!(serde_json::json!({
-                "component": "github",
+                "component": crate::code_host::COMPONENT,
                 "kind": "read.sighted",
                 "repository": sighting.repository,
                 "number": sighting.number,
@@ -1905,6 +1915,17 @@ impl Runtime {
                 answered.push((path.clone(), outcome));
             }
             newly_settled |= self.github_settled.insert(path);
+        }
+        // A gitlab.com project read on this machine is the day's use of GitLab.
+        let gitlab_read = answered.iter().any(|(path, outcome)| {
+            *outcome == GithubReadOutcome::Read
+                && github.project(path).is_some_and(|project| {
+                    project.status.host.as_ref().map(|host| host.key.as_str())
+                        == Some(crate::gitlab::host::KEY)
+                })
+        });
+        if gitlab_read {
+            self.note_feature_used(crate::product_analytics::Feature::Gitlab);
         }
         let mut merged = github;
         keep_previous_reads(&mut merged, &self.github, &requested);
@@ -3648,7 +3669,7 @@ impl Runtime {
             .insert(device_id.to_owned(), over_limit);
         if over_limit > 0 && logged != Some(over_limit) {
             crate::diagnostic!(serde_json::json!({
-                "component": "github",
+                "component": crate::code_host::COMPONENT,
                 "kind": "projects.over_limit",
                 "target": device_id,
                 "read": repositories.len(),
@@ -3734,7 +3755,11 @@ impl Runtime {
                 crate::code_host::read::GithubProjectRequest {
                     links,
                     root: PathBuf::from(&root),
-                    place,
+                    // A stored name no registered host reads has no place.
+                    place: place.map_or(
+                        crate::code_host::Placement::NoRemote,
+                        crate::code_host::Placement::At,
+                    ),
                     generation: read.generation,
                 }
             })
@@ -3920,7 +3945,7 @@ impl Runtime {
                     path == root.as_ref()
                         && project
                             .place
-                            .as_ref()
+                            .as_place()
                             .and_then(crate::code_host::Place::stored_name)
                             .as_ref()
                             == Some(repository)
@@ -3948,9 +3973,13 @@ impl Runtime {
             }
         }
         let mut merged = github;
-        if let Some(previous) = self.device_github.get(device_id) {
-            keep_previous_reads(&mut merged, previous, request);
-        }
+        keep_previous_reads(
+            &mut merged,
+            self.device_github
+                .get(device_id)
+                .unwrap_or(&crate::model::GithubSnapshot::default()),
+            request,
+        );
         self.note_mission_pulls(device_id, &merged);
         if self.device_github.get(device_id) == Some(&merged) {
             return false;
@@ -5811,6 +5840,14 @@ fn keep_previous_reads(
     request: &crate::code_host::read::GithubRequest,
 ) {
     for project in &mut answer.projects {
+        // A read not made this pass changes nothing: the previous answer
+        // stands as it was, neither stale nor failed.
+        if project.held.is_some()
+            && let Some(previous) = previous.project(&project.root_path)
+        {
+            *project = previous.clone();
+            continue;
+        }
         if project.repository.is_none()
             && let Some(kept) = previous
                 .project(&project.root_path)
@@ -5823,7 +5860,7 @@ fn keep_previous_reads(
                 .projects
                 .iter()
                 .find(|asked| asked.root.to_string_lossy() == project.root_path)
-                .and_then(|asked| asked.place.as_ref());
+                .and_then(|asked| asked.place.as_place());
             let named = place
                 .and_then(crate::code_host::Place::repository)
                 .zip(named_repository)
@@ -5862,6 +5899,7 @@ fn keep_previous_reads(
                     || previous.status.last_success_at_unix_ms.is_some())
             {
                 project.pull_requests = previous.pull_requests.clone();
+                project.pull_requests_cut = previous.pull_requests_cut;
                 project.pull_requests_read = true;
                 // The kept list carries the judgments it was kept with, so
                 // the questions that left them unknown stay named beside it.
@@ -5897,6 +5935,9 @@ fn keep_previous_reads(
                 }
             }
         }
+        // The screen's copy of the identity, made from whatever this pass
+        // settled on, its own read's or the one kept above.
+        project.show_repository();
     }
 }
 

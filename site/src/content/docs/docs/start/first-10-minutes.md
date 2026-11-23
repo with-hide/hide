@@ -51,6 +51,7 @@ When an agent opens a pull request, a PR mark with its number appears on its row
 Press the mark to open the pull request's card in the lane.
 `⇧⌘R` (`Alt+Shift+R`) opens the PR list for every project on this device.
 Pull requests need `gh` 2.72.0 or later, signed in.
+A project on gitlab.com lists its merge requests in the same list, written `!12` with GitLab's mark, once `glab` 1.78.0 or later is signed in to gitlab.com.
 
 ## What you will see
 
@@ -62,7 +63,8 @@ Pull requests need `gh` 2.72.0 or later, signed in.
 
 - **`hide` is not found in a terminal.** hide never edits your `PATH`. Add the folder that holds the `hide` command, as your system's install page says, or use **Add project**.
 - **No agent starts, and the Home says "Add a project to start an agent."** Add a project first, as in step 2.
-- **No pull request shows.** Check that `gh` is 2.72.0 or later and signed in. An older `gh` shows nothing, and the GitHub row in Settings says to update it.
+- **No pull request shows.** Check that `gh` is 2.72.0 or later and signed in. An older `gh` shows nothing, and the GitHub row in Settings › Remote repositories says to update it.
+- **No merge request of a gitlab.com project shows.** Check that `glab` is 1.78.0 or later and signed in to gitlab.com. The GitLab row in Settings › Remote repositories says what is missing and the command that fixes it.
 
 ## Next
 

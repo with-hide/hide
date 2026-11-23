@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Flow 10's words (`practice/chapters/answer.ts`).
+// Flow 11's words (`practice/chapters/answer.ts`).
 const en = {
   "practice.answer.title": "Answer from your phone",
   "practice.answer.summary": "Pick an agent's choice on your phone, and your computer answers on its screen",
@@ -24,7 +24,7 @@ const en = {
   "practice.answer.running.kick": "At work",
   "practice.answer.running.title": "Your phone says it runs a command",
   "practice.answer.running.text": "While the agent runs a command, the clock counts from its start. The command itself stays on your computer.",
-  "practice.answer.end.kick": "End of chapter 10",
+  "practice.answer.end.kick": "End of chapter 11",
   "practice.answer.end.title": "Answer from anywhere",
   "practice.answer.end.text": "Pair your phone in **Settings › Mobile**. A question, a plan or a permission waits there with its choices; an agent Hide has no keys for is answered in the Terminal tab.",
 };
@@ -52,7 +52,7 @@ const ko = {
   "practice.answer.running.kick": "작업 중",
   "practice.answer.running.title": "명령을 실행 중이라고 폰이 알려요",
   "practice.answer.running.text": "에이전트가 명령을 실행하는 동안 시작부터 시간을 세요. 명령 자체는 컴퓨터에만 있어요.",
-  "practice.answer.end.kick": "10장 끝",
+  "practice.answer.end.kick": "11장 끝",
   "practice.answer.end.title": "어디서든 답해요",
   "practice.answer.end.text": "**설정 › 모바일**에서 폰을 연결해요. 질문, 계획, 권한 요청이 선택지와 함께 폰에서 기다려요. Hide가 키를 모르는 에이전트는 터미널 탭에서 답해요.",
 } satisfies Catalog<typeof en>;
@@ -80,7 +80,7 @@ const zhCN = {
   "practice.answer.running.kick": "工作中",
   "practice.answer.running.title": "手机提示它在运行命令",
   "practice.answer.running.text": "智能体运行命令时，从开始计时。命令本身只留在电脑上。",
-  "practice.answer.end.kick": "第 10 章结束",
+  "practice.answer.end.kick": "第 11 章结束",
   "practice.answer.end.title": "随时随地回答",
   "practice.answer.end.text": "在 **设置 › 移动端** 连接手机。问题、计划和权限请求会带着选项在手机上等你；Hide 不知道按键的智能体，在终端标签页里回答。",
 } satisfies Catalog<typeof en>;
@@ -108,7 +108,7 @@ const ja = {
   "practice.answer.running.kick": "作業中",
   "practice.answer.running.title": "コマンド実行中だとスマホが伝えます",
   "practice.answer.running.text": "エージェントがコマンドを実行している間、開始からの時間を数えます。コマンドそのものはコンピュータにだけあります。",
-  "practice.answer.end.kick": "第 10 章 おわり",
+  "practice.answer.end.kick": "第 11 章 おわり",
   "practice.answer.end.title": "どこからでも答えられます",
   "practice.answer.end.text": "**設定 › モバイル** でスマホをつなぎます。質問、計画、権限の確認が選択肢と一緒にスマホで待ちます。Hide がキーを知らないエージェントは、ターミナルタブで答えます。",
 } satisfies Catalog<typeof en>;

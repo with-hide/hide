@@ -3,6 +3,7 @@
 // values: the task row, a plan's steps, the letter marks, the PR mark, the
 // mission chip and the @ chip. The sidebar row and the record draw the same
 // parts in the projects-sidebar and session-record scenes. Nothing leaves it.
+import { pullLabel } from "../codeHost";
 import { HouseIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, type ReactNode } from "react";
 import { AgentMark, ProfileBadge } from "../AgentMark";
@@ -81,10 +82,10 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
       <div style={{ width }} className="flex min-h-full min-w-0 flex-col gap-md bg-background p-lg text-body text-foreground" data-gallery-scene="shared-parts">
         <Part name="Task row · SessionRow">
           <div className="flex min-w-0 flex-col gap-xs">
-            <State name="Working"><ol><SessionRow mark={marks("going")} title="mention 버튼 정리" chips={<PrMark state="pending" number={1903} />} right={time("12m")} line={{ text: "desk/mention-button · 테스트 돌리는 중 · 6/14" }} /></ol></State>
+            <State name="Working"><ol><SessionRow mark={marks("going")} title="mention 버튼 정리" chips={<PrMark state="pending" label={pullLabel({ number: 1903 })} />} right={time("12m")} line={{ text: "desk/mention-button · 테스트 돌리는 중 · 6/14" }} /></ol></State>
             <State name="Question"><ol><SessionRow mark={marks("turn")} title="갤러리 캡처 비교" right={time("3m")} line={{ text: "질문 · 다크 모드도 찍을까요? 라이트와 같은 크기로 찍어 둘지도 알려 주세요", className: "text-warning", wrap: true }} /></ol></State>
             <State name="Conductor"><ol><SessionRow mark={marks("going")} title="Desk 1차" chips={<MissionChip agent={conductor("running")} onOpen={open} />} right={time("22m")} line={{ text: "herdr-ide · Conductor · 1b 작업 중" }} /></ol></State>
-            <State name="Done, pressable"><ol><SessionRow mark={marks("done", "codex")} title="release 노트 초안" titleClassName="text-subtle-foreground" chips={<PrMark state="merged" number={41} />} right={time("1h")} reveal={<span className="text-caption text-subtle-foreground">기록 보기</span>} line={{ text: "herdr-ide · 결과물 1" }} onPress={open} pressLabel="release 노트 초안" /></ol></State>
+            <State name="Done, pressable"><ol><SessionRow mark={marks("done", "codex")} title="release 노트 초안" titleClassName="text-subtle-foreground" chips={<PrMark state="merged" label={pullLabel({ number: 41 })} />} right={time("1h")} reveal={<span className="text-caption text-subtle-foreground">기록 보기</span>} line={{ text: "herdr-ide · 결과물 1" }} onPress={open} pressLabel="release 노트 초안" /></ol></State>
             <State name="Long title"><ol><SessionRow mark={marks("waiting")} title="세션 기록과 사이드바가 같은 부품을 쓰도록 공용 부품을 꺼내고 갤러리에 올리기" right={time("2h")} line={{ text: "desk/shared-parts · PR CI 기다리는 중" }} /></ol></State>
             <State name="Milestone"><ol><SessionRow mark={<MilestoneMark className="text-pr-merged" />} title="PR 1905 머지됨" right={time("15:02")} /></ol></State>
           </div>
@@ -134,8 +135,8 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="Pane header"><span className="flex items-center gap-xs"><PaneLetterButton paneId="w1:p1" letters={1} onDeliver={open} /><PaneLetterButton paneId="w1:p2" letters={3} onDeliver={open} /></span></State>
         </Part>
         <Part name="PR mark · PrMark">
-          <State name="States"><span className="flex flex-wrap items-center gap-sm">{PR_STATES.map((state, index) => <PrMark key={state} state={state} number={1900 + index} />)}</span></State>
-          <State name="Compact, stale"><span className="flex flex-wrap items-center gap-sm">{PR_STATES.map((state) => <PrMark key={state} state={state} compact />)}<PrMark state="pending" number={1903} stale /></span></State>
+          <State name="States"><span className="flex flex-wrap items-center gap-sm">{PR_STATES.map((state, index) => <PrMark key={state} state={state} label={`#${1900 + index}`} />)}</span></State>
+          <State name="Compact, stale"><span className="flex flex-wrap items-center gap-sm">{PR_STATES.map((state) => <PrMark key={state} state={state} compact />)}<PrMark state="pending" label={pullLabel({ number: 1903 })} stale /></span></State>
         </Part>
         <Part name="Mission chip · MissionChip">
           <State name="States"><span className="flex flex-wrap items-center gap-sm">{MISSION_STATES.map((state) => <MissionChip key={state} agent={conductor(state)} onOpen={open} />)}</span></State>

@@ -1640,6 +1640,10 @@ pub fn handle_with_progress(
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             to_value(crate::gh::run(cwd.as_deref(), repository.as_deref(), &args))
         }
+        Call::Glab { args } => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            to_value(crate::glab::run(&args))
+        }
         Call::ListeningPorts => to_value(crate::ports::read()),
         Call::MemoryPressure => to_value(crate::memory::pressure()?),
         Call::VolumeFree { path } => to_value(crate::disk::volume_free_bytes(&absolute(&path)?)),

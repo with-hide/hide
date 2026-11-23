@@ -1605,3 +1605,33 @@ fn a_press_behind_another_memory_change_waits_and_a_refusal_shows_on_its_row() {
     // The refusal stays on the row; pressing it again asks again.
     assert!(offered.press(&mut guard));
 }
+
+/// A Project gitlab.com answered for is not read as GitHub connected: its
+/// host keeps no issues and says nothing of how its base moves, so the tab
+/// stays as it was before gitlab.com was read (no remote GitHub reads).
+#[test]
+fn a_project_gitlab_com_answered_for_is_not_github_connected() {
+    use crate::model::SuggestionsGithub;
+    let mut runtime = runtime();
+    let (_, root) = opened_project(&mut runtime);
+    let answered = |host: &dyn crate::code_host::CodeHost| crate::model::GithubProjectSnapshot {
+        root_path: root.clone(),
+        status: crate::model::GithubStatusSnapshot {
+            available: true,
+            last_success_at_unix_ms: Some(1),
+            host: Some(crate::code_host::declaration(host)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    runtime.github.projects = vec![answered(&crate::gitlab::host::GITLAB)];
+    assert_eq!(
+        runtime.suggestions_github(&runtime.node.clone(), &root),
+        SuggestionsGithub::Missing
+    );
+    runtime.github.projects = vec![answered(&crate::github::host::GITHUB)];
+    assert_eq!(
+        runtime.suggestions_github(&runtime.node.clone(), &root),
+        SuggestionsGithub::Connected
+    );
+}

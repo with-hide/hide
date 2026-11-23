@@ -8027,7 +8027,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -8038,7 +8038,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -8288,7 +8288,10 @@
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
-                "mission_machine_no_repository"
+                "mission_machine_no_repository",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9420,7 +9423,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -9445,7 +9448,10 @@
                 "plan_file_outside",
                 "plan_file_missing",
                 "plan_file_unconfirmed",
-                "plan_report_missing"
+                "plan_report_missing",
+                "change_request_other_host",
+                "change_request_other_repository",
+                "change_request_project_unknown"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9493,7 +9499,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:45e3129c2ebf31a69cae341b83f28ec8e2ec01807d61180826a3f5fc3646e8df",
+    "digest": "sha256:efb36ca51ec253a8a685b41a996820a9c333ba891c00ae268a9345c14a17bb38",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9570,6 +9576,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
+        "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
         "commit": "7 to 64 hexadecimal digits",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",

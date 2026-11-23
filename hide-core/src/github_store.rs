@@ -70,7 +70,14 @@ fn encode(github: &GithubSnapshot) -> Result<Vec<u8>, String> {
                         cross_repository: pull_request.cross_repository,
                     })
                     .collect(),
-                project: project.clone(),
+                project: GithubProjectSnapshot {
+                    // Made again from the identity on restore.
+                    status: crate::model::GithubStatusSnapshot {
+                        repository: None,
+                        ..project.status.clone()
+                    },
+                    ..project.clone()
+                },
             })
             .collect(),
     };
@@ -100,8 +107,26 @@ struct LegacyIssues {
 
 /// What a restored project says about itself: read once, not current.
 fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
-    let stored: Stored =
+    // A saved declaration is not trusted: each status's declaration is the
+    // registered unit's own, found by the saved key (a key no unit registers
+    // restores as none), as each reference's pages are made again below.
+    let mut value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| format!("could not be decoded: {error}"))?;
+    let mut hosts = std::collections::HashMap::new();
+    for project in value["projects"].as_array_mut().into_iter().flatten() {
+        let root = project["root_path"].as_str().unwrap_or_default().to_owned();
+        let saved = project["status"]
+            .as_object_mut()
+            .and_then(|status| status.remove("host"));
+        let declaration = saved
+            .as_ref()
+            .and_then(|host| host["key"].as_str())
+            .and_then(|key| crate::code_host::CodeHosts::STANDARD.host(key))
+            .map(|host| crate::code_host::declaration(host.unit()));
+        hosts.insert(root, declaration);
+    }
+    let stored: Stored =
+        serde_json::from_value(value).map_err(|error| format!("could not be decoded: {error}"))?;
     let legacy_public: std::collections::HashMap<String, Option<bool>> =
         serde_json::from_slice::<LegacyStored>(bytes)
             .map(|legacy| {
@@ -145,6 +170,7 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
             ));
         }
         project.pull_requests_read = true;
+        project.status.host = hosts.remove(&project.root_path).flatten();
         // The issues part comes back with the outcome it was saved with; a
         // file from before it was kept reads `Read` (the field's default).
         // A saved reference names its repository and number as its host's
@@ -201,6 +227,7 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
                 Some(host.unit().repository_url(repository))
             });
         }
+        project.show_repository();
         project.status.stale = true;
         project.status.loading = false;
         projects.push(project);
@@ -390,6 +417,70 @@ mod tests {
             None,
             "without a pull request the server is unknown until the next read"
         );
+    }
+
+    /// The repository the screen names and opens is made from the saved
+    /// identity on restore by its host's unit, the server's port and a
+    /// gitlab.com subgroup kept, and never written to the file itself.
+    #[test]
+    fn the_repository_on_the_screen_is_made_again_on_restore_and_not_saved() {
+        for (host, authority, path, name, url) in [
+            (
+                "github",
+                "github.com",
+                "acme/app",
+                "acme/app",
+                "https://github.com/acme/app",
+            ),
+            (
+                "github",
+                "ghe.example.com:8443",
+                "acme/app",
+                "ghe.example.com:8443/acme/app",
+                "https://ghe.example.com:8443/acme/app",
+            ),
+            (
+                "gitlab",
+                "gitlab.com",
+                "acme/shop/api",
+                "gitlab.com/acme/shop/api",
+                "https://gitlab.com/acme/shop/api",
+            ),
+        ] {
+            let repository = crate::code_host::RepositoryRef {
+                host: host.to_owned(),
+                authority: authority.to_owned(),
+                path: path.to_owned(),
+            };
+            let unit = crate::code_host::CodeHosts::STANDARD
+                .of(&repository)
+                .expect("a registered host")
+                .unit();
+            let mut sent = answer("/repo", Some(100));
+            sent.repository = Some(RepositoryIdentity::named(unit, repository));
+            sent.show_repository();
+            let shown = crate::model::RepositoryOnScreen {
+                name: name.to_owned(),
+                url: url.to_owned(),
+            };
+            assert_eq!(sent.status.repository.as_ref(), Some(&shown));
+            let stored: serde_json::Value = serde_json::from_slice(
+                &encode(&GithubSnapshot {
+                    projects: vec![sent.clone()],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                stored["projects"][0]["status"].get("repository").is_none(),
+                "the file keeps the identity only"
+            );
+            let restored = saved_then_restored(GithubSnapshot {
+                projects: vec![sent],
+            })
+            .expect("the file is restored");
+            assert_eq!(restored.projects[0].status.repository, Some(shown));
+        }
     }
 
     /// Each of the four outcomes of the issues part comes back as it was
@@ -613,5 +704,54 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             assert!(store.restore().is_none());
         }
+    }
+
+    /// A checkout whose remotes were not known has no read to save: a
+    /// restore brings back neither an empty read list nor no remote for it,
+    /// so the reader makes it again from the node's facts.
+    #[test]
+    fn remotes_not_known_is_not_saved_and_restores_as_nothing() {
+        let mut unknown = crate::code_host::read::no_remote("/unknown".to_owned());
+        unknown.remotes_not_known = true;
+        let restored = saved_then_restored(GithubSnapshot {
+            projects: vec![unknown, answer("/repo", Some(100))],
+        })
+        .unwrap();
+        assert_eq!(restored.project("/unknown"), None);
+        assert!(restored.project("/repo").is_some());
+    }
+
+    /// The store does not trust a saved declaration: a status comes back
+    /// with its registered unit's declaration as it is now, found by the
+    /// saved key, whatever the file held beside the key; a key no unit
+    /// registers comes back with none.
+    #[test]
+    fn a_saved_declaration_comes_back_as_the_registered_units_by_its_key() {
+        let gitlab = crate::code_host::declaration(&crate::gitlab::host::GITLAB);
+        let mut projects = Vec::new();
+        for root in ["/unnamed", "/operations", "/unknown"] {
+            let mut project = answer(root, Some(100));
+            project.status.host = Some(gitlab.clone());
+            projects.push(project);
+        }
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&encode(&GithubSnapshot { projects }).unwrap()).unwrap();
+        let host = |stored: &mut serde_json::Value, index: usize| {
+            stored["projects"][index]["status"]["host"]
+                .as_object_mut()
+                .unwrap()
+                .clone()
+        };
+        let mut unnamed = host(&mut stored, 0);
+        unnamed.remove("name");
+        stored["projects"][0]["status"]["host"] = unnamed.into();
+        stored["projects"][1]["status"]["host"]["operations"] =
+            serde_json::json!(["merge", "watch"]);
+        stored["projects"][2]["status"]["host"]["key"] = "elsewhere".into();
+        let restored = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
+        let declared = |root: &str| restored.project(root).unwrap().status.host.clone();
+        assert_eq!(declared("/unnamed"), Some(gitlab.clone()));
+        assert_eq!(declared("/operations"), Some(gitlab));
+        assert_eq!(declared("/unknown"), None);
     }
 }

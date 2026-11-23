@@ -1226,7 +1226,8 @@ A row shows the mission's number, the state pill (in 내 차례 the operator's a
 While a mission shows letters to its Conductor waiting (`Conductor에게 편지 N통 대기`), a worker raised only because its own letter to the Conductor is held (a draft, an approval, three bells, undelivered) is folded into that line in 내 차례 by one rule (`shownEscalation`, `web/src/missions.ts`); a worker raised for anything else keeps its own item.
 While a mission runs, a ready pull request its plan left to the operator to merge (`merge.state` `due`, PRD mission-destination D-11) stands in 내 차례 as `머지할 차례` with its node's chip, which stands the mission in the list's 내 차례 with `머지하기`, and makes the mission its own Needs You row with the line `<node> · 머지할 차례 PR #n`; a pull request the mission's scope `pr` leaves to the operator stands in none of them until the mission waits on its merges, where the merge order stands as before (D-35).
 What waits on the operator stands in 내 차례 above the map and nowhere else on the page: the summary beside the map lists it in no group of its own, and the node's card wears a thick border and ring in the hold colour (`--mission-hold`, 내 차례's colour), a dot of it on its corner and `내 차례`.
-A node raised to its Conductor is never a card of the operator's (the principle of 2026-11-11, with-hide/hide-private `docs/missions.md`): the cells its Conductor has not resolved, a raise or another standing cell such as a failed CI, are the mission's one safety net card in 내 차례, however many nodes they hold, each row worded from the cell's typed fact (`CI 실패`, `수정 요청 받음`, a raise's reason).
+A node raised to its Conductor is never a card of the operator's (the principle of 2026-11-11, with-hide/hide-private `docs/missions.md`): what only its Conductor moves and it has not settled, a raise, a stopped worker's warning or an outside pull request closed unmerged, is the mission's one safety net card in 내 차례, however many nodes it holds, each row worded from the typed fact (`경고 · 일꾼이 멈춤`, a raise's reason).
+A failed CI, changes asked for and a review failing at its round limit are the working worker's to answer and never a row: a worker that stops on one is warned as stopped and one that ends is raised, and the row counts from then (operator decision 2026-11-23).
 The core derives it (`safety_net` on the mission's view): it stands at once while no Conductor holds the mission, and with one once the oldest raise stood 20 minutes unsettled, counted from the later of that raise and the Conductor's arrival.
 Its head says `걸린 일 N건이 M분째 그대로예요` with `Conductor가 아직 풀지 못했어요` under it and `터미널로 이동`, which brings the Conductor's pane forward; with no Conductor it says `이 미션에 Conductor가 없어요 · 걸린 일 N건` with `지휘 다시 열기`, and the Conductor row steps aside so the page says it once.
 Under the head is a row per held node: its title, which picks it on the map, its raise's reason, and how long that raise stood (`web/src/MissionTurn.tsx`).
@@ -1692,6 +1693,26 @@ Moved to a private document: `docs/tasks-and-pr-list.md` in with-hide/hide-priva
 A 태스크 row in 내 차례 whose line says something else, a question or a run's result, while its agent opened a View the operator has not looked at, draws that View as a chip on a line of its own under it: the unseen dot, its file mark, its name and `외 N개`; pressing the chip brings it forward as a 볼 것 row does, and the row's own press stays the row's (`LookChip`, `web/src/components/linked-view.tsx`; operator decision 2026-11-21).
 The 태스크 list's 내 차례 draws the missions that are their own Needs You item with the same row and choices as the 프로젝트 list's Needs You, counted in its head with the tasks; with-hide/hide-private `docs/tasks-and-pr-list.md`, 내 차례, says where they stand.
 Its 내 차례 lists every connected device's as the 프로젝트 list's Needs You does, by the same operator decision of 2026-11-08 ([Sidebar hierarchy](#sidebar-hierarchy) for the rule; `elsewhereTasks` in `web/src/taskList.ts`); the same private document says where they stand in each view.
+
+## Code hosts
+
+A project is read from the code host its remote names, GitHub or gitlab.com; `docs/ARCHITECTURE.md`, Code hosts, owns how the core picks the host and what each one declares.
+Every screen that names a project's pull requests takes the host's look from `web/src/codeHost.ts`: its mark, its name, its word for an item (`PR`, `MR`) and its number form (`#12`, `!12`).
+A number is drawn from the reference the core carried for it, never parsed from or built into an address on the screen; a place that has no reference and no host keeps `#12`.
+The words Hide gives its own lists stay Hide's: the sidebar's `PR` tab and its counts read `PR` for a gitlab.com project too.
+An action the host does not offer is not drawn, not drawn disabled: on gitlab.com today a card has no hand-over, merge queue, branch update, linked issue or new issue, and its Merge appears only once the host declares the merge.
+Hide AI follows the same rule: for a host that files no issues, such as gitlab.com today, a suggestion that would leave an issue shows no `GitHub 연결 필요` hold, and Settings › Hide AI draws no GitHub signals row.
+A line about a read names the host and its program (`glab 로그인 필요`, `GitLab 읽기 실패`), and a line about one pull request calls it what its host does (`MR`), except two rare notices that keep main's words on both hosts: the card or phone page of one no longer listed, and a merge that met a moved head.
+The host mark among a project row's buttons in the sidebar opens the repository its last read named, on that host; a project no read named yet has no mark there.
+With GitHub as the only host, every screen reads as it did before hosts.
+
+### Settings › Remote repositories
+
+The tab lists one row per host: GitHub always, and GitLab only while a gitlab.com project exists.
+There is no switch to turn a host on or off.
+Each row says whether its program (`gh`, `glab`) can read the host now, and a row that needs a sign-in shows the program's sign-in command to copy.
+Check again reads every project again.
+When a host cannot be read, the PR list keeps the other host's items and marks its head with that host's reason, and the phone's PR tab says the same line under its head.
 
 ## Explorer file management
 
@@ -2812,11 +2833,15 @@ A practice screen cannot run an outside AI, so its world stages the join: a few 
 Settings closed, the rail shows `nightly` in its own space and no tile for `hermes`, and a few seconds after the join (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing, disconnecting and a mode change are not answered, so the chapter keeps both bots.
 Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
 
-Flow 10 (폰에서 답하기, `chapters/answer.ts`, since 1.3.0) shows an agent's question answered from the phone.
+Flow 10 (GitLab, `chapters/gitlab.ts`, since 1.3.0) shows a gitlab.com project read beside a GitHub one.
+Its world lists `shop-api`, read by gitlab.com, and `web`, read by GitHub, each checkout carrying the host that read it and each pull request the reference its host made, so the screens draw them as they draw a real read (Code hosts).
+The learner opens the PR list (`open_sidebar_prs` or the list switch's PR), reads `!12` with GitLab's mark beside `#41` with GitHub's, and opens `!12`; the world answers `pr_open` as the core does, and the card names GitLab, its failed pipeline and `GitLab에서 보기`, with no merge or 맡기기 because gitlab.com does not declare them.
+Settings (`settings`) then opens on 원격 저장소, whose GitLab row stands below GitHub's because a gitlab.com project exists; every address in the world is an example.
+Flow 11 (폰에서 답하기, `chapters/answer.ts`, since 1.3.0) shows an agent's question answered from the phone.
 A practice screen has no phone and no relay, so the chapter's world draws one beside the screen (`PracticeWorld.phone`, `PracticePhone.tsx`), standing at the window's foot and open on the asking agent's conversation, from the phone's own parts: its message rows, its activity line and its ask card (`AskCardView`), which the phone's detail draws too.
 The learner sees the agent's row in 내 차례, the same question on the phone with what the agent wrote under each choice, marks `Split into two PRs` (`practice_phone_pick`, which only marks it), and sends it with 답하기 (`practice_phone_answer`); the agent's own screen moves its highlight to that row, and a moment later (a `wait` step) takes Enter, leaves 내 차례 and runs a command, which the phone says by the clock under its conversation.
 
-Flow 11 (폰에서 파일 보내기, `chapters/attachments.ts`, since 1.3.0) shows files sent from the phone with a reply, on the same phone drawn beside the screen, open on an agent that reported a memory measurement.
+Flow 12 (폰에서 파일 보내기, `chapters/attachments.ts`, since 1.3.0) shows files sent from the phone with a reply, on the same phone drawn beside the screen, open on an agent that reported a memory measurement.
 Its reply bar is the phone's own (`ComposerFiles`, `FileNoticeLine`, `Composer` with the `+` at its start), and the files over a sent bubble are `MessageItem`'s.
 A practice screen has no picker, so the `+` (`practice_phone_attach`) stands in for one: it attaches a screenshot, drawn in the theme's colors (`web/src/components/sample-shot.ts`), and a log, and leaves out a 14 MB trace with its one line; a file's `×` (`practice_phone_remove`) takes only it off.
 The log uploads for a moment with its band (a `wait` step the world ends with `practice_upload_done`), the learner sends (`practice_phone_send`), the files stand over the bubble, and the agent's own screen takes the files' paths before the words, reads them, and a moment later answers (a `wait` step).

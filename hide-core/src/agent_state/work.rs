@@ -177,6 +177,7 @@ pub(crate) fn shown_pull_requests(
             (
                 AgentPullRequestSnapshot {
                     number: pull_request.number,
+                    reference: pull_request.reference.clone(),
                     title: pull_request.title.clone(),
                     url: pull_request.url.clone(),
                     badge: pull_request.badge,

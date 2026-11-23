@@ -150,6 +150,12 @@ Where the app's launch reads the variable:
 Hide needs GitHub's CLI `gh` 2.72.0 or later, signed in.
 An older `gh` lacks fields Hide asks for, so Hide reads nothing with it and its GitHub row says to update it.
 
+### Merge requests of a gitlab.com project are missing
+
+Hide reads a project whose remote is on gitlab.com with GitLab's CLI `glab` 1.78.0 or later, signed in to gitlab.com (`glab auth login --hostname gitlab.com`).
+Settings › Remote repositories shows a GitLab row once such a project is added, and it says when `glab` is missing, too old or signed out.
+A GitLab server other than gitlab.com is not read; its project shows "No remote Hide can read".
+
 ## Other machines and your phone
 
 ### A machine does not connect over SSH

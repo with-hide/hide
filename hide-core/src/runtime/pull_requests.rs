@@ -722,6 +722,16 @@ impl Runtime {
                 return true;
             }
         };
+        if !offers(&place, crate::code_host::Operation::Handover) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pull_requests", "kind": "pr_feedback.unsupported",
+                "request": slot.request_id, "pr": slot.pr_number, "host": place.host().key(),
+            }));
+            slot.phase = "failed".into();
+            slot.failure = Some("pr_feedback.unsupported".to_owned());
+            self.snapshot.pr_work.feedback = Some(slot);
+            return true;
+        }
         let request_id = slot.request_id.clone();
         self.snapshot.pr_work.feedback = Some(slot);
         let number = payload.pr_number;
@@ -985,9 +995,12 @@ impl Runtime {
                 return true;
             }
         };
+        let declaration = crate::code_host::declaration(place.host().unit());
         let card = self.pr_card_slot(&payload.workspace_id, number);
+        let declared = card.host.as_ref() != Some(&declaration);
+        card.host = Some(declaration);
         if card.reading {
-            return false;
+            return declared;
         }
         card.reading = true;
         let workspace_id = payload.workspace_id;
@@ -1109,9 +1122,27 @@ impl Runtime {
                 return true;
             }
         };
+        let operation = match request {
+            CardWrite::Merge { .. } => crate::code_host::Operation::Merge,
+            CardWrite::UpdateBranch => crate::code_host::Operation::UpdateBranch,
+        };
+        let offered = offers(&place, operation);
         let card = self.pr_card_slot(&workspace_id, number);
         if card.write.as_ref().is_some_and(|w| w.phase == "working") {
             return false;
+        }
+        if !offered {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pull_requests", "kind": "pr_write.unsupported",
+                "project": workspace_id, "pr": number, "action": action,
+                "host": place.host().key(),
+            }));
+            card.write = Some(PrWriteSnapshot {
+                phase: "failed",
+                reason: Some("unsupported"),
+                ..write
+            });
+            return true;
         }
         // GitHub only proves the head is its current one. The state that
         // enabled the button (checks, merge state) was judged on the list's
@@ -1240,6 +1271,16 @@ impl Runtime {
             look_again: false,
         });
     }
+}
+
+/// Whether the place's host offers `operation`, by the declaration the
+/// card and the project status carry: what the screen draws and what the
+/// core takes ask the same question, so an event for an operation the host
+/// lacks (an old phone bundle, a direct event) is refused at once.
+fn offers(place: &crate::code_host::Place, operation: crate::code_host::Operation) -> bool {
+    crate::code_host::declaration(place.host().unit())
+        .operations
+        .contains(&operation)
 }
 
 /// One write asked from a card; the head it names is the write's own.

@@ -1,4 +1,5 @@
 import { useCenterReconnect } from "./centerReconnect";
+import { hostLook, hostRepository, projectHost, pullHost, pullLabel } from "./codeHost";
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -10,7 +11,6 @@ import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
-import { GithubIcon } from "./components/github-icon";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
@@ -63,7 +63,7 @@ import type { Digit } from "./shortcuts";
 import { contextAgents, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
 import { agentReference } from "./agentReference";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, type MenuHost, type MenuItem } from "./workspaceManage";
-import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
+import { projectIssueSource, settingsTarget } from "./projectSettings";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SessionPull, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
 import { useStartPanel } from "./startDraft";
@@ -740,7 +740,7 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
  */
 function openRowPullRequest(actions: Actions, pane: string, pull: SessionPull, external: boolean) {
   if (external) actions.openLink(pull.url, true);
-  else actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, { pane });
+  else actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number, reference: pull.reference }, { pane });
 }
 
 function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: ListedAgent; context: ListContext }) {
@@ -951,27 +951,30 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
 }
 
 /**
- * A GitHub project's mark at its row's end: the repository's name in a tooltip,
- * and a press opens it on GitHub (⌘ asks for the default browser, as on a
- * pull request's mark) without selecting the project. It sits outside the
- * hover-swapped `+` and `⋯` so it stays pressable while they show. A folder,
- * or a project no GitHub repository is known for, draws nothing.
+ * A project's code host mark at its row's end, GitHub's or GitLab's: the
+ * repository's name in a tooltip, and a press opens the repository's page its
+ * host's unit made (⌘ asks for the default browser, as on a pull request's
+ * mark) without selecting the project. It sits outside the hover-swapped `+`
+ * and `⋯` so it stays pressable while they show. A folder, or a project whose
+ * repository no host's read named, draws nothing.
  */
 function RepositoryMark({ workspace, actions }: { workspace: Workspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const repository = useShellStore((s) => projectRepository(s.rest, workspace));
-  if (!repository) return null;
-  const label = t("sidebar.openRepository", { repository });
+  const repository = hostRepository(workspace);
+  if (!workspace.is_git || !repository) return null;
+  const look = hostLook(projectHost(workspace)?.key);
+  const label = t("sidebar.openRepository", { repository: repository.name, host: look.name });
   return (
-    <Hint label={repository}>
+    <Hint label={repository.name}>
       <Button
         variant="row-action"
         size="icon-sm"
         aria-label={label}
         data-project-github={workspace.id}
-        onClick={(event) => actions.openRepository(repository, workspace.device_id, pullRequestOpenExternal(event))}
+        data-project-host={look.key}
+        onClick={(event) => actions.openRepository(repository.url, workspace.device_id, pullRequestOpenExternal(event))}
       >
-        <GithubIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+        <look.Mark aria-hidden="true" className="size-(--size-icon-sm)" />
       </Button>
     </Hint>
   );
@@ -1406,7 +1409,7 @@ function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; de
         type="button"
         data-checkout-pr-glyph={pr.number}
         data-checkout-glyph="true"
-        aria-label={t("sidebar.openPullRequest", { number: pr.number })}
+        aria-label={t("sidebar.openPullRequest", { label: pullLabel(pr), noun: t(pullHost(pr).noun) })}
         className={cn(
           "pointer-events-auto relative flex size-(--size-checkout-icon) shrink-0 cursor-pointer items-center justify-center rounded-xs outline-none hover:ring-1 hover:ring-current focus-visible:ring-1 focus-visible:ring-ring",
           PR_LOOK[pr.state].tone,

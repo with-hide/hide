@@ -131,6 +131,11 @@ pub struct TurnSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentPullRequestSnapshot {
     pub number: u32,
+    /// The reference its code host's unit made (docs/ARCHITECTURE.md, Code
+    /// hosts), so the row's lines name it `!12` on gitlab.com; absent while
+    /// the list has not carried one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub title: String,
     pub url: String,
     pub badge: PullRequestBadge,

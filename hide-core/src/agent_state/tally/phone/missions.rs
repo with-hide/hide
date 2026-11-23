@@ -211,6 +211,11 @@ pub struct PhoneNode {
     pub blocked: Option<String>,
     pub delivery: Option<String>,
     pub pr: Option<u32>,
+    /// The current pull request as its host's unit named it
+    /// (`NodeView::pr_reference`), so the step's line names it `!12` on
+    /// gitlab.com; absent while no read holds it and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_reference: Option<crate::code_host::ChangeRequestRef>,
     pub pr_state: Option<String>,
     pub base_pr: Option<u32>,
     /// The branch its current pull request merges into, as GitHub last
@@ -454,6 +459,8 @@ struct NodeIn {
     pane_id: Option<String>,
     #[serde(default)]
     pr: Option<u32>,
+    #[serde(default)]
+    pr_reference: Option<crate::code_host::ChangeRequestRef>,
     #[serde(default)]
     pr_state: Option<String>,
     #[serde(default)]
@@ -703,6 +710,7 @@ fn phone_mission(
                 blocked: source.blocked,
                 delivery: source.delivery,
                 pr: source.pr,
+                pr_reference: source.pr_reference,
                 pr_state: source.pr_state,
                 base_pr: source.base_pr,
                 pr_more: source.prs.len().saturating_sub(1),
@@ -1161,6 +1169,36 @@ mod tests {
         );
         assert!(old.get("destination").is_none(), "{old}");
         assert!(!sent.to_string().contains("never-send"));
+    }
+
+    /// A step's current pull request reaches the phone with the reference
+    /// its host's unit made, so the phone names a gitlab.com one `!12`
+    /// (docs/ARCHITECTURE.md, Code hosts); a step with none sends no key.
+    #[test]
+    fn a_steps_pull_request_reaches_the_phone_with_its_hosts_reference() {
+        let reference = json!({
+            "repository": {"host": "gitlab", "authority": "gitlab.com", "path": "acme/shop"},
+            "number": 12, "key": "gitlab.com/acme/shop!12", "label": "!12",
+            "url": "https://gitlab.com/acme/shop/-/merge_requests/12",
+            "checks_url": "https://gitlab.com/acme/shop/-/merge_requests/12/pipelines",
+            "files_url": "https://gitlab.com/acme/shop/-/merge_requests/12/diffs",
+        });
+        let rest = rest(
+            vec![mission(
+                "m1",
+                10,
+                "running",
+                vec![
+                    node("a", json!({"pr": 12, "pr_reference": reference})),
+                    node("b", json!({"pr": 7})),
+                ],
+            )],
+            json!({}),
+        );
+        let sent = serde_json::to_value(projected(&rest)).unwrap();
+        let nodes = &sent["items"][0]["nodes"];
+        assert_eq!(nodes[0]["pr_reference"]["label"], json!("!12"));
+        assert_eq!(nodes[1].get("pr_reference"), None);
     }
 
     #[test]

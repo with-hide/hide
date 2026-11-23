@@ -9,6 +9,7 @@ import { GateAheadCount } from "./components/mission-gate";
 import { useElapsed } from "./components/elapsed";
 import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
+import { pullLabel } from "./codeHost";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
@@ -484,11 +485,11 @@ function LandingLine({ nodes, join }: { nodes: MissionNode[]; join: boolean }) {
     <span className="flex min-w-0 items-center gap-xxs overflow-hidden text-caption text-muted-foreground" data-mission-row-line={join ? "join" : "merge"}>
       <span className="shrink-0">{t(join ? "mission.turn.join" : "mission.turn.merge")}</span>
       {nodes.map((node, index) => {
-        const pr = join ? { number: node.pr, state: node.pr_state, more: 0 } : mergePull(node);
+        const pr = join ? { number: node.pr, state: node.pr_state, reference: node.pr_reference ?? null, more: 0 } : mergePull(node);
         return (
           <span key={node.key} className="flex min-w-0 shrink-0 items-center gap-xxs">
             {index > 0 ? <span aria-hidden="true">→</span> : null}
-            {pr.number != null && pr.state ? <PrMark state={pr.state} number={pr.number} /> : pr.number != null ? <span className="font-mono">#{pr.number}</span> : <span className="max-w-(--size-flow-title) truncate">{node.title}</span>}
+            {pr.number != null && pr.state ? <PrMark state={pr.state} label={pullLabel({ number: pr.number, reference: pr.reference })} /> : pr.number != null ? <span className="font-mono">{pullLabel({ number: pr.number, reference: pr.reference })}</span> : <span className="max-w-(--size-flow-title) truncate">{node.title}</span>}
             {pr.more > 0 ? <span>+{pr.more}</span> : null}
           </span>
         );

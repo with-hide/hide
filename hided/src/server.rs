@@ -6348,7 +6348,11 @@ mod tests {
     fn only_the_daemons_own_reads_answer_without_a_shell() {
         use hide_core::links::query::{LinksQuery, QueryTarget};
         let links = ScopedRequest::Links(LinksQuery {
-            target: QueryTarget::Pr { number: 1 },
+            target: QueryTarget::Pr {
+                number: 1,
+                host: None,
+                repository: None,
+            },
             all_projects: false,
         });
         assert!(!links.needs_renderer());

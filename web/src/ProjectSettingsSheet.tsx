@@ -17,7 +17,8 @@ import { MemorySettings, useMemoryProject } from "./MemoryTab";
 import { guardPartOf, ProjectGuardrails, pathRefusalKey, type GuardPart } from "./ProjectGuardrails";
 import { folderName, guardedBase, projectBaseBranch, projectGuardrails, projectIssueSource, projectNameDraft, projectRepository, projectSettings, readableSettings, refusedForGood, unguardedAgents, type Guardrails, type ProjectSettingsPatch, type ProjectSettingsTarget } from "./projectSettings";
 import { issueSourceChoices, issueSourceName } from "./settings";
-import { catalogWorkspaces } from "./snapshot";
+import { catalogWorkspaces, type HostDeclaration } from "./snapshot";
+import { hostLook, namedHost, projectHost } from "./codeHost";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { composingKey } from "./keys";
@@ -115,12 +116,15 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   const baseChoice = record?.base_branch;
   const selectedBase = baseChoice?.mode === "branch" ? baseChoice.branch : baseChoice?.mode === "auto" ? null : rest?.ui_state?.project_base_branches?.[target.root];
   const baseValue = !selectedBase || base.missing ? "auto" : `branch:${selectedBase}`;
+  // The host this project's read declared names its rows; a project not read yet is GitHub's, as before hosts.
+  const host = namedHost(workspace ? projectHost(workspace) : null).name;
   const source = workspace ? issueSourceChoices(workspace, projectIssueSource(rest, workspace), t) : null;
   const resolvedSource = workspace?.tasks?.source;
   const usable = workspace?.checkouts.some((checkout) => checkout.exists) ?? false;
   const applyRepository = () => {
     const value = repositoryDraft.trim();
-    if (value.length > 256 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)) { setRepositoryInvalid(true); return; }
+    // A plain shape check only: which repository names a host reads (`owner/repo`, `gitlab.com/group/project`) is the core's to judge.
+    if (value.length > 256 || !/^[^\s/]+(\/[^\s/]+)+$/.test(value) || value.includes("://")) { setRepositoryInvalid(true); return; }
     setRepositoryInvalid(false);
     save("repository", { repository: { mode: "repository", repository: value } });
   };
@@ -155,10 +159,10 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                     <div className="flex min-w-0 max-w-full flex-wrap gap-xs"><Input ref={nameInput} aria-label={t("projectSettings.name")} placeholder={folderName(target.root)} value={nameDraft} disabled={blocked} data-project-settings-name-input="true" onChange={(event) => { setNameDraft(event.target.value); setNameInvalid(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) applyName(); }} /><Button variant="secondary" size="sm" aria-label={t("projectSettings.applyName")} disabled={blocked || nameDraft === confirmedName} onClick={applyName}>{t("projectSettings.apply")}</Button></div>
                   </Row>
                 </Group>
-                <Group title={t("projectSettings.repository")} note={t("projectSettings.repositoryNote")}>
-                  <Row label={t("projectSettings.repository")} detail={<>{workspace?.is_git ? <Value>{(workspace && projectRepository(rest, workspace)) ?? t("projectSettings.repositoryMissing")}</Value> : <Note>{t("projectSettings.folder")}</Note>}{stateFor("repository")}</>}>
+                <Group title={t("projectSettings.repository", { host })} note={t("projectSettings.repositoryNote", { host })}>
+                  <Row label={t("projectSettings.repository", { host })} detail={<>{workspace?.is_git ? <RepositoryValue repository={workspace ? projectRepository(rest, workspace) : null} host={workspace ? projectHost(workspace) : null} /> : <Note>{t("projectSettings.folder")}</Note>}{stateFor("repository")}</>}>
                     <Select value={confirmedRepository !== null ? "repository" : "auto"} disabled={blocked || !workspace?.is_git} onValueChange={(value) => { if (value === "repository") setRepositoryEditing(true); if (value === "auto") save("repository", { repository: { mode: "auto" } }); }}>
-                      <SelectTrigger aria-label={t("projectSettings.repository")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">{t("projectSettings.automatic")}</SelectItem><SelectItem value="repository">{t("projectSettings.override")}</SelectItem></SelectContent>
+                      <SelectTrigger aria-label={t("projectSettings.repository", { host })}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">{t("projectSettings.automatic")}</SelectItem><SelectItem value="repository">{t("projectSettings.override")}</SelectItem></SelectContent>
                     </Select>
                   </Row>
                   {repositoryEditing ? <Row label={t("projectSettings.override")} detail={repositoryInvalid ? <Note tone="error">{t("projectSettings.repositoryInvalid")}</Note> : undefined}>
@@ -171,7 +175,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                       {resolvedSource ? resolvedSource.failure ? t("board.sourceReadFailed", { source: issueSourceName(resolvedSource, t) }) : resolvedSource.reading ? t("board.reading") : issueSourceName(resolvedSource, t) : t(available ? "board.reading" : "settings.unavailable")}
                     </Note>
                     {resolvedSource?.failure ? <Button size="sm" variant="ghost" disabled={!available} onClick={() => actions.refreshProjectOverview(target.workspaceId)}>{t("projectSettings.retry")}</Button> : null}
-                    {workspace?.checkouts.some((checkout) => checkout.github?.failure_category === "not_logged_in") ? <Button size="sm" variant="ghost" onClick={() => actions.openSettings("github")}>{t("projectSettings.accountSettings")}</Button> : null}
+                    {workspace?.checkouts.some((checkout) => checkout.github?.failure_category === "not_logged_in") ? <Button size="sm" variant="ghost" onClick={() => actions.openSettings("github")}>{t("projectSettings.accountSettings", { host })}</Button> : null}
                     {!workspace?.is_git ? <Note>{t("projectSettings.folder")}</Note> : null}
                     {stateFor("issue_source")}
                   </>}>
@@ -229,4 +233,12 @@ function settingsErrorKey(code: string | null | undefined) {
     case "project_settings_policy_failed": return "projectSettings.errorPolicy" as const;
     default: return "projectSettings.errorSave" as const;
   }
+}
+
+/** The repository the project reads, with its host's mark (`codeHost.hostLook`), or that none was found. */
+function RepositoryValue({ repository, host }: { repository: string | null; host: HostDeclaration | null }) {
+  const { t } = useInterfaceTranslation();
+  if (!repository) return <Value>{t("projectSettings.repositoryMissing", { host: namedHost(host).name })}</Value>;
+  const { Mark, name } = hostLook(host?.key);
+  return <Value><span className="inline-flex min-w-0 items-center gap-xs" data-project-settings-host={host?.key ?? "github"}><Mark aria-label={name} className="size-(--size-icon) shrink-0" /><span className="min-w-0 break-all font-mono">{repository}</span></span></Value>;
 }

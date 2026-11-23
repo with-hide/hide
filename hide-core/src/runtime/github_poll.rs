@@ -60,7 +60,7 @@ impl Runtime {
             self.github_poll_over_limit = over_limit;
             if over_limit > 0 {
                 crate::diagnostic!(serde_json::json!({
-                    "component": "github",
+                    "component": host.key(),
                     "kind": "poll.over_limit",
                     "limit": project_limit,
                     "with_open_pull_requests": projects.len(),
@@ -180,7 +180,7 @@ impl Runtime {
                 LookRead::Asked => {
                     self.github_polled.remove(&path);
                     crate::diagnostic!(serde_json::json!({
-                        "component": "github",
+                        "component": self.read_component(None, &path),
                         "kind": "poll.asked",
                         "project": path,
                     }));
