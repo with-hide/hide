@@ -225,7 +225,7 @@ export function WaitCardLines({ card }: { card: WaitCard }) {
   return (
     <>
       <span aria-hidden="true" className="flex min-w-0 items-center gap-xs text-caption" data-node-line="wait" data-wait-kind={card.aim.kind}>
-        <Icon className={cn("size-(--size-icon-sm) shrink-0", card.state === "met" ? "text-muted-foreground" : tone)} data-line-icon={card.aim.kind} />
+        <Icon className={cn("size-(--size-icon-sm) shrink-0", card.state === "met" ? "text-muted-foreground" : tone)} data-line-icon={card.aim.kind} data-line-mark={card.aim.kind === "pr" || card.aim.kind === "ci" ? card.aim.mark : undefined} />
         <span className={cn("min-w-0 truncate", open ? "text-foreground" : "text-muted-foreground")} title={condition} data-wait-condition="true">{condition}</span>
       </span>
       {foot ? (

@@ -980,9 +980,12 @@ test("the phone's mission page ends each step in the desktop's line to the missi
     await expect(line("schema")).toHaveAttribute("data-line-person", "ahead");
     await expect(card("schema").locator("[data-node-merge-turn]")).toHaveCount(0);
     await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: #31 \+1 → main · Mergeable · You merge it/);
-    // An outside pull request and branch name what they watch and end where it goes; research ends in its kind.
-    await expect(line("outside")).toHaveText("↗#34→main", { timeout: 30_000 }); // wait-ok: the outside pull request's base reaches the phone's frame
-    await expect(line("lib")).toHaveText("↗ feat/lib→main");
+    // A waiting pull request and branch say what they wait for in one sentence (option A of the operator's decision on pull
+    // request 2848): the pull request's mark lit by GitHub's answer, `pull` until it came (the fake answers #34 open with its
+    // checks passing), the branch to the default branch the catalog read; research ends in its kind.
+    await expect(line("outside").locator("[data-line-icon]")).toHaveAttribute("data-line-mark", "mergeable", { timeout: 30_000 }); // wait-ok: GitHub's answer for #34 reaches the phone's frame
+    await expect(line("outside")).toHaveText("if #34 merges");
+    await expect(line("lib")).toHaveText("if feat/lib lands in main");
     await expect(line("cause")).toHaveAttribute("data-node-line", "result");
     await expect(line("cause")).toHaveText("Research");
     const spills = await phone.locator("[data-mission-node]").evaluateAll((cards) => cards.flatMap((one) => {
