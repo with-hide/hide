@@ -170,11 +170,14 @@ export function PeerWorkRows({ group, actions, treeIndent = false }: { group: "n
                 </>}
               >
                 {/* Under the task list the line is drawn as its own rows' second line: a step down, in micro text.
-                    The chip keeps its name up to two fifths of the line, and is cut there so the place and the reason keep the rest. */}
+                    Room goes in order, not by share: why it waits keeps its width (up to three fifths), the place keeps what it can,
+                    and the chip takes only what is left, from its mark and a letter up to two fifths. */}
                 <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xs leading-(--size-sidebar-line-detail)", treeIndent ? "mt-xs text-micro" : "text-caption")}>
                   {row.place ? <span className="min-w-0 shrink truncate text-muted-foreground">{row.place}</span> : null}
-                  {reason ? <span className={cn("min-w-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
-                  <DeviceChip label={machine} className="max-w-2/5 shrink-0" />
+                  {reason ? <span className={cn("max-w-3/5 shrink-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
+                  <span className="flex min-w-0 max-w-2/5 shrink-0 grow basis-xxxl">
+                    <DeviceChip label={machine} className="max-w-full" />
+                  </span>
                 </span>
               </SessionRowBody>
             </RowButton>
