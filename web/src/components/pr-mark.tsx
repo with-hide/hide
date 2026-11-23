@@ -1,5 +1,6 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { recordPending, recordWords } from "../agentRow";
+import { pullLabel } from "../codeHost";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { cn } from "../lib/utils";
@@ -15,18 +16,18 @@ import { Hint, Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui
 
 /**
  * The one PR mark (docs/UI_BEHAVIOR.md, PR mark): the state's icon in its
- * colour and `#number`. No border; the icon's colour is the state. `compact`
+ * colour and the number as its host writes it (`#12`, `!12`, `pullLabel`). No border; the icon's colour is the state. `compact`
  * is the same mark without the number, where a row already names the pull
  * request (a checkout's kind glyph, a search row's icon). A stale mark dims.
  */
 export function PrMark({
   state,
-  number,
+  label,
   stale = false,
   compact = false,
   className,
   ...rest
-}: { state: PrState; number?: number; stale?: boolean; compact?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+}: { state: PrState; label?: string; stale?: boolean; compact?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   const { icon: Icon, tone } = PR_LOOK[state];
   return (
     <span
@@ -36,7 +37,7 @@ export function PrMark({
       {...rest}
     >
       <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
-      {compact || number === undefined ? null : <span className="text-subtle-foreground">#{number}</span>}
+      {compact || label === undefined ? null : <span className="text-subtle-foreground">{label}</span>}
     </span>
   );
 }
@@ -67,7 +68,7 @@ function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: 
 
 /** A row's or a family's mark, one PR or several; a closed PR is dimmed. */
 export function PartsMark({ parts, stale, className, ...rest }: { parts: PrMarkParts; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
-  return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} className={className} {...rest} /> : <PrMark state={parts.state} number={parts.number} stale={stale} className={cn(className, parts.state === "closed" && CLOSED_DIM)} {...rest} />;
+  return "counts" in parts ? <PrStateCounts counts={parts.counts} stale={stale} className={className} {...rest} /> : <PrMark state={parts.state} label={parts.label} stale={stale} className={cn(className, parts.state === "closed" && CLOSED_DIM)} {...rest} />;
 }
 
 /**
@@ -79,7 +80,7 @@ export function PrChipMark({ chip, stale = false }: { chip: PrChip; stale?: bool
   const { t } = useInterfaceTranslation();
   return (
     <span className="inline-flex shrink-0 items-center gap-xs">
-      <PrMark state={chip.state} number={chip.number} stale={stale} />
+      <PrMark state={chip.state} label={chip.label} stale={stale} />
       {chip.changesRequested ? (
         <span className={cn("font-sans text-caption", CHANGES.tone)} data-pr-review="changes_requested">
           {t(CHANGES.key)}
@@ -98,7 +99,7 @@ function useMarkLabel(parts: PrMarkParts | null, stale: PrStaleness | undefined)
   if (!parts) return "";
   const head = "counts" in parts
     ? [t("agentSessions.pr.count", { count: parts.counts.reduce((sum, { count }) => sum + count, 0) }), ...parts.counts.map(({ state, count }) => `${t(PR_LOOK[state].word)} ${count}`)]
-    : [`#${parts.number} ${t(PR_LOOK[parts.state].word)}`];
+    : [`${parts.label} ${t(PR_LOOK[parts.state].word)}`];
   return [...head, staleLabel(stale, t, requireInterfaceLanguage(i18n.language))].filter(Boolean).join(" · ");
 }
 
@@ -152,7 +153,7 @@ export function AgentPrMark({ agent, pulls, disabled = false, side, onOpen, onEx
       <DropdownMenuContent align="start" className="w-(--size-pr-popover)" onClick={(event) => event.stopPropagation()} data-pr-list={agent.pane_id}>
         <PrListHead agent={agent} count={pulls.length} />
         {pulls.map((pull) => (
-          <DropdownMenuItem key={pull.url} aria-label={[`#${pull.number} ${t(PR_LOOK[pull.state].word)}`, pull.title, holderNames(pull)].filter(Boolean).join(" · ")} onSelect={() => onOpen(pull)} data-pr-list-item={pull.number}>
+          <DropdownMenuItem key={pull.url} aria-label={[`${pullLabel(pull)} ${t(PR_LOOK[pull.state].word)}`, pull.title, holderNames(pull)].filter(Boolean).join(" · ")} onSelect={() => onOpen(pull)} data-pr-list-item={pull.number}>
             <PrListItem pull={pull} />
           </DropdownMenuItem>
         ))}
@@ -181,7 +182,7 @@ function PrListItem({ pull }: { pull: SessionPull }) {
   const names = holderNames(pull);
   return (
     <>
-      <PrMark role="img" aria-label={`#${pull.number} ${t(PR_LOOK[pull.state].word)}`} state={pull.state} number={pull.number} stale={pull.stale} className={pull.state === "closed" ? CLOSED_DIM : undefined} />
+      <PrMark role="img" aria-label={`${pullLabel(pull)} ${t(PR_LOOK[pull.state].word)}`} state={pull.state} label={pullLabel(pull)} stale={pull.stale} className={pull.state === "closed" ? CLOSED_DIM : undefined} />
       <span className={cn("min-w-0 flex-1", pull.state === "closed" && CLOSED_DIM)} data-pr-closed={pull.state === "closed" || undefined}>
         <span className="block truncate" title={pull.title}>{pull.title}</span>
         {names ? <span className="block truncate text-micro text-muted-foreground" title={names}>{names}</span> : null}
@@ -248,7 +249,7 @@ export function PrHoverCard({ agent, pulls, staleness, side, onOpenPullRequest, 
   const pr = useShellStore((s) => (single ? catalogWorkspaces(s.rest).flatMap((project) => project.pull_requests ?? []).find((row) => row.url === single.url) : undefined));
   if (pr && !staleness?.stale) {
     return (
-      <CheckoutCardHint card={pullRequestCard(pr, t)} description={`#${pr.number} ${pr.title}`} side={side} onOpenPullRequest={onOpenPullRequest}>
+      <CheckoutCardHint card={pullRequestCard(pr, t)} description={`${pullLabel(pr)} ${pr.title}`} side={side} onOpenPullRequest={onOpenPullRequest}>
         {trigger}
       </CheckoutCardHint>
     );

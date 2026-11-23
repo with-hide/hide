@@ -1,0 +1,18 @@
+{
+  "id": "9ca9db7a0299de06f4deccf98ff88da93efc6d7d",
+  "short_id": "9ca9db7a",
+  "created_at": "2026-11-22T05:33:48.000+00:00",
+  "parent_ids": [
+    "11cdba5db432ae449c6887ce2ceb63994315b6a4",
+    "169aeb81a27c77529e3ba4382aabd5f5c5859f62"
+  ],
+  "title": "Merge branch 'scene-merge' into 'main'",
+  "message": "Merge branch 'scene-merge' into 'main'\n\nScene merge\n\nSee merge request example-user/hide-code-host-check!9",
+  "author_name": "Example User",
+  "authored_date": "2026-11-22T05:33:48.000+00:00",
+  "committer_name": "Example User",
+  "committed_date": "2026-11-22T05:33:48.000+00:00",
+  "trailers": {},
+  "extended_trailers": {},
+  "web_url": "https://gitlab.com/example-user/hide-code-host-check/-/commit/9ca9db7a0299de06f4deccf98ff88da93efc6d7d"
+}

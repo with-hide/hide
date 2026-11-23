@@ -1,4 +1,5 @@
 import type { KitAgent, SnapshotRest, Workspace } from "./snapshot";
+import { hostRepository } from "./codeHost";
 import { agentInstalled, agentUnsupportedHere, supportedAgents } from "./settings/agentRows";
 
 export type RepositoryConnection = { mode: "auto" } | { mode: "repository"; repository: string };
@@ -98,18 +99,14 @@ export function projectSettings(rest: SnapshotRest | null, target: ProjectSettin
   return { record, write };
 }
 
-/** The repository the core detected for a Git project: its issue source when that is GitHub, else the one its remote names. */
-export const detectedRepository = (workspace: Workspace): string | null =>
-  workspace.home_issues?.repository ?? (workspace.tasks?.source?.kind === "github" ? workspace.tasks.source.name : null);
-
 /**
- * The GitHub repository a project is connected to as `owner/repo`: the one the operator confirmed in Project Settings,
- * else the one detected. A folder has none.
+ * The repository a project is connected to, as its host stores it (`owner/repo`, `gitlab.com/group/project`): the one
+ * the operator confirmed in Project Settings, else the one its host's read named. A folder has none.
  */
 export function projectRepository(rest: SnapshotRest | null, workspace: Workspace): string | null {
   if (!workspace.is_git) return null;
   const confirmed = projectSettings(rest, settingsTarget(workspace)).record?.repository;
-  return confirmed?.mode === "repository" ? confirmed.repository : detectedRepository(workspace);
+  return confirmed?.mode === "repository" ? confirmed.repository : hostRepository(workspace)?.name ?? null;
 }
 
 export function projectIssueSource(rest: SnapshotRest | null, workspace: Workspace): string | undefined {

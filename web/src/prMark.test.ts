@@ -65,16 +65,17 @@ describe("staleness", () => {
   it("dims only once GitHub could not be read again, and says when it last was", () => {
     expect(staleness(null)).toBeUndefined();
     const read = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: 1_800_000_000_000, unavailable_reason: null };
-    expect(staleness(read)).toEqual({ stale: false, lastRead: 1_800_000_000_000 });
+    expect(staleness(read)).toEqual({ stale: false, lastRead: 1_800_000_000_000, host: "GitHub" });
     expect(staleLabel(staleness(read), t, "en")).toBeNull();
     expect(staleLabel(staleness({ ...read, stale: true }), t, "en")).toMatch(/^GitHub last read .+ · cannot read now$/);
-    expect(staleLabel({ stale: true, lastRead: null }, t, "en")).toBe("GitHub last read - · cannot read now");
+    expect(staleLabel({ stale: true, lastRead: null, host: "GitHub" }, t, "en")).toBe("GitHub last read - · cannot read now");
+    expect(staleLabel({ stale: true, lastRead: null, host: "GitLab" }, t, "en")).toBe("GitLab last read - · cannot read now");
   });
 });
 
 describe("a PR mark's parts", () => {
   it("draws one PR as its state and number", () => {
-    expect(prMarkParts([sessionPull(924, "mergeable")])).toEqual({ state: "mergeable", number: 924 });
+    expect(prMarkParts([sessionPull(924, "mergeable")])).toEqual({ state: "mergeable", label: "#924" });
   });
 
   it("counts several PRs per state, worst first, whatever order they arrive in", () => {
@@ -108,9 +109,9 @@ describe("a row's list", () => {
 
   it("is stale while any of its pull requests is, with the oldest last read", () => {
     expect(pullsStaleness([])).toBeUndefined();
-    expect(pullsStaleness([sessionPull(1, "pending", { last_read_at_unix_ms: 300 })])).toEqual({ stale: false, lastRead: null });
+    expect(pullsStaleness([sessionPull(1, "pending", { last_read_at_unix_ms: 300 })])).toEqual({ stale: false, lastRead: null, host: "GitHub" });
     const stale = [sessionPull(1, "pending", { stale: true, last_read_at_unix_ms: 200 }), sessionPull(2, "merged", { stale: true, last_read_at_unix_ms: 100 }), sessionPull(3, "pending", { last_read_at_unix_ms: 300 })];
-    expect(pullsStaleness(stale)).toEqual({ stale: true, lastRead: 100 });
-    expect(pullsStaleness([sessionPull(1, "pending", { stale: true })])).toEqual({ stale: true, lastRead: null });
+    expect(pullsStaleness(stale)).toEqual({ stale: true, lastRead: 100, host: "GitHub" });
+    expect(pullsStaleness([sessionPull(1, "pending", { stale: true })])).toEqual({ stale: true, lastRead: null, host: "GitHub" });
   });
 });

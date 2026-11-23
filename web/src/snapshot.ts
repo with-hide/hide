@@ -67,7 +67,15 @@ export type PrState = "failed" | "pending" | "mergeable" | "draft" | "merged" | 
  * One pull request of a session's list (`family::SessionPull`): `own` when the session itself holds or made it,
  * `holders` naming who does, `stale` when GitHub could not be read again or its list no longer holds it.
  */
-export type SessionPull = { url: string; number: number; title: string; state: PrState; own: boolean; holders: string[]; stale: boolean; last_read_at_unix_ms: number | null };
+export type SessionPull = { url: string; number: number; title: string; state: PrState; own: boolean; holders: string[]; stale: boolean; last_read_at_unix_ms: number | null; reference?: ChangeRequestRef | null };
+/** A repository as its code host's unit names it (`code_host::RepositoryRef`): the host's key, its server and its path there. */
+export type RepositoryRef = { host: string; authority: string; path: string };
+/**
+ * A change request as its host's unit named it (`code_host::ChangeRequestRef`): the screen compares two by `key`, writes the
+ * number as `label` (`#12`, `!12`) and opens the pages the unit made; it never reads an address again to find these. Absent
+ * beside an address no registered host reads, and from a core older than references.
+ */
+export type ChangeRequestRef = { repository: RepositoryRef; number: number; key: string; label: string; url: string; checks_url: string; files_url: string };
 /** A session's pull requests and every descendant's, worst first; `omitted` counts those past the core's cap. */
 export type SessionPulls = { pulls: SessionPull[]; omitted?: number };
 
@@ -353,6 +361,8 @@ export type AgentTurn = {
 /** One of a row's pull requests (`AgentPullRequestSnapshot`). */
 export type AgentPullRequest = {
   number: number;
+  /** The reference its host's unit made, by which its lines name it (`MR !12`); absent while the list carried none. */
+  reference?: ChangeRequestRef;
   title: string;
   url: string;
   badge: PullRequest["badge"];
@@ -484,6 +494,8 @@ export type PullRequest = {
   number: number;
   title: string;
   url: string;
+  /** `url` as its host's unit names it, with the label and the pages the screen opens. */
+  reference?: ChangeRequestRef | null;
   badge: "merged" | "closed" | "review" | "open";
   review: "review_required" | "changes_requested" | "approved" | null;
   is_draft: boolean;
@@ -550,7 +562,8 @@ export type PrCard = {
   files: { path: string; additions: number; deletions: number; generated: boolean }[] | null;
   files_total: number;
   threads: { reviewer: string | null; path: string; line: number | null; text: string }[] | null;
-  merge: { methods: PrMergeMethod[]; queue: boolean; can_merge: boolean } | null;
+  /** `host_sets_method`: the host merges by its own settings' method and applies none Hide sends, so the confirm line names none; absent from GitHub and an older core. */
+  merge: { methods: PrMergeMethod[]; queue: boolean; can_merge: boolean; host_sets_method?: boolean } | null;
   /** Parts the last read could not get. */
   failed: ("body" | "files" | "threads")[];
   /** When the head's last check run finished, for the timeline's check row (PRD pr-card-and-session-record-redesign D-15); absent until the card read it or when no check ran. */
@@ -568,7 +581,7 @@ export type PrWrite = {
   head: string;
   method: PrMergeMethod | null;
   phase: "working" | "done" | "failed";
-  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "unsupported" | "failed" | null;
+  reason: "head_moved" | "denied" | "conflict" | "not_mergeable" | "unreachable" | "unsupported" | "auto_merge" | "budget_spent" | "failed" | null;
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */
@@ -585,6 +598,8 @@ export type GithubStatus = {
   unread_queries?: ExtraQuery[];
   /** The host whose read this is; absent before any host answered, for a project no host reads, and from a core older than hosts, which read GitHub alone. */
   host?: HostDeclaration | null;
+  /** The repository the read named, as its host stores it (`owner/name`, `gitlab.com/group/project`), with its own page; absent before a read named it or while its server is not known. */
+  repository?: { name: string; url: string } | null;
 };
 
 /** A code host as the core declares it (`code_host::HostDeclaration`): its key, the optional operations it offers (an action not named here is refused by the core), and how it is reached. */
@@ -1485,8 +1500,8 @@ export type MissionBlocked = "upstream_dropped";
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood", "ci_failed", "mission_cancelled", "node_dropped", "wait_expired"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
-/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
-export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "warning_review_fails", "warning_stopped"] as const;
+/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). The core sends only `warning_stopped` since 2026-11-23, a waiting node's failed wait being a raise (PRD core-wait D-17); the other five stay because a phone reads a Mac of the same `PHONE_PROTOCOL` built before then. */
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1503,7 +1518,7 @@ export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: Mi
 /** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
 export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "resume";
 /** One of a node's pull requests (`NodePrView`), the current one last: `base` is the branch it merges into as GitHub last answered, absent until it answered and from a core before it. */
-export type MissionNodePr = { number: number; state: PrState | null; url: string | null; base?: string };
+export type MissionNodePr = { number: number; state: PrState | null; url: string | null; base?: string; reference?: ChangeRequestRef | null };
 
 /** Who merges a node's pull request (`mission_merge_by`, PRD mission-destination D-10, D-35). */
 export type MissionMergeBy = "operator" | "conductor";
@@ -1725,6 +1740,8 @@ export type MissionNode = {
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
+  /** `pr_url` as its host's unit names it; absent while no read named it. */
+  pr_reference?: ChangeRequestRef | null;
   /** The node's step of four (D-42, D-48); none for a node without a pull request or branch (D-53). */
   stage: number | null;
   attempts: number;
@@ -1911,7 +1928,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_reference" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
@@ -3120,6 +3137,8 @@ export type MemoryRow = {
     pr_number: number | null;
     /** Original repository-qualified target; unknown on legacy attempts. */
     pr_url?: string | null;
+    /** `pr_url` as its host's unit names it. */
+    pr_reference?: ChangeRequestRef | null;
     target_path: string | null;
     /** Why GitHub could not say whether an `unconfirmed` attempt's pull request came, when it said. */
     github_failure: GithubFailureCategory | null;
@@ -3260,6 +3279,8 @@ export type SuggestionEvidence = {
   session_id: string | null;
   pr_number: number | null;
   url: string | null;
+  /** A pull request's `url` as its host's unit names it. */
+  reference?: ChangeRequestRef | null;
   at_unix_ms: number;
   gone: boolean;
   /** The operator's words, masked and cut, once the row was opened (PRD memory-self-improve B7). Absent on older daemons. */
@@ -3312,7 +3333,7 @@ export type SuggestionRow = {
   /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
   hold: "github_needed" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
-  escalated: { level: number; previous_pr_url: string | null } | null;
+  escalated: { level: number; previous_pr_url: string | null; previous_pr_reference?: ChangeRequestRef | null } | null;
   /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
   returned_after_skip: boolean;
   evidence: SuggestionEvidence[];
@@ -3321,6 +3342,8 @@ export type SuggestionRow = {
     started_at_unix_ms: number;
     pr_number: number | null;
     url: string | null;
+    /** `url` as its host's unit names it, when it is a pull request's. */
+    reference?: ChangeRequestRef | null;
     /** The applying agent's pane while it lives, as the agent lists name it. Absent on older daemons. */
     agent_pane?: string | null;
     /** Why a failed attempt failed, as a code; on a ready branch, why the last merge did not happen. */

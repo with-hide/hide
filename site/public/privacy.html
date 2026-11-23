@@ -92,7 +92,7 @@
                 <tr data-event="hide_mission_ended"><td>Mission ended</td><td>Done, waiting to merge, or cancelled.</td></tr>
                 <tr data-event="hide_practice"><td>Practice chapter</td><td>Which practice chapter, and whether it started or finished.</td></tr>
                 <tr data-event="hide_active"><td>Active day</td><td>That Hide was used that day, sent once a day for the computer and once for the phone, and which of the two it was.</td></tr>
-                <tr data-event="hide_feature_used"><td>Feature used</td><td>That a main feature was used that day, sent once a day for each: focus mode turned on, a skill or MCP server added, changed, switched or removed, or a pairing with another computer that runs Hide finished (never which computer).</td></tr>
+                <tr data-event="hide_feature_used"><td>Feature used</td><td>That a main feature was used that day, sent once a day for each: focus mode turned on, a skill or MCP server added, changed, switched or removed, a gitlab.com project's merge requests read, or a pairing with another computer that runs Hide finished (never which computer).</td></tr>
                 <tr data-event="hide_automation_created"><td>Automation made</td><td>Which example the automation started from (a weekly report, a morning briefing or fixing failed CI), or none.</td></tr>
                 <tr data-event="hide_automation_run_ended"><td>Automation run ended</td><td>Whether the run finished, failed or was stopped, and whether its time came, a missed time was caught up, or you ran it yourself.</td></tr>
                 <tr data-event="hide_bot_connected"><td>Bot connected</td><td>Whether you made the bot and its AI joined with the code, or the bot asked and you approved it, and whether it works in its own space or as you. Never its name, its program or its key.</td></tr>
@@ -112,6 +112,7 @@
           <p>The desktop app keeps a second folder for its window: its own log (<code>logs/desktop.log</code>), the window's position and size, the language you chose, update state and where it found the <code>hide</code> command. It is <code>~/Library/Application Support/hide-desktop</code> on macOS, <code>%APPDATA%\hide-desktop</code> on Windows and <code>~/.config/hide-desktop</code> on Linux. Deleting both folders removes hide's own data from your computer; the entries hide added to your agents' settings and the files in your projects stay, and the Uninstall section of hide's install guide lists them.</p>
           <p>The app checks for updates by asking GitHub's public release list for <code>with-hide/hide</code>. That request carries no hide data, and GitHub sees your IP address when it is made.</p>
           <p>Pull requests and their checks are read through the <code>gh</code> command you signed in to. hide holds no GitHub token of its own; <code>gh</code> uses its own credentials and GitHub sees the same requests it would see from your terminal.</p>
+          <p>For a project on gitlab.com, merge requests and their pipelines are read the same way, through the <code>glab</code> command you signed in to. hide holds no GitLab token of its own, and gitlab.com sees the same requests it would see from your terminal.</p>
 
           <h4>1.3 The agents you run</h4>
           <p>Each agent in a pane is a command-line tool you installed and signed in to, such as Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor or Antigravity, or any other program you run in a pane. Those tools talk to their own providers under your own account, as they do in a terminal. hide neither proxies nor adds to those requests, and keeps no provider credential.</p>
@@ -252,7 +253,7 @@
                 <tr data-event="hide_mission_ended"><td>미션 끝</td><td>완료, 병합 대기, 취소 중 하나.</td></tr>
                 <tr data-event="hide_practice"><td>연습 챕터</td><td>어느 연습 챕터인지와, 시작했는지 끝냈는지.</td></tr>
                 <tr data-event="hide_active"><td>사용한 날</td><td>그날 Hide를 썼다는 것. 컴퓨터와 폰 각각 하루에 한 번 보내며, 둘 중 어느 쪽이었는지.</td></tr>
-                <tr data-event="hide_feature_used"><td>기능 사용</td><td>그날 주요 기능을 썼다는 것. 기능마다 하루에 한 번 보내며, 집중 모드를 켰는지, 스킬이나 MCP 서버를 추가·변경·켜고 끄기·삭제했는지, Hide가 깔린 다른 컴퓨터와 연결을 마쳤는지(어느 컴퓨터인지는 빼고).</td></tr>
+                <tr data-event="hide_feature_used"><td>기능 사용</td><td>그날 주요 기능을 썼다는 것. 기능마다 하루에 한 번 보내며, 집중 모드를 켰는지, 스킬이나 MCP 서버를 추가·변경·켜고 끄기·삭제했는지, gitlab.com 프로젝트의 MR을 읽었는지, Hide가 깔린 다른 컴퓨터와 연결을 마쳤는지(어느 컴퓨터인지는 빼고).</td></tr>
                 <tr data-event="hide_automation_created"><td>자동화 만듦</td><td>어떤 예시(주간 리포트, 아침 브리핑, 실패한 CI 고치기)로 시작했는지, 또는 예시 없이 만들었는지.</td></tr>
                 <tr data-event="hide_automation_run_ended"><td>자동화 실행 끝</td><td>실행이 끝났는지, 실패했는지, 멈췄는지와, 정한 시간에 돌았는지, 놓친 시간을 따라잡았는지, 직접 실행했는지.</td></tr>
                 <tr data-event="hide_bot_connected"><td>봇 연결</td><td>봇을 직접 만들고 AI가 코드로 연결했는지, 봇이 요청하고 승인했는지와, 봇 공간에서 일하는지 나처럼 일하는지. 봇의 이름, 프로그램, 키는 보내지 않아요.</td></tr>
@@ -272,6 +273,7 @@
           <p>데스크톱 앱은 창을 위한 폴더를 하나 더 둡니다. 앱 자체 로그(<code>logs/desktop.log</code>), 창의 위치와 크기, 고른 언어, 업데이트 상태, <code>hide</code> 명령을 찾은 위치입니다. macOS에서는 <code>~/Library/Application Support/hide-desktop</code>, Windows에서는 <code>%APPDATA%\hide-desktop</code>, Linux에서는 <code>~/.config/hide-desktop</code>입니다. 두 폴더를 지우면 hide 자신의 데이터가 컴퓨터에서 지워집니다. hide가 에이전트 설정에 넣은 항목과 프로젝트의 파일은 남으며, 그 목록은 hide 설치 안내의 제거 절에 있습니다.</p>
           <p>앱은 업데이트를 확인하려고 <code>with-hide/hide</code>의 공개 릴리스 목록을 GitHub에 요청합니다. 이 요청에는 hide의 데이터가 실리지 않고, 그때 GitHub가 사용자의 IP 주소를 봅니다.</p>
           <p>풀 리퀘스트와 검사 결과는 사용자가 로그인한 <code>gh</code> 명령으로 읽습니다. hide는 GitHub 토큰을 따로 갖지 않고, <code>gh</code>가 자기 자격 증명을 쓰며, GitHub는 터미널에서 보냈을 때와 같은 요청을 봅니다.</p>
+          <p>gitlab.com에 있는 프로젝트의 MR과 파이프라인도 같은 방식으로, 사용자가 로그인한 <code>glab</code> 명령으로 읽습니다. hide는 GitLab 토큰을 따로 갖지 않고, gitlab.com은 터미널에서 보냈을 때와 같은 요청을 봅니다.</p>
 
           <h4>1.3 사용자가 실행하는 에이전트</h4>
           <p>팬의 에이전트는 사용자가 설치하고 로그인한 명령줄 도구입니다. Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor, Antigravity 같은 것이며, 팬에서 실행하는 다른 프로그램도 마찬가지입니다. 그 도구는 터미널에서처럼 사용자의 계정으로 각자의 공급자와 통신합니다. hide는 그 요청을 중계하지도, 덧붙이지도 않으며, 공급자 자격 증명을 보관하지 않습니다.</p>

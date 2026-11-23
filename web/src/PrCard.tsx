@@ -1,4 +1,5 @@
 import { CheckCircle2Icon, LoaderCircleIcon, ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
+import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -18,7 +19,7 @@ import { ReviewBlock } from "./PrReviewers";
 import { badgeWord, staleLabel, staleness } from "./prMark";
 import { findPrEntry, opensCard, type PrEntry } from "./prWork";
 import { requireInterfaceLanguage } from "./i18n/locale";
-import { catalogWorkspaces, frontCheckout, type LinkPanel, type PrCard, type PrMergeMethod, type PullRequest, type Workspace } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type HostDeclaration, type LinkPanel, type PrCard, type PrMergeMethod, type PullRequest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { useRequestViewDemand } from "./requestViewDemand";
@@ -104,12 +105,12 @@ export function PrCardView({ workspaceId, number, actions, front = true }: { wor
     if (livePanel && !livePanel.loading && !livePanel.failure) keptPanels.keep(keyOf, livePanel);
   }, [livePanel, keyOf]);
   const scroller = useRef<HTMLElement>(null);
-  if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted", { number })}</p>;
+  if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted")}</p>;
   const panel: LinkPanel | null = front ? livePanel : livePanel ?? keptPanels.get(keyOf);
   return (
-    <article ref={scroller} aria-label={t("work.card.aria", { number })} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [overflow-wrap:anywhere] text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
+    <article ref={scroller} aria-label={t("work.card.aria", pullWords(pr ?? { number }))} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [overflow-wrap:anywhere] text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
       <div className="flex w-full flex-col gap-lg p-lg">
-        {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted", { number })}</p>}
+        {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted")}</p>}
         {pr ? <DecisionBox project={project} pr={pr} entry={entry} card={card} actions={actions} /> : null}
         <Timeline project={project} pr={pr} card={card} panel={panel} waiting={!front && !panel} number={number} actions={actions} />
         {pr ? <FilesRow pr={pr} project={project} card={card} actions={actions} open={filesOpen} onToggle={toggleFiles} /> : null}
@@ -135,9 +136,9 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
   return (
     <header className="flex flex-col gap-xs" data-pr-card-header="true">
       <div className="flex min-w-0 flex-wrap items-center gap-xs">
-        <button type="button" className="mr-auto rounded-xs outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-number={pr.number}><span className="inline-flex items-center gap-xs"><PrMark state={pr.state} number={pr.number} /><span className="text-micro text-muted-foreground">{badgeWord(pr, t).label}</span></span></button>
-        <Button variant="outline" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-github="true">{t("recordCard.github")}<ExternalLinkIcon aria-hidden="true" /></Button>
-        <CardMenu project={project} pr={pr} entry={entry} actions={actions} />
+        <button type="button" className="mr-auto rounded-xs outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-number={pr.number}><span className="inline-flex items-center gap-xs"><PrMark state={pr.state} label={pullLabel(pr)} /><span className="text-micro text-muted-foreground">{badgeWord(pr, t).label}</span></span></button>
+        <Button variant="outline" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-github="true">{t("recordCard.github", pullWords(pr))}<ExternalLinkIcon aria-hidden="true" /></Button>
+        <CardMenu project={project} pr={pr} entry={entry} cardHost={card?.host} actions={actions} />
       </div>
       <h2 className="min-w-0 whitespace-normal text-subhead font-semibold [overflow-wrap:anywhere]" data-pr-card-title="true">{pr.title}</h2>
       {author ? <span className="text-caption text-muted-foreground" data-pr-card-author={author}>{t("work.row.author", { name: author })}</span> : null}
@@ -154,26 +155,29 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
 }
 
 /** `⋯` of the card (D-28): hand the PR to an agent, make an issue for it, copy the branch name. */
-function CardMenu({ project, pr, entry, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; actions: Actions }) {
+function CardMenu({ project, pr, entry, cardHost, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; cardHost: HostDeclaration | null | undefined; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const merged = pr.state === "merged" || pr.state === "closed";
   const checkout = entry?.row.checkout_id ? project.checkouts.find((row) => row.id === entry.row.checkout_id) : null;
   const worktree = checkout?.is_worktree === true && !checkout.is_primary && checkout.exists && !checkout.worktree?.missing;
-  const linkable = !merged && !entry?.row.issue && (project.tasks?.source?.kind !== "local" || worktree);
+  // An action the pull request's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts).
+  const host = projectActionHost(project, cardHost);
+  const linkable = !merged && !entry?.row.issue && offers(host, "issues") && (project.tasks?.source?.kind !== "local" || worktree);
+  const handover = offers(host, "handover");
   const [linking, setLinking] = useState(false);
   return (
     <IssuePicker number={pr.number} project={project} open={linking} onOpenChange={setLinking}>
     <span className="inline-flex"><DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label={t("work.card.menu")} data-pr-card-menu={pr.number}>
+        <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label={t("work.card.menu", { item: pullHost(pr).item })} data-pr-card-menu={pr.number}>
           <EllipsisIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (linking) event.preventDefault(); }}>
         {linkable ? <DropdownMenuItem onSelect={() => setLinking(true)}>{t("prList.linkIssue")}</DropdownMenuItem> : null}
-        {!merged ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })}>{t("prList.delegate")}</DropdownMenuItem> : null}
+        {!merged && handover ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })}>{t("prList.delegate")}</DropdownMenuItem> : null}
         {/* With no review block to hold it, the pre-check stays one menu away on any open pull request that is not a draft (B12). */}
-        {!merged && !pr.is_draft && !prReview(pr) ? <DropdownMenuItem onSelect={() => preCheck(project, pr)} data-pr-card-menu-pre-check="true">{t("work.review.preCheck")}</DropdownMenuItem> : null}
+        {!merged && handover && !pr.is_draft && !prReview(pr) ? <DropdownMenuItem onSelect={() => preCheck(project, pr)} data-pr-card-menu-pre-check="true">{t("work.review.preCheck")}</DropdownMenuItem> : null}
         {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })}>{t("prList.newIssue")}</DropdownMenuItem> : null}
         <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-card-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
       </DropdownMenuContent>
@@ -224,9 +228,9 @@ function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace
         <div className="min-w-0 flex-1" data-pr-card-checks="true">
           <p className={cn("flex items-start gap-xs text-caption font-medium", failed ? "text-destructive" : passing ? "text-success" : "text-agent-working")}><Icon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" /><span>{t(summary.key, summary.values)}</span></p>
           {counts && counts.total > 0 ? <p className="mt-xs flex flex-wrap gap-x-sm gap-y-xxs text-micro text-muted-foreground" data-pr-card-check-counts="true">{(["passed", "running", "waiting", "failed", "skipped", "unknown"] as const).filter((key) => counts[key] > 0).map((key) => <span key={key}>{t(`recordCard.ci.${key}`, { count: counts[key] })}</span>)}</p> : null}
-          <Button variant="text-link" size="inline" className="mt-xs gap-xxs text-micro" onClick={() => actions.openPullRequest(`${pr.url}/checks`, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></Button>
+          {pr.reference ? <Button variant="text-link" size="inline" className="mt-xs gap-xxs text-micro" onClick={() => actions.openPullRequest(pr.reference!.checks_url, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></Button> : null}
         </div>
-        {review ? <ReviewBlock review={review} onPreCheck={() => preCheck(project, pr)} /> : null}
+        {review ? <ReviewBlock review={review} onPreCheck={offers(projectActionHost(project, card?.host), "handover") ? () => preCheck(project, pr) : null} /> : null}
       </Buttons>
       {entry && ["queued", "unjudged", "checking"].includes(entry.reason.kind) ? <ReasonLine reason={entry.reason} group={entry.row.group} className="whitespace-normal [overflow-wrap:anywhere]" /> : null}
       {facts.length > 0 ? <p className="text-micro text-muted-foreground" data-pr-card-fact-line="true">{facts.map((fact) => factText(fact, t)).join(" · ")}</p> : null}
@@ -271,8 +275,11 @@ function Blocked({ pr, entry, card, actions, projectId }: { pr: PullRequest; ent
 
 type Confirm = Confirmed | null;
 
-function confirmText(confirm: Confirmed, queue: boolean, t: (key: string, values?: Record<string, unknown>) => string, values: { number: number; base: string; method: string; head: string }): string {
-  return t(confirm.action === "merge" ? (queue ? "work.card.confirm.queue" : "work.card.confirm.merge") : "work.card.confirm.update", values);
+function confirmText(confirm: Confirmed, queue: boolean, t: (key: string, values?: Record<string, unknown>) => string, values: { pull: string; label: string; host: string; base: string; method: string | null; head: string }): string {
+  if (confirm.action !== "merge") return t("work.card.confirm.update", values);
+  if (queue) return t("work.card.confirm.queue", values);
+  // A host that merges by its own settings' method takes none from Hide: the line names none.
+  return t(values.method === null ? "work.card.confirm.mergeOwnMethod" : "work.card.confirm.merge", values);
 }
 
 /**
@@ -298,7 +305,8 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const write = card?.write ?? null;
   const writing = write?.phase === "working";
   const head = card?.head ?? null;
-  const github = (path = "") => actions.openPullRequest(`${pr.url}${path}`, project.device_id, true);
+  const words = pullWords(pr);
+  const host = projectActionHost(project, card?.host);
   const confirming = confirm !== null && confirmHolds(confirm, { head, queue, method, mergeBlocked: why !== null, behind: pr.work?.merge_state === "behind" }) ? confirm : null;
   useEffect(() => {
     if (confirm !== null && confirming === null) setConfirm(null);
@@ -306,13 +314,13 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   const line = <div className="flex min-w-0 flex-wrap items-center gap-sm">{children}</div>;
   if (!open) return line;
   const base = pr.base_branch ?? "";
-  const methodLabel = method ? t(`work.card.method.${method}`) : "";
+  const methodLabel = card?.merge?.host_sets_method === true ? null : method ? t(`work.card.method.${method}`) : "";
   // A write GitHub refused for the head, the merge state or the permission would only be refused again, so both buttons stay off until Look again has read the card; a transient failure (unreachable, failed) is retried with the same button (B37).
   const repeats = write?.phase === "failed" && write.reason !== "unreachable" && write.reason !== "failed";
   const canAsk = head !== null && !writing && !repeats;
   const MergeButton = (
     <span className="flex min-w-0 items-center gap-xs" data-pr-card-merge-slot="true">
-      {why && !(why.key === "ci" && pr.work?.check_counts) ? <span className="min-w-0 whitespace-normal text-micro text-muted-foreground" data-pr-card-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base })}</span> : null}
+      {why && !(why.key === "ci" && pr.work?.check_counts) ? <span className="min-w-0 whitespace-normal text-micro text-muted-foreground" data-pr-card-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base, host: words.host })}</span> : null}
       {!queue && (card?.merge?.methods.length ?? 0) > 1 ? (
         <select aria-label={t("work.card.merge")} className="rounded-xs border border-border bg-background px-xs py-xxs text-micro outline-none focus-visible:ring-1 focus-visible:ring-ring" value={method ?? ""} onChange={(event) => setPicked(event.target.value as PrMergeMethod)} data-pr-card-method="true">
           {card!.merge!.methods.map((each) => <option key={each} value={each}>{t(`work.card.method.${each}`)}</option>)}
@@ -331,33 +339,33 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
       <div className="flex min-w-0 flex-wrap items-start gap-sm">
         {children}
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-xs">
-          {primary === "update" || pr.work?.merge_state === "behind" ? UpdateButton : null}
-          {primary === "review" ? <Button variant="secondary" size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button> : null}
-          {primary === "assign" ? <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
-          {primary === "assign_reviewer" ? <Button variant="secondary" size="sm" onClick={() => github()} data-pr-card-assign-reviewer="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.assignReviewer")}</Button> : null}
-          {mine && primary !== "review" ? MergeButton : null}
+          {(primary === "update" || pr.work?.merge_state === "behind") && offers(host, "update_branch") ? UpdateButton : null}
+          {primary === "review" && pr.reference ? <Button variant="secondary" size="sm" onClick={() => actions.openPullRequest(pr.reference!.files_url, project.device_id, true)} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub", words)}</Button> : null}
+          {primary === "assign" && offers(host, "handover") ? <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
+          {primary === "assign_reviewer" ? <Button variant="secondary" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-assign-reviewer="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.assignReviewer", words)}</Button> : null}
+          {mine && primary !== "review" && offers(host, "merge") ? MergeButton : null}
         </span>
       </div>
       {confirming !== null ? (
-        <div role="alertdialog" aria-label={confirmText(confirming, queue, t, { number: pr.number, base, method: methodLabel, head: confirming.head.slice(0, 7) })} className="flex flex-col gap-sm rounded-md border border-border bg-background p-sm" data-pr-card-confirm={confirming.action}>
-          <p className="text-caption">{confirmText(confirming, queue, t, { number: pr.number, base, method: methodLabel, head: confirming.head.slice(0, 7) })}</p>
+        <div role="alertdialog" aria-label={confirmText(confirming, queue, t, { ...words, base, method: methodLabel, head: confirming.head.slice(0, 7) })} className="flex flex-col gap-sm rounded-md border border-border bg-background p-sm" data-pr-card-confirm={confirming.action}>
+          <p className="text-caption">{confirmText(confirming, queue, t, { ...words, base, method: methodLabel, head: confirming.head.slice(0, 7) })}</p>
           <span className="flex gap-xs">
             <Button size="sm" onClick={() => {
               if (confirming.action === "merge") actions.mergePullRequest(project.id, pr.number, confirming.head, confirming.queue ? null : confirming.method);
               else actions.updatePullRequestBranch(project.id, pr.number, confirming.head);
               setConfirm(null);
-            }} data-pr-card-confirm-yes={confirming.action}>{t(confirming.action === "merge" ? (queue ? "work.card.confirm.doQueue" : "work.card.confirm.doMerge") : "work.card.confirm.doUpdate", { number: pr.number })}</Button>
+            }} data-pr-card-confirm-yes={confirming.action}>{t(confirming.action === "merge" ? (queue ? "work.card.confirm.doQueue" : "work.card.confirm.doMerge") : "work.card.confirm.doUpdate", words)}</Button>
             <Button size="sm" variant="ghost" autoFocus onClick={() => setConfirm(null)}>{t("common.cancel")}</Button>
           </span>
         </div>
       ) : null}
-      <WriteLine write={write} base={base} card={card} actions={actions} projectId={project.id} number={pr.number} />
+      <WriteLine write={write} base={base} host={words.host} card={card} actions={actions} projectId={project.id} number={pr.number} />
     </div>
   );
 }
 
 /** What the last Merge or branch update did, in one line under the buttons (B37). */
-function WriteLine({ write, base, card, actions, projectId, number }: { write: PrCard["write"]; base: string; card: PrCard | null; actions: Actions; projectId: string; number: number }) {
+function WriteLine({ write, base, host, card, actions, projectId, number }: { write: PrCard["write"]; base: string; host: string; card: PrCard | null; actions: Actions; projectId: string; number: number }) {
   const { t } = useInterfaceTranslation();
   if (!write) return null;
   if (write.phase === "working") return <p role="status" className="text-caption text-muted-foreground" data-pr-card-write="working">{t("work.card.writing")}</p>;
@@ -365,7 +373,7 @@ function WriteLine({ write, base, card, actions, projectId, number }: { write: P
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-caption text-warning" data-pr-card-write="failed" data-pr-card-write-reason={reason}>
-      <span>{t(`work.card.fail.${reason}`, { base })}</span>
+      <span>{t(`work.card.fail.${reason}`, { base, host })}</span>
       <Button size="sm" variant="secondary" disabled={card?.reading === true} onClick={() => actions.lookAgainPrCard(projectId, number)} data-pr-card-look-again="true">{t("work.card.lookAgain")}</Button>
     </p>
   );
@@ -402,7 +410,7 @@ function Timeline({ project, pr, card, panel, waiting, number, actions }: { proj
         {holder.loading || !holder.total ? null : <span className="font-normal" data-pr-card-sessions={holder.total}>· {t("links.sessionsCount", { count: holder.total })}</span>}
       </h3>
       {/* A card out of front with no timeline drawn yet waits quietly for its turn rather than spinning. */}
-      {waiting ? <p className="text-caption text-muted-foreground" data-pr-card-waiting="true">{t("detail.readInFront")}</p> : <LinkTimeline panel={holder} project={project} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />}
+      {waiting ? <p className="text-caption text-muted-foreground" data-pr-card-waiting="true">{t("detail.readInFront")}</p> : <LinkTimeline panel={holder} project={project} host={projectActionHost(project, card?.host)} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />}
     </section>
   );
 }
@@ -443,8 +451,8 @@ function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequ
   const removed = files?.reduce((sum, file) => sum + file.deletions, 0) ?? 0;
   const openFile = (file: string) => {
     const target = fileOpen({ pr, front: front ? { branch: front.branch ?? null, path: front.path } : null, committed, file });
-    if (target.kind === "diff") actions.selectChange(target.path, true, false);
-    else actions.openPullRequest(target.url, project.device_id, true);
+    if (target?.kind === "diff") actions.selectChange(target.path, true, false);
+    else if (target) actions.openPullRequest(target.url, project.device_id, true);
   };
   const name = files === null ? t("work.card.changedFiles") : t("work.card.filesCount", { count: card?.files_total ?? files.length });
   const summary = files === null ? (card?.failed.includes("files") ? <span className="text-warning" data-pr-card-part-summary="files">{t("work.card.part.failed")}</span> : null) : <><span className="font-mono text-pr-mergeable">+{added}</span><span className="font-mono text-pr-failed">−{removed}</span></>;
@@ -469,7 +477,7 @@ function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequ
                 </li>
               ) : null}
               {generatedOpen ? files.filter((file) => file.generated).map((file) => <FileRow key={file.path} file={file} onOpen={() => openFile(file.path)} />) : null}
-              {card && card.files_total > files.length ? <li className="py-xs text-micro text-muted-foreground">{t("work.card.filesMore", { shown: files.length, total: card.files_total })}</li> : null}
+              {card && card.files_total > files.length ? <li className="py-xs text-micro text-muted-foreground">{t("work.card.filesMore", { shown: files.length, total: card.files_total, host: pullHost(pr).name })}</li> : null}
             </ul>
           )}
         </div>

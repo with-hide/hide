@@ -17,6 +17,7 @@ import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
 import { machineName } from "./screenMachine";
 import type { Mission, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
+import { pullLabel } from "./codeHost";
 
 // A Conductor pane's mission chip and its popover (PRD mission-pane-chip
 // D-01, D-07; PRD mission-plan-visibility B8, B10, B11): in the plan chip's
@@ -235,7 +236,7 @@ function LiveRow({ node }: { node: MissionNode }) {
     <li className="flex min-w-0 items-center gap-xs rounded-xs px-xs py-xxs" data-mission-mini-node={node.key} data-node-status={node.status}>
       <StatusMark mark={nodeMark(node, row?.mark ?? null)} label={t(`mission.status.${node.status}`)} />
       <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-      {node.pr != null ? <span className="shrink-0 font-mono text-micro text-muted-foreground" data-node-pr={node.pr}>#{node.pr}</span> : null}
+      {node.pr != null ? <span className="shrink-0 font-mono text-micro text-muted-foreground" data-node-pr={node.pr}>{pullLabel({ number: node.pr, reference: node.pr_reference })}</span> : null}
       <span className="shrink-0 text-micro text-muted-foreground" data-node-stage={node.stage ?? 0}>{t(stageWord(node))}</span>
     </li>
   );

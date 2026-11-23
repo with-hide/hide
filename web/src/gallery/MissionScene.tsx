@@ -652,9 +652,9 @@ function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest 
   // Each cell names its node's own pull request where it is about one.
   const cells = [
     { reason: "wake_refused", pr: false },
-    { reason: "ci_failed", pr: true },
+    { reason: "wait_stood", pr: true },
     { reason: "worker_ended", pr: false },
-    { reason: "changes_requested", pr: true },
+    { reason: "pr_closed", pr: true },
     { reason: "warning_stopped", pr: false },
   ] as const;
   const held = raised.map((one, index) => {

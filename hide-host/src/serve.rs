@@ -1642,6 +1642,15 @@ pub fn handle_with_progress(
         }
         Call::Glab { args } => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            // A line this node does not allow is one a newer core asks for:
+            // refused as unsupported, so the core reads "not offered here"
+            // and never a failure it would retry.
+            if !hide_node_link::glab::allowed(&args) {
+                return Err(HostError::new(
+                    ErrorCode::Unsupported,
+                    "this node does not run that glab command",
+                ));
+            }
             to_value(crate::glab::run(&args))
         }
         Call::ListeningPorts => to_value(crate::ports::read()),

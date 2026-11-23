@@ -6080,6 +6080,11 @@ pub struct PrCardMerge {
     pub queue: bool,
     /// The signed-in account may write to the repository.
     pub can_merge: bool,
+    /// The host merges by the method its own settings name and applies none
+    /// Hide sends, so the confirm line names no method. Left out when false,
+    /// so GitHub's card and an older core's read the same.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_sets_method: bool,
 }
 
 /// One GitHub write asked for from a card (D-22, B31-B34).
@@ -6093,8 +6098,14 @@ pub struct PrWriteSnapshot {
     /// `working`, `done` or `failed`.
     pub phase: &'static str,
     /// Why it failed, as a code the card words with what to do:
-    /// `head_moved`, `denied`, `conflict`, `not_mergeable`, `unreachable`
-    /// or `failed`. The text GitHub gave goes to the diagnostic log.
+    /// `head_moved`, `denied`, `conflict`, `not_mergeable`, `unreachable`,
+    /// `unsupported` (the host or the node does not offer it), `auto_merge`
+    /// (gitlab.com set auto-merge and merged nothing), `budget_spent`
+    /// (Hide's share of the account's gitlab.com requests this minute is
+    /// spent, and nothing was sent) or `failed`. On gitlab.com
+    /// `unreachable` can follow a merge that landed, whose answer was lost;
+    /// asking again then succeeds without a second write. The host's own
+    /// text goes to the diagnostic log.
     pub reason: Option<&'static str>,
 }
 
@@ -7322,6 +7333,23 @@ pub struct GithubStatusSnapshot {
     /// saved file from before hosts were declared, which was GitHub's.
     #[serde(default)]
     pub host: Option<crate::code_host::HostDeclaration>,
+    /// The repository the read named, for the screen: the name its host
+    /// stores it by and its own page, both made by the host's unit. Absent
+    /// while no read named it or its server is not known. Only a copy of
+    /// [`GithubProjectSnapshot::repository`], made again by
+    /// [`GithubProjectSnapshot::show_repository`] wherever that is set; the
+    /// store does not save it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryOnScreen>,
+}
+
+/// A repository as the screen names and opens it ([`GithubStatusSnapshot::repository`]).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RepositoryOnScreen {
+    /// The name its host stores it by (`OWNER/NAME`, `gitlab.com/GROUP/PROJECT`).
+    pub name: String,
+    /// Its own page.
+    pub url: String,
 }
 
 impl GithubStatusSnapshot {
@@ -7333,6 +7361,19 @@ impl GithubStatusSnapshot {
         self.host
             .as_ref()
             .is_none_or(|host| host.operations.contains(&operation))
+    }
+
+    /// The unit of the host that answered, whose words a text about the
+    /// project takes (`PR #12`, `MR !12`); GitHub's with no declaration, as
+    /// [`GithubStatusSnapshot::offers`] reads one.
+    pub(crate) fn unit(&self) -> &'static dyn crate::code_host::CodeHost {
+        self.host
+            .as_ref()
+            .and_then(|host| crate::code_host::CodeHosts::STANDARD.host(&host.key))
+            .map_or(
+                &crate::github::host::GITHUB as &dyn crate::code_host::CodeHost,
+                crate::code_host::Host::unit,
+            )
     }
 }
 
@@ -7532,6 +7573,20 @@ impl GithubProjectSnapshot {
     /// while its server is not known ([`RepositoryIdentity::as_key`]).
     pub(crate) fn repository_id(&self) -> Option<&str> {
         self.repository.as_ref()?.as_key()?.id.as_deref()
+    }
+
+    /// Puts the repository the read named on the status the screen reads,
+    /// as its host's unit names it; called wherever the identity is set (a
+    /// read's answer, a kept identity, a restore), so the two never differ.
+    pub(crate) fn show_repository(&mut self) {
+        self.status.repository = self.repository.as_ref().and_then(|identity| {
+            let repository = identity.repository.as_ref()?;
+            let host = crate::code_host::CodeHosts::STANDARD.of(repository)?;
+            Some(RepositoryOnScreen {
+                name: host.unit().stored_name(repository),
+                url: host.unit().repository_url(repository),
+            })
+        });
     }
 
     /// The branch the repository's host names as its default.

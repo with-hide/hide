@@ -344,7 +344,11 @@ impl Runtime {
                     actor,
                     cell: Cell {
                         subject: node_subject(&mission.id, &wake.node),
-                        line: cut(&super::missions::wake_body(mission, wake)),
+                        line: cut(&super::missions::wake_words(
+                            mission,
+                            wake,
+                            self.mission_unit(mission),
+                        )),
                         news: !wake.standing(),
                         revision: wake.seq,
                         episode: wake.opened_seq.unwrap_or(wake.seq),

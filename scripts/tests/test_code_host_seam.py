@@ -136,7 +136,7 @@ class CodeHostSeam(unittest.TestCase):
 
     def test_a_named_exception_is_skipped_and_nothing_else_is(self):
         check = self.tree({
-            'web/src/PrCard.tsx': 'const files = `${url}/files`;\n',
+            'web/src/PrLinks.tsx': 'const files = `${url}/files`;\n',
             'web/src/Other.tsx': 'const files = `${url}/files`;\n',
             # A key file may spell the key, and nothing else.
             'hide-core/src/tasks.rs': 'pub const GITHUB: &str = "github";\nconst P: &str = "gh";\n',

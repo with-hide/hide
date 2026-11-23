@@ -5,13 +5,13 @@
 use hide_node_link::glab::{HOST, MINIMUM_VERSION, SIGN_IN, is_project_path};
 
 use crate::code_host::{
-    CardRead, ChangeRequestPage, CodeHost, CommitChecks, HostAccess, HostReads, Place, ReadClock,
-    RepositoryRef,
+    ByNumber, CardRead, ChangeRequestPage, CodeHost, CommitChecks, HeadMerge, HostAccess,
+    HostReads, MergeProof, Place, ReadClock, RepositoryRef,
 };
 use crate::node_access::NodeLink;
 
 /// The key a gitlab.com reference names its host by.
-const KEY: &str = "gitlab";
+pub(crate) const KEY: &str = "gitlab";
 
 pub(crate) struct Gitlab;
 
@@ -147,6 +147,14 @@ impl CodeHost for Gitlab {
         format!("!{number}")
     }
 
+    fn change_request_name(&self, number: u32) -> String {
+        format!("MR !{number}")
+    }
+
+    fn create_command(&self, base: &str) -> String {
+        format!("glab mr create --target-branch {base}")
+    }
+
     fn access(&self) -> HostAccess {
         HostAccess {
             program: "glab".to_owned(),
@@ -181,7 +189,20 @@ impl CodeHost for Gitlab {
         super::read_card(node, repository, number)
     }
 
+    /// The merge at the head the operator saw (`super::merge_request`).
+    fn merge(&self) -> Option<&dyn HeadMerge> {
+        Some(self)
+    }
+
+    fn merge_proof(&self) -> Option<&dyn MergeProof> {
+        Some(self)
+    }
+
     fn commit_checks(&self) -> Option<&dyn CommitChecks> {
+        Some(self)
+    }
+
+    fn by_number(&self) -> Option<&dyn ByNumber> {
         Some(self)
     }
 }

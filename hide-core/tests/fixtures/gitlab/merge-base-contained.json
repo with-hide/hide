@@ -1,0 +1,17 @@
+{
+  "id": "fe5296c752635d78354626be05387fb6d597e93f",
+  "short_id": "fe5296c7",
+  "created_at": "2026-11-22T16:10:39.000+00:00",
+  "parent_ids": [
+    "9ca9db7a0299de06f4deccf98ff88da93efc6d7d"
+  ],
+  "title": "W squash",
+  "message": "W squash\n",
+  "author_name": "Example User",
+  "authored_date": "2026-11-22T16:10:39.000+00:00",
+  "committer_name": "Example User",
+  "committed_date": "2026-11-22T16:10:39.000+00:00",
+  "trailers": {},
+  "extended_trailers": {},
+  "web_url": "https://gitlab.com/example-user/hide-code-host-check/-/commit/fe5296c752635d78354626be05387fb6d597e93f"
+}

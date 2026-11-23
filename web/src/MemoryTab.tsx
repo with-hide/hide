@@ -1,4 +1,5 @@
 import { ArchiveRestoreIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
+import { namedHost, pullHost, pullLabel, useProjectHost } from "./codeHost";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
@@ -562,7 +563,7 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
                 <span className="flex min-w-0 rounded-xs bg-secondary px-xxs"><DocumentName path={row.promotion.target_path} /></span>
               ) : row.promotion?.pr_number != null ? (
                 // No file was named: the pull request it went in by.
-                <PrMark state="merged" number={row.promotion.pr_number} />
+                <PrMark state="merged" label={pullLabel({ number: row.promotion.pr_number, reference: row.promotion.pr_reference })} />
               ) : null}
               <span>{t("memory.merged")}</span>
             </>
@@ -575,7 +576,7 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
             </>
           )}
         </span>
-        <PromotionStatus row={row} actions={actions} />
+        <PromotionStatus row={row} project={project} actions={actions} />
         {checking && !STATUS_STATES.has(row.promotion?.state) ? (
           // Quiet and alone: the operator has nothing to do (design 13).
           <span className="text-caption text-muted-foreground" data-memory-verifying={row.number}>
@@ -584,8 +585,8 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
         ) : null}
         {row.promotion?.state === "pr_open" && row.promotion.pr_number !== null ? (
           <span className="flex items-center gap-sm text-caption text-subtle-foreground">
-            <Button variant="ghost" size="inline" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { number: String(row.promotion.pr_number) })} onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url })}>
-              <PrMark state="pending" number={row.promotion.pr_number} />
+            <Button variant="ghost" size="inline" disabled={!row.promotion.pr_url} aria-label={t("memory.openPr", { noun: t(pullHost({ number: row.promotion.pr_number, reference: row.promotion.pr_reference }).noun), number: row.promotion.pr_number })} onClick={() => row.promotion?.pr_url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: row.promotion.pr_number!, url: row.promotion.pr_url, reference: row.promotion.pr_reference })}>
+              <PrMark state="pending" label={pullLabel({ number: row.promotion.pr_number, reference: row.promotion.pr_reference })} />
             </Button>
             {t("memory.prOpen")}
           </span>
@@ -596,8 +597,10 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
   );
 }
 
-function PromotionStatus({ row, actions }: { row: MemoryRow; actions: Actions }) {
+function PromotionStatus({ row, project, actions }: { row: MemoryRow; project: ProjectMemory; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  // The read that could not answer is the project's host's, with its own program.
+  const { name: host, program } = namedHost(useProjectHost(project.workspace_id));
   return <>
         {row.promotion?.state === "running" ? (
           <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground" data-memory-running={row.number}>
@@ -616,14 +619,14 @@ function PromotionStatus({ row, actions }: { row: MemoryRow; actions: Actions })
           </span>
         ) : null}
         {row.promotion?.state === "unconfirmed" ? (
-          // The agent is gone and GitHub cannot say whether its pull request
-          // came; restoring GitHub settles it, so nothing here asks to act.
+          // The agent is gone and the host cannot say whether its pull request
+          // came; restoring the host's read settles it, so nothing here asks to act.
           <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-memory-unconfirmed={row.number}>
             <span className="shrink-0 whitespace-nowrap">{t("memory.unconfirmed")}</span>
             {row.promotion.github_failure && row.promotion.github_failure !== "no_github_remote" ? (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="min-w-0 truncate">{t(`memory.github.${row.promotion.github_failure}`)}</span>
+                <span className="min-w-0 truncate">{t(`memory.github.${row.promotion.github_failure}`, { host, program })}</span>
               </>
             ) : null}
           </span>
