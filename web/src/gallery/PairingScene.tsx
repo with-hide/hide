@@ -74,7 +74,7 @@ const helper = (id: string, label: string, over: Partial<Device> = {}): Device =
 const HELPERS: Device[] = [
   helper("build-box", "build-box"),
   helper("mac-mini", "Mac mini", { switch: { state: "connecting" } }),
-  helper("windows-pc", "Windows PC", { switch: { state: "failed", reason: "ssh_not_reached" } }),
+  helper("windows-pc", "Windows PC", { switch: { state: "failed", reason: "ssh_refused_there" } }),
   helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, wsl_distro: "Ubuntu" }),
   helper("wsl-debian", "WSL Debian", { ssh_alias: null, wsl_distro: "Debian", switch: { state: "failed", reason: "wsl_not_reached" } }),
 ];
