@@ -93,6 +93,19 @@ pub(super) fn in_holder(peer: i32, home: &Path, state: &Path) -> Result<bool, &'
             // remains beyond it, as for the accepted detached-process case.
             #[cfg(windows)]
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            // Windows will not describe another account's process to this
+            // one: the SSH service's own process, which runs as SYSTEM and
+            // started this account's login. That is the account boundary a
+            // root sshd is on Unix, once the system confirms the parent is
+            // not this account's; a parent this account owns, or one that
+            // cannot be read at all, stays refused.
+            #[cfg(windows)]
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return match process::started_by_other_account(pid) {
+                    Ok(true) => Ok(false),
+                    Ok(false) | Err(_) => Err(UNAVAILABLE),
+                };
+            }
             Err(_) => return Err(UNAVAILABLE),
         };
         if parent <= 1 {

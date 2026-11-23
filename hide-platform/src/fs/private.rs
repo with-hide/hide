@@ -1056,6 +1056,57 @@ mod sys {
         Ok(token_sid(token.0, TokenUser)?.text()? == current_user_sid()?)
     }
 
+    /// Whether `pid` is another account's process, for one the system
+    /// refuses to describe to this one. Windows grants an object's owner
+    /// the right to read its access list whatever that list says, so a
+    /// process whose access list this account may not read is not owned by
+    /// it; one whose list it reads names its owner, compared as a file's
+    /// owner is ([`owned`]). `NotFound` when the process is gone.
+    pub(crate) fn process_owned_elsewhere(pid: u32) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER};
+        use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+        use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+        use windows_sys::Win32::System::Threading::OpenProcess;
+        // SAFETY: the pid is only opened, and the returned handle is owned.
+        let process = unsafe { OpenProcess(READ_CONTROL, 0, pid) };
+        if process.is_null() {
+            let error = io::Error::last_os_error();
+            return match error.raw_os_error() {
+                Some(code) if code == ERROR_ACCESS_DENIED as i32 => Ok(true),
+                Some(code) if code == ERROR_INVALID_PARAMETER as i32 => {
+                    Err(io::ErrorKind::NotFound.into())
+                }
+                _ => Err(error),
+            };
+        }
+        let process = Closing(process);
+        let mut owner = null_mut();
+        let mut descriptor = null_mut();
+        // SAFETY: the handle is open with READ_CONTROL, and the out
+        // parameters are writable.
+        let status = unsafe {
+            GetSecurityInfo(
+                process.0,
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        let security = Security {
+            _descriptor: Local(descriptor),
+            owner,
+            acl: null_mut(),
+        };
+        Ok(!owned(&security)?)
+    }
+
     fn account() -> io::Result<Account> {
         let token = acting_token(TOKEN_QUERY)?;
         Ok(Account {

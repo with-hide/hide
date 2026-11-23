@@ -1634,6 +1634,26 @@ pub fn same_account(pid: u32) -> io::Result<bool> {
     sys::same_account(pid)
 }
 
+/// Windows: whether `pid`, a process of this account, was started by a
+/// process of another account that the system will not describe to this
+/// one, which is what [`parent_of`] meets above a login a service made, such
+/// as the SSH server's own per-login process under its `SYSTEM` service.
+/// Unix reads every process's account, so [`same_account`] answers there.
+///
+/// The parent is the one the process table names; another account's
+/// process holding a pid whose own process has ended is just as far from
+/// this account's ancestry. A parent this account may read is not answered
+/// for here (`InvalidData`): [`parent_of`] and [`same_account`] read it. A
+/// refused parent counts as another account's only when this account may
+/// not read its access list either, or reads an owner that is not this
+/// account (the owner's own right to it, which a process of this account
+/// keeps unless it took that right from itself). `NotFound` when `pid` or
+/// its parent ended during the read.
+#[cfg(windows)]
+pub fn started_by_other_account(pid: u32) -> io::Result<bool> {
+    sys::started_by_other_account(pid)
+}
+
 /// Every process this account can see whose program file is `file`, read
 /// from one look at the system's process table: a process that runs the
 /// file under another path (renamed, linked or deleted since) is one of
@@ -6881,6 +6901,31 @@ mod sys {
 
     pub(super) fn same_account(pid: u32) -> io::Result<bool> {
         crate::fs::private::process_is_current_user(pid)
+    }
+
+    pub(super) fn started_by_other_account(pid: u32) -> io::Result<bool> {
+        let started = start_time(pid)?;
+        let table = process_table()?;
+        let (_, parent) = table
+            .iter()
+            .find(|(candidate, _)| *candidate == pid)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        match open_live(*parent, PROCESS_QUERY_LIMITED_INFORMATION) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the parent is readable, so its account is read from it",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => return Err(error),
+        }
+        let other = crate::fs::private::process_owned_elsewhere(*parent)?;
+        // The pid still names the process whose parent was read.
+        if start_time(pid)? != started {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(other)
     }
 
     pub(super) fn set_output_aside(_: &Path, _: &Path, _: u64) -> io::Result<bool> {

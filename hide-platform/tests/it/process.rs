@@ -2903,6 +2903,102 @@ fn a_running_programs_path_and_account_are_kernel_facts_on_every_system() {
     }
 }
 
+/// Sets the access list of `pid`, a process this test started, to the one
+/// `sddl` writes.
+#[cfg(windows)]
+fn set_process_access(pid: u32, sddl: &str) {
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_KERNEL_OBJECT,
+        SetSecurityInfo,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+    use windows_sys::Win32::System::Threading::OpenProcess;
+
+    let text: Vec<u16> = sddl.encode_utf16().chain([0]).collect();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: `text` is NUL-terminated and `descriptor` receives a
+    // LocalAlloc buffer freed below.
+    let made = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(made, 0, "{sddl} is no security descriptor");
+    let (mut present, mut acl, mut defaulted) = (0, std::ptr::null_mut(), 0);
+    // SAFETY: `descriptor` is the one made above; the out pointers are live.
+    let read = unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) };
+    assert_ne!(read, 0);
+    // SAFETY: a plain open of a process this test started, which it owns.
+    let process = unsafe { OpenProcess(WRITE_DAC, 0, pid) };
+    assert!(!process.is_null(), "{}", std::io::Error::last_os_error());
+    // SAFETY: the handle is open with WRITE_DAC and `acl` lives in
+    // `descriptor` until it is freed below.
+    let status = unsafe {
+        SetSecurityInfo(
+            process,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null_mut(),
+        )
+    };
+    // SAFETY: both were allocated above and are not used again.
+    unsafe {
+        CloseHandle(process);
+        LocalFree(descriptor);
+    }
+    assert_eq!(status, 0, "the access list of {pid} was not set");
+}
+
+/// The SSH service's own process runs as SYSTEM and starts the account's
+/// login, and Windows will not describe it to the account: the boundary a
+/// root sshd is on Unix. A parent that refuses this account and whose
+/// access list, the owner's own right, the account may not read either is
+/// another account's; one the account owns that only refuses the query is
+/// not, and a parent the account reads is read by `parent_of`.
+#[cfg(windows)]
+#[test]
+fn a_parent_that_refuses_this_account_and_is_not_its_own_is_another_accounts() {
+    use hide_platform::process::{same_account, started_by_other_account};
+    let _serial = serial();
+
+    let (_readable, under_readable) = owned_tree();
+    assert_eq!(
+        started_by_other_account(under_readable).unwrap_err().kind(),
+        ErrorKind::InvalidData
+    );
+
+    // No entry: nobody may open it, while its owner still reads its list.
+    let (closed, under_closed) = owned_tree();
+    set_process_access(closed.id(), "D:P");
+    assert_eq!(
+        same_account(closed.id()).unwrap_err().kind(),
+        ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        parent_of(under_closed).unwrap_err().kind(),
+        ErrorKind::PermissionDenied
+    );
+    assert!(
+        !started_by_other_account(under_closed).unwrap(),
+        "a parent this account owns is never another account's"
+    );
+
+    // Not even its owner may read it, as for SYSTEM's processes.
+    let (foreign, under_foreign) = owned_tree();
+    set_process_access(foreign.id(), "D:P(D;;0x1fffff;;;OW)");
+    assert!(started_by_other_account(under_foreign).unwrap());
+}
+
 /// Windows names no foreground for a console: the program a shell runs now,
 /// its oldest child still running, stands in for it, and the shell itself
 /// while it runs none.
