@@ -54,6 +54,8 @@ async function openDetail(listed: PhoneAgent) {
   const root = createRoot(container);
   patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -61,7 +63,14 @@ async function openDetail(listed: PhoneAgent) {
   await serve({ type: "agents", groups: [{ group: "seen", count: 1, rows: [{ kind: "agent", ...listed }] }], devices: [], interface_language: "en", color_theme: null });
   await act(async () => root.render(<App />));
   await act(async () => container.querySelector<HTMLElement>('[data-phone-agent="local|w1:p1"]')!.click());
-  return { container, socket, serve, root, unmount: () => act(async () => root.unmount()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    });
+  return { container, socket, serve, root, unmount };
 }
 
 afterEach(() => {
