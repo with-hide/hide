@@ -7,7 +7,7 @@ const words = {
   "recordCard.paneOpen": ["Pane open", "터미널 열림", "ペインは開いています", "窗格已打开"],
   "recordCard.paneClosed": ["Pane closed", "터미널 닫힘", "ペインは閉じています", "窗格已关闭"],
   "recordCard.prs": ["PR", "PR", "PR", "PR"],
-  "recordCard.github": ["View on GitHub", "GitHub에서 보기", "GitHubで見る", "在 GitHub 查看"],
+  "recordCard.github": ["View on {{host}}", "{{host}}에서 보기", "{{host}}で見る", "在 {{host}} 查看"],
   "recordCard.ciFailed": ["CI: {{count}} of {{total}} checks failed", "CI 검사 {{total}}개 중 {{count}}개 실패", "CI {{total}}件中{{count}}件失敗", "CI 检查 {{total}} 项中 {{count}} 项失败"],
   "recordCard.ciRunning": ["CI: {{count}} of {{total}} checks running", "CI 검사 {{total}}개 중 {{count}}개 실행 중", "CI {{total}}件中{{count}}件実行中", "CI 检查 {{total}} 项中 {{count}} 项运行中"],
   "recordCard.ciWaiting": ["CI: {{count}} of {{total}} checks waiting", "CI 검사 {{total}}개 중 {{count}}개 대기", "CI {{total}}件中{{count}}件待機中", "CI 检查 {{total}} 项中 {{count}} 项等待"],

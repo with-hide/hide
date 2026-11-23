@@ -12,7 +12,7 @@ const PHONE = "[data-practice-phone]";
 
 export default chapter<AnswerModel>({
   id: "answer",
-  number: 10,
+  number: 11,
   version: 1,
   since: "1.3.0",
   world: ANSWER_WORLD,

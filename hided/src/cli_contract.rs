@@ -74,6 +74,10 @@ pub enum Input {
     Approval,
     /// A decimal integer from 0 to 2^64 - 1.
     Unsigned,
+    /// A change request: its number above 0, written bare, with a registered
+    /// host's label (`#12`, `!12`) or as its address
+    /// (`hide_core::written_change_request`).
+    ChangeRequest,
     /// A JSON document of the shape the command names.
     Json,
     /// Text that may also carry line breaks (LF, CR) and tabs, and no other
@@ -100,6 +104,7 @@ impl Input {
             Span => "span",
             Approval => "approval",
             Unsigned => "unsigned",
+            ChangeRequest => "change_request",
             Json => "json",
             PasteText => "paste_text",
             LinkOrKey => "link_or_key",
@@ -317,8 +322,8 @@ const fn spec(
 }
 
 use Input::{
-    Address, Approval, Body, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio, Session,
-    Sha256, Span, Text, Unsigned,
+    Address, Approval, Body, ChangeRequest, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio,
+    Session, Sha256, Span, Text, Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -1941,8 +1946,8 @@ pub const COMMANDS: &[Spec] = &[
             optional("--mission", Key),
             optional("--status", OneOf(crate::mission_cli::STATUSES)),
             cleared("--agent-id", Key, &["--no-agent-id"]),
-            cleared("--pr", Unsigned, &["--no-pr"]),
-            cleared("--base-pr", Unsigned, &["--no-base-pr"]),
+            cleared("--pr", ChangeRequest, &["--no-pr"]),
+            cleared("--base-pr", ChangeRequest, &["--no-base-pr"]),
             cleared("--branch", Text, &["--no-branch"]),
             optional("--attempts", Unsigned),
             cleared("--line", Text, &["--no-line"]),
@@ -1999,6 +2004,9 @@ pub const COMMANDS: &[Spec] = &[
             "mission_machine_unavailable",
             "mission_projects_loading",
             "mission_machine_no_repository",
+            "change_request_other_host",
+            "change_request_other_repository",
+            "change_request_project_unknown",
         ],
     },
     Spec {
@@ -2459,7 +2467,7 @@ pub const COMMANDS: &[Spec] = &[
                 OneOf(&["done", "planned", "working", "dropped"]),
             ),
             optional("--line", Text),
-            cleared("--pr", Unsigned, &["--file"]),
+            cleared("--pr", ChangeRequest, &["--file"]),
             cleared("--file", Text, &["--pr"]),
         ],
         rest: None,
@@ -2475,6 +2483,9 @@ pub const COMMANDS: &[Spec] = &[
             "plan_file_missing",
             "plan_file_unconfirmed",
             "plan_report_missing",
+            "change_request_other_host",
+            "change_request_other_repository",
+            "change_request_project_unknown",
         ],
     },
     Spec {
@@ -2643,6 +2654,7 @@ fn body() -> Value {
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "span": "whole minutes or hours, such as 30m or 2h",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
+            "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
             "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
                 "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",
@@ -2907,6 +2919,7 @@ mod tests {
             Span => ("30m", "30"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
+            ChangeRequest => ("!12", "12x"),
             Json => ("{\"nodes\": []}", "{nodes"),
             PasteText => ("line one\nline two\tend", "\u{1b}[201~"),
             LinkOrKey => ("k1", "-x"),

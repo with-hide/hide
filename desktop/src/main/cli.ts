@@ -71,8 +71,10 @@ export type Locations = Pick<DesktopEnv, "home" | "localAppData" | "appData" | "
  *   `{commonpf}` in its installer), whose `cmd` folder is what it puts on PATH.
  * - `%APPDATA%\npm`: the global folder the Node.js installer gives npm, where
  *   `npm install -g` puts `claude` and `codex`.
- * - `%ProgramFiles%\GitHub CLI` and `%ProgramFiles%\nodejs`: the GitHub CLI's
- *   and Node.js's installers' folders; npm's commands run on `node`.
+ * - `%ProgramFiles%\GitHub CLI`, `%ProgramFiles%\glab` and
+ *   `%ProgramFiles%\nodejs`: the GitHub CLI's, glab's (`{autopf}\glab` in its
+ *   installer, which asks for the machine) and Node.js's installers' folders;
+ *   npm's commands run on `node`.
  */
 export function wellKnownDirs(at: Locations): Folders {
   if (process.platform !== "win32") return { dirs: [path.join(at.home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"], missing: [] };
@@ -88,7 +90,7 @@ export function wellKnownDirs(at: Locations): Folders {
     path.join(at.home, ".local", "bin"),
     ...under("LOCALAPPDATA", at.localAppData, ["Programs", "OpenAI", "Codex", "bin"], ["Programs", "Git", "cmd"]),
     ...under("APPDATA", at.appData, ["npm"]),
-    ...under("ProgramFiles", at.programFiles, ["Git", "cmd"], ["GitHub CLI"], ["nodejs"]),
+    ...under("ProgramFiles", at.programFiles, ["Git", "cmd"], ["GitHub CLI"], ["glab"], ["nodejs"]),
   ];
   return { dirs, missing };
 }

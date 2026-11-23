@@ -6,13 +6,14 @@
 
 import { agentProductName } from "./agentAdapters";
 import { botStarter } from "./bots";
+import { pullName } from "./codeHost";
 import { hideAiWords } from "./hideAiOrigin";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
 import { askSubjectText } from "./askSubject";
 import { humanTurnText } from "./humanTurn";
-import type { AgentRow, AgentSleep, AgentStatusCode, AskSubject, AgentWait, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
+import type { AgentRow, AgentSleep, AgentStatusCode, AskSubject, AgentWait, ChangeRequestRef, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
  * Why a row's second line is on screen at rest (the core's `RowLine::mode`).
@@ -31,7 +32,8 @@ import type { AgentRow, AgentSleep, AgentStatusCode, AskSubject, AgentWait, Huma
 export type { LineMode };
 
 /** `look`: the line names the newest View to look at, and counts every one (PRD unseen-agent-views D-14). */
-export type RowLine = { text: string; mode: LineMode; pull_request?: number; subject?: AskSubject; look?: number };
+/** `pull_reference` is the line's pull request as its host named it, which the phone's line carries (`tally::Line`); the desktop finds it in the row's own list. */
+export type RowLine = { text: string; mode: LineMode; pull_request?: number; pull_reference?: ChangeRequestRef | null; subject?: AskSubject; look?: number };
 
 /** The row's second line and why it shows, or null when the core gave it none. */
 export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
@@ -120,7 +122,13 @@ export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "sta
 }
 
 /** What `lineText` reads off a row: a desktop row, or the phone's. */
-export type LineAgent = WaitAgent & LeftAgent & { status_code: AgentStatusCode; look?: { count: number } | null };
+export type LineAgent = WaitAgent & LeftAgent & { status_code: AgentStatusCode; look?: { count: number } | null; request?: { pull_requests: readonly { number: number; reference?: ChangeRequestRef | null }[] } | null };
+
+/** The line's pull request as its host names it (`PR #12`, `MR !12`), by the reference the line or the row's own list carries. */
+function linePull(agent: LineAgent, line: RowLine): string {
+  const number = line.pull_request ?? 0;
+  return pullName({ number, reference: line.pull_reference ?? agent.request?.pull_requests.find((pull) => pull.number === number)?.reference ?? null });
+}
 
 /**
  * A line in its three parts, so a narrow row cuts only the sentence: the word
@@ -151,9 +159,9 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "vanished":
       return parts(statusText(t, "stopped"), t("agents.line.vanished"));
     case "checks_passed":
-      return parts(null, t("agents.line.checksPassed", { number: String(line.pull_request ?? 0) }));
+      return parts(null, t("agents.line.checksPassed", { pull: linePull(agent, line) }));
     case "checks_failed":
-      return parts(null, t("agents.line.checksFailed", { number: String(line.pull_request ?? 0) }));
+      return parts(null, t("agents.line.checksFailed", { pull: linePull(agent, line) }));
     case "waiting":
       return parts(waitWord(t, agent), line.text || waitDetail(t, agent, line));
     case "kept":
@@ -193,7 +201,7 @@ export function waitWord(t: TFunction<"translation">, agent: WaitAgent): string 
 
 /** The cause's detail a waiting row with no sentence says after its word (B10): the pull request its checks run on; null when the word says it all. */
 function waitDetail(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string | null {
-  return agent.wait === "checks" && line.pull_request ? t("agents.line.pullRequest", { number: String(line.pull_request) }) : null;
+  return agent.wait === "checks" && line.pull_request ? t("agents.line.pullRequest", { pull: linePull(agent, line) }) : null;
 }
 
 /** Whether the line is drawn without a pointer or selection on the row. */
@@ -323,7 +331,7 @@ export function agentWithProfile(t: TFunction<"translation">, agent: Pick<AgentR
 }
 
 export function rowAccessibleName(t: TFunction<"translation">, agent: AgentRow, device: string | null): string {
-  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentWithProfile(t, agent), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
+  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentWithProfile(t, agent), markWords(t, agent), hideAiWords(t, agent.hide_ai, undefined, agent.request?.pull_requests), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
 }
 
 export function recordPending(agent: Pick<AgentRow, "record_connection">): boolean {

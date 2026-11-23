@@ -7,18 +7,19 @@
 // line. What the groups, the line and the reading are is `prModel.ts` and the
 // desktop's own rules; this draws them.
 
+import { pullLabel, pullWords } from "../codeHost";
 import { ChevronRightIcon, Loader2Icon } from "lucide-react";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { GH_REFUSAL_KEY } from "../githubFailure";
 import { PR_LOOK } from "../prMark";
 import { ReasonLine } from "../prReason";
 import { ApprovalCount } from "../PrReviewers";
 import { approvalCount, prReview } from "../prReview";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
-import { openCount, groupPrs, projectTag, prsReading, type PrEntry, type PrGroup } from "./prModel";
+import { openCount, groupPrs, projectTag, prsReading, prsStatusLines, type PrEntry, type PrGroup } from "./prModel";
+import { blockedLines } from "../prWork";
 import { openPrPage } from "./connection";
 import { TabBar } from "./TabBar";
 import { usePhone } from "./store";
@@ -34,6 +35,8 @@ export function PrsScreen() {
   const reading = prs ? prsReading(prs.projects, Date.now()) : null;
   const count = openCount(groups);
   const blocked = reading?.state === "blocked" ? reading.category : null;
+  // Each refused or failed host, in its own words (B38).
+  const statusLines = reading ? prsStatusLines(reading, t) : [];
   // A failed read keeps the last list; the line says it is read again (B38).
   const stale = reading?.state === "stale";
   const dim = offline || stale;
@@ -53,12 +56,12 @@ export function PrsScreen() {
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
           <span><OfflineText /></span>
         </div>
-      ) : stale ? (
-        <p role="status" className="px-xl py-sm text-body text-subtle-foreground" data-phone-prs-state="stale">{t("mobile.prs.readFailed")}</p>
+      ) : statusLines.length > 0 ? (
+        <p role="status" className="px-xl py-sm text-body text-subtle-foreground" data-phone-prs-state={stale ? "stale" : "hosts"}>{statusLines.join(" · ")}</p>
       ) : null}
       <div className={cn("flex-1", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {blocked ? (
-          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="blocked" data-phone-prs-gh={blocked}>{t(GH_REFUSAL_KEY[blocked])}</p>
+          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="blocked" data-phone-prs-gh={blocked}>{reading?.state === "blocked" ? blockedLines(reading, t).join(" · ") : null}</p>
         ) : prs === null || (count === 0 && reading?.state === "reading") ? (
           <p role="status" className="px-xl py-lg text-body text-muted-foreground" data-phone-prs-state="reading">{t("work.reading")}</p>
         ) : count === 0 ? (
@@ -103,7 +106,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
   const review = prReview(pr);
   return (
     <RowButton
-      aria-label={t("work.row.open", { number: String(pr.number), title: pr.title })}
+      aria-label={t("work.row.open", { ...pullWords(pr), title: pr.title })}
       data-phone-pr={pr.key}
       data-phone-pr-reason={pr.reason.kind}
       className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
@@ -111,7 +114,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
     >
       <span className="flex w-full min-w-0 items-center gap-sm">
         <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
-        <span className="shrink-0 font-mono text-body text-subtle-foreground">#{pr.number}</span>
+        <span className="shrink-0 font-mono text-body text-subtle-foreground">{pullLabel(pr)}</span>
         <span className="min-w-0 flex-1 truncate text-title font-medium text-foreground">{pr.title}</span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>

@@ -436,7 +436,11 @@ use crate::error::HostError;
 /// `store_export` reads a store for a copy to a device; a helper on 99 knows
 /// none of these calls, so it is refused at Hello and upgraded with its
 /// core.
-pub const PROTOCOL_VERSION: u32 = 100;
+/// 101: the core's own node runs `glab` (`Glab`, `crate::glab::allowed`) to
+/// read gitlab.com's merge requests with the operator's login; a node on 100
+/// does not know the call, so it is refused at Hello and upgraded with its
+/// core.
+pub const PROTOCOL_VERSION: u32 = 101;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1191,6 +1195,13 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repository: Option<String>,
     },
+    /// One `glab` command with the operator's gitlab.com login
+    /// (`glab::allowed` names the command lines; any other is refused
+    /// unrun). Every line names its server and project itself, so none runs
+    /// in a folder. Answers `glab::GlabAnswer`.
+    Glab {
+        args: Vec<String>,
+    },
     /// The machine's TCP listeners and where each was started
     /// (`ports::ListeningPorts`).
     ListeningPorts,
@@ -1453,7 +1464,7 @@ impl Call {
 
     /// Whether a device's node answers this request. A device answers the
     /// work on its own files, repositories, sessions, processes, kit, panes
-    /// and the Hide AI agents signed in there; GitHub and the usage reads,
+    /// and the Hide AI agents signed in there; GitHub, gitlab.com and the usage reads,
     /// which act with the core machine's logins, and the files the operator
     /// picked on the core's machine are the core's own node's, and a device
     /// refuses them unrun.
@@ -1575,6 +1586,7 @@ impl Call {
             Self::UsageLimitFetch { .. }
             | Self::UsagePriceFetch
             | Self::Gh { .. }
+            | Self::Glab { .. }
             | Self::ReadAttachments { .. }
             | Self::ReadDropped { .. }
             | Self::RemoveClipboard { .. }

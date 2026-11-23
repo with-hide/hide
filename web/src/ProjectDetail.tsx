@@ -26,6 +26,7 @@ import { catalogWorkspaces, frontCheckout, localDeviceId, type ChangedFileSnapsh
 import type { WorkspaceView } from "./workspace";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { projectPullWords } from "./codeHost";
 
 // What the Project tool opens as a card tab on a desk (PRD lane-two-columns B30,
 // project-panel-results B9, B27-B34): the project's worktrees with its disk,
@@ -126,7 +127,7 @@ function WorktreeRow({ checkout, state }: { checkout: Checkout; state: DotState 
     <li className="flex min-w-0 items-center gap-xs border-b border-border py-xs" data-worktree-row={checkout.id} data-worktree-state={state}>
       <span aria-hidden="true" className={cn("size-(--size-status-mark) shrink-0 rounded-full", DOT_TONES[state])} />
       <span className="min-w-0 flex-1 truncate text-foreground" title={checkout.path}>{checkout.branch ?? checkout.label}</span>
-      {checkout.pull_request ? <PrMark state={checkout.pull_request.state} number={checkout.pull_request.number} compact /> : null}
+      {checkout.pull_request ? <PrMark state={checkout.pull_request.state} compact /> : null}
       <span className="shrink-0 text-micro text-muted-foreground">{t(`projectTool.worktrees.state.${state}`)}</span>
       {bytes !== null ? <span className="min-w-(--size-control-lg) shrink-0 whitespace-nowrap text-right font-mono text-micro text-muted-foreground">{formatBytes(language, bytes)}</span> : null}
     </li>
@@ -300,7 +301,7 @@ function TaskRow({ task, project, noResult, open: openFirst, actions }: { task: 
         <span role="cell" className={cn(NUMBER_COLUMN, "pointer-events-none relative tabular-nums text-muted-foreground")}>{durationWords(language, task.elapsed_ms)}</span>
         <span role="cell" className={cn(NUMBER_COLUMN, WIDE_COLUMN, "pointer-events-none relative tabular-nums text-muted-foreground")}>{durationWords(language, task.worked_ms)}</span>
       </div>
-      {open ? (task.kind === "mission" && task.mission ? <MissionNodes mission={task.mission} /> : <TaskSessions task={task} project={project} />) : null}
+      {open ? (task.kind === "mission" && task.mission ? <MissionNodes mission={task.mission} project={project} /> : <TaskSessions task={task} project={project} />) : null}
     </div>
   );
 }
@@ -329,7 +330,7 @@ function TaskSessions({ task, project }: { task: TaskCost; project: Workspace })
   );
 }
 
-function MissionNodes({ mission }: { mission: TaskMission }) {
+function MissionNodes({ mission, project }: { mission: TaskMission; project: Workspace }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   return (
@@ -337,7 +338,7 @@ function MissionNodes({ mission }: { mission: TaskMission }) {
       {mission.nodes.map((node) => (
         <li key={node.key} className="flex min-w-0 items-center gap-sm py-xxs ps-md text-micro" data-mission-node={node.key}>
           <span className="min-w-0 flex-1 truncate text-foreground" title={node.title}>{node.title}</span>
-          <span className="shrink-0 text-muted-foreground">{node.pr != null ? `#${node.pr}` : t("projectTool.table.noPr")}</span>
+          <span className="shrink-0 text-muted-foreground">{node.pr != null ? projectPullWords(project, node.pr).label : t("projectTool.table.noPr")}</span>
           {node.attempts > 1 ? <span className="shrink-0 text-muted-foreground">{t("projectTool.table.attempts", { count: node.attempts - 1 })}</span> : null}
           {node.reopened > 0 ? <span className="shrink-0 text-warning">{t("projectTool.table.reopened", { count: node.reopened })}</span> : null}
           <span className={cn(NUMBER_COLUMN, "font-mono tabular-nums")}>{usd(node.micro_usd, language)}</span>

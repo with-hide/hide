@@ -949,9 +949,9 @@ pub(crate) struct SafetyNet {
 }
 
 /// Why a node stands in the safety net (PRD letters-missions-simplify D-23,
-/// B15): its raise, or else the Conductor's standing cell about it (a failed
-/// or cancelled CI, changes asked for, a failed outside node, a warning). The
-/// card's row words this typed fact in the operator's language.
+/// B15): its raise, or else a standing cell only its Conductor moves (a
+/// stopped worker, a failed outside node). The card's row words this typed
+/// fact in the operator's language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(untagged)]
 pub enum HeldReason {
@@ -963,57 +963,62 @@ pub enum HeldReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellReason {
-    CiFailed,
-    CiCancelled,
-    ChangesRequested,
     OutsideFailed,
-    WarningReviewFails,
     WarningStopped,
 }
 
 /// What holds `node` of `mission` in the safety net, with since when it
 /// stood unresolved and the pull request it is about: a raise its Conductor
-/// settles (not `operator_first`, which is the operator's own item), else
-/// the Conductor's standing cell about the node. None when nothing stands.
+/// settles (not `operator_first`, which is the operator's own item), else a
+/// standing cell no one but its Conductor moves: the node's worker stopped
+/// (`WarningKind::Stopped`), or its outside pull request closed unmerged.
+/// A failed or cancelled CI, changes asked for and a review failing at its
+/// round limit are the working worker's to answer and hold nothing: a worker
+/// that stops on one is warned as stopped and one that ends is raised, and
+/// the clock counts from then. None when nothing stands.
 pub(crate) fn held_of(
     mission: &Mission,
     node: &MissionNode,
 ) -> Option<(HeldReason, u64, Option<u32>)> {
-    let wake = mission
-        .wakes
+    use crate::missions::{WakeEvent, WarningKind};
+    // When Hide warned that the node's worker stopped: from then on the
+    // node's cell is its Conductor's to move.
+    let stopped = node
+        .warnings
         .iter()
-        .find(|wake| wake.node == node.key && wake.standing());
+        .find(|warning| warning.kind == WarningKind::Stopped)
+        .map(|warning| warning.since_unix_ms);
     if let Some(attention) = &node.attention {
-        // The raise's cell began when the node's standing cell did, a
-        // warning it took over included: its clock does not start again.
-        let since = wake
-            .and_then(|wake| wake.since_unix_ms)
-            .map_or(attention.since_unix_ms, |since| {
-                since.min(attention.since_unix_ms)
-            });
+        // A raise that took over a stopped worker's warning keeps its
+        // clock; any other raise counts from itself.
+        let since = stopped.map_or(attention.since_unix_ms, |since| {
+            since.min(attention.since_unix_ms)
+        });
         return (!attention.reason.operator_first()).then_some((
             HeldReason::Raise(attention.reason),
             since,
             attention.pr,
         ));
     }
-    let wake = wake?;
-    use crate::missions::{CiResult, WakeEvent, WarningKind};
-    let reason = match wake.event {
-        WakeEvent::Ci => match wake.ci.as_ref().map(|ci| ci.result) {
-            Some(CiResult::Cancelled) => CellReason::CiCancelled,
-            _ => CellReason::CiFailed,
-        },
-        WakeEvent::ChangesRequested => CellReason::ChangesRequested,
-        WakeEvent::OutsideFailed => CellReason::OutsideFailed,
-        WakeEvent::Warning => match wake.warning {
-            Some(WarningKind::ReviewFails) => CellReason::WarningReviewFails,
-            _ => CellReason::WarningStopped,
-        },
-        // A raise's own cell stands with its attention, read above.
-        _ => return None,
-    };
-    Some((HeldReason::Cell(reason), wake.since_unix_ms?, wake.pr))
+    let wake = mission
+        .wakes
+        .iter()
+        .find(|wake| wake.node == node.key && wake.standing())?;
+    let cell_since = wake.since_unix_ms?;
+    if let Some(stopped) = stopped {
+        // The cell may have begun with a fact its worker was still
+        // answering, a failed CI: the Conductor's part began with the stop.
+        return Some((
+            HeldReason::Cell(CellReason::WarningStopped),
+            cell_since.max(stopped),
+            wake.pr,
+        ));
+    }
+    (wake.event == WakeEvent::OutsideFailed).then_some((
+        HeldReason::Cell(CellReason::OutsideFailed),
+        cell_since,
+        wake.pr,
+    ))
 }
 
 /// Whether the operator was told of what holds `mission`'s node `at`.

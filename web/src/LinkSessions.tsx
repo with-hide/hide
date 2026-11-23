@@ -1,4 +1,5 @@
 import { CopyIcon, LoaderCircleIcon, MessageSquareIcon, PlayIcon, CircleHelpIcon, SquareTerminalIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { hostLook, offers, projectPullWords } from "./codeHost";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -17,7 +18,7 @@ import { deviceLabel, failureKey, foldTimeline, resumeProvider, resumeBlock, res
 import { allAgents } from "./navigation";
 import { checkSummary, timeline, type Milestone, type TimelineEntry } from "./prCardModel";
 import { recordTitle } from "./sessionWork";
-import { catalogOf, localDeviceId, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
+import { catalogOf, catalogWorkspaces, localDeviceId, type HostDeclaration, type LinkPanel, type PullRequest, type Workspace } from "./snapshot";
 import { useSessionResume } from "./useSessionResume";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -45,6 +46,7 @@ const ON_RAIL = "relative inline-flex rounded-full bg-background";
 export function LinkTimeline({
   panel,
   project,
+  host,
   pr,
   milestones,
   branchOf,
@@ -53,6 +55,8 @@ export function LinkTimeline({
 }: {
   panel: LinkPanel;
   project: Workspace;
+  /** The host whose operations decide the hand-over and whose word names the item (`codeHost.actionHost`). */
+  host: HostDeclaration | null;
   /** The list's row for the pull request, or none while it is unlisted (then only sessions are drawn). */
   pr: PullRequest | null;
   milestones: readonly Milestone[];
@@ -77,6 +81,9 @@ export function LinkTimeline({
   const { shown, earlier } = foldTimeline(entries, (entry) => entry.kind === "session", (entry) => entry.kind === "session" && entry.session.live !== null, unfolded);
   const finding = panel.loading || filling;
   const empty = lines.length === 0 && !panel.failure && !panel.loading;
+  // The pull request's word and its hand-over follow its host; an action it does not offer is not drawn
+  // (docs/UI_BEHAVIOR.md, Code hosts).
+  const item = hostLook(host?.key).item;
   return (
     <div className="flex flex-col gap-xs" data-link-sessions={panel.total} data-link-loading={finding ? "true" : undefined}>
       {finding ? (
@@ -107,8 +114,8 @@ export function LinkTimeline({
       ) : null}
       {empty ? (
         <p className="flex min-w-0 flex-wrap items-center gap-sm text-caption text-muted-foreground" data-link-none="true">
-          {t("links.noSessions")}
-          {pr && pr.state !== "merged" && pr.state !== "closed" ? (
+          {t("links.noSessions", { item })}
+          {pr && pr.state !== "merged" && pr.state !== "closed" && offers(host, "handover") ? (
             <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-link-delegate={pr.number}>
               <PlayIcon aria-hidden="true" />
               {t("prList.delegate")}
@@ -119,8 +126,8 @@ export function LinkTimeline({
       {shown.length > 0 ? (
         <ol className={cn("relative flex flex-col", RAIL)} aria-label={t("work.card.timeline")} data-pr-card-timeline-rows={shown.length}>
           {shown.map((entry) => {
-            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} actions={actions} />;
-            if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} />;
+            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} item={item} actions={actions} />;
+            if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} item={item} />;
             return <NowRow key="now" running={entry.running} pr={pr} />;
           })}
         </ol>
@@ -130,10 +137,10 @@ export function LinkTimeline({
 }
 
 /** A milestone's word and colour (B5): what happened, in the colour the PR marks use for it. */
-function milestoneLook(milestone: Milestone, t: ReturnType<typeof useInterfaceTranslation>["t"]): { text: string; tone: string } {
+function milestoneLook(milestone: Milestone, item: string, t: ReturnType<typeof useInterfaceTranslation>["t"]): { text: string; tone: string } {
   switch (milestone.kind) {
     case "opened":
-      return { text: t("work.card.milestone.opened"), tone: "text-subtle-foreground" };
+      return { text: t("work.card.milestone.opened", { item }), tone: "text-subtle-foreground" };
     case "checks_passed":
       return { text: t("work.card.milestone.checksPassed"), tone: "text-pr-mergeable" };
     case "checks_failed":
@@ -150,9 +157,9 @@ function milestoneLook(milestone: Milestone, t: ReturnType<typeof useInterfaceTr
 }
 
 /** One milestone of the pull request (D-05, B5): the square in its colour, the word, the time at the right. */
-function MilestoneRow({ milestone }: { milestone: Milestone }) {
+function MilestoneRow({ milestone, item }: { milestone: Milestone; item: string }) {
   const { t } = useInterfaceTranslation();
-  const look = milestoneLook(milestone, t);
+  const look = milestoneLook(milestone, item, t);
   return (
     <SessionRow mark={<span className={ON_RAIL}><MilestoneMark className={look.tone} /></span>} title={look.text} right={milestone.at !== null ? <span className="font-mono text-caption text-muted-foreground">{timeText(milestone.at)}</span> : null} data-timeline-milestone={milestone.kind} data-timeline-at={milestone.at ?? undefined} />
   );
@@ -179,7 +186,7 @@ function useSessionTitle(line: SessionLine["line"], live: SessionLine["live"], w
   return row ? recordTitle(row, summaries) : agentProductName(line.agent);
 }
 
-function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; opener: boolean; actions: Actions }) {
+function SessionLineView({ entry, project, checkoutBranch, opener, item, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; opener: boolean; item: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
@@ -237,7 +244,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
       title={title}
       titleClassName={gone ? "text-muted-foreground" : undefined}
       hint={hint}
-      chips={opener && line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created")}</span> : null}
+      chips={opener && line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created", { item })}</span> : null}
       right={right}
       reveal={busy && !live ? undefined : reveal}
       line={caption}
@@ -337,11 +344,12 @@ const NO_CHIPS: readonly { number: number; created: boolean }[] = [];
 export function SessionPrChips({ workspaceId, sessionId, onPr, className }: { workspaceId: string; sessionId: string; onPr: (number: number) => void; className?: string }) {
   const { t } = useInterfaceTranslation();
   const chips = useShellStore((s) => s.linkSummaries?.projects[workspaceId]?.sessions?.[sessionId] ?? NO_CHIPS);
+  const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === workspaceId) ?? null);
   if (chips.length === 0) return null;
   return (
     <span className={cn("flex flex-wrap items-center gap-xxs", className)} data-session-prs={sessionId}>
       {chips.map((chip) => (
-        <Hint key={chip.number} label={t("links.chip", { number: chip.number })} reveals>
+        <Hint key={chip.number} label={t("links.chip", projectPullWords(project, chip.number))} reveals>
           <button
             type="button"
             className={cn("inline-flex h-(--size-control-sm) items-center rounded-xs border border-border px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", chip.created ? "text-pr-merged" : "text-subtle-foreground")}
@@ -349,7 +357,7 @@ export function SessionPrChips({ workspaceId, sessionId, onPr, className }: { wo
             data-session-pr={chip.number}
             data-session-pr-created={chip.created ? "true" : undefined}
           >
-            {chip.created ? t("links.createdNumber", { number: chip.number }) : t("links.workedNumber", { number: chip.number })}
+            {chip.created ? t("links.createdNumber", projectPullWords(project, chip.number)) : t("links.workedNumber", projectPullWords(project, chip.number))}
           </button>
         </Hint>
       ))}

@@ -15,7 +15,7 @@ import { MissionDetail } from "../mobile/MissionDetail";
 import { MissionsScreen } from "../mobile/MissionsScreen";
 import { PrDetail } from "../mobile/PrDetail";
 import { PrsScreen } from "../mobile/PrsScreen";
-import { confirmOf } from "../mobile/prModel";
+import { confirmOf, prHostOf } from "../mobile/prModel";
 import { patch, usePhone } from "../mobile/store";
 import "../mobile/mobile.css";
 import { PRESETS_MISSION, RELEASE_MISSION, phoneMissions } from "./mobilePhoneMissionsData";
@@ -74,7 +74,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
       missions: phoneMissions({ views: state === "phone-mission-views", withPresets: state === "phone-mission-presets" }), missionsFailed: false, missionsOmitted: cut ? CUT.missions : 0, missionOpen: missionPage ? opened : null,
       missionFolds: missionPage ? { [`done:${opened}`]: true } : {}, missionDrafts: {}, missionAnswer: null, missionAnswerError: null,
       prs, prOpen: prKey, prPending: null, prNotice: null, prDelegated: null,
-      prConfirm: state === "phone-pr-merge" && page ? confirmOf(page) : null,
+      prConfirm: state === "phone-pr-merge" && page ? confirmOf(page, prHostOf(page, prs.projects)) : null,
       startCatalog: state === "phone-pr-delegate" ? CATALOG : null,
       prDelegate: state === "phone-pr-delegate" && page
         ? { key: page.key, prompt: "", edited: false, choice: { target: null, kind: null, model: undefined }, feedbackId: "gallery-feedback", pending: null, error: null }

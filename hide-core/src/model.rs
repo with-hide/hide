@@ -6013,6 +6013,11 @@ pub const PR_CARD_LIMIT: usize = 8;
 pub struct PrCardSnapshot {
     pub workspace_id: String,
     pub number: u32,
+    /// The host of the pull request's project, with the operations it
+    /// offers: the card draws an action only when its host declares it, and
+    /// the core refuses the event of one it does not. Absent until a read of
+    /// the card has placed the project.
+    pub host: Option<crate::code_host::HostDeclaration>,
     /// A read is in flight; the parts below are the last read's.
     pub reading: bool,
     /// The head commit the parts were read at, which a merge is conditioned on.
@@ -7070,6 +7075,10 @@ pub enum MergeQueuePlace {
     NotQueued,
     /// From 1.
     At(u32),
+    /// The host has no merge queue Hide reads (gitlab.com's merge trains),
+    /// so no pull request waits on a place: told apart from `Unknown`,
+    /// which leaves a pull request unjudged.
+    Unsupported,
 }
 
 /// The questions a project's pull request read asks beside the list itself
@@ -7188,13 +7197,15 @@ impl PullRequestSnapshot {
     }
 
     /// The key a session's printed address and the link record name it by:
-    /// its repository's path in lower case and its number, on a server its
-    /// host names ([`crate::code_host::CodeHosts::on_named_server`]).
+    /// its repository's record name ([`crate::code_host::CodeHosts::record_name`])
+    /// and its number, on a server its host names
+    /// ([`crate::code_host::CodeHosts::on_named_server`]).
     pub(crate) fn sighting_key(&self, hosts: crate::code_host::CodeHosts) -> Option<(String, u64)> {
         let (repository, number) = self.named(hosts)?;
-        hosts
-            .on_named_server(&repository)
-            .then(|| (repository.path.to_ascii_lowercase(), u64::from(number)))
+        if !hosts.on_named_server(&repository) {
+            return None;
+        }
+        Some((hosts.record_name(&repository)?, u64::from(number)))
     }
 
     /// Something on its head's checks has not finished: they are pending,
@@ -7294,6 +7305,42 @@ pub struct GithubStatusSnapshot {
     /// are unknown (issue #1189).
     #[serde(default)]
     pub unread_queries: Vec<ExtraQuery>,
+    /// The host whose read this is: its key, the operations it offers and
+    /// how it is reached ([`crate::code_host::HostDeclaration`]). Absent
+    /// before any host has answered for the project, for a project no
+    /// registered host reads (`no_github_remote`), and in a payload or a
+    /// saved file from before hosts were declared, which was GitHub's.
+    #[serde(default)]
+    pub host: Option<crate::code_host::HostDeclaration>,
+    /// The repository the read named, for the screen: the name its host
+    /// stores it by and its own page, both made by the host's unit. Absent
+    /// while no read named it or its server is not known. Only a copy of
+    /// [`GithubProjectSnapshot::repository`], made again by
+    /// [`GithubProjectSnapshot::show_repository`] wherever that is set; the
+    /// store does not save it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryOnScreen>,
+}
+
+/// A repository as the screen names and opens it ([`GithubStatusSnapshot::repository`]).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RepositoryOnScreen {
+    /// The name its host stores it by (`OWNER/NAME`, `gitlab.com/GROUP/PROJECT`).
+    pub name: String,
+    /// Its own page.
+    pub url: String,
+}
+
+impl GithubStatusSnapshot {
+    /// Whether the host that answered offers `operation`. The one place an
+    /// absent declaration is read: before any host answered, and in a
+    /// payload or a saved file from before hosts were declared, the read was
+    /// GitHub's, which offers every operation.
+    pub(crate) fn offers(&self, operation: crate::code_host::Operation) -> bool {
+        self.host
+            .as_ref()
+            .is_none_or(|host| host.operations.contains(&operation))
+    }
 }
 
 /// How one part of a project's read stands: the four answers the reader,
@@ -7371,6 +7418,17 @@ impl RepositoryIdentity {
     }
 }
 
+/// Which bounded lists of a read held only their newest part.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ListCut {
+    /// The open change requests passed their cap: one the list does not
+    /// hold may be open.
+    pub open: bool,
+    /// The recent window of every state passed its cap: older merged and
+    /// closed ones are not listed, by design of the window.
+    pub settled: bool,
+}
+
 /// One repository's pull requests as its host reported them.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct GithubProjectSnapshot {
@@ -7397,12 +7455,40 @@ pub struct GithubProjectSnapshot {
     /// The repository's main worktree, which is what identifies a project.
     pub root_path: String,
     pub status: GithubStatusSnapshot,
+    /// The read named no remote because the node did not say enough to
+    /// tell (`code_host::Placement::RemotesNotKnown`): kept apart from no
+    /// remote in the core and read as no remote everywhere else, since
+    /// nothing truer can be shown. Never saved: the reader makes it again
+    /// each pass from the node's facts, as it makes no remote.
+    #[serde(skip)]
+    pub remotes_not_known: bool,
+    /// The read was not made this pass, and is no failure
+    /// ([`ReadHeld`]): the runtime keeps the previous answer and starts no
+    /// failure clock. Internal reader provenance.
+    #[serde(skip)]
+    pub held: Option<ReadHeld>,
+    /// Which of the read's bounded lists passed their cap and hold their
+    /// newest part only. Internal reader provenance, kept with the list it
+    /// describes (a list carried over a failed read keeps its mark); no
+    /// screen draws it yet.
+    #[serde(skip)]
+    pub pull_requests_cut: ListCut,
     /// The account `gh` is signed in as, which "mine" is judged against;
     /// absent before the first successful read.
     #[serde(default)]
     pub viewer: Option<String>,
     /// One entry per branch that has a pull request.
     pub pull_requests: Vec<PullRequestSnapshot>,
+}
+
+/// Why a host's read was not made this pass, which is no failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadHeld {
+    /// The node refused the host's call as one it does not know: a node
+    /// older than the host's reads.
+    Unsupported,
+    /// The account's request budget for background reads is spent.
+    BudgetSpent,
 }
 
 /// How a project's read ended, as the re-read clock counts it.
@@ -7421,6 +7507,9 @@ pub enum GithubReadOutcome {
     /// The repository has no GitHub remote: there is nothing to ask GitHub,
     /// and nothing changes that until its remotes do.
     NoRemote,
+    /// The read was not made this pass ([`ReadHeld`]): no failure, and the
+    /// next read comes on the ordinary clock.
+    Held,
 }
 
 impl PartRead {
@@ -7452,6 +7541,20 @@ impl GithubProjectSnapshot {
         self.repository.as_ref()?.as_key()?.id.as_deref()
     }
 
+    /// Puts the repository the read named on the status the screen reads,
+    /// as its host's unit names it; called wherever the identity is set (a
+    /// read's answer, a kept identity, a restore), so the two never differ.
+    pub(crate) fn show_repository(&mut self) {
+        self.status.repository = self.repository.as_ref().and_then(|identity| {
+            let repository = identity.repository.as_ref()?;
+            let host = crate::code_host::CodeHosts::STANDARD.of(repository)?;
+            Some(RepositoryOnScreen {
+                name: host.unit().stored_name(repository),
+                url: host.unit().repository_url(repository),
+            })
+        });
+    }
+
     /// The branch the repository's host names as its default.
     pub(crate) fn default_branch(&self) -> Option<&str> {
         self.repository.as_ref()?.default_branch.as_deref()
@@ -7460,6 +7563,8 @@ impl GithubProjectSnapshot {
     pub fn read_outcome(&self) -> GithubReadOutcome {
         if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
             GithubReadOutcome::NoRemote
+        } else if self.held.is_some() {
+            GithubReadOutcome::Held
         } else if !self.pull_requests_read {
             GithubReadOutcome::Failed
         } else if matches!(self.issues_read, PartRead::NotRead | PartRead::Failed)
@@ -7876,7 +7981,8 @@ pub struct ProjectWorktreesSnapshot {
     #[serde(skip)]
     pub repository: Option<String>,
     /// The address of its `origin`, which names `repository` through the
-    /// registered code hosts.
+    /// registered code hosts; without the user and password a `scheme://`
+    /// address carries, whatever the node sent.
     #[serde(skip)]
     pub origin_url: Option<String>,
 }

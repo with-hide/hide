@@ -4,6 +4,7 @@
 // tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 
+import { pullLabel } from "../codeHost";
 import { useMemo, type ReactNode } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
@@ -181,7 +182,7 @@ function RowMarks({ links }: { links: AgentLinks }) {
         return <span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-phone-row-pr={state}><Icon className="size-(--size-pr-icon) shrink-0" />{left > 0 ? left : null}</span>;
       })() : parts ? (() => {
         const { icon: Icon, tone } = PR_LOOK[parts.state];
-        return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />#{parts.number}</span>;
+        return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />{parts.label}</span>;
       })() : null}
       {links.missions.map(({ mission, turn }) => (
         <span key={mission.id} className={cn("flex items-center gap-xxs rounded-xs bg-secondary px-xs", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} data-phone-row-mission={mission.id}>
@@ -204,7 +205,7 @@ function AgentRow({ agent, nested, chip }: { agent: PhoneAgent; nested: boolean;
   const links = useRowLinks(agent);
   const marks = [
     agent.starred ? t("taskLens.revisit.starred") : null,
-    ...links.prs.map((pr) => `#${pr.number}`),
+    ...links.prs.map((pr) => pullLabel(pr)),
     ...links.missions.map(({ mission }) => `${t("mobile.tab.missions")} ${mission.title}`),
   ];
   const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.tool, agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");

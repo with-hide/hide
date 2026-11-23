@@ -105,16 +105,19 @@ pub enum Feature {
     /// A pairing with another computer that runs Hide finished, in either
     /// direction (PRD device-connect-iroh): the daemon tells the core.
     HidesPaired,
+    /// A gitlab.com project's merge requests read on this machine.
+    Gitlab,
     /// An agent's own question, plan or tool permission answered with one
     /// of its choices from a phone.
     PhoneAnswer,
 }
 
 impl Feature {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Focus,
         Self::SkillsMcp,
         Self::HidesPaired,
+        Self::Gitlab,
         Self::PhoneAnswer,
     ];
 
@@ -123,6 +126,7 @@ impl Feature {
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
             Self::HidesPaired => "hides_paired",
+            Self::Gitlab => "gitlab",
             Self::PhoneAnswer => "phone_answer",
         }
     }
@@ -187,6 +191,9 @@ pub struct ActiveDays {
     skills_mcp: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hides_paired: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gitlab: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_answer: Option<u64>,
 }
 
@@ -202,6 +209,7 @@ impl ActiveDays {
             Daily::Feature(Feature::Focus) => &mut self.focus,
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
             Daily::Feature(Feature::HidesPaired) => &mut self.hides_paired,
+            Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
             Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
         };
         if *recorded == Some(day) {
@@ -263,6 +271,7 @@ pub enum PracticeChapter {
     Focus,
     Bots,
     Connect,
+    Gitlab,
     Answer,
 }
 
@@ -278,6 +287,7 @@ impl PracticeChapter {
             "focus" => Self::Focus,
             "bots" => Self::Bots,
             "connect" => Self::Connect,
+            "gitlab" => Self::Gitlab,
             "answer" => Self::Answer,
             _ => return None,
         })
@@ -457,6 +467,7 @@ impl Event {
                         PracticeChapter::Focus => "focus",
                         PracticeChapter::Bots => "bots",
                         PracticeChapter::Connect => "connect",
+                        PracticeChapter::Gitlab => "gitlab",
                         PracticeChapter::Answer => "answer",
                     },
                 ),

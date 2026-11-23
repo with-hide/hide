@@ -1035,6 +1035,9 @@ fn a_failed_lookup_keeps_the_pull_requests_it_could_not_refresh() {
     };
     runtime.ingest_github(GithubSnapshot {
         projects: vec![GithubProjectSnapshot {
+            held: None,
+            pull_requests_cut: crate::model::ListCut::default(),
+            remotes_not_known: false,
             viewer: None,
             issues: Default::default(),
             root_path: "/tmp/hide".to_owned(),

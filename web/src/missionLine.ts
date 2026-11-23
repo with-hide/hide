@@ -14,10 +14,11 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
-import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
+import type { ChangeRequestRef, MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
+import { pullLabel } from "./codeHost";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
-export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
+export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_reference" | "pr_state" | "landing" | "merge"> & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
   /** How the pull request it is stacked on stands, as the mission's own nodes know it; absent or null when no node holds it. */
@@ -85,7 +86,8 @@ export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { ki
 export type BranchLine = {
   mark: LineMark;
   /** `#n`, `↗#n` for an outside one, and `+N` for the others the node holds. */
-  pr: { number: number; outside: boolean; more: number } | null;
+  /** `reference` is the one the node carries, which names the number as its host writes it. */
+  pr: { number: number; reference?: ChangeRequestRef | null; outside: boolean; more: number } | null;
   /** The branch, `↗` before an outside one; null when not known. */
   branch: { name: string; outside: boolean } | null;
   /** A planned node says how it will go in its branch's place: `PR` or `PR 없이`. */
@@ -118,7 +120,7 @@ function ownLine(node: LineNode, destination: string | null): BranchLine {
   }
   const branch = node.branch ? { name: node.branch, outside: false } : null;
   if (!byPr) return { mark: node.landing?.state === "landed" ? "merged" : "branch", pr: null, branch, plan: null, direct: true, to, person: null };
-  const pr = node.pr != null ? { number: node.pr, outside: false, more: node.pr_more ?? 0 } : null;
+  const pr = node.pr != null ? { number: node.pr, reference: node.pr_reference ?? null, outside: false, more: node.pr_more ?? 0 } : null;
   return { mark: pr ? (node.pr_state ?? "pull") : "branch", pr, branch, plan: null, direct: false, to, person };
 }
 
@@ -176,7 +178,7 @@ export function lineToWords(to: LineTo, t: TFunction<"translation">): string {
 
 /** The pull request's words as the line draws them: `#n`, `↗#n`, `+N`. */
 export function linePrLabel(pr: NonNullable<BranchLine["pr"]>): string {
-  return `${pr.outside ? "↗" : ""}#${pr.number}${pr.more > 0 ? ` +${pr.more}` : ""}`;
+  return `${pr.outside ? "↗" : ""}${pullLabel({ number: pr.number, reference: pr.reference })}${pr.more > 0 ? ` +${pr.more}` : ""}`;
 }
 
 /**

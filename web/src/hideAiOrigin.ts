@@ -3,8 +3,9 @@
 // the coordination record of the spawn; this module only words it and joins
 // it to the checkouts a project draws. Nothing here reads a branch name.
 import type { TFunction } from "i18next";
+import { pullName } from "./codeHost";
 import type { MessageKey } from "./i18n/catalogs";
-import { catalogWorkspaces, type AgentRow, type AutomationsSection, type Checkout, type HideAi, type HideAiCheckout, type HideAiTask, type HomeTurn, type SnapshotRest, type Workspace } from "./snapshot";
+import { catalogWorkspaces, type AgentRow, type AutomationsSection, type Checkout, type HideAi, type HideAiCheckout, type HideAiTask, type HomeTurn, type ChangeRequestRef, type SnapshotRest, type Workspace } from "./snapshot";
 
 /** The task kinds the catalogs name; a kind of another build shows as its code (LOCALIZATION.md). */
 const TASK_KEYS: Record<string, MessageKey> = {
@@ -55,20 +56,26 @@ export function originLine(t: TFunction<"translation">, hideAi: HideAi, names: A
   return taskLine(t, hideAi.task, names) ?? t("hideAi.name");
 }
 
-/** What the home waits for, in words (`PR #n 리뷰`, `CI 실패`, `바뀐 것 보기`); the core decides the turn and the screen only words it (PRD hide-ai-work-home D-14). */
-export function homeTurnLine(t: TFunction<"translation">, turn: HomeTurn): string {
+/** The pull requests a row lists, with the reference its host named each by. */
+export type RowPulls = readonly { number: number; reference?: ChangeRequestRef | null }[];
+
+/**
+ * What the home waits for, in words (`PR #n 리뷰`, `CI 실패`, `바뀐 것 보기`); the core decides the turn and the screen only words it (PRD hide-ai-work-home D-14).
+ * The pull request is named by the reference the row's own list carries for its number (`MR !n` on gitlab.com).
+ */
+export function homeTurnLine(t: TFunction<"translation">, turn: HomeTurn, pulls: RowPulls = []): string {
   switch (turn.kind) {
-    case "pr_review": return t("hideAi.turn.pr_review", { number: turn.pr_number });
+    case "pr_review": return t("hideAi.turn.pr_review", { pull: pullName({ number: turn.pr_number, reference: pulls.find((pull) => pull.number === turn.pr_number)?.reference ?? null }) });
     case "ci_failed": return t("hideAi.turn.ci_failed");
     case "branch_ready": return t("hideAi.turn.branch_ready");
   }
 }
 
 /** Hide AI's part of a row's accessible name (D-09, B12): the name, the task and the turn, so a screen reader hears who started it and what waits. */
-export function hideAiWords(t: TFunction<"translation">, hideAi: HideAi | undefined, names: AutomationNames = NO_NAMES): string | null {
+export function hideAiWords(t: TFunction<"translation">, hideAi: HideAi | undefined, names: AutomationNames = NO_NAMES, pulls: RowPulls = []): string | null {
   if (!hideAi) return null;
   const task = taskLine(t, hideAi.task, names);
-  const turn = hideAi.turn ? homeTurnLine(t, hideAi.turn) : null;
+  const turn = hideAi.turn ? homeTurnLine(t, hideAi.turn, pulls) : null;
   // An automation run is the automation's, which its task line names; Hide AI is only how it started.
   return [hideAi.task?.kind === "automation" ? null : t("hideAi.name"), task, turn].filter(Boolean).join(" · ");
 }

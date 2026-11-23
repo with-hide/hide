@@ -1,4 +1,5 @@
 import { BookMarkedIcon, BrainIcon, ChevronRightIcon, LightbulbIcon, SettingsIcon, Trash2Icon, type LucideIcon } from "lucide-react";
+import { servesSuggestions, useProjectHost } from "./codeHost";
 import { useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
@@ -145,10 +146,13 @@ function Section({ icon: Icon, name, note, checked, disabled, dimmed, onChange, 
 function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions; actions: Actions; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
+  // GitHub's signals are read from its issues and checks; a project whose host offers neither, such as gitlab.com for now, does not draw them.
+  const host = useProjectHost(id);
+  const groups = servesSuggestions(host) ? SIGNAL_GROUPS : SIGNAL_GROUPS.filter(({ group }) => group !== "github");
   return (
     <div className="flex flex-col gap-xs" data-hide-ai-read-from="true">
       <span className="text-caption text-subtle-foreground">{t("suggestions.settings.readFrom")}</span>
-      {SIGNAL_GROUPS.map(({ group, signals }) => {
+      {groups.map(({ group, signals }) => {
         const rows = project.settings.signals.filter((row) => signals.includes(row.signal));
         const readable = rows.filter((row) => row.unavailable === null);
         const unavailable = readable.length === 0 ? rows.find((row) => row.unavailable !== null)?.unavailable ?? null : null;

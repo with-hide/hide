@@ -71,6 +71,9 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
         .github
         .projects
         .push(crate::model::GithubProjectSnapshot {
+            held: None,
+            pull_requests_cut: crate::model::ListCut::default(),
+            remotes_not_known: false,
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {
@@ -1138,4 +1141,132 @@ fn a_teammates_pending_checks_the_list_does_not_show_are_not_read_for() {
     runtime.observe_request_view(true, start);
     runtime.reread_pending_checks(start + std::time::Duration::from_secs(61));
     assert_eq!(runtime.github_generations.get("/repo").copied(), before);
+}
+
+/// The project `/repo` connected, through its repository setting, to a
+/// gitlab.com project: the setting takes a gitlab.com repository, and the
+/// card writes and the feedback hand-over gitlab.com does not declare are
+/// refused at the event, before any host is asked and whatever surface sent
+/// it (an old phone bundle, a direct event).
+#[test]
+fn an_operation_gitlab_com_does_not_offer_is_refused_at_its_event() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        2,
+        "open-work",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    assert!(runtime.dispatch_json(&event(
+        "project_settings_set",
+        serde_json::json!({
+            "device_id": crate::node::TEST_NODE, "root": "/repo", "request_id": "connect",
+            "patch": {"repository": {"mode": "repository", "repository": "gitlab.com/acme/sub/project"}},
+        }),
+    )));
+    let place = runtime.github_place(None, "/repo").unwrap();
+    assert_eq!(place.host().key(), "gitlab");
+    // The new repository's read lists the merge request.
+    runtime
+        .github
+        .projects
+        .retain(|project| project.root_path != "/repo");
+    runtime
+        .github
+        .projects
+        .push(crate::model::GithubProjectSnapshot {
+            root_path: "/repo".into(),
+            status: crate::model::GithubStatusSnapshot {
+                available: true,
+                last_success_at_unix_ms: Some(1),
+                ..Default::default()
+            },
+            pull_requests: vec![PullRequestSnapshot {
+                url: "https://gitlab.com/acme/sub/project/-/merge_requests/2".into(),
+                ..pull_request(2, "open-work", PullRequestBadge::Open, None)
+            }],
+            pull_requests_read: true,
+            issues_read: crate::model::PartRead::Unsupported,
+            identity_read: crate::model::PartRead::Read,
+            ..Default::default()
+        });
+    runtime.apply_pull_requests();
+
+    for (kind, payload) in [
+        (
+            "pr_merge",
+            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
+        ),
+        (
+            "pr_update_branch",
+            serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD}),
+        ),
+    ] {
+        runtime.pr_card_slot("w", 2).write = None;
+        assert!(runtime.dispatch_json(&event(kind, payload)), "{kind}");
+        let write = card(&runtime, 2)
+            .write
+            .unwrap_or_else(|| panic!("{kind}: {:?}", runtime.snapshot().status.last_error));
+        assert_eq!(
+            (write.phase, write.reason),
+            ("failed", Some("unsupported")),
+            "{kind}"
+        );
+    }
+
+    assert!(runtime.dispatch_json(&event(
+        "pr_feedback_read",
+        serde_json::json!({"request_id": "f1", "workspace_id": "w", "pr_number": 2}),
+    )));
+    let feedback = runtime.snapshot().pr_work.feedback.clone().unwrap();
+    assert_eq!(feedback.failure.as_deref(), Some("pr_feedback.unsupported"));
+
+    // gitlab.com keeps no issues Hide reads: the project's issues are
+    // Hide's own, so a link never asks the host to edit a body.
+    let workspace = runtime.snapshot.navigator.workspaces[0].clone();
+    assert_eq!(
+        runtime.project_source_kind(&workspace),
+        crate::tasks::SourceKind::Local
+    );
+}
+
+/// GitHub's card writes are not refused by the declaration: the same merge
+/// on a GitHub project goes on to its host (and fails there in this test,
+/// which has no `gh`).
+#[test]
+fn githubs_operations_pass_the_declaration() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        2,
+        "open-work",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    assert!(runtime.dispatch_json(&event(
+        "pr_merge",
+        serde_json::json!({"workspace_id": "w", "pr_number": 2, "head": HEAD, "method": "squash"}),
+    )));
+    assert_ne!(card(&runtime, 2).write.unwrap().reason, Some("unsupported"));
+}
+
+/// A gitlab.com card whose description gitlab.com refused beside the rest
+/// keeps the body an earlier read found and names the body unread.
+#[test]
+fn a_gitlab_com_card_keeps_its_last_body_when_the_description_is_refused() {
+    let mut runtime = pr_runtime(vec![pull_request(
+        2,
+        "open-work",
+        PullRequestBadge::Open,
+        None,
+    )]);
+    runtime.pr_card_slot("w", 2).body = Some("The earlier body".into());
+    runtime.pr_card_slot("w", 2).reading = true;
+    let mut answer: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/gitlab/card.json")).unwrap();
+    answer["data"]["project"]["mergeRequest"]["description"] = serde_json::Value::Null;
+    answer["errors"] =
+        serde_json::json!([{"message": "x", "path": ["project", "mergeRequest", "description"]}]);
+    let read = crate::gitlab::parse_card(&answer.to_string());
+    runtime.ingest_pr_card("w", 2, read);
+    let card = card(&runtime, 2);
+    assert_eq!(card.body.as_deref(), Some("The earlier body"));
+    assert_eq!(card.failed, ["body"]);
 }

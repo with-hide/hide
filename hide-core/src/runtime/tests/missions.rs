@@ -18987,15 +18987,60 @@ fn one_cause_is_one_cell_and_no_send_however_often_it_is_evaluated() {
     assert_eq!(hide_letters(&runtime), 0, "nothing was sent");
 }
 
-/// B15 (D-23, D-25): the safety net counts every cell standing unresolved
-/// for the Conductor, a raise or a failed CI alike. Two nodes held 20
-/// minutes are one card for the mission, its rows each node's typed fact
-/// (which the screen words in the operator's language), an update keeps
-/// when the cell began, and a resolved cell leaves the card.
+/// Hide warns that `node`'s worker stopped at `since`, as the warning rule
+/// does: the warning stands on the node and its cell goes to the Conductor,
+/// `cell_since` set as a wake recorded then would be, or none to take the
+/// node's standing cell's start as an update does.
+fn warn_stopped(runtime: &mut Runtime, node: &str, since: u64, cell_since: Option<u64>) {
+    use crate::missions::{NodeWarning, PendingWake, WarningKind};
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|known| known.key == node)
+        .unwrap()
+        .warnings
+        .push(NodeWarning {
+            kind: WarningKind::Stopped,
+            from_unix_ms: since,
+            since_unix_ms: since,
+            told_unix_ms: Some(since),
+            cause: None,
+        });
+    mission.wake_seq += 1;
+    let wake = PendingWake {
+        seq: mission.wake_seq,
+        node: node.into(),
+        pr: None,
+        event: WakeEvent::Warning,
+        head: None,
+        to: None,
+        reason: None,
+        why: None,
+        action: None,
+        warning: Some(WarningKind::Stopped),
+        ci: None,
+        line: None,
+        key: None,
+        since_unix_ms: cell_since,
+        notified: false,
+        opened_seq: None,
+        round: None,
+    };
+    crate::runtime::missions::push_wake(mission, wake).unwrap();
+    runtime.save_missions();
+}
+
+/// B15 (D-23, D-25): the safety net counts what only the Conductor moves.
+/// Two nodes held 20 minutes are one card for the mission, its rows each
+/// node's typed fact (which the screen words in the operator's language),
+/// oldest first, and a settled one leaves the card. A failed CI is its
+/// worker's to answer and no row however long it stands; the worker stopping
+/// on it is, counted from the stop, not from the failure.
 #[test]
-fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
+fn the_safety_net_is_one_card_whose_rows_are_what_only_the_conductor_moves() {
     use crate::mission_health::{CellReason, HeldReason};
-    use crate::missions::AttentionReason;
+    use crate::missions::{AttentionReason, WarningKind};
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -19008,7 +19053,7 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
     )
     .unwrap();
     let now = crate::runtime::unix_milliseconds();
-    let then = now - 25 * MINUTE;
+    let then = now - 40 * MINUTE;
     // The Conductor has been there since before the cells.
     runtime.drive_mission_health(then);
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -19029,17 +19074,6 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
         node,
         &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
     );
-    let fix_cell = |runtime: &mut Runtime| {
-        runtime
-            .missions
-            .book
-            .get_mut("mission-1")
-            .unwrap()
-            .wakes
-            .iter_mut()
-            .find(|wake| wake.node == "fix" && wake.standing())
-            .map(|wake| wake.since_unix_ms)
-    };
     // The failure stood since then.
     {
         let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -19058,39 +19092,53 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
             .map(|net| {
                 net.nodes
                     .into_iter()
-                    .map(|node| (node.key, node.reason))
+                    .map(|node| (node.key, node.reason, node.since_unix_ms))
                     .collect::<Vec<_>>()
             })
     };
+    let cause = (
+        "cause".to_owned(),
+        HeldReason::Raise(AttentionReason::PrClosed),
+        then,
+    );
+    assert_eq!(
+        rows(&runtime),
+        Some(vec![cause.clone()]),
+        "the failed CI is its worker's, not a row"
+    );
+    // The Conductor is still told of both cells.
+    assert_eq!(runtime.take_conductor_cells("mission-1").len(), 2);
+    // The worker stops on the failure: the stop is the Conductor's to move,
+    // counted from the warning while the cell keeps when it began.
+    let stopped = then + 5 * MINUTE;
+    warn_stopped(&mut runtime, "fix", stopped, None);
     assert_eq!(
         rows(&runtime),
         Some(vec![
+            cause.clone(),
             (
-                "cause".to_owned(),
-                HeldReason::Raise(AttentionReason::PrClosed)
+                "fix".to_owned(),
+                HeldReason::Cell(CellReason::WarningStopped),
+                stopped
             ),
-            ("fix".to_owned(), HeldReason::Cell(CellReason::CiFailed)),
         ]),
         "one card, its rows the unresolved cells, oldest first"
     );
-    // The Conductor reading the cells does not resolve them.
-    assert_eq!(runtime.take_conductor_cells("mission-1").len(), 2);
-    assert!(rows(&runtime).is_some());
-    // A failure on the next commit updates the cell and keeps its start.
-    runtime.note_mission_pulls(
-        node,
-        &checked(7, "b2", PullRequestChecks::Failed, &["verify"]),
-    );
-    assert_eq!(fix_cell(&mut runtime), Some(Some(then + MINUTE)));
-    // The pass resolves it: its row goes, the raise's stays.
-    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
-    assert_eq!(
-        rows(&runtime),
-        Some(vec![(
-            "cause".to_owned(),
-            HeldReason::Raise(AttentionReason::PrClosed)
-        )])
-    );
+    // The worker at work again takes the warning off: its row goes, the
+    // raise's stays.
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .warnings
+        .retain(|warning| warning.kind != WarningKind::Stopped);
+    runtime.save_missions();
+    assert_eq!(rows(&runtime), Some(vec![cause]));
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission
         .nodes
@@ -19103,10 +19151,11 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
     assert_eq!(rows(&runtime), None, "nothing stands, no card");
 }
 
-/// B15: a failed CI cell under 20 minutes holds no card while its Conductor
-/// is there; the same cell past 20 minutes does, as a raise would.
+/// B15: a failed CI, however long it stands, holds no card while its worker
+/// answers it; once its worker is warned stopped, the card comes 20 minutes
+/// after the warning, as a raise's does.
 #[test]
-fn a_standing_cell_holds_the_safety_net_only_after_twenty_minutes() {
+fn a_stopped_worker_holds_the_safety_net_only_after_twenty_minutes() {
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -19119,7 +19168,7 @@ fn a_standing_cell_holds_the_safety_net_only_after_twenty_minutes() {
     )
     .unwrap();
     let now = crate::runtime::unix_milliseconds();
-    runtime.drive_mission_health(now - 60 * MINUTE);
+    runtime.drive_mission_health(now - 120 * MINUTE);
     let node = crate::node::TEST_NODE;
     runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
     runtime.note_mission_pulls(
@@ -19127,17 +19176,28 @@ fn a_standing_cell_holds_the_safety_net_only_after_twenty_minutes() {
         &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
     );
     let net = |runtime: &Runtime| runtime.mission_view_of("mission-1").unwrap().safety_net;
-    let set_since = |runtime: &mut Runtime, since: u64| {
-        for wake in &mut runtime.missions.book.get_mut("mission-1").unwrap().wakes {
-            if wake.standing() {
-                wake.since_unix_ms = Some(since);
-            }
+    for wake in &mut runtime.missions.book.get_mut("mission-1").unwrap().wakes {
+        if wake.standing() {
+            wake.since_unix_ms = Some(now - 90 * MINUTE);
         }
-    };
-    set_since(&mut runtime, now - 19 * MINUTE);
-    assert_eq!(net(&runtime), None);
-    set_since(&mut runtime, now - 21 * MINUTE);
-    assert_eq!(net(&runtime).map(|net| net.nodes.len()), Some(1));
+    }
+    assert_eq!(net(&runtime), None, "a failed CI alone is no card");
+    warn_stopped(&mut runtime, "fix", now - 19 * MINUTE, None);
+    assert_eq!(net(&runtime), None, "19 minutes after the stop");
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let fix = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    for warning in &mut fix.warnings {
+        warning.since_unix_ms = now - 21 * MINUTE;
+    }
+    assert_eq!(
+        net(&runtime).map(|net| (net.since_unix_ms, net.nodes.len())),
+        Some((now - 21 * MINUTE, 1)),
+        "21 minutes after the stop, counted from it"
+    );
 }
 
 /// What a registered Conductor saw outlives the core: the delivery store
@@ -19289,7 +19349,7 @@ fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
 /// 30, counted from the warning's start, and the operator is not told again.
 #[test]
 fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
-    use crate::missions::{AttentionReason, PendingWake, WarningKind};
+    use crate::missions::AttentionReason;
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -19298,30 +19358,7 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
     let now = crate::runtime::unix_milliseconds();
     let start = now - 30 * MINUTE;
     runtime.drive_mission_health(start - MINUTE);
-    {
-        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-        mission.wake_seq += 1;
-        let wake = PendingWake {
-            seq: mission.wake_seq,
-            node: "fix".into(),
-            pr: None,
-            event: WakeEvent::Warning,
-            head: None,
-            to: None,
-            reason: None,
-            why: None,
-            action: None,
-            warning: Some(WarningKind::Stopped),
-            ci: None,
-            line: None,
-            key: None,
-            since_unix_ms: Some(start),
-            notified: false,
-            opened_seq: None,
-            round: None,
-        };
-        crate::runtime::missions::push_wake(mission, wake).unwrap();
-    }
+    warn_stopped(&mut runtime, "fix", start, Some(start));
     let held = |runtime: &Runtime| {
         runtime
             .mission_view_of("mission-1")
@@ -19354,6 +19391,71 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
         "the card stays, counted from the warning's start"
     );
     assert!(runtime.claim_mission_notices().is_empty(), "not told again");
+}
+
+/// B15: a raise on a node whose failed CI its worker was answering counts
+/// its 20 minutes from the raise, not from the failure: the failure was
+/// never the Conductor's to move.
+#[test]
+fn a_raise_after_a_failed_ci_counts_from_the_raise() {
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now - 120 * MINUTE);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+    );
+    for wake in &mut runtime.missions.book.get_mut("mission-1").unwrap().wakes {
+        if wake.standing() {
+            wake.since_unix_ms = Some(now - 90 * MINUTE);
+        }
+    }
+    let raised = now - 10 * MINUTE;
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::WorkerEnded,
+            Some(7),
+            raised
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    let net = |runtime: &Runtime| runtime.mission_view_of("mission-1").unwrap().safety_net;
+    assert_eq!(net(&runtime), None, "10 minutes after the raise");
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .attention
+        .as_mut()
+        .unwrap()
+        .since_unix_ms = now - 21 * MINUTE;
+    assert_eq!(
+        net(&runtime).map(|net| net.since_unix_ms),
+        Some(now - 21 * MINUTE),
+        "21 minutes after the raise, counted from it"
+    );
 }
 
 /// A blocked child's cell its parent read is not handed again by a core
@@ -20589,4 +20691,171 @@ fn an_own_mode_bot_lists_and_shows_the_missions_its_agents_conduct_only() {
         ask(&idle, show).err().as_deref(),
         Some(crate::access::NOT_OWN_WORK)
     );
+}
+
+/// The project's repository read as `stored`'s, as its host answered it.
+fn read_as(stored: &str) -> GithubSnapshot {
+    let mut project = GithubProjectSnapshot {
+        pull_requests_read: true,
+        root_path: PROJECT.into(),
+        ..Default::default()
+    };
+    project.repository = crate::code_host::CodeHosts::STANDARD
+        .repository(stored)
+        .map(|(host, repository)| crate::model::RepositoryIdentity::named(host.unit(), repository));
+    GithubSnapshot {
+        projects: vec![project],
+    }
+}
+
+/// A node's `--pr` or `--base-pr` written with another host's label, or as
+/// an address of another host or repository, attaches nothing and says
+/// which project's change request it expected, never what was written; the
+/// project's own forms and a bare number attach, as does an event from an
+/// older `hide` that sends the number alone.
+#[test]
+fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_nothing() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let held = |runtime: &Runtime| {
+        let node = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        (node.prs.clone(), node.base_pr)
+    };
+    let node = |runtime: &mut Runtime, patch: Value| {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": patch}),
+        )
+        .map(|_| ())
+        .map_err(|refusal| {
+            let (code, detail) = crate::coordination::split_refusal(&refusal);
+            (code.to_owned(), detail.map(str::to_owned))
+        })
+    };
+    // While the project's repository is not read, only a bare number.
+    assert_eq!(
+        node(
+            &mut runtime,
+            json!({"pr": 12, "pr_place": {"host": "github"}})
+        ),
+        Err(("change_request_project_unknown".to_owned(), None))
+    );
+    node(&mut runtime, json!({"pr": 3})).unwrap();
+
+    runtime.github = read_as("acme/app");
+    for (patch, code, detail) in [
+        (
+            json!({"pr": 12, "pr_place": {"host": "gitlab"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+        (
+            json!({"pr": 12, "pr_place": {"host": "gitlab", "repository": "gitlab.com/acme/app"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+        (
+            json!({"pr": 12, "pr_place": {"host": "github", "repository": "github.com/acme/other"}}),
+            "change_request_other_repository",
+            "acme/app",
+        ),
+        (
+            json!({"pr": 12, "base_pr": 2, "base_pr_place": {"host": "gitlab"}}),
+            "change_request_other_host",
+            "GitHub",
+        ),
+        // An Enterprise server's `acme/app` is another repository.
+        (
+            json!({"pr": 12, "pr_place": {"host": "github", "repository": "ghe.example/acme/app"}}),
+            "change_request_other_repository",
+            "acme/app",
+        ),
+        (
+            json!({"pr": 12, "base_pr": 2, "base_pr_place": {"host": "github", "repository": "ghe.example/acme/app"}}),
+            "change_request_other_repository",
+            "acme/app",
+        ),
+    ] {
+        assert_eq!(
+            node(&mut runtime, patch.clone()),
+            Err((code.to_owned(), Some(detail.to_owned()))),
+            "{patch}"
+        );
+        assert_eq!(held(&runtime), (vec![3], None), "{patch}");
+    }
+    for patch in [
+        json!({"pr": 12}),
+        json!({"pr": 13, "pr_place": {"host": "github"}}),
+        json!({"pr": 14, "pr_place": {"host": "github", "repository": "github.com/acme/app"}, "base_pr": 2}),
+    ] {
+        node(&mut runtime, patch.clone()).unwrap();
+    }
+    assert_eq!(held(&runtime).1, Some(2));
+    assert!(
+        held(&runtime).0.ends_with(&[12, 13, 14]),
+        "{:?}",
+        held(&runtime)
+    );
+
+    // On an Enterprise project github.com's `acme/app` is another
+    // repository, and the server's own address is the project's.
+    runtime.github = read_as("ghe.example/acme/app");
+    for (field, place) in [("pr_place", "pr"), ("base_pr_place", "base_pr")] {
+        assert_eq!(
+            node(
+                &mut runtime,
+                json!({(place): 20, (field): {"host": "github", "repository": "github.com/acme/app"}})
+            ),
+            Err((
+                "change_request_other_repository".to_owned(),
+                Some("ghe.example/acme/app".to_owned())
+            )),
+            "{field}"
+        );
+        node(
+            &mut runtime,
+            json!({(place): 21, (field): {"host": "github", "repository": "ghe.example/acme/app"}}),
+        )
+        .unwrap();
+    }
+
+    // On a gitlab.com project `#12` is GitHub's label and `!12` its own.
+    runtime.github = read_as("gitlab.com/acme/app");
+    assert_eq!(
+        node(
+            &mut runtime,
+            json!({"pr": 15, "pr_place": {"host": "github"}})
+        ),
+        Err((
+            "change_request_other_host".to_owned(),
+            Some("GitLab".to_owned())
+        ))
+    );
+    node(
+        &mut runtime,
+        json!({"pr": 15, "pr_place": {"host": "gitlab"}}),
+    )
+    .unwrap();
+    node(
+        &mut runtime,
+        json!({"pr": 16, "pr_place": {"host": "gitlab", "repository": "gitlab.com/acme/app"}}),
+    )
+    .unwrap();
 }

@@ -38,7 +38,7 @@ import {
   type ServerFrame,
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
-import { confirmOf, holds, prOf } from "./prModel";
+import { confirmOf, holds, prHostOf, prOf } from "./prModel";
 import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
@@ -954,7 +954,7 @@ export function lookAgainPr(): void {
 export function askMerge(): void {
   const { prs, prOpen } = usePhone.getState();
   const pr = prOf(prs?.items ?? null, prOpen);
-  const confirm = pr ? confirmOf(pr) : null;
+  const confirm = pr ? confirmOf(pr, prHostOf(pr, prs?.projects ?? [])) : null;
   if (confirm) patch({ prConfirm: confirm, prNotice: null });
 }
 
@@ -972,7 +972,7 @@ export function confirmMerge(): boolean {
   if (!confirm || state.prPending) return false;
   const pr = prOf(state.prs?.items ?? null, confirm.key);
   patch({ prConfirm: null });
-  if (!pr || !holds(confirm, pr)) return false;
+  if (!pr || !holds(confirm, pr, prHostOf(pr, state.prs?.projects ?? []))) return false;
   const intent = JSON.stringify([confirm.key, confirm.head, confirm.queue ? null : confirm.method]);
   const requestId = lastMerge?.key === intent ? lastMerge.requestId : newRequestId();
   lastMerge = { key: intent, requestId };

@@ -73,7 +73,7 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     requirement: "optional",
     shape: "absolute directory path; read on Windows only",
     fallback: "none: the machine-wide install folders are left out of the search and of every child's PATH, and `env.locations_missing` names the key",
-    note: "Holds the machine-wide installs of Git for Windows (`Git\\cmd`), the GitHub CLI (`GitHub CLI`) and Node.js (`nodejs`), which npm's `claude` and `codex` commands run on",
+    note: "Holds the machine-wide installs of Git for Windows (`Git\\cmd`), the GitHub CLI (`GitHub CLI`), glab (`glab`) and Node.js (`nodejs`), which npm's `claude` and `codex` commands run on",
   },
   {
     key: "SystemRoot",

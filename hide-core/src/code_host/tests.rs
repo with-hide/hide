@@ -23,13 +23,22 @@ pub(crate) static PLAIN: Plain = Plain;
 const PLAIN_SERVER: &str = "code.example";
 
 /// GitHub and the test host, as a core that registered both would have them.
-pub(crate) const BOTH: CodeHosts = CodeHosts(&[&crate::github::host::GITHUB, &PLAIN]);
+const BOTH_UNITS: &[&dyn CodeHost] = &[&crate::github::host::GITHUB, &PLAIN];
+pub(crate) const BOTH: CodeHosts = CodeHosts::new(BOTH_UNITS, &crate::github::host::GITHUB);
 
-const PLAIN_ONLY: CodeHosts = CodeHosts(&[&PLAIN]);
+const PLAIN_UNITS: &[&dyn CodeHost] = &[&PLAIN];
+const PLAIN_ONLY: CodeHosts = CodeHosts::new(PLAIN_UNITS, &PLAIN);
+const GITHUB_UNITS: &[&dyn CodeHost] = &[&crate::github::host::GITHUB];
+pub(crate) const GITHUB_ONLY: CodeHosts =
+    CodeHosts::new(GITHUB_UNITS, &crate::github::host::GITHUB);
 
 impl CodeHost for Plain {
     fn key(&self) -> &'static str {
         "plain"
+    }
+
+    fn name(&self) -> &'static str {
+        "Plain"
     }
 
     fn names_server(&self, authority: &str) -> bool {
@@ -110,6 +119,14 @@ impl CodeHost for Plain {
 
     fn number_label(&self, number: u32) -> String {
         format!("!{number}")
+    }
+
+    fn access(&self) -> HostAccess {
+        HostAccess {
+            program: "plain".to_owned(),
+            minimum_version: "1.0.0".to_owned(),
+            sign_in: "plain login".to_owned(),
+        }
     }
 
     fn reads(&self) -> Box<dyn HostReads> {
@@ -457,10 +474,14 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         remotes.iter().map(|remote| (*remote).to_owned()).collect()
     };
     let by_address = |hosts: CodeHosts, remotes: &[&str]| {
-        hosts.place_of_checkout(root, CheckoutRemotes::Addresses(&list(remotes)))
+        hosts
+            .placement_of_checkout(root, CheckoutRemotes::Addresses(&list(remotes)))
+            .place()
     };
     let by_name = |hosts: CodeHosts, remotes: &[&str]| {
-        hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
+        hosts
+            .placement_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
+            .place()
     };
     // Read in the checkout, with the remotes the registry gives that host
     // and whether every remote was read by a registered unit.
@@ -553,10 +574,27 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         in_checkout(BOTH, "github", &["acme/app"], false),
         "an older node's name no unit reads beside one GitHub reads"
     );
+    // The registry as it ships, with gitlab.com's unit registered.
+    let gitlab = "git@gitlab.com:acme/sub/app.git";
+    assert_eq!(
+        by_address(CodeHosts::STANDARD, &[github, gitlab]),
+        in_checkout(CodeHosts::STANDARD, "github", &["acme/app"], true),
+        "a gitlab.com remote is read by its own unit: beside a GitHub one the list is complete"
+    );
+    assert_eq!(
+        by_address(CodeHosts::STANDARD, &[gitlab]),
+        CodeHosts::STANDARD.place_of("gitlab.com/acme/sub/app"),
+        "a gitlab.com remote alone is read by its name"
+    );
+    assert_eq!(
+        by_name(CodeHosts::STANDARD, &["gitlab.com/acme/app"]),
+        CodeHosts::STANDARD.place_of("gitlab.com/acme/app"),
+        "an older node names a gitlab.com remote as an Enterprise server's: gitlab.com's unit reads it"
+    );
 }
 
 fn hosts_place(hosts: CodeHosts, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
-    hosts.place_of_checkout(root, remotes)
+    hosts.placement_of_checkout(root, remotes).place()
 }
 
 #[test]
@@ -753,7 +791,10 @@ fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
     let project = |root: &str, place: Option<Place>| GithubProjectRequest {
         links: Vec::new(),
         root: PathBuf::from(root),
-        place,
+        place: place.map_or(
+            crate::code_host::Placement::NoRemote,
+            crate::code_host::Placement::At,
+        ),
         generation: 1,
     };
     let request = GithubRequest {
@@ -872,7 +913,10 @@ fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
     let project = |root: &str, place: Option<Place>| GithubProjectRequest {
         links: Vec::new(),
         root: PathBuf::from(root),
-        place,
+        place: place.map_or(
+            crate::code_host::Placement::NoRemote,
+            crate::code_host::Placement::At,
+        ),
         generation: 1,
     };
     let request = GithubRequest {
@@ -952,4 +996,153 @@ fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
         restored.project("/github-app").unwrap().pull_requests[0].reference,
         github.pull_requests[0].reference
     );
+}
+
+/// The declaration on the wire: the screen and the phone read these names,
+/// and a status or a phone card from a core before hosts were declared
+/// reads as carrying none (GitHub's, by the one place that says so).
+#[test]
+fn a_hosts_declaration_travels_by_these_names_and_an_old_payload_carries_none() {
+    let declaration = super::declaration(&crate::gitlab::host::GITLAB);
+    assert_eq!(
+        serde_json::to_value(&declaration).unwrap(),
+        serde_json::json!({
+            "key": "gitlab",
+            "name": "GitLab",
+            "operations": ["commit_checks"],
+            "access": {
+                "program": "glab",
+                "minimum_version": "1.78.0",
+                "sign_in": "glab auth login --hostname gitlab.com",
+            },
+        })
+    );
+    let github = super::declaration(&crate::github::host::GITHUB);
+    assert_eq!(
+        serde_json::to_value(&github.operations).unwrap(),
+        serde_json::json!([
+            "merge",
+            "update_branch",
+            "edit_body",
+            "merge_proof",
+            "base_policy",
+            "commit_checks",
+            "failed_log",
+            "by_number",
+            "handover",
+            "issues",
+            "search",
+            "watch",
+        ])
+    );
+    let old: crate::model::GithubStatusSnapshot = serde_json::from_value(serde_json::json!({
+        "failure_category": null, "available": true, "loading": false, "stale": false,
+        "last_success_at_unix_ms": 1,
+    }))
+    .unwrap();
+    assert_eq!(old.host, None);
+    let card: crate::agent_state::tally::phone::PhoneCard =
+        serde_json::from_value(serde_json::json!({"reading": false})).unwrap();
+    assert_eq!(card.host, None);
+}
+
+/// The session readers (`hide_session::hosts`, which run on the node that
+/// holds a session file) know the registry's hosts and name the same host
+/// for a reference from before hosts; each one's stored name of an address
+/// is read back by the core's unit of that host, and its record name is the
+/// key that unit makes, so one repository has one key in the record.
+#[test]
+fn the_session_readers_hosts_are_the_registrys_and_their_names_are_its_keys() {
+    let hosts = CodeHosts::STANDARD;
+    let mut core: Vec<&str> = hosts.hosts().map(|host| host.key()).collect();
+    let mut session = hide_session::hosts::keys();
+    core.sort_unstable();
+    session.sort_unstable();
+    assert_eq!(core, session);
+    assert_eq!(
+        hosts.before_hosts().key(),
+        hide_session::hosts::before_hosts_key()
+    );
+    for address in [
+        "https://github.com/Acme/App/pull/5",
+        "https://gitlab.com/Acme/Platform/App/-/merge_requests/12/diffs",
+    ] {
+        let (key, stored, number) = hide_session::hosts::change_request_address(address).unwrap();
+        let (host, repository) = hosts.repository(&stored).unwrap();
+        assert_eq!(host.key(), key, "{address}");
+        let (at_host, at_repository, at_number) = hosts.change_request_at(address).unwrap();
+        assert_eq!(
+            (at_host, &at_repository, u64::from(at_number)),
+            (host, &repository, number)
+        );
+        let record = hosts.record_name(&repository).unwrap();
+        assert_eq!(record, stored.to_ascii_lowercase(), "{address}");
+    }
+    let gitlab = hosts.repository("gitlab.com/Acme/Platform/App").unwrap();
+    assert_eq!(
+        hosts.record_name(&gitlab.1).unwrap(),
+        gitlab.0.repository_key(&gitlab.1),
+        "gitlab.com's record name is its repository key"
+    );
+    assert_eq!(
+        hosts
+            .record_id(&gitlab.1, "gid://gitlab/Project/1")
+            .unwrap(),
+        "gitlab.com/gid://gitlab/Project/1"
+    );
+    let github = hosts.repository("Acme/App").unwrap();
+    assert_eq!(hosts.record_name(&github.1).unwrap(), "acme/app");
+    assert_eq!(hosts.record_id(&github.1, "R_1").unwrap(), "R_1");
+    assert_eq!(hosts.recorded(None), Some(hosts.before_hosts()));
+    assert_eq!(hosts.recorded(Some("")), Some(hosts.before_hosts()));
+}
+
+#[test]
+fn a_record_key_is_the_units_answer_and_a_host_without_its_own_is_its_repository_key() {
+    const UNITS: &[&dyn CodeHost] = &[
+        &crate::github::host::GITHUB,
+        &crate::gitlab::host::GITLAB,
+        &PLAIN,
+    ];
+    let hosts = CodeHosts::new(UNITS, &crate::github::host::GITHUB);
+    // A host with no record form of its own keys a repository by its
+    // repository key, server and folding included, case and all.
+    for stored in [
+        "gitlab.com/Acme/Platform/App",
+        "gitlab.com/acme/platform/app",
+        "code.example/Acme/App",
+        "code.example/acme/Sub/App",
+    ] {
+        let (host, repository) = hosts.repository(stored).unwrap();
+        assert_eq!(
+            hosts.record_name(&repository).unwrap(),
+            host.repository_key(&repository),
+            "{stored}"
+        );
+        assert_eq!(
+            hosts.record_id(&repository, "7").unwrap(),
+            format!("{}/7", repository.authority),
+            "{stored}"
+        );
+    }
+    // Two spellings of one gitlab.com project share a key; the base-only
+    // host, which reads paths in their case, keeps two.
+    let key = |stored: &str| {
+        let repository = hosts.repository(stored).unwrap().1;
+        hosts.record_name(&repository).unwrap()
+    };
+    assert_eq!(key("gitlab.com/Acme/App"), key("gitlab.com/acme/app"));
+    assert_ne!(key("code.example/Acme/App"), key("code.example/acme/app"));
+    assert_ne!(key("gitlab.com/acme/app"), key("code.example/acme/app"));
+    // GitHub keeps what its records have always held: the bare path in lower
+    // case on github.com and on an Enterprise server, and the bare id.
+    for (stored, record) in [
+        ("Acme/App", "acme/app"),
+        ("github.com/Acme/App", "acme/app"),
+        ("ghe.example/Acme/App", "acme/app"),
+    ] {
+        let repository = hosts.repository(stored).unwrap().1;
+        assert_eq!(hosts.record_name(&repository).unwrap(), record, "{stored}");
+        assert_eq!(hosts.record_id(&repository, "R_1").unwrap(), "R_1");
+    }
 }

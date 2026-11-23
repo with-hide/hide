@@ -70,6 +70,7 @@ import { machineName } from "./screenMachine";
 import type { Mission, MissionEvent, MissionNode, MissionNodeWork } from "./snapshot";
 import { useShellStore } from "./store";
 import { ToolMark } from "./components/tool-mark";
+import { pullName } from "./codeHost";
 
 // A mission's page as a card tab on a desk (PRD mission-map-git-criteria
 // D-01-D-06, B24-B35; PRD mission-tool B12-B25): the head (state, time, a
@@ -409,7 +410,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(device ? [device] : []),
         ...(took ? [took] : []),
         ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
-        ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
+        ...node.prs.map((pr) => t("mission.attention.pr", { pull: pullName(pr) })),
         ...(branch ? [`${t("mission.foot.where")}: ${branchLineWords(branch, t)}`] : []),
         ...(result ? [resultLineWords(result, t)] : []),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),

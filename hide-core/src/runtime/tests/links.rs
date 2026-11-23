@@ -130,7 +130,11 @@ fn hide_links_from_a_device_pane_answers_with_the_device_projects_pull_request()
     let answer = crate::links::query::run(
         &scope,
         &crate::links::query::LinksQuery {
-            target: crate::links::query::QueryTarget::Pr { number: 5 },
+            target: crate::links::query::QueryTarget::Pr {
+                number: 5,
+                host: None,
+                repository: None,
+            },
             all_projects: false,
         },
         &hide_node::Local::of_process(),
@@ -573,6 +577,9 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
         .github
         .projects
         .push(crate::model::GithubProjectSnapshot {
+            held: None,
+            pull_requests_cut: crate::model::ListCut::default(),
+            remotes_not_known: false,
             viewer: None,
             root_path: "/repo".into(),
             issues: ProjectIssuesSnapshot {

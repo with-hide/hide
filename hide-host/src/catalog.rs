@@ -122,27 +122,11 @@ fn remote_addresses(urls: &[String]) -> Vec<String> {
     let mut addresses: Vec<String> = urls
         .iter()
         .filter(|url| !names_local_path(url))
-        .map(|url| without_credentials(url.trim()))
+        .map(|url| hide_node_link::catalog::without_credentials(url.trim()))
         .collect();
     addresses.sort();
     addresses.dedup();
     addresses
-}
-
-fn without_credentials(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_owned();
-    };
-    let (authority, path) = rest
-        .split_once('/')
-        .map_or((rest, None), |(authority, path)| (authority, Some(path)));
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    match path {
-        Some(path) => format!("{scheme}://{host}/{path}"),
-        None => format!("{scheme}://{host}"),
-    }
 }
 
 /// Whether Git reads a remote URL as a local path: `file://`, or no

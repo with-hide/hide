@@ -137,7 +137,7 @@ function PullRequestHeader({
             {t("agentSessions.pr.draft")}
           </span>
         ) : null}
-        <span className="font-mono text-caption text-muted-foreground">#{header.number}</span>
+        <span className="font-mono text-caption text-muted-foreground">{header.label}</span>
         <span className="flex-1" />
         <button
           type="button"

@@ -159,6 +159,7 @@ describe("the install folders", () => {
         "C:\\Users\\example\\AppData\\Roaming\\npm",
         "C:\\Program Files\\Git\\cmd",
         "C:\\Program Files\\GitHub CLI",
+        "C:\\Program Files\\glab",
         "C:\\Program Files\\nodejs",
       ],
       missing: [],

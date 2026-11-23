@@ -652,6 +652,7 @@ mod tests {
         });
         request.pull_requests.push(AgentPullRequestSnapshot {
             number: pull.number,
+            reference: pull.reference.clone(),
             title: pull.title.clone(),
             url: pull.url.clone(),
             badge: pull.badge,

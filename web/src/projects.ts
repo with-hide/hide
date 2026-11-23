@@ -14,6 +14,7 @@ import { githubFailureText } from "./githubFailure";
 import { agentGroupTitle, type AgentGroup, type ListedAgent } from "./navigation";
 import { badgeWord, checksWord, PR_LOOK, reviewWord, settled, staleness } from "./prMark";
 import type { Checkout, MarkCounts, PrState, PullRequest, RecentCheckout, SnapshotRest, Workspace } from "./snapshot";
+import { pullLabel } from "./codeHost";
 
 /** Return to this device's last usable checkout, then its primary, then row order. */
 export function projectCheckout(workspace: Workspace, recent: readonly RecentCheckout[] = []): Checkout | null {
@@ -185,13 +186,13 @@ export function checkoutPresentation(workspace: Workspace, checkout: Checkout, n
 
   const lines: string[] = [];
   if (pr) {
-    let first = `#${pr.number} · ${t(PR_LOOK[pr.state].word)}`;
+    let first = `${pullLabel(pr)} · ${t(PR_LOOK[pr.state].word)}`;
     if (pr.title) first += ` · ${pr.title}`;
     const lastKnown = github?.stale ? activityAge(github.last_success_at_unix_ms, nowMs) : null;
     if (lastKnown) first += ` · ${t("card.lastKnown", { age: ageText(lastKnown, t) })}`;
     lines.push(first);
   }
-  if (github?.failure_category && github.failure_category !== "no_github_remote") lines.push(githubFailureText(github.failure_category, t));
+  if (github?.failure_category && github.failure_category !== "no_github_remote") lines.push(githubFailureText(github, t));
   if (summary && agentCount > 0) {
     const counts = (
       [
@@ -233,7 +234,7 @@ export type CheckoutCardRow =
 export type CheckoutCard = {
   /** A pull request's badge line, or the danger header of a folder that is gone; null on a plain checkout. */
   header:
-    | { kind: "pull_request"; badge: ReturnType<typeof badgeWord>; state: PrState; number: number; url: string; title: string }
+    | { kind: "pull_request"; badge: ReturnType<typeof badgeWord>; state: PrState; number: number; label: string; url: string; title: string }
     | { kind: "missing"; label: string }
     | null;
   /** Each row only where its source has a value; a row with nothing to say takes no place. */
@@ -285,7 +286,7 @@ export function pullRequestCard(pr: PullRequest, t: TFunction<"translation">): C
 }
 
 function pullRequestHeader(pr: PullRequest, t: TFunction<"translation">): NonNullable<CheckoutCard["header"]> {
-  return { kind: "pull_request", badge: badgeWord(pr, t), state: pr.state, number: pr.number, url: pr.url, title: pr.title };
+  return { kind: "pull_request", badge: badgeWord(pr, t), state: pr.state, number: pr.number, label: pullLabel(pr), url: pr.url, title: pr.title };
 }
 
 /** A pull request's Review and Checks rows, each once GitHub has answered it. */
