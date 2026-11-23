@@ -54,6 +54,8 @@ async function openLooks(rows: LookRow[] = ROWS) {
   const root = createRoot(container);
   patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
+  // This page's own socket, the only one: another would be a connection an earlier test left running.
+  expect(FakeSocket.instances).toHaveLength(1);
   const socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   await act(async () => socket.onopen?.());
@@ -64,7 +66,14 @@ async function openLooks(rows: LookRow[] = ROWS) {
   await serve({ type: "looks", device_id: "local", pane_id: "w1:p1", views: rows, omitted: 0 });
   const last = (type: string) => socket.sent.filter((message) => message.type === type).at(-1)!;
   const press = (selector: string) => act(async () => container.querySelector<HTMLElement>(selector)!.click());
-  return { container, socket, serve, last, press, unmount: () => act(async () => root.unmount()) };
+  // Unmounting ends the connection's timers and socket too: a reconnect left running would open its socket in the next test's
+  // page, which would then serve frames to it.
+  const unmount = () =>
+    act(async () => {
+      root.unmount();
+      connection.stop();
+    });
+  return { container, socket, serve, last, press, unmount };
 }
 
 const base64 = (text: string) => Buffer.from(text).toString("base64");

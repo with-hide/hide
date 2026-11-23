@@ -1,5 +1,6 @@
 // One pull request's page on the phone (PRD mobile-companion-ui B39-B45, D-12,
-// D-13, doop final board F10): its state, title and branch, the agent that
+// D-13, doop final board F10): the page's one-line head (`PageHead`: back,
+// the number, `branch → base`, the link out), then the title and state, the agent that
 // holds it, the checks, the review, the changed files with their +/- lines, a
 // link to the pull request's page on its host, and the two buttons: `머지`, which asks once and goes out on
 // the head the page showed, and `에이전트에게 맡기기`, which opens the hand-over
@@ -9,7 +10,7 @@
 // (D-12): there is no merge order on the phone.
 
 import { pullHost, pullLabel, pullWords } from "../codeHost";
-import { ArrowLeftIcon, ChevronRightIcon, ExternalLinkIcon, GitMergeIcon, Loader2Icon, UserRoundCheckIcon } from "lucide-react";
+import { ChevronRightIcon, ExternalLinkIcon, GitMergeIcon, Loader2Icon, UserRoundCheckIcon } from "lucide-react";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
@@ -21,6 +22,7 @@ import { PR_LOOK } from "../prMark";
 import { approvalCount, prReview } from "../prReview";
 import { agentProductName } from "../agentAdapters";
 import { askMerge, cancelMerge, confirmMerge, lookAgainPr, openDelegate, openDetail } from "./connection";
+import { PageHead } from "./layout";
 import { OfflineText } from "./OfflineText";
 import { PrDelegateSheet } from "./PrDelegateSheet";
 import { prActions, prGroupOf, prHostOf, prOf, settled } from "./prModel";
@@ -44,36 +46,28 @@ function Page({ pr }: { pr: PhonePr }) {
   const base = pr.base_branch ?? "";
   return (
     <main className="flex h-full flex-col" data-phone-pr-page={pr.key} data-phone-pr-head={pr.card?.head ?? undefined}>
-      <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
-        <div className="flex items-center justify-between gap-md pt-md">
-          <Button variant="text" size="inline" className="min-h-(--size-touch-target) gap-xs text-body" data-phone-back="prs" onClick={closePr}>
-            <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon)" />
-            {t("mobile.prs.title")}
-          </Button>
+      <PageHead
+        back={{ label: t("mobile.prs.title"), onClick: closePr, tag: "prs" }}
+        title={<span data-phone-pr-number="true">{pullLabel(pr)}</span>}
+        line={
+          <span className="min-w-0 font-mono wrap-anywhere" data-phone-pr-branch="true">
+            {pr.head_branch ?? ""}
+            {base ? <> <span aria-hidden="true">→</span> {base}</> : null}
+          </span>
+        }
+        action={
           <a
             href={pr.url}
             target="_blank"
             rel="noopener noreferrer"
             aria-label={t("work.card.github", pullWords(pr))}
             data-phone-pr-github="true"
-            className="inline-flex min-h-(--size-touch-target) items-center gap-xs text-body text-muted-foreground"
+            className="-mr-md inline-flex size-(--size-touch-target) items-center justify-center text-foreground"
           >
-            {pullHost(pr).name}
-            <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+            <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-lg)" />
           </a>
-        </div>
-        <StatePill pr={pr} />
-        <h1 className="mt-sm break-keep text-headline font-semibold text-foreground wrap-anywhere" data-phone-pr-title="true">
-          <span className="font-mono text-subtle-foreground">{pullLabel(pr)}</span> {pr.title}
-        </h1>
-        <p className="mt-xs flex min-w-0 flex-wrap items-center gap-xs break-all font-mono text-body text-muted-foreground" data-phone-pr-branch="true">
-          <span>{pr.head_branch ?? ""}</span>
-          {base ? <><span aria-hidden="true">→</span><span>{base}</span></> : null}
-        </p>
-        {project && (project.device_label || projects.length > 1) ? (
-          <p className="mt-xs text-body text-muted-foreground">{project.device_label ? `${project.device_label} · ${project.label}` : project.label}</p>
-        ) : null}
-      </header>
+        }
+      />
       {dim ? (
         <div role="status" className="flex items-center gap-sm px-lg py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
@@ -81,6 +75,11 @@ function Page({ pr }: { pr: PhonePr }) {
         </div>
       ) : null}
       <div className={cn("min-h-0 flex-1 overflow-auto overscroll-contain px-lg pb-lg", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
+        <h2 className="pt-lg break-keep text-headline font-semibold text-foreground wrap-anywhere" data-phone-pr-title="true">{pr.title}</h2>
+        <StatePill pr={pr} />
+        {project && (project.device_label || projects.length > 1) ? (
+          <p className="mt-xs text-body text-muted-foreground">{project.device_label ? `${project.device_label} · ${project.label}` : project.label}</p>
+        ) : null}
         <Agents pr={pr} />
         <Checks pr={pr} />
         <Review pr={pr} />
@@ -93,14 +92,14 @@ function Page({ pr }: { pr: PhonePr }) {
   );
 }
 
-/** The pull request's state under the back row: what it can do now for an open one (the phone's group), its own word once settled. */
+/** The pull request's state under its title: what it can do now for an open one (the phone's group), its own word once settled. */
 function StatePill({ pr }: { pr: PhonePr }) {
   const { t } = useInterfaceTranslation();
   const open = !settled(pr);
   const group = open ? prGroupOf(pr.reason.kind) : null;
   const { icon: Icon, tone } = PR_LOOK[pr.state];
   return (
-    <span className="mt-sm inline-flex items-center gap-xs rounded-full bg-secondary px-md py-xxs text-caption font-semibold" data-phone-pr-pill={pr.state}>
+    <span className="mt-md inline-flex items-center gap-xs rounded-full bg-secondary px-md py-xxs text-caption font-semibold" data-phone-pr-pill={pr.state}>
       <Icon aria-hidden="true" className={cn("size-(--size-icon-sm)", tone)} />
       <span className={tone}>{group ? t(`mobile.prs.group.${group}`) : t(PR_LOOK[pr.state].word)}</span>
     </span>
@@ -333,7 +332,9 @@ function MergeSheet() {
   const open = confirm !== null && pr !== null;
   const base = pr?.base_branch ?? "";
   const words = pullWords(pr ?? { number: 0 });
-  const detail = confirm ? [confirm.queue || !confirm.method ? null : t(`work.card.method.${confirm.method}`), confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
+  // A host that merges by its own settings' method takes none from Hide: the sheet names none.
+  const named = confirm && !confirm.queue && confirm.method && pr?.card?.merge?.host_sets_method !== true ? confirm.method : null;
+  const detail = confirm ? [named ? t(`work.card.method.${named}`) : null, confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
   return (
     <Sheet open={open} onOpenChange={(next) => !next && cancelMerge()}>
       <SheetContent

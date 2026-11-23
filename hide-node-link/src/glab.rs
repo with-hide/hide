@@ -9,7 +9,12 @@
 //! a POST on its own, so an endpoint alone does not say what the line does.
 //! Every project read names the project by its validated path
 //! ([`is_project_path`]), and every list it asks for has a fixed page whose
-//! answer says when it was cut (`count` beside the page).
+//! answer says when it was cut (`count` beside the page, or a page that came
+//! back full).
+//!
+//! One line writes: the merge of one merge request at one head
+//! ([`merge_arguments`]), with exactly the flags that make it conditional and
+//! immediate.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,19 +74,25 @@ const CHANGE_FIELDS: &str = "iid title state draft webUrl sourceBranch targetBra
 /// list (approvals, reviewers, author, merge status) and their head pipeline
 /// with its jobs, and the most recently updated of any state. `glab mr list`
 /// and the REST list carry no pipeline, which would cost one more call per
-/// merge request. Kept under gitlab.com's query complexity of 250.
+/// merge request. Kept under gitlab.com's query complexity of 250 (188
+/// measured on 2026-11-23 at these page sizes).
+///
+/// `mergeable` is asked only because asking it makes gitlab.com check the
+/// merge request: after a push it keeps `detailedMergeStatus` `UNCHECKED`
+/// until something asks, and the answer then carries the checked status.
+/// The verdict still comes from `detailedMergeStatus` alone.
 pub fn merge_requests_query() -> String {
     format!(
-        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
+        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus mergeable approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
     )
 }
 
-/// One merge request's card: its head, description, changed files and
-/// discussions. `diffStats` takes no page; the node's byte cap bounds it,
+/// One merge request's card: its head, whether the signed-in account may
+/// merge it, description, changed files and discussions. `diffStats` takes no page; the node's byte cap bounds it,
 /// and `diffStatsSummary` says how many files there are in all.
 pub fn card_query() -> String {
     format!(
-        "query=query HideGitlabMergeRequestCard($project:ID!,$iid:String!){{project(fullPath:$project){{mergeRequest(iid:$iid){{diffHeadSha description resolvableDiscussionsCount resolvedDiscussionsCount diffStatsSummary{{fileCount}} diffStats{{path additions deletions}} discussions(first:{DISCUSSION_LIMIT}){{nodes{{resolvable resolved notes(first:1){{nodes{{author{{username}} body position{{newPath newLine oldPath}}}}}}}}}}}}}}}}"
+        "query=query HideGitlabMergeRequestCard($project:ID!,$iid:String!){{project(fullPath:$project){{mergeRequest(iid:$iid){{diffHeadSha userPermissions{{canMerge}} description resolvableDiscussionsCount resolvedDiscussionsCount diffStatsSummary{{fileCount}} diffStats{{path additions deletions}} discussions(first:{DISCUSSION_LIMIT}){{nodes{{resolvable resolved notes(first:1){{nodes{{author{{username}} body position{{newPath newLine oldPath}}}}}}}}}}}}}}}}"
     )
 }
 
@@ -157,6 +168,119 @@ pub fn commit_checks_arguments(project: &str, commits: &[String]) -> Option<Vec<
     Some(graphql(commit_checks_query(commits.len()), &variables))
 }
 
+/// The most merged merge requests of one source branch a merge proof read
+/// names, the newest first, as GitHub's merge proof reads 100.
+pub const MERGED_LIMIT: usize = 100;
+
+/// A project's path as one segment of a REST endpoint: gitlab.com takes a
+/// project by its path with each `/` written `%2F`. A project path holds no
+/// other character that needs it ([`is_project_path`]).
+fn project_segment(project: &str) -> String {
+    project.replace('/', "%2F")
+}
+
+/// `glab api --hostname gitlab.com -X GET <endpoint> -f k=v...`: a REST
+/// read, its fields sent as the query string.
+fn rest_read(endpoint: String, fields: &[(&str, &str)]) -> Vec<String> {
+    let mut arguments: Vec<String> = ["api", "--hostname", HOST, "-X", "GET"]
+        .map(str::to_owned)
+        .into();
+    arguments.push(endpoint);
+    for (name, value) in fields {
+        arguments.push("-f".to_owned());
+        arguments.push(format!("{name}={value}"));
+    }
+    arguments
+}
+
+/// One merge request of `project` by its number, of any state, as the list
+/// endpoint answers it: an empty list is "no such merge request", which a
+/// single read would say only in its error text. Its state, head (`sha`),
+/// merge and squash commits, auto-merge and merge status are what a merge's
+/// read before and after decides on, and what a merge proof and a read by
+/// number answer from.
+pub fn merge_request_arguments(project: &str, iid: u32) -> Option<Vec<String>> {
+    (is_project_path(project) && iid > 0).then(|| {
+        rest_read(
+            format!("projects/{}/merge_requests", project_segment(project)),
+            &[("iids[]", &iid.to_string())],
+        )
+    })
+}
+
+/// The merged merge requests of `branch` in `project`, newest first, at
+/// most [`MERGED_LIMIT`]: their heads and target branches prove a squash or
+/// rebase merge of a worktree whose commits are not in the target.
+pub fn merged_arguments(project: &str, branch: &str) -> Option<Vec<String>> {
+    (is_project_path(project) && is_branch(branch)).then(|| {
+        rest_read(
+            format!("projects/{}/merge_requests", project_segment(project)),
+            &[
+                ("state", "merged"),
+                ("source_branch", branch),
+                ("per_page", &MERGED_LIMIT.to_string()),
+            ],
+        )
+    })
+}
+
+/// The merge base of two exact commits of `project`: `a` is in `b`'s history
+/// exactly when it is their merge base.
+pub fn merge_base_arguments(project: &str, a: &str, b: &str) -> Option<Vec<String>> {
+    (is_project_path(project) && is_commit(a) && is_commit(b)).then(|| {
+        rest_read(
+            format!(
+                "projects/{}/repository/merge_base",
+                project_segment(project)
+            ),
+            &[("refs[]", a), ("refs[]", b)],
+        )
+    })
+}
+
+/// The one write: merge request `iid` of `project` merged now, and only
+/// while its head is `head`. `--sha` is the head condition (gitlab.com
+/// answers 409 to another head), `--auto-merge=false` is "now" (without it
+/// `glab` sets auto-merge on a merge request whose pipeline runs and exits
+/// 0 with nothing merged), and `-R` names the server and project, since the
+/// node runs `glab` in no folder. The merge request's own merge is made: the
+/// project's merge method, and a squash when the merge request or the
+/// project asks for one. Neither the exit code nor the text decides what
+/// happened; the caller reads the merge request again.
+pub fn merge_arguments(project: &str, iid: u32, head: &str) -> Option<Vec<String>> {
+    (is_project_path(project) && iid > 0 && is_commit(head)).then(|| {
+        vec![
+            "mr".to_owned(),
+            "merge".to_owned(),
+            iid.to_string(),
+            "-R".to_owned(),
+            format!("https://{HOST}/{project}"),
+            "--sha".to_owned(),
+            head.to_owned(),
+            "--auto-merge=false".to_owned(),
+            "--yes".to_owned(),
+        ]
+    })
+}
+
+/// Whether `value` is a branch name Hide asks gitlab.com about: what git
+/// takes as a branch (no space, control character or any of `~^:?*[\`, no `..`,
+/// not starting with `-`), at most 255 bytes.
+pub fn is_branch(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && !value.starts_with('-')
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.ends_with(".lock")
+        && !value.contains("..")
+        && !value.contains("@{")
+        && !value.contains("//")
+        && value
+            .chars()
+            .all(|c| !c.is_control() && !c.is_whitespace() && !"~^:?*[\\".contains(c))
+}
+
 /// Whether `value` names a gitlab.com project as Hide takes it:
 /// `group[/subgroup...]/project`, two to twenty path segments (gitlab.com's
 /// nesting limit), each made of letters, digits, `.`, `_` and `-`, none
@@ -180,14 +304,26 @@ pub fn is_project_path(value: &str) -> bool {
 }
 
 /// Whether the node may run `glab` with `arguments`: the version, the
-/// sign-in check, and `glab api` lines whose method and endpoint are allowed
-/// together ([`api_allowed`]). Every shape named here has a line in
+/// sign-in check, the one conditional merge ([`merge_arguments`]), and
+/// `glab api` lines whose method and endpoint are allowed together
+/// ([`api_allowed`]). Every shape named here has a line in
 /// `hide-host/src/glab.rs`'s floor test, which runs it against
 /// [`MINIMUM_VERSION`].
 pub fn allowed(arguments: &[&str]) -> bool {
     match arguments {
         ["--version"] => true,
         ["auth", "status", "--hostname", HOST] => true,
+        [
+            "mr",
+            "merge",
+            iid,
+            "-R",
+            repository,
+            "--sha",
+            head,
+            "--auto-merge=false",
+            "--yes",
+        ] => merge_allowed(iid, repository, head, arguments),
         [
             "api",
             "--hostname",
@@ -209,26 +345,80 @@ fn api_allowed(method: &str, endpoint: &str, fields: &[&str], arguments: &[&str]
         // A GraphQL request is always a POST; only the three fixed queries
         // ride it, each rebuilt from its variables and compared whole.
         ("POST", "graphql") => graphql_allowed(fields, arguments),
+        // A REST read is a GET of one of the three endpoints, rebuilt from
+        // the project and fields it names and compared whole.
+        ("GET", endpoint) => rest_allowed(endpoint, fields, arguments),
         _ => false,
     }
+}
+
+/// The `-f k=v` pairs of `fields`, or `None` when anything else rides.
+fn field_pairs<'a>(fields: &[&'a str]) -> Option<Vec<(&'a str, &'a str)>> {
+    let mut pairs = Vec::new();
+    let mut rest = fields;
+    while let ["-f", pair, tail @ ..] = rest {
+        pairs.push(pair.split_once('=')?);
+        rest = tail;
+    }
+    rest.is_empty().then_some(pairs)
+}
+
+/// Whether a REST read is one its builder makes: the project read back from
+/// the endpoint, the line rebuilt from it and the fields, and compared whole.
+fn rest_allowed(endpoint: &str, fields: &[&str], arguments: &[&str]) -> bool {
+    let Some(pairs) = field_pairs(fields) else {
+        return false;
+    };
+    let Some(rest) = endpoint.strip_prefix("projects/") else {
+        return false;
+    };
+    let (segment, resource) = rest.split_once('/').unwrap_or((rest, ""));
+    let project = segment.replace("%2F", "/");
+    let rebuilt = match (resource, pairs.as_slice()) {
+        ("merge_requests", [("iids[]", iid)]) => iid
+            .parse::<u32>()
+            .ok()
+            .filter(|_| !iid.starts_with('0'))
+            .and_then(|iid| merge_request_arguments(&project, iid)),
+        (
+            "merge_requests",
+            [
+                ("state", "merged"),
+                ("source_branch", branch),
+                ("per_page", _),
+            ],
+        ) => merged_arguments(&project, branch),
+        ("repository/merge_base", [("refs[]", a), ("refs[]", b)]) => {
+            merge_base_arguments(&project, a, b)
+        }
+        _ => None,
+    };
+    rebuilt.is_some_and(|rebuilt| rebuilt == arguments)
+}
+
+/// Whether a merge line is the one [`merge_arguments`] makes.
+fn merge_allowed(iid: &str, repository: &str, head: &str, arguments: &[&str]) -> bool {
+    let Some(project) = repository
+        .strip_prefix("https://")
+        .and_then(|rest| rest.strip_prefix(HOST))
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return false;
+    };
+    iid.parse::<u32>()
+        .ok()
+        .filter(|_| !iid.starts_with('0'))
+        .and_then(|iid| merge_arguments(project, iid, head))
+        .is_some_and(|rebuilt| rebuilt == arguments)
 }
 
 /// Whether `fields` (`-f k=v` pairs) are one of the fixed queries with
 /// valid variables: the line is rebuilt by its builder from the variables
 /// it names and must equal it, so no other query, variable or flag rides.
 fn graphql_allowed(fields: &[&str], arguments: &[&str]) -> bool {
-    let mut pairs = Vec::new();
-    let mut rest = fields;
-    while let ["-f", pair, tail @ ..] = rest {
-        let Some((name, value)) = pair.split_once('=') else {
-            return false;
-        };
-        pairs.push((name, value));
-        rest = tail;
-    }
-    if !rest.is_empty() {
+    let Some(pairs) = field_pairs(fields) else {
         return false;
-    }
+    };
     let value = |wanted: &str| {
         pairs
             .iter()
@@ -438,6 +628,122 @@ mod tests {
         let mut skipped = commit_checks_arguments(PROJECT, &commits(2)).unwrap();
         skipped[11] = format!("c5={SHA}");
         assert!(!allowed(&words(&skipped)));
+    }
+
+    #[test]
+    fn the_rest_reads_and_the_merge_are_allowed_exactly_as_built() {
+        let lines = [
+            merge_request_arguments(PROJECT, 12).unwrap(),
+            merged_arguments(PROJECT, "m91/gitlab-write").unwrap(),
+            merge_base_arguments(PROJECT, SHA, &"f".repeat(40)).unwrap(),
+        ];
+        for line in &lines {
+            let words = words(line);
+            assert!(allowed(&words), "{words:?}");
+            assert_eq!(words[..5], ["api", "--hostname", "gitlab.com", "-X", "GET"]);
+            assert!(
+                words[5].starts_with("projects/group%2Fsub%2Fproject/"),
+                "{words:?}"
+            );
+        }
+        let merge = merge_arguments(PROJECT, 12, SHA).unwrap();
+        assert_eq!(
+            words(&merge),
+            [
+                "mr",
+                "merge",
+                "12",
+                "-R",
+                "https://gitlab.com/group/sub/project",
+                "--sha",
+                SHA,
+                "--auto-merge=false",
+                "--yes"
+            ]
+        );
+        assert!(allowed(&words(&merge)));
+    }
+
+    /// The merge is allowed only as the conditional, immediate write: no
+    /// head, another head shape, auto-merge left on, another flag, another
+    /// server, or the `accept` alias are refused.
+    #[test]
+    fn a_merge_off_its_one_shape_is_refused() {
+        let merge = merge_arguments(PROJECT, 12, SHA).unwrap();
+        let mutate = |change: &dyn Fn(&mut Vec<String>)| {
+            let mut changed = merge.clone();
+            change(&mut changed);
+            allowed(&words(&changed))
+        };
+        assert!(!mutate(&|line| {
+            line.drain(5..7);
+        }));
+        assert!(!mutate(&|line| line[6] = "main".to_owned()));
+        assert!(!mutate(&|line| line[7] = "--auto-merge=true".to_owned()));
+        assert!(!mutate(&|line| {
+            line.remove(7);
+        }));
+        assert!(!mutate(&|line| line.push("--squash".to_owned())));
+        assert!(!mutate(
+            &|line| line.insert(8, "--remove-source-branch".to_owned())
+        ));
+        assert!(!mutate(&|line| line[1] = "accept".to_owned()));
+        assert!(!mutate(&|line| line[2] = "012".to_owned()));
+        assert!(!mutate(&|line| line[2] = "0".to_owned()));
+        assert!(!mutate(
+            &|line| line[4] = "https://gitlab.example.com/group/sub/project".to_owned()
+        ));
+        assert!(!mutate(&|line| line[4] = "group/sub/project".to_owned()));
+        assert!(!mutate(
+            &|line| line[4] = "https://gitlab.com/a/../b".to_owned()
+        ));
+        assert!(merge_arguments(PROJECT, 0, SHA).is_none());
+        assert!(merge_arguments(PROJECT, 12, "abc").is_none());
+    }
+
+    #[test]
+    fn a_rest_read_off_its_builder_is_refused() {
+        let read = merge_request_arguments(PROJECT, 12).unwrap();
+        let mutate = |line: &[String], change: &dyn Fn(&mut Vec<String>)| {
+            let mut changed = line.to_vec();
+            change(&mut changed);
+            allowed(&words(&changed))
+        };
+        // Another method, or the merge endpoint read as a GET.
+        assert!(!mutate(&read, &|line| line[4] = "PUT".to_owned()));
+        assert!(!mutate(&read, &|line| line[4] = "POST".to_owned()));
+        assert!(!mutate(&read, &|line| line[5] =
+            "projects/group%2Fsub%2Fproject/merge_requests/12/merge"
+                .to_owned()));
+        assert!(!mutate(&read, &|line| line[5] =
+            "projects/group%2Fsub%2Fproject".to_owned()));
+        assert!(!mutate(&read, &|line| line[5] =
+            "projects/89295207/merge_requests".to_owned()));
+        // A field of another name, a second number, a leading zero.
+        assert!(!mutate(&read, &|line| line[7] = "iids[]=012".to_owned()));
+        assert!(!mutate(&read, &|line| line[7] = "state=opened".to_owned()));
+        assert!(!mutate(&read, &|line| line
+            .extend(["-f".to_owned(), "iids[]=13".to_owned()])));
+        assert!(!mutate(&read, &|line| line[6] = "-F".to_owned()));
+        let merged = merged_arguments(PROJECT, "topic").unwrap();
+        assert!(!mutate(&merged, &|line| line[11] = "per_page=1000".to_owned()));
+        assert!(!mutate(&merged, &|line| line[7] = "state=opened".to_owned()));
+        assert!(!mutate(&merged, &|line| line[9] = "source_branch=-x".to_owned()));
+        let base = merge_base_arguments(PROJECT, SHA, SHA).unwrap();
+        assert!(!mutate(&base, &|line| line[9] = "refs[]=main".to_owned()));
+        assert!(merged_arguments(PROJECT, "a b").is_none());
+    }
+
+    #[test]
+    fn branch_names_are_read_as_git_takes_them() {
+        for branch in ["main", "m91/gitlab-write", "feature/a.b_c-d", "한글"] {
+            assert!(is_branch(branch), "{branch}");
+        }
+        for branch in [
+            "", "-x", "a b", "a..b", "a~1", "a:b", "/a", "a/", "a.lock", "a@{1}", "a\\b",
+        ] {
+            assert!(!is_branch(branch), "{branch}");
+        }
     }
 
     #[test]

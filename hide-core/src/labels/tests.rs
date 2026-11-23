@@ -5584,6 +5584,140 @@ fn another_session_in_the_pane_gets_its_own_answer_reads() {
     assert_eq!(label.expected_reply.as_deref(), Some("S3/GCS 선택"));
 }
 
+/// A Claude session holding `records`, the agent working on it and then held
+/// by a dialog: the worker, its read count, the dialog's state and the file.
+fn dialog_over(
+    harness: &Harness,
+    records: &[&str],
+) -> (
+    LabelWorker,
+    Receiver<()>,
+    Arc<CountingSource>,
+    Links,
+    ObservedAgent,
+    PathBuf,
+) {
+    let (mut worker, woken, source, links) = harness.linked_worker();
+    worker.set_summaries(false, Instant::now());
+    let path = harness
+        .home
+        .path()
+        .join(".claude/projects/-project/asked.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{}\n", records.join("\n"))).unwrap();
+    observe(&mut worker, &agent(&path, "working", 4));
+    settle(&mut worker, &woken);
+    let dialog = agent(&path, "blocked", 5);
+    observe(&mut worker, &dialog);
+    settle(&mut worker, &woken);
+    (worker, woken, source, links, dialog, path)
+}
+
+/// The records of a turn that asks after a Bash call refused with Esc
+/// (Claude Code 2.1.330): prompt, call, refusal, interruption, prompt, and
+/// the question's call last.
+const QUESTION_AFTER_INTERRUPT: &str = include_str!(
+    "../../../hide-session/tests/fixtures/user-turns/claude-2.1.330-question-after-interrupt.jsonl"
+);
+
+/// 2026-11-23: Claude Code 2.1.330 drew an AskUserQuestion dialog before it
+/// wrote the call to its session file. The engine read the dialog
+/// (`blocked`), the read under it found no call for the dialog to be about,
+/// and nothing read the session again, so the question reached the phone
+/// without its words. A dialog's stop reads again until the call is written,
+/// whether the question is the turn's first record or follows a call that
+/// already has its result, and no longer.
+#[test]
+fn a_question_dialog_drawn_before_its_call_is_written_reads_again_for_its_words() {
+    let records: Vec<&str> = QUESTION_AFTER_INTERRUPT.lines().collect();
+    let call = records[5];
+    // After the interruption, the question's prompt is the last record; in
+    // one turn, the refused Bash call and its result come before it.
+    for before in [&records[..5], &records[..3]] {
+        let harness = Harness::new();
+        let (mut worker, woken, source, _links, dialog, path) = dialog_over(&harness, before);
+        assert!(shown_facts(&worker, &dialog).unwrap().user_turn.is_none());
+        let reads = source.reads.load(Ordering::SeqCst);
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write;
+        writeln!(file, "{call}").unwrap();
+        worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+        settle(&mut worker, &woken);
+        assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+        let asked = shown_facts(&worker, &dialog).unwrap().user_turn.unwrap();
+        let content = asked.content.expect("the question's words are read");
+        assert_eq!(content.text(), "Which font should the title use?");
+        assert_eq!(content.choices(), ["Serif", "Sans", "Mono"]);
+
+        // The call is written: the dialog's stop owes no more reads.
+        spend_answer_reads(&mut worker, &woken);
+        assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+    }
+}
+
+/// A permission dialog over a call already in the file has nothing left to
+/// read: its stop spends no read again.
+#[test]
+fn a_dialog_over_a_written_call_reads_nothing_again() {
+    let records: Vec<&str> = QUESTION_AFTER_INTERRUPT.lines().collect();
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links, _dialog, _path) = dialog_over(&harness, &records[..2]);
+    let reads = source.reads.load(Ordering::SeqCst);
+    spend_answer_reads(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads);
+}
+
+/// Codex marks no call it makes, so a turn of its default mode held by an
+/// approval dialog cannot say it holds no call: its stop reads nothing again,
+/// however long the dialog waits, and logs nothing.
+#[test]
+fn a_dialog_in_a_format_that_marks_no_call_reads_nothing_again() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    worker.set_summaries(false, Instant::now());
+    let id = "0199a000-0000-7000-8000-0000000000b3";
+    let folder = harness.home.path().join(".codex/sessions/2026/10/07");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join(format!("rollout-2026-10-07T01-00-00-{id}.jsonl"));
+    let records = [
+        json!({"timestamp":"2026-10-07T01:00:00.000Z","type":"session_meta",
+            "payload":{"id":id,"cwd":"/work/app","cli_version":"0.160.1"}}),
+        codex_event(
+            "task_started",
+            "turn-1",
+            json!({"collaboration_mode_kind":"default"}),
+        ),
+        json!({"timestamp":"2026-10-07T01:00:01.000Z","type":"response_item",
+            "payload":{"type":"message","role":"user",
+                "content":[{"type":"input_text","text":"빌드를 돌려줘"}]}}),
+    ];
+    let lines: String = records.iter().map(|record| format!("{record}\n")).collect();
+    std::fs::write(&path, lines).unwrap();
+    let codex = |status: &str, seq: u64| ObservedAgent {
+        agent: Some("codex".to_owned()),
+        ..agent(&path, status, seq)
+    };
+    observe(&mut worker, &codex("working", 4));
+    settle(&mut worker, &woken);
+    observe(&mut worker, &codex("blocked", 5));
+    settle(&mut worker, &woken);
+    let reads = source.reads.load(Ordering::SeqCst);
+
+    let ((), diagnostics) = crate::diagnostics::capture(|| spend_answer_reads(&mut worker, &woken));
+
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads);
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|record| record["kind"] == "turn_end.unwritten"),
+        "{diagnostics:?}"
+    );
+}
+
 /// The read a stop scheduled ends with the stop: the answer found by another
 /// read, the agent working again, or another stop leaves no read behind it.
 #[test]

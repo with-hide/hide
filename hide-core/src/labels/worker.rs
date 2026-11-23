@@ -2167,22 +2167,26 @@ impl LabelWorker {
     /// its own ([`AnswerWait`]), until a read finds the answer, the agent
     /// works again, another stop comes or the pane reads another session;
     /// past the backoff it waits for the agent's next state change and says
-    /// so once. An agent whose session is read on a cadence of its own
-    /// (`requires_native_file_proof`) needs none.
+    /// so once. A dialog's stop (`blocked`) is the same: Claude Code draws
+    /// its question before it writes the call that asks it, so the read under
+    /// the dialog can find no call for the dialog to be about, and the
+    /// question would wait wordless. An agent whose session is read on a
+    /// cadence of its own (`requires_native_file_proof`) needs none.
     fn await_answer(&mut self, pane_id: &str, now: Instant) {
         let (Some(pane), Some(record)) = (self.panes.get_mut(pane_id), self.records.get(pane_id))
         else {
             return;
         };
-        // The newest event being the operator's message is a turn whose end
-        // `decide` has not judged: only an answer or an interruption ends it.
         // The read is owed whatever the summary switch says: the turn's end
         // and the calls it answered are what a letter's approval hold ends
         // on (`agent_hooks::facts::end_by_session_read`).
         let owner = record.owner.as_ref().filter(|_| {
             !pane.agent.requires_native_file_proof()
-                && matches!(pane.status.as_str(), "idle" | "done")
-                && newest_user_is_last(pane.events.make_contiguous())
+                && stop_unwritten(
+                    &pane.status,
+                    pane.events.make_contiguous(),
+                    record.turns.as_ref(),
+                )
         });
         let Some(owner) = owner else {
             pane.answer_unwritten = None;
@@ -2207,7 +2211,8 @@ impl LabelWorker {
                 "pane_id": pane_id,
                 "session_id": record.native_session_id,
                 "state_change_seq": seq,
-                "message": "A stopped turn's answer never reached its session file; its end waits for the agent's next state change",
+                "status": pane.status,
+                "message": "A stopped turn's answer, or the call its dialog asks about, never reached its session file; the read waits for the agent's next state change",
             }));
         }
         pane.answer_unwritten = Some(AnswerWait {
@@ -3324,6 +3329,25 @@ fn owed_requests(
             )
         })
         .collect()
+}
+
+/// Whether the stop the engine reads from the agent's screen has records the
+/// agent has not written yet ([`LabelWorker::await_answer`]). At rest, the
+/// operator's message still being the newest event is a turn whose answer
+/// is owed: only an answer or an interruption ends it. Under a dialog, a turn
+/// whose every call the records mark, holding no question, plan or call
+/// without a result, owes the call the dialog asks about, wherever it falls
+/// in the turn ([`hide_session::turns::TurnTracker::holds_open_call`]).
+fn stop_unwritten(
+    status: &str,
+    events: &[LabelEvent],
+    turns: Option<&hide_session::turns::TurnTracker>,
+) -> bool {
+    match status {
+        "idle" | "done" => newest_user_is_last(events),
+        "blocked" => turns.is_some_and(|turns| !turns.holds_open_call()),
+        _ => false,
+    }
 }
 
 /// The record of the moment a session's read stopped proving background work
