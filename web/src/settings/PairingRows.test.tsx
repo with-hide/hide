@@ -126,6 +126,14 @@ it("names a paired machine's system as its device reports it, and none before th
   await unmount();
 });
 
+it("names a machine a device was switched onto by that device's name, as the rail does (B36)", async () => {
+  const switched = peer({ name: "DESKTOP-7Q2" });
+  const { q, unmount } = await mount(idle, [switched], [], [{ id: "build-box", label: "빌드 서버", kind: "remote", state: "ready", peer_key: switched.key }]);
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("빌드 서버");
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).not.toContain("DESKTOP-7Q2");
+  await unmount();
+});
+
 it("says the Tailscale tip only on a row connected through the relay, and keeps the path and direction in Connection details (D-86)", async () => {
   const relayed = peer({ key: "cd".repeat(32), device_id: "office", name: "Office Linux", path: "relay" });
   const direct = peer({ path: "tailscale" });

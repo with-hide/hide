@@ -1121,7 +1121,10 @@ impl Runtime {
                     format!("Device {device_id} is not registered"),
                 )
             })?;
-        if registration.origin.peer_key().is_some() {
+        // A paired machine's device carries the name its pairing holds; one
+        // switched onto it keeps the operator's own (B36), so that one is
+        // renamed here as a helper device is.
+        if registration.origin.peer_key().is_some() && !registration.origin.switched() {
             return Err(DeviceRefusal::new(
                 "device.paired",
                 format!("Device {device_id} is a paired machine, named by its pairing"),

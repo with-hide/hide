@@ -6,7 +6,7 @@
 // (`pairing.ts`); a press sends one `pairing_*` event.
 
 import { CheckIcon, MoreHorizontalIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
@@ -372,7 +372,18 @@ function RemovedWork({ panes, end, onEnd }: { panes: number; end: boolean; onEnd
 export function PeerRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const own = useShellStore((s) => ownWindow(s.pairing));
-  const peers = useShellStore((s) => pairedMachines(s.rest));
+  const listed = useShellStore((s) => pairedMachines(s.rest));
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  // A machine the core made a device of goes by that device's name, as on
+  // the rail and in its tabs: one switched onto it keeps the operator's (B36).
+  const peers = useMemo(
+    () =>
+      listed.map((peer) => {
+        const label = devices?.find((device) => device.peer_key === peer.key)?.label;
+        return label && label !== peer.name ? { ...peer, name: label } : peer;
+      }),
+    [listed, devices],
+  );
   const requests = useShellStore((s) => s.pairing?.requests);
   const sharing = useShellStore((s) => s.pairing?.offer != null);
   const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction; end: boolean } | null>(null);

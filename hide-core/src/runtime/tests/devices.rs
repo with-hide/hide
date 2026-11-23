@@ -2074,6 +2074,26 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
         runtime.device_registration("build-box-id").unwrap().label,
         "build-box"
     );
+    // The operator's own rename of that machine does.
+    dispatch(
+        &mut runtime,
+        "peer_renamed",
+        serde_json::json!({"key": key, "name": "빌드 서버"}),
+    );
+    assert_eq!(
+        runtime.device_registration("build-box-id").unwrap().label,
+        "빌드 서버"
+    );
+    // And it is renamed by its own id, as the helper device it was.
+    dispatch(
+        &mut runtime,
+        "rename_device",
+        serde_json::json!({"device_id": "build-box-id", "name": "build box"}),
+    );
+    assert_eq!(
+        runtime.device_registration("build-box-id").unwrap().label,
+        "build box"
+    );
     dispatch(&mut runtime, "peer_machines", machines("unpaired"));
     assert_eq!(runtime.device_registration("build-box-id"), None);
 

@@ -339,6 +339,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("path_rename", Screen),
     ("path_trash", Screen),
     ("peer_machines", Daemon),
+    ("peer_renamed", Daemon),
     // What another machine told of its own work (D-50).
     ("peer_work", Daemon),
     ("phone_viewing", Daemon),
@@ -624,6 +625,7 @@ mod tests {
             for kind in [
                 "ui_attached",
                 "peer_machines",
+                "peer_renamed",
                 "device_switch",
                 "guest_panes",
                 "peer_work",

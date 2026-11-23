@@ -130,6 +130,31 @@ impl Runtime {
             .any(|machine| machine.key == key && active(machine))
     }
 
+    /// The operator named the paired machine under `key` (B36): a device
+    /// switched onto it takes the name too, which a change of the list alone
+    /// never gives it. Whether anything drawn changed.
+    pub(super) fn peer_renamed(&mut self, key: &str, name: &str) -> bool {
+        let Some(name) = crate::device_command::device_name(name) else {
+            return false;
+        };
+        let Some(registration) = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.origin.switched() && registration.origin.peer_key() == Some(key))
+        else {
+            return false;
+        };
+        if registration.label == name {
+            return false;
+        }
+        registration.label = name.to_owned();
+        self.rebuild_device_rows();
+        self.persist_current_ui_state();
+        true
+    }
+
     /// Brings the device registrations in line with the paired machines,
     /// after the list replaced `before`. Whether anything drawn changed.
     pub(super) fn reconcile_peer_devices(&mut self, before: &[PeerMachine]) -> bool {
@@ -216,13 +241,9 @@ impl Runtime {
                 }));
                 continue;
             }
-            // A switched device keeps the name its operator gave it (B36),
-            // until the operator names the machine again: a rename moves the
-            // name the list carries.
-            let renamed = before
-                .iter()
-                .any(|earlier| earlier.key == machine.key && earlier.name != machine.name);
-            if (!registration.origin.switched() || renamed) && registration.label != machine.name {
+            // A switched device keeps the name its operator gave it (B36);
+            // only the operator's own rename moves it (`peer_renamed`).
+            if !registration.origin.switched() && registration.label != machine.name {
                 registration.label = machine.name.clone();
                 self.rebuild_device_rows();
                 self.persist_current_ui_state();

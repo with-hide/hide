@@ -1423,6 +1423,7 @@ impl Pairing {
                 if !peers.rename(&paired.key, name).map_err(store)? {
                     return Err("device_unknown");
                 }
+                self.tell_renamed(&paired.machine.key, name).await;
                 self.look.send_modify(|count| *count += 1);
                 Ok(json!({ "device_id": paired.machine.device_id, "name": name }))
             }
@@ -1745,6 +1746,29 @@ impl Pairing {
                 return Err("switch_not_connected");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Tells the core the operator named the machine under `key`
+    /// (`peer_renamed`), so a device switched onto it takes the name (B36).
+    async fn tell_renamed(&self, key: &str, name: &str) {
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "peer_renamed",
+            "payload": { "key": key, "name": name },
+        });
+        let core = Arc::clone(&self.core);
+        let told =
+            tokio::task::spawn_blocking(move || core.dispatch(event.to_string().into_bytes()))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|told| told);
+        if let Err(error) = told {
+            hide_core::diagnostic!(json!({
+                "component": "pairing",
+                "kind": "pairing.rename_not_told",
+                "error": error,
+            }));
         }
     }
 
