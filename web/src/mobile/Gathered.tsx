@@ -11,6 +11,7 @@ import { RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { AskLine, AutomationAskRows } from "./AutomationsScreen";
+import { MissionAskRows } from "./MissionsScreen";
 import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type HostLine } from "./gather";
 import { automationLink, dropHostPush, hostLink, hostStore, type PairedHost } from "./hosts";
 import { FoldButton, GatheredRowItem } from "./ListRows";
@@ -118,7 +119,7 @@ type OtherAsk = { host: GatheredHost; ask: GatheredAsk };
 export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { hosts: readonly ConnectableHost[]; activeRoom: string; dim: boolean; watch?: Watch }) {
   const { t } = useInterfaceTranslation();
   const groups = usePhone((s) => s.groups);
-  const asksHere = usePhone((s) => s.automationAsks.length);
+  const asksHere = usePhone((s) => s.automationAsks.length + s.missionAsks.length);
   const omittedHere = usePhone((s) => s.agentsOmitted);
   const unreachable = usePhone((s) => s.unreachable);
   const presence = usePresences(hosts, activeRoom, watch);
@@ -177,6 +178,7 @@ function AskRows({ here, others }: { here: GatheredHost | undefined; others: rea
   return (
     <>
       <AutomationAskRows computer={here?.name} />
+      <MissionAskRows computer={here?.name} />
       {others.length > 0 ? (
         <ul className="divide-y divide-border border-b border-border" data-phone-gathered-asks={others.length}>
           {others.map(({ host, ask }) => <OtherAskRow key={`${host.room}|${ask.id}`} host={host} ask={ask} />)}

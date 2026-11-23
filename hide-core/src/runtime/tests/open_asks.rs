@@ -415,6 +415,14 @@ mod letter_woken {
             );
             assert_eq!(finished.detail.as_deref(), Some(line));
             assert_eq!(finished.asks_behind, 1, "the question waits behind it");
+            // The phone's row counts it behind the same line.
+            let phone = crate::agent_state::phone::project(
+                &json!({"navigator": {"agents": [finished]}}),
+                "local",
+            );
+            let listed = phone.agents().next().unwrap();
+            assert_eq!((listed.group.as_str(), listed.asks_behind), ("done", 1));
+            assert_eq!(serde_json::to_value(listed).unwrap()["asks_behind"], 1);
             assert_eq!(notices.len(), 1, "the finish is announced ({end:?})");
             assert_eq!(notices[0].state, push::NoticeState::Done);
 

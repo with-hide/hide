@@ -799,3 +799,33 @@ it("reads a step a Hide sends by its old kind as the general step of that preset
     await unmount();
   }
 });
+
+it("lists a mission that is its own 내 차례 item in the agent list's 내 차례 and counts it on the agents tab, as the desktop counts it", async () => {
+  const now = Date.now();
+  const held = [{ key: "a", title: "Step a", reason: "worker_ended" as const, pr: null, since_unix_ms: now - 25 * 60_000 }];
+  const nodes = [node("a", "working", { attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: now - 25 * 60_000, on_row: false, item: false } })];
+  const net = mission("m-net", { nodes, safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: held } });
+  const { container, click, serve, unmount } = await connect([net, mission("m-run")]);
+  try {
+    // A Mac that names none adds nothing.
+    expect(container.querySelector('[data-phone-group="needs_you"]')).toBeNull();
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBeNull();
+    await serve({ type: "missions", items: [net, mission("m-run")], failed: false, asks: ["m-net"] });
+    const group = container.querySelector('[data-phone-group="needs_you"]')!;
+    expect(group.querySelector("[data-phone-group-count]")!.textContent).toBe("1");
+    expect([...group.querySelectorAll("[data-phone-mission]")].map((row) => row.getAttribute("data-phone-mission"))).toEqual(["m-net"]);
+    expect(group.querySelector("[data-phone-mission-line]")?.textContent).toBe("1 stuck · the Conductor has not settled them yet");
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
+    // The row opens the mission's page.
+    await click('[data-phone-group="needs_you"] [data-phone-mission="m-net"]');
+    expect(container.querySelector('[data-phone-back="missions"]')).not.toBeNull();
+    // Resolved, the computer names it no more and the line goes.
+    await serve({ type: "missions", items: [net, mission("m-run")], failed: false, asks: [] });
+    await click('[data-phone-back="missions"]');
+    await click('[data-phone-tab="agents"]');
+    expect(container.querySelector('[data-phone-group="needs_you"]')).toBeNull();
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

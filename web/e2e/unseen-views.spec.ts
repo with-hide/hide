@@ -8,14 +8,16 @@ import { dumpOnFailure } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { quietFor } from "./wait";
-import { enterWorkspace, screenshot } from "./wire";
+import { enterWorkspace, openTaskFolds, screenshot, showTasks } from "./wire";
 
 // A View an agent opens while the operator is elsewhere waits on its row as
 // To look at (PRD unseen-agent-views): the row is in Needs You with the look
 // mark and the View as a chip under it, and the pane's View list marks it.
-// Pressing the row goes to the agent only and leaves the View to look at;
-// pressing the chip opens the View in focus mode beside the agent's pane,
-// with the keyboard on it, which sees it (operator decision 2026-11-23). The
+// Pressing the row goes to the agent only and leaves the View to look at:
+// read, the row leaves Needs You and rests in the 태스크 list with the chip
+// kept (the 프로젝트 tree draws no chip); pressing the chip opens the View in
+// focus mode beside the agent's pane, with the keyboard on it, which sees it
+// (operator decisions 2026-11-23). The
 // pane header's eye brings the View forward too. An open in the pane the
 // operator is in is seen at once. Only this flow crosses the page, hided and
 // the core: the chip's event and the core's focus mode are unit and core
@@ -62,24 +64,35 @@ test("an agent's open the operator has not looked at waits on its row until its 
     await page.keyboard.press("Escape");
     await screenshot(page, "unseen-view-row");
 
-    // The row goes to the agent only: the View stays to look at, on no desk.
+    // The row goes to the agent only: the View stays to look at, on no desk. Read, the row leaves Needs You for its
+    // project's tree, which draws no chip, and the pane's View list still marks the View (operator decision 2026-11-23).
     await row.locator(`[data-agent-open="${pane}"]`).click();
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
     await quietFor(page, 1_000, "the row's press opens no View");
     await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-label*="login.md"]')).toHaveCount(0);
-    await expect(mark).toHaveAttribute("data-agent-status-mark", "look");
+    await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
+    await expect(page.locator(`[data-pane-views="${pane}"]`)).toHaveAttribute("data-pane-views-unseen", "true");
     await screenshot(page, "unseen-view-row-press");
+
+    // The 태스크 list keeps the chip on the row where it rests.
+    const tasks = await showTasks(page);
+    await openTaskFolds(page);
+    const resting = tasks.locator(`[data-task-row="${pane}"]`);
+    await expect(resting).toHaveAttribute("data-task-state", "resting");
+    const kept = resting.locator("[data-look-chip]");
+    await expect(kept).toContainText("login.md");
 
     // The chip opens the View in focus mode: the agent's pane on the left, the View in front of its desk with the
     // keyboard, and the look goes once it is in front.
-    await chip.click();
+    await kept.click();
     await expect(page.locator(`[data-pair-pane="${pane}"]`)).toBeVisible();
     await expect(front(page)).toHaveAttribute("aria-label", /\/login\.md/);
     await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-view-area-id]") !== null), { message: "the keyboard on the View" }).toBe(true);
-    await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
-    await expect(chip).toHaveCount(0);
+    await expect(kept).toHaveCount(0);
     await expect(page.locator(`[data-pane-views="${pane}"]`)).not.toHaveAttribute("data-pane-views-unseen", "true");
     await screenshot(page, "unseen-view-focus-mode");
+    await page.locator('[data-sidebar-lens-option="projects"]').click();
+    await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
 
     // B5: an open from the pane the operator is in, here the left of focus mode, comes to the front and is seen at once.
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");

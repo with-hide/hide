@@ -187,13 +187,14 @@ function device(id: string, shown: number, more: number, done = 1, doneMore = 0)
   return { id, agent_scope: { raised } };
 }
 
-// Operator decision 2026-10-18: include unread Done in the app icon under its own switch.
+// Operator decision 2026-11-23: the app icon counts 내 차례 alone, never unread
+// Done, whatever the Done switch says (replacing 2026-10-18's Done in the icon).
 it.each([
   [false, false, [], 0, false],
   [true, false, ["Needs You · my-app"], 2, true],
-  [false, true, ["Unread · my-app"], 1, true],
-  [true, true, ["Needs You · my-app", "Unread · my-app"], 3, true],
-] as const)("with Needs You=%s and Done=%s sends and counts only the chosen groups", async (needsYou, done, bodies, badge, wanted) => {
+  [false, true, ["Unread · my-app"], 0, true],
+  [true, true, ["Needs You · my-app", "Unread · my-app"], 2, true],
+] as const)("with Needs You=%s and Done=%s sends only the chosen groups and counts 내 차례 alone", async (needsYou, done, bodies, badge, wanted) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const shown: string[] = [];
   const reported: number[] = [];
@@ -226,7 +227,7 @@ it.each([
   }
 });
 
-it("counts enabled groups across devices, updates when Done is read, and keeps the legacy shared choice", async () => {
+it("counts 내 차례 across devices, moves with it alone, and counts nothing while Needs You is off", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const reported: number[] = [];
   window.hideHost = {
@@ -255,7 +256,8 @@ it("counts enabled groups across devices, updates when Done is read, and keeps t
   } } as never));
   await act(async () => useShellStore.setState({ rest: null }));
   await act(async () => useShellStore.setState({ rest: rest(false, 3) } as never));
-  expect(reported).toEqual([3, 4, 3, 12, 0]);
+  // Done read or unread never moves it; with Needs You off it counts nothing.
+  expect(reported).toEqual([2, 3, 8, 0]);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

@@ -18,7 +18,7 @@ export type PhoneAgent = {
   pane_id: string;
   root_pane_id: string;
   group: GroupId;
-  /** In 내 차례 for an ask the operator read and has not answered: drawn with a hollow `!`, never announced (needs-you-cleanup B11). */
+  /** An ask the operator read and has not answered: rests in its own group with a hollow `!`, never announced (docs/status-model.md, A question still waiting). */
   read?: true;
   /** The desktop row's mark (`RowMark`). */
   mark: RowMark;
@@ -32,6 +32,8 @@ export type PhoneAgent = {
   children_left?: number;
   /** The subagents still running under a finished turn not read yet, which its line ends with; absent when none. */
   subagents_left?: number;
+  /** The open questions the operator read that wait behind the row's own news or ask, which its line ends with as `외 N건`; absent when none, and from a Mac that predates it. */
+  asks_behind?: number;
   /** How many subagents its agent runs inside its own session, which its children toggle counts beside its children; absent for none, for a count Hide cannot read, and from a Mac that predates it. */
   subagents?: number;
   /** The first five of them, oldest first, with what its agent named of each, listed after its children (docs/UI_BEHAVIOR.md, Subagents); absent when it names none. */
@@ -367,7 +369,8 @@ export type ServerFrame =
   /** `omitted` counts the agents hided left out to keep the frame within one relay message. */
   | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
   /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
-  | { type: "missions"; items: PhoneMissionOnWire[]; failed: boolean; omitted?: number }
+  /** `asks`: the listed missions that are their own 내 차례 item, oldest first, as the computer counts them in Needs You; absent from a Mac before it. */
+  | { type: "missions"; items: PhoneMissionOnWire[]; failed: boolean; omitted?: number; asks?: string[] }
   /** hided's answer to `answer_mission`, `ask_mission_material` and `reopen_mission_view`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */

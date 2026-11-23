@@ -61,9 +61,9 @@ export const FIREWALL_STATE_CHANNEL = "hide:firewall-state";
 export const FIREWALL_ALLOW_CHANNEL = "hide:firewall-allow";
 
 /**
- * The app icon's badge: how many root agents need the operator, which the
- * shell reports once it holds a live snapshot and again only when the number
- * changes (renderer -> main).
+ * The app icon's badge: the 내 차례 number, which the shell reports once it
+ * holds a live snapshot and again only when the number changes
+ * (renderer -> main).
  */
 export const NOTIFY_BADGE_CHANNEL = "hide:notify-badge";
 

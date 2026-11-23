@@ -460,6 +460,12 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub subagents_left: u64,
+        /// The open questions the operator read that wait behind the row's
+        /// own news or ask, which its line ends with as `외 N건`
+        /// (`SidebarAgentSnapshot::asks_behind`); 0 otherwise, so a phone
+        /// that predates it reads nothing new.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub asks_behind: u64,
         /// How many subagents its agent runs inside its own session
         /// (`SidebarAgentSnapshot::subagents`), which its children toggle
         /// counts beside its children; 0 for none and for a count Hide cannot
@@ -1146,6 +1152,10 @@ pub mod phone {
                     .unwrap_or(0),
                 subagents_left: agent
                     .get("subagents_left")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                asks_behind: agent
+                    .get("asks_behind")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
                 subagents: agent.get("subagents").and_then(Value::as_u64).unwrap_or(0),

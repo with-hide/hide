@@ -100,13 +100,20 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     // B4, B7, B8: Needs You's second line is the question, the waiting parent stands for its child, unfinished work rests with its line.
     const ask = (pane: string) => group("needs_you").locator(`[data-task-row="${pane}"] [data-task-line="needs_you"]`);
     await expect(ask(asking)).toContainText("검증 명령을 승인해 주세요", { timeout: 30_000 });
-    await expect(ask(question)).toContainText(QUESTION, { timeout: 30_000 });
     // A parent waiting on its working child stands in 작업 중, under the agents that work themselves.
     await expect(group("working").locator(`[data-task-row="${parent}"]`)).toHaveAttribute("data-task-state", "waiting");
     await expect(row(child)).toHaveCount(0);
     // A folded parent counts no children (status-marks B35).
     await expect(row(parent).locator("[data-task-children]")).toHaveCount(0);
     await openTaskFolds(page);
+    // The question came while its new tab was in front, so the operator has read it: it is out of Needs You and
+    // waits at the top of 쉬는 중 with a hollow mark and its question as the resting line until it is answered
+    // (operator decision 2026-11-23).
+    const restingFirst = tasks.locator('[data-task-fold="rest"] [data-task-row]').first();
+    await expect(restingFirst).toHaveAttribute("data-task-row", question, { timeout: 30_000 });
+    await expect(restingFirst).toHaveAttribute("data-task-read", "true");
+    await expect(restingFirst.locator('[data-task-line="resting"]')).toContainText(QUESTION);
+    await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveCount(0);
     await expect(row(stopped)).toHaveAttribute("data-task-state", "resting");
     await expect(row(stopped)).toContainText("테스트 환경이 없어 멈췄어요");
     // B10: the chevron opens the children in place and closes them again.
@@ -114,13 +121,13 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await expect(tasks.locator(`[data-task-child="${child}"]`)).toContainText("하위 작업 검증");
     await tasks.locator(`[data-task-chevron="${parent}"]`).click();
     await expect(tasks.locator(`[data-task-child="${child}"]`)).toHaveCount(0);
-    // B12: Enter goes to the pane; a read question stays in Needs You, read, until it is answered
-    // (needs-you-cleanup B10).
+    // B12: Enter goes to the pane; the read question keeps resting, its question still its line.
     await row(question).locator('[data-task-focus="row"]').focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(`[data-pane-view="${question}"]`)).toHaveAttribute("data-focused", "true");
-    await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveAttribute("data-task-read", "true");
-    await expect(ask(question)).toContainText(QUESTION);
+    await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveCount(0);
+    await expect(row(question)).toHaveAttribute("data-task-read", "true");
+    await expect(row(question).locator('[data-task-line="resting"]')).toContainText(QUESTION);
     await row(asking).locator('[data-task-focus="row"]').click();
     await expect(page.locator(`[data-pane-view="${asking}"]`)).toHaveAttribute("data-focused", "true");
     await expect(row(asking)).toHaveAttribute("data-selected", "true");

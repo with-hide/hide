@@ -84,7 +84,7 @@ export const firstRunEnglish = {
   "firstRun.settings.allowed": "Allowed",
   "firstRun.settings.blocked": "Blocked by macOS",
   "firstRun.settings.testRow": "Test notification",
-  "firstRun.settings.sentWhen": "Sent only while no Hide window is in front. The app icon counts agents in the notification groups you enable.",
+  "firstRun.settings.sentWhen": "Sent only while no Hide window is in front. While you are notified when an agent needs you, the app icon shows how many items need you.",
 } as const;
 
 const ko = {
@@ -169,7 +169,7 @@ const ko = {
   "firstRun.settings.allowed": "허용됨",
   "firstRun.settings.blocked": "macOS에서 차단됨",
   "firstRun.settings.testRow": "테스트 알림",
-  "firstRun.settings.sentWhen": "Hide 창이 맨 앞에 있지 않을 때만 알림을 보내요. 앱 아이콘 배지에는 알림을 켠 그룹의 에이전트 수를 더해 보여 줘요.",
+  "firstRun.settings.sentWhen": "Hide 창이 맨 앞에 있지 않을 때만 알림을 보내요. 내 차례 알림을 켜 두면 앱 아이콘 배지에 내 차례 수를 보여 줘요.",
 } satisfies Catalog<typeof firstRunEnglish>;
 
 const zhCN = {
@@ -254,7 +254,7 @@ const zhCN = {
   "firstRun.settings.allowed": "已允许",
   "firstRun.settings.blocked": "被 macOS 阻止",
   "firstRun.settings.testRow": "测试通知",
-  "firstRun.settings.sentWhen": "仅在没有 Hide 窗口位于前台时发送。应用图标会显示已开启通知的各组智能体总数。",
+  "firstRun.settings.sentWhen": "仅在没有 Hide 窗口位于前台时发送。开启轮到我的通知后，应用图标会显示轮到我的项数。",
 } satisfies Catalog<typeof firstRunEnglish>;
 
 const ja = {
@@ -339,7 +339,7 @@ const ja = {
   "firstRun.settings.allowed": "許可済み",
   "firstRun.settings.blocked": "macOSがブロック中",
   "firstRun.settings.testRow": "テスト通知",
-  "firstRun.settings.sentWhen": "Hideのウィンドウが前面にないときだけ送ります。アプリのアイコンには、通知をオンにしたグループのエージェント数を合計して表示します。",
+  "firstRun.settings.sentWhen": "Hideのウィンドウが前面にないときだけ送ります。自分の番の通知をオンにすると、アプリのアイコンに自分の番の件数を表示します。",
 } satisfies Catalog<typeof firstRunEnglish>;
 
 export const firstRunCatalogs = { en: firstRunEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof firstRunEnglish>;

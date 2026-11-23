@@ -13,7 +13,7 @@ import { AutomationAskRows, AutomationsScreen } from "./AutomationsScreen";
 import { Detail } from "./Detail";
 import { GroupRows } from "./ListRows";
 import { MissionDetail } from "./MissionDetail";
-import { MissionsScreen } from "./MissionsScreen";
+import { MissionAskRows, MissionsScreen } from "./MissionsScreen";
 import { PrDetail } from "./PrDetail";
 import { PrsScreen } from "./PrsScreen";
 import { SettingsScreen } from "./SettingsScreen";
@@ -145,7 +145,8 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
   const devices = usePhone((s) => s.devices);
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
-  const asks = usePhone((s) => s.automationAsks.length);
+  // The automations that stopped for a person and the missions that are their own item are lines of 내 차례 too (PRD automations D-12, B23).
+  const asks = usePhone((s) => s.automationAsks.length + s.missionAsks.length);
   const scope = usePhone((s) => s.listScope);
   // A hosted phone paired with two computers or more chooses between all of them and this one (PRD device-connect-iroh B55).
   const hosts = useConnectableHosts();
@@ -192,17 +193,23 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
           <section className="px-xl pt-lg" data-phone-group="needs_you">
             <GroupHead id="needs_you" count={asks} />
             <AutomationAskRows />
+            <MissionAskRows />
           </section>
         ) : null}
         {groups?.map((group) => {
           const id = group.group;
-          // An automation that stopped for a person is one more line of 내 차례 (PRD automations D-12, B23).
+          // An automation that stopped for a person, or a mission that is its own item, is one more line of 내 차례 (PRD automations D-12, B23).
           const count = group.count + (id === "needs_you" ? asks : 0);
           if (count === 0) return null;
           return (
             <section key={id} className="px-xl pt-lg" data-phone-group={id}>
               <GroupHead id={id} count={count} />
-              {id === "needs_you" ? <AutomationAskRows /> : null}
+              {id === "needs_you" ? (
+                <>
+                  <AutomationAskRows />
+                  <MissionAskRows />
+                </>
+              ) : null}
               {group.count > 0 ? <GroupRows group={group} /> : null}
             </section>
           );
