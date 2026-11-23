@@ -3579,6 +3579,9 @@ mod tests {
                         ("done", true, 1),
                         "{case}"
                     );
+                    // No sentence of its own: the question behind is its line.
+                    let line = rested.state.line.as_ref().expect(&case);
+                    assert_eq!((line.mode, line.text.as_str()), ("news", ""), "{case}");
                     assert_eq!(sent.len(), 1, "{case}");
                 } else {
                     assert_eq!(

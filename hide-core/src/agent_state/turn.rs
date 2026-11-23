@@ -383,6 +383,11 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         // No sentence: the shell words the proven cause (B10).
         line = Some(RowLine::new("", "waiting", subtle));
     }
+    if line.is_none() && agent.asks_behind > 0 {
+        // No sentence (Hide AI off, or its answer not in yet): the read
+        // questions still waiting behind the news are the line, `외 N건`.
+        line = Some(RowLine::new("", "news", news));
+    }
     if let Some(line) = line.as_mut().filter(|line| line.mode == "waiting") {
         line.pull_request = agent
             .checks_wait

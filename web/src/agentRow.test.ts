@@ -230,6 +230,10 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const { t } = await createInterfaceI18n("ko");
     const finished = row("f", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "PR #41 올림", asks_behind: 1 } as Partial<AgentRow>);
     expect(lineText(t, finished, sidebarLine(finished)!)).toBe("끝남 · PR #41 올림 · 외 1건");
+    // A finish with no sentence of its own (Hide AI off) gets the core's empty news line, which still counts them.
+    const bare = row("n", { activity: "stopped", mark: "done", status_code: "stopped", group: "done", unread: true, asks_behind: 1 } as Partial<AgentRow>);
+    bare.state = { ...bare.state, line: { text: "", mode: "news", tone: { kind: "news", read: false } } };
+    expect(lineText(t, bare, sidebarLine(bare)!)).toBe("외 1건");
     const quiet = row("q", { activity: "stopped", mark: "quiet", status_code: "idle", group: "seen", asks_behind: 0 } as Partial<AgentRow>);
     quiet.state = { ...quiet.state, line: { text: "진정서 건 정해 주세요", mode: "quiet", tone: { kind: "subtle", read: true } } };
     expect(lineText(t, quiet, quiet.state.line!)).toBe("진정서 건 정해 주세요");

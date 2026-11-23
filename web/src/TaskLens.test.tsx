@@ -94,6 +94,17 @@ it.each(["status", "project"] as const)("in %s orders resting tasks by their dis
   expect(rows(container)).toEqual(["recent", "middle", "old", "unknown"]);
 });
 
+// Operator decision 2026-11-23: a finish over a read question counts it behind its news, even with no sentence of its own
+// (Hide AI off, or its answer not in yet); a finish with nothing behind it has no line.
+it("says 외 N건 on a finished row with no sentence of its own", async () => {
+  const finished = (id: string, asks: number) => row(id, { status_code: "stopped", mark: "done", group: "done", unread: true, activity: "stopped", asks_behind: asks } as Partial<AgentRow>, { group: "done" });
+  const agents = [finished("behind", 1), finished("bare", 0)];
+  const { container } = await render(snapshot(agents, [card("behind", "done", "hide-main"), card("bare", "done", "hide-main")]), agents);
+  const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`)?.textContent;
+  expect(line("behind")).toBe("herdr-ide외 1건");
+  expect(line("bare")).toBe("herdr-ide");
+});
+
 it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and 작업 중 (a wait included, under the working ones), drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
   const agents = [
     row("ask", { status_code: "question", state: undefined as never }, { group: "needs_you" }),

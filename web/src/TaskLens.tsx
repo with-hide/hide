@@ -827,8 +827,9 @@ function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agen
   if (!own && agent.mark === "look" && row?.mode === "request") return null;
   if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, withoutLook(agent), row!);
   const text = agent.state.session.line;
-  if (!text) return null;
-  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: [leftTail(t, agent), asksBehindTail(t, agent)].filter(Boolean).join(" · ") || null };
+  // With no sentence (Hide AI off, or its answer not in yet), the read questions still waiting behind the news are the line.
+  if (!text && !agent.asks_behind) return null;
+  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text: text || null, tail: [leftTail(t, agent), asksBehindTail(t, agent)].filter(Boolean).join(" · ") || null };
 }
 
 const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].filter(Boolean).join(" · ");
