@@ -8922,6 +8922,8 @@ fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
     let (read, notices) = shown(&mut runtime);
     assert!(!read.unread);
     assert!(notices.is_empty());
+    // Read, it leaves 내 차례 (operator decision 2026-11-23).
+    assert_eq!(read.group, "seen");
 
     // A worker's letter wakes the Conductor; it works, then rests.
     engine(&mut runtime, "working", 2);
@@ -8931,7 +8933,10 @@ fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
     engine(&mut runtime, "done", 3);
     let (rested, notices) = shown(&mut runtime);
     assert_eq!(rested.ask_subject, read.ask_subject);
-    assert_eq!((rested.demand.as_str(), rested.unread), ("question", false));
+    assert_eq!(
+        (rested.group.as_str(), rested.demand.as_str(), rested.unread),
+        ("seen", "question", false)
+    );
     assert!(notices.is_empty(), "the raise read is not announced again");
     assert!(
         rested.revisit.is_some_and(|revisit| revisit.read_ask),

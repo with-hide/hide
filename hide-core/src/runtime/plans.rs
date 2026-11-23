@@ -141,10 +141,7 @@ mod ask_id {
     /// A question the session put to the operator, by the session and the
     /// record's id for the line.
     pub(super) fn open_ask(session: &SessionIdentity, id: &str) -> String {
-        format!(
-            "ask:{}/{}/{}#{id}",
-            session.device_id, session.agent, session.session_id
-        )
+        crate::model::open_ask_id(session, id)
     }
 
     /// A plan put up for review, by its session, its instance and when it

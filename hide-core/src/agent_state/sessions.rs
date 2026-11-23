@@ -60,10 +60,11 @@ pub struct Revisit {
     pub since_unix_ms: u64,
 }
 
-/// An ask the operator read and has not answered: a question or an approval
-/// that no longer holds the row in Needs You (a block holds it there, D-12),
-/// on a root that is not working or resolved (해결 puts it away, D-14), and
-/// not the one 다 봤음 put away. The ask is known by its `ask_stamp`.
+/// An ask the operator read and has not answered: a question, an approval
+/// or a block that no longer holds the row in Needs You (operator decision
+/// 2026-11-23, replacing D-12's block), on a root that is not working or
+/// resolved (해결 puts it away, D-14), and not the one 다 봤음 put away. The
+/// ask is known by its `ask_stamp`.
 pub(crate) fn revisit_of(
     agent: &SidebarAgentSnapshot,
     mark: Option<&RevisitMark>,
@@ -82,14 +83,16 @@ pub(crate) fn revisit_of(
     })
 }
 
-/// A read, unanswered question or approval at rest on a root, whether or not
-/// 치우기 put it away. An external tool's agent asks its tool, which answers
-/// it, so the operator reading its pane leaves it no ask of theirs (PRD
-/// hide-external-control B28).
+/// A read, unanswered question, approval or block at rest on a root,
+/// whether or not 치우기 put it away. An external tool's agent asks its tool,
+/// which answers it, so the operator reading its pane leaves it no ask of
+/// theirs (PRD hide-external-control B28). A blocked pane holds Needs You
+/// until it is answered, so it is never one.
 fn read_open_ask(agent: &SidebarAgentSnapshot) -> bool {
     agent.lineage_parent_pane_id.is_none()
         && !super::axes::tool_keeps(agent)
-        && matches!(agent.demand.as_str(), "question" | "approval")
+        && super::axes::demand_of(agent) != super::axes::AgentDemand::None
+        && agent.group != "needs_you"
         && !agent.blocked
         && !agent.unread
         && agent.activity != "working"
@@ -98,10 +101,29 @@ fn read_open_ask(agent: &SidebarAgentSnapshot) -> bool {
 }
 
 /// The stamp an ask is known by: when the core laid it (a plan review or a
-/// mission decision, which leave the agent's state alone), else the stamp of
-/// the state it stands in, which the operator reading it does not move.
+/// mission decision, which leave the agent's state alone), else, for a turn
+/// that only asked open questions again, when the first of them was asked,
+/// so the same question asked again keeps its place; else the stamp of the
+/// state it stands in, which the operator reading it does not move.
 pub(crate) fn ask_stamp(agent: &SidebarAgentSnapshot) -> Option<u64> {
-    agent.laid_since_unix_ms.or(agent.changed_at_unix_ms)
+    agent
+        .laid_since_unix_ms
+        .or_else(|| asked_again_since(agent))
+        .or(agent.changed_at_unix_ms)
+}
+
+/// When the first of the open questions the row's turn only asked again
+/// was asked (`RowFacts::asks_again`).
+fn asked_again_since(agent: &SidebarAgentSnapshot) -> Option<u64> {
+    let again = &agent.row_facts.as_ref()?.asks_again;
+    agent
+        .open_asks
+        .as_ref()?
+        .items
+        .iter()
+        .filter(|item| again.contains(&item.id))
+        .map(|item| item.at_unix_ms)
+        .min()
 }
 
 /// Why the operator cannot resolve the row now: work that still runs or

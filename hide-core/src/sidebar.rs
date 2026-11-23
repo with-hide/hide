@@ -895,6 +895,10 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         blocked_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),
+        laid_read: false,
+        views_unread: false,
+        open_asks_read: 0,
+        asks_behind: 0,
         open_asks: None,
         human_turn: None,
         status_word_visible: true,
@@ -1981,6 +1985,7 @@ mod tests {
                 checks_ended: None,
                 human_turn: None,
                 read_asks: None,
+                views_opened: None,
             },
         );
         apply_read_state(
@@ -3067,6 +3072,7 @@ mod tests {
             checks_ended: None,
             human_turn: None,
             read_asks: None,
+            views_opened: None,
         };
         for (saved, unread, what) in [
             (40, false, "the same sequence is still read"),

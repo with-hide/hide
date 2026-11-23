@@ -2780,6 +2780,13 @@ impl LabelWorker {
                 // The questions are checked against the turn's own answer
                 // before anything keeps them; what the checks dropped or
                 // folded is counted, never named.
+                // Read before the checks take the judgment: a question the
+                // turn only asked again is no news (`asked_only_again`).
+                let asks_again = analysis
+                    .work
+                    .as_ref()
+                    .map(|work| work.asked_only_again(analysis.end, &outcome.answer))
+                    .unwrap_or_default();
                 let judgment = analysis.work.clone().map(|work| {
                     let (judgment, checks) = work.checked(&outcome.answer);
                     if checks.listed > 0 {
@@ -3069,6 +3076,7 @@ impl LabelWorker {
                 }
                 record.line = analysis.line.clone();
                 record.end = Some(analysis.end);
+                record.asks_again = asks_again;
                 record.task_input_cursor = outcome.task_input_cursor.or(record.task_input_cursor);
                 match outcome.phase {
                     AnalysisPhase::TurnStart => record.analysis_turn_start = Some(outcome.turn),

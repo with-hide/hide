@@ -2068,6 +2068,27 @@ pub struct OpenAsksSnapshot {
     pub items: Vec<OpenAskSnapshot>,
 }
 
+/// What every id of a question a session put to the operator starts with
+/// (`OpenAsksSnapshot::ask_id`), which tells it from the core's own.
+pub(crate) const OPEN_ASK_ID_PREFIX: &str = "ask:";
+
+impl OpenAsksSnapshot {
+    /// The id the core lays and the read record keeps for the session's
+    /// question `id`: the session and the record's id for the line, so a
+    /// question raised again is the same one and a new one is news.
+    pub(crate) fn ask_id(&self, id: &str) -> String {
+        open_ask_id(&self.session, id)
+    }
+}
+
+/// The id of `session`'s open question `id` (`OpenAsksSnapshot::ask_id`).
+pub(crate) fn open_ask_id(session: &crate::links::ledger::SessionIdentity, id: &str) -> String {
+    format!(
+        "{OPEN_ASK_ID_PREFIX}{}/{}/{}#{id}",
+        session.device_id, session.agent, session.session_id
+    )
+}
+
 /// One question that still waits on the operator.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OpenAskSnapshot {
@@ -2345,6 +2366,29 @@ pub struct SidebarAgentSnapshot {
     /// core lays stays read).
     #[serde(skip)]
     pub(crate) laid_asks: BTreeSet<String>,
+    /// Whether the operator read every question laid on the row
+    /// (`laid_asks`), decided with the read axis: such a question steps
+    /// behind the agent's own turn while that turn is news
+    /// (`axes.rs::laid_ask_steps_back`).
+    #[serde(skip)]
+    pub(crate) laid_read: bool,
+    /// Whether the agent opened a View to look at since the operator last
+    /// read the row (`PaneReadRecord::views_opened`), decided with the read
+    /// axis: news of its own beside `unread`, which a View to look at calls
+    /// with (`axes.rs::look_calls`).
+    #[serde(skip)]
+    pub(crate) views_unread: bool,
+    /// How many of the session's open questions on the row (`open_asks`)
+    /// the operator read, leaving out the ones the row's turn only asked
+    /// again; decided with the read axis.
+    #[serde(skip)]
+    pub(crate) open_asks_read: usize,
+    /// Derived: the open questions the operator read that wait behind what
+    /// leads an unread row, its own news or ask, which its line counts as
+    /// `외 N건` (docs/status-model.md, A question still waiting); absent at
+    /// zero, and on a row a laid question leads, whose ask counts its own.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub asks_behind: u32,
     /// The questions the row's session put to the operator that still wait
     /// and that the operator has sent nothing since, whether or not one is
     /// laid on the row (`runtime/plans.rs::lay_reviews_on`); absent while
@@ -5522,6 +5566,14 @@ pub struct PaneReadRecord {
     /// written before the questions were kept, which is judged as it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_asks: Option<BTreeSet<String>>,
+    /// The newest open of a View the pane's agent opened that the operator
+    /// had not looked at when the pane was read (`UnseenViewFact::
+    /// opened_unix_ms`): a later open is news, an open again of a View
+    /// already seen included (PRD unseen-agent-views D-11), while the View
+    /// itself stays unseen once the row is read (docs/status-model.md, A
+    /// View to look at).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub views_opened: Option<u64>,
 }
 
 /// A pane whose last stop finished work, as Hide last saw it. A

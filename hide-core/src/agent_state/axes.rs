@@ -712,7 +712,10 @@ pub fn prune_lineage_expansion(
 /// `derive_from_axes` is the only writer of those fields and writes them from
 /// these same enums, so the round trip is total.
 pub(crate) fn axes_of(agent: &SidebarAgentSnapshot) -> (AgentDemand, AgentActivity, bool) {
+    // A question the core laid only over a row with no demand of its own,
+    // so one stepping behind the agent's turn leaves it none.
     let demand = match agent.demand.as_str() {
+        _ if laid_ask_steps_back(agent) => AgentDemand::None,
         "error" => AgentDemand::Error,
         "question" => AgentDemand::Question,
         "approval" => AgentDemand::Approval,
@@ -908,8 +911,63 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
             .declared_human_turn
             .as_ref()
             .map(|declared| declared.id.clone()),
-        read_asks: Some(agent.laid_asks.clone()),
+        read_asks: Some(asks_on(agent)),
+        views_opened: views_opened(agent),
     }
+}
+
+/// The newest open of a View the row's agent opened that the operator has
+/// not looked at. A delegated row's Views go up to its ancestors as
+/// descendant signals instead (PRD unseen-agent-views D-10).
+fn views_opened(agent: &SidebarAgentSnapshot) -> Option<u64> {
+    if agent.delegated {
+        return None;
+    }
+    agent
+        .unseen_views
+        .iter()
+        .map(|view| view.opened_unix_ms)
+        .max()
+}
+
+/// Whether the row's Views to look at call the operator: one is unseen and
+/// the operator has not read the row since, neither the agent's turn nor the
+/// View's open. Read, the row stands where its own axes put it and keeps the
+/// View's chip (operator decision 2026-11-23).
+pub(crate) fn look_calls(agent: &SidebarAgentSnapshot) -> bool {
+    !agent.unseen_views.is_empty() && (agent.unread || agent.views_unread)
+}
+
+/// Every question standing on the row now: the core's questions laid on it
+/// and the questions its session put to the operator that still wait, laid
+/// or not (`SidebarAgentSnapshot::open_asks`). Reading the row reads them all.
+fn asks_on(agent: &SidebarAgentSnapshot) -> BTreeSet<String> {
+    let mut asks = agent.laid_asks.clone();
+    if let Some(open) = &agent.open_asks {
+        asks.extend(open.items.iter().map(|item| open.ask_id(&item.id)));
+    }
+    asks
+}
+
+/// The open questions the row's turn only asked again, by the ids the read
+/// record keeps (`SidebarAgentSnapshot::open_asks`): None unless the label
+/// read the turn as asking nothing else, or when one of them is no question
+/// still standing on the row.
+fn asks_again(agent: &SidebarAgentSnapshot) -> Option<BTreeSet<String>> {
+    let again = &agent.row_facts.as_ref()?.asks_again;
+    let open = agent.open_asks.as_ref()?;
+    if again.is_empty() {
+        return None;
+    }
+    again
+        .iter()
+        .map(|id| {
+            open.items
+                .iter()
+                .any(|item| item.id == *id)
+                .then(|| open.ask_id(id))
+        })
+        .collect()
 }
 
 /// Records what `agent` shows now as read, as the operator's focus on its
@@ -957,8 +1015,12 @@ fn completion_is_news(record_completed: bool, current_completed: bool) -> bool {
 /// answered or a finished child back at work, neither of which calls the
 /// operator (PRD B5, B6). How the checks it waited on ended is news when the
 /// record has not seen that end (status-marks D-08).
-fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
-    record_covers_turn(record, current)
+fn record_covers(
+    record: &PaneReadRecord,
+    current: &PaneReadRecord,
+    agent: &SidebarAgentSnapshot,
+) -> bool {
+    record_covers_turn(record, current, agent)
         && current
             .descendant_signals
             .is_subset(&record.descendant_signals)
@@ -973,22 +1035,57 @@ fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
 ///
 /// A question the core laid on the row is judged apart from the agent's
 /// turn: one the record has not read is news, and while every one laid was
-/// read, the agent working and resting under it is not, since the row still
-/// asks what the operator read (docs/status-model.md, A question the core
-/// lays stays read).
-fn record_covers_turn(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
-    let asks = asks_read(record, current);
-    asks != Some(false) && (asks == Some(true) || turn_covered(record, current))
+/// read and one of them is the core's own (a plan review, a mission
+/// decision or raise, input not taken), the agent working and resting under
+/// it is not, since the row still asks what the operator read
+/// (docs/status-model.md, A question the core lays stays read). A question
+/// the session itself put to the operator covers nothing of the agent's:
+/// only a turn that asks the same open questions again and does nothing
+/// else is no news (A question still waiting).
+fn record_covers_turn(
+    record: &PaneReadRecord,
+    current: &PaneReadRecord,
+    agent: &SidebarAgentSnapshot,
+) -> bool {
+    match asks_read(record, agent) {
+        Some(false) => false,
+        Some(true) if agent.laid_asks.iter().any(|ask| !is_open_ask(ask)) => true,
+        _ => {
+            turn_covered(record, current)
+                || asks_again(agent).is_some_and(|again| {
+                    record
+                        .read_asks
+                        .as_ref()
+                        .is_some_and(|read| again.is_subset(read))
+                })
+        }
+    }
 }
 
 /// Whether the record read the core's questions laid on the row now: Some
 /// (true) when one is laid and the record read them all, Some(false) when
 /// one is laid that it did not read, and None when none is laid or the
 /// record was written before it kept them.
-fn asks_read(record: &PaneReadRecord, current: &PaneReadRecord) -> Option<bool> {
+fn asks_read(record: &PaneReadRecord, agent: &SidebarAgentSnapshot) -> Option<bool> {
     let read = record.read_asks.as_ref()?;
-    let laid = current.read_asks.as_ref().filter(|laid| !laid.is_empty())?;
+    let laid = Some(&agent.laid_asks).filter(|laid| !laid.is_empty())?;
     Some(laid.is_subset(read))
+}
+
+/// Whether a laid question is one the session put to the operator
+/// (`runtime/plans.rs::ask_id::open_ask`) rather than one of the core's own.
+fn is_open_ask(ask: &str) -> bool {
+    ask.starts_with(crate::model::OPEN_ASK_ID_PREFIX)
+}
+
+/// Whether a question laid on the row steps behind the agent's own turn:
+/// every question laid is one the operator read, and the agent's turn since
+/// is news, a finish, work left or anything else it did. The row then shows
+/// that turn, in 읽을 것 or wherever its own axes put it, and the questions
+/// wait behind it (`외 N건`); once the operator reads the turn they lead the
+/// row again (docs/status-model.md, A question still waiting).
+pub(crate) fn laid_ask_steps_back(agent: &SidebarAgentSnapshot) -> bool {
+    !agent.laid_asks.is_empty() && agent.laid_read && agent.own_unread
 }
 
 /// Whether a record covers the agent's own turn itself: its sequence,
@@ -1165,7 +1262,7 @@ pub fn apply_read_state(
             record.demand = agent.demand.clone();
             record.activity = agent.activity.clone();
             record.completed = agent.completed;
-            record.read_asks = Some(agent.laid_asks.clone());
+            record.read_asks = Some(asks_on(agent));
             moved = true;
         } else if settled_here && !record.unread && from_another_server {
             // Only this server's numbering is taken; what the operator read
@@ -1189,14 +1286,16 @@ pub fn apply_read_state(
                 .is_none_or(|now| now.contains(signal))
         });
         moved |= record.descendant_signals.len() != before;
-        // A question the record read that is not laid beside those the row
-        // carries now is gone: the core lays all of a row's questions at
-        // once. Dropping it never changes the read axis, as above.
+        // A question the record read that does not stand beside those the
+        // row carries now is gone: the core lays all of a row's questions at
+        // once, and the row carries every open one of its session. Dropping
+        // it never changes the read axis, as above.
+        let standing = asks_on(agent);
         if let Some(read) = record.read_asks.as_mut()
-            && !agent.laid_asks.is_empty()
-            && !read.is_subset(&agent.laid_asks)
+            && !standing.is_empty()
+            && !read.is_subset(&standing)
         {
-            read.retain(|ask| agent.laid_asks.contains(ask));
+            read.retain(|ask| standing.contains(ask));
             moved = true;
         }
         if moved {
@@ -1250,25 +1349,54 @@ pub(crate) fn derive_read_state(
         // which may be a descendant's news alone, so it never says the own
         // turn is unread: the children wait stays rather than bringing back
         // an answer already read.
-        let (read, own_read) = if looked_at.contains(&agent.pane_id.as_str()) {
+        // Which of the questions standing on the row the operator read: all
+        // of them on a pane looked at now, none without a record.
+        let looked = looked_at.contains(&agent.pane_id.as_str());
+        let record = records.get(&agent.pane_id);
+        let (read, own_read) = if looked {
             (true, true)
         } else {
-            match records.get(&agent.pane_id) {
+            match record {
                 None => (false, false),
                 Some(record)
                     if !agent.telemetry_stale && connection.judges_by_sequence(record, agent) =>
                 {
                     let current = read_fingerprint(agent);
                     (
-                        record_covers(record, &current),
-                        record_covers_turn(record, &current),
+                        record_covers(record, &current, agent),
+                        record_covers_turn(record, &current, agent),
                     )
                 }
                 Some(record) => (!record.unread, true),
             }
         };
+        let asks_read_now = |ask: &String| {
+            looked
+                || record
+                    .and_then(|record| record.read_asks.as_ref())
+                    .is_some_and(|read| read.contains(ask))
+        };
         agent.unread = !read;
         agent.own_unread = !own_read;
+        // A View's open is compared by its own clock, which a restart keeps,
+        // so it is judged on every server.
+        agent.views_unread = !looked
+            && views_opened(agent).is_some_and(|opened| {
+                record
+                    .and_then(|record| record.views_opened)
+                    .is_none_or(|read| read < opened)
+            });
+        agent.laid_read = !agent.laid_asks.is_empty() && agent.laid_asks.iter().all(asks_read_now);
+        // The open questions read that wait behind whatever leads the row,
+        // the ones its turn only asked again being that turn itself.
+        let again = asks_again(agent).unwrap_or_default();
+        agent.open_asks_read = agent.open_asks.as_ref().map_or(0, |open| {
+            open.items
+                .iter()
+                .map(|item| open.ask_id(&item.id))
+                .filter(|ask| asks_read_now(ask) && !again.contains(ask))
+                .count()
+        });
         derive_from_axes(agent);
     }
     sort_agents(agents);

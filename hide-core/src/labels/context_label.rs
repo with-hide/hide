@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v29";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v30";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -133,7 +133,7 @@ fn improvements_rule() -> String {
 /// a parent's letter never settles; Hide AI folds one only when the turn
 /// shows it taken or no longer needed.
 const ASKS: &str = concat!(
-    "quote: for each new ask, the exact sentence of the last assistant answer that asks it (at most 200 characters); no such sentence there means no ask. \"\" for every other item. ",
+    "quote: for each new ask, the exact sentence of the last assistant answer that asks it (at most 200 characters); no such sentence there means no ask. Also for an <open-missed> ask the last assistant answer asks again, in any words (listed with its same_as): the sentence that asks it again. \"\" for an open ask only listed again, not asked in the answer, and for every other item. ",
     "ask: a question or request in the last assistant answer that waits on someone else's answer or action: a choice, an OK, information, or a step only a person can do; a closing 'Shall I …?' counts. Not an ask: own notes, TODOs, unverified items, next steps; own decisions; optional offers ('if you want, …'); questions for later; anything settled within the turn. Be strict. ",
     "An <open-missed> ask closes only when this turn's request answers, decides or declines it (an approval, a choice, 'do X' that settles it), or the agent reports it done or moot. A request or letter about something else, a progress report, or the operator asking a new question of their own does not answer it: list it again with its same_as. ",
     "ask_type: human_only if it needs a person's authority, account or hands: OK or approval of a merge, release, send or deletion (also asked plainly: 'Merge #2406?', 'Screen OK?'), login, terms, credentials, a form in an external site, console or store, a permission (install on another machine, delete another session's files), or a check only the operator can reach (their app, phone, mail); else decision. ",
@@ -219,7 +219,7 @@ fn end_prompt(limits: LabelLimits) -> String {
         &requests_rule(limits),
         &format!("line: one line, at most {} characters, not repeating goal. Report the result; for limited, the limit and when it resets if stated; for question, the user's required action as an imperative; blocked, its cause; waiting, the awaited result; unfinished, remaining work. ", limits.line),
         LINE,
-        "Decide end from the WHOLE last assistant answer, picking the FIRST matching case: ",
+        "Decide end from the WHOLE last assistant answer, picking the FIRST matching case. An ask the answer only asks again (an <open-missed> ask, listed with its same_as) decides end only when the answer does nothing else: beside a result, progress, a finding, remaining work or a new ask, judge end and line from those and leave the repeated ask to missed. ",
         "0 limited: the turn ended because the agent's own model provider refused it: a usage, rate or weekly limit, exhausted credit, or an API/server error printed in place of an answer. Not a tool, CI, network, disk or login failure the agent reports about its work: those are blocked. ",
         "1 question: a specific answer, choice, approval or information is requested from the user, including an implicit quiz or a separate later decision. State the required action in line; if it cannot be one sentence, not question. This outranks any running work: never hide the request in missed and call it waiting. Greetings ('How can I help?'), completion reports and optional offers are not question. When the answer could be read either as asking the user something or as finished, it is question. Asking to inspect an output still being produced is waiting if work proceeds without the answer; question if that answer is necessary to proceed. ",
         "2 blocked: assigned work is unfinished and the answer states a cause the agent cannot resolve alone (disk, login/permission, network, tool/CI failure). State the cause in one sentence in line; unclear stuckness is not blocked. ",
@@ -429,6 +429,32 @@ pub(crate) struct AskChecks {
 }
 
 impl JudgedWork {
+    /// The open questions a turn that ended on a question (`end`) only asked
+    /// again: each line naming an open one (`same_as`) whose quoted sentence
+    /// is in the turn's own answer `answer`. Empty when the turn listed
+    /// anything new, a question, a problem or a follow-up, or quoted none:
+    /// such a turn is news, and only one that asks the same again and does
+    /// nothing else is not (docs/status-model.md, A question still waiting).
+    pub(crate) fn asked_only_again(&self, end: LabelEnd, answer: &str) -> Vec<String> {
+        if end != LabelEnd::Question || self.missed.iter().any(|line| line.same_as.is_none()) {
+            return Vec::new();
+        }
+        let answer = quote_form(answer);
+        let mut again: Vec<String> = Vec::new();
+        for line in &self.missed {
+            let quote = quote_form(&line.quote);
+            if line.kind == MissedKind::Ask
+                && !quote.is_empty()
+                && answer.contains(&quote)
+                && let Some(id) = &line.same_as
+                && !again.contains(id)
+            {
+                again.push(id.clone());
+            }
+        }
+        again
+    }
+
     /// The judgment as the ledger records it, with the turn's own answer
     /// `answer` (its assistant messages as the context gave them) to check
     /// against. A new question whose quoted sentence is not in that answer

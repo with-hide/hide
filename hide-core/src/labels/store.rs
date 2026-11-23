@@ -79,6 +79,11 @@ pub(crate) struct PaneRecord {
     /// How the last analyzed turn ended, until the agent runs again.
     #[serde(default)]
     pub(crate) end: Option<LabelEnd>,
+    /// The record ids of the open questions the last analyzed turn asked
+    /// again when it did nothing else, written with `end` and read only
+    /// while `end` says the turn ended on a question.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) asks_again: Vec<String>,
     /// A v3 record's question and the reply it asked for, read only to
     /// carry a pending question into `end` and `line` on load; retired with
     /// the v3 records (`upgrade_v3`).
@@ -464,6 +469,8 @@ struct DeviceMark {
     analysis_turn_end: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     end: Option<LabelEnd>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asks_again: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     goal: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -490,6 +497,7 @@ impl DeviceMark {
             analysis_turn_start: record.analysis_turn_start,
             analysis_turn_end: record.analysis_turn_end,
             end: record.end,
+            asks_again: record.asks_again.clone(),
             goal: record.goal.clone(),
             line: record.line.clone(),
             recent_turns: record.recent_turns.clone(),
@@ -507,6 +515,7 @@ impl DeviceMark {
             self.analysis_turn_start,
             self.analysis_turn_end,
             self.end,
+            &self.asks_again,
             &self.goal,
             &self.line,
             &self.recent_turns,
@@ -520,6 +529,7 @@ impl DeviceMark {
             analysis_turn_start: self.analysis_turn_start,
             analysis_turn_end: self.analysis_turn_end,
             end: self.end,
+            asks_again: self.asks_again,
             goal: self.goal,
             line: self.line,
             recent_turns: self.recent_turns,

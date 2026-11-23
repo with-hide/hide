@@ -221,10 +221,11 @@ fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
 }
 
 #[test]
-fn needs_you_puts_read_asks_below_unread_ones_each_newest_first() {
-    // Operator decision 2026-11-08: an ask the operator already read sinks
-    // below every unread one, however recent it is; 2026-11-14: the newest
-    // ask of each stands on top.
+fn a_read_ask_leaves_needs_you_and_rests_with_its_ask_kept() {
+    // Operator decision 2026-11-23: 내 차례 is the group, so an ask the
+    // operator already read rests, drawn read, and counts in no 내 차례; the
+    // newest unread ask stands on top (2026-11-14), and where the read ones
+    // stand in 쉬는 중 is the shell's (`restingOrder` in web/src/taskList.ts).
     use crate::agent_state::sessions::Revisit;
     let mut runtime = runtime();
     let mut base = rows().remove(1);
@@ -280,10 +281,11 @@ fn needs_you_puts_read_asks_below_unread_ones_each_newest_first() {
         [
             ("unread_new", TaskState::NeedsYou, false),
             ("unread_old", TaskState::NeedsYou, false),
-            ("read_new", TaskState::NeedsYou, true),
-            ("read_old", TaskState::NeedsYou, true),
+            ("read_old", TaskState::Resting, true),
+            ("read_new", TaskState::Resting, true),
         ]
     );
+    assert_eq!(tasks.needs_you, 2);
 }
 
 #[test]

@@ -134,15 +134,16 @@ pub struct Ask {
 /// holds until it is answered.
 pub(crate) fn demand_verb(agent: &SidebarAgentSnapshot) -> Option<super::escalation::Verb> {
     use super::escalation::Verb;
-    let native_question = agent.demand == "question"
+    let demand = demand_of(agent);
+    let native_question = demand == AgentDemand::Question
         && agent
             .user_turn
             .as_ref()
             .is_some_and(|turn| turn.kind == hide_session::turns::UserTurnKind::Question);
-    if (agent.blocked || agent.demand == "approval") && !native_question {
+    if (agent.blocked || demand == AgentDemand::Approval) && !native_question {
         Some(Verb::Approval)
-    } else if (agent.demand == "error" && agent.unread)
-        || (agent.demand == "question" && (native_question || agent.unread))
+    } else if (demand == AgentDemand::Error && agent.unread)
+        || (demand == AgentDemand::Question && (native_question || agent.unread))
     {
         Some(Verb::Answer)
     } else {
@@ -240,6 +241,7 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     let total = agent.raised.len()
         + usize::from(own.is_some())
         + agent.laid_more
+        + agent.asks_behind as usize
         + usize::from(declared.is_some());
     if let Some(declared) =
         declared.filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own))
@@ -308,7 +310,7 @@ fn tool_ask(agent: &SidebarAgentSnapshot) -> Option<Ask> {
 }
 
 pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
-    let demand = agent.demand.as_str();
+    let demand = demand_of(agent).name();
     let activity = agent.activity.as_str();
     let group = agent.group.as_str();
     let asking = matches!(demand, "error" | "question" | "approval");
@@ -689,7 +691,9 @@ pub fn agent_group_for(
         };
     }
     // An agent's open the operator has not looked at is theirs to look at
-    // (PRD unseen-agent-views D-05, D-08), whatever the agent does meanwhile.
+    // (PRD unseen-agent-views D-05, D-08) until they read the row, as an ask
+    // is (`look` is `axes::look_calls`): the View stays unseen and its chip
+    // with it, wherever the row is listed (operator decision 2026-11-23).
     if blocked || (demand != AgentDemand::None && unread) || look {
         AgentGroup::NeedsYou
     } else if waiting {
@@ -943,7 +947,7 @@ pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
         agent.blocked,
         ownership_of(agent),
         agent.wait.is_some(),
-        !agent.unseen_views.is_empty(),
+        super::axes::look_calls(agent),
     )
 }
 
@@ -959,6 +963,15 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     // delegated child's rises to its root instead.
     let human = agent.human_turn.is_some() && ownership_of(agent) != Ownership::Delegated;
     let (demand, activity, unread) = axes_of(agent);
+    // A question laid on the row leads it and counts what it laid behind
+    // it; an unread row led by anything else counts the open questions the
+    // operator already read behind its own news or ask.
+    let stepped_back = super::axes::laid_ask_steps_back(agent);
+    agent.asks_behind = if unread && (agent.laid_asks.is_empty() || stepped_back) {
+        u32::try_from(agent.open_asks_read).unwrap_or(u32::MAX)
+    } else {
+        0
+    };
     let waiting = agent.wait.is_some();
     let group = agent_group_for(
         demand,
@@ -968,7 +981,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         agent.blocked,
         ownership_of(agent),
         waiting,
-        !agent.unseen_views.is_empty(),
+        super::axes::look_calls(agent),
     );
     let raised = raise_calls(agent);
     let group = if raised || human {
@@ -1029,7 +1042,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         .filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own));
     let (status_word_visible, detail) = if let Some(declared) = declared {
         (true, first_line_cut(&declared.place))
-    } else if let Some(subject) = &agent.ask_subject {
+    } else if let Some(subject) = agent.ask_subject.as_ref().filter(|_| !stepped_back) {
         // A mission decision's line is also its sentence, which a surface
         // that does not know the subject draws instead (D-12).
         let line = match subject {
@@ -1325,10 +1338,13 @@ pub mod push {
             } else if agent.human_notice {
                 Effective::Other
             } else if agent.read {
-                // A read ask listed in Needs You is read: it clears a notice
-                // and never announces again (needs-you-cleanup D-10, B12).
+                // A read ask is read: it clears a notice and never announces
+                // again (needs-you-cleanup D-10, B12).
                 Effective::Seen
-            } else if agent.look.is_some() && agent.notice_group != "needs_you" {
+            } else if agent.look.is_some()
+                && agent.group == "needs_you"
+                && agent.notice_group != "needs_you"
+            {
                 // A question, approval or block on the row keeps its own
                 // notice; a finished turn with a View to look at is the View's
                 // one notice, never a Done beside it.

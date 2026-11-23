@@ -91,6 +91,12 @@ pub struct RowFacts {
     /// read for the agent's current engine state: a hook's wait on one of
     /// them that began before that state is over (`agent_hooks::facts`).
     pub(crate) answered_calls: Vec<String>,
+    /// The record ids of the open questions the session's last turn asked
+    /// again and did nothing else, as the label's judgment read it while that
+    /// turn ended on a question; empty for any other turn. A read of every
+    /// one of them covers the turn (docs/status-model.md, A question still
+    /// waiting).
+    pub(crate) asks_again: Vec<String>,
 }
 
 /// Who sent the request a row shows.
