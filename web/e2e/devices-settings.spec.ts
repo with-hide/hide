@@ -166,6 +166,7 @@ test("the Add dialog lists the account's Hosts, fills the name from the chosen o
     // B50, B51: a Host written while the dialog was closed is listed when it opens again, with the address ssh resolves it to.
     writeSshHost(daemon, ALIAS);
     await sheet.locator("[data-device-add-open]").click();
+    await page.locator('[data-add-choice="computer"]').click();
     await sshChoice.click();
     const host = dialog.locator(`[data-ssh-host="${ALIAS}"]`);
     await expect(host).toBeVisible();
