@@ -284,14 +284,21 @@ pub(crate) fn in_a_pane(
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
 ) -> Result<bool, &'static str> {
-    if origin::in_holder(peer, core.home(), core.state_dir())? {
+    let origin = origin::in_holder(peer, core.home(), core.state_dir())?;
+    if origin == origin::Origin::Holder {
         return Ok(true);
     }
-    if !request.pane_id.is_empty()
-        && let Some(engine) = engine
-        && crate::pane_auth::attest_local(peer, &request.pane_id, engine, core).is_ok()
-    {
-        return Ok(true);
+    if !request.pane_id.is_empty() {
+        // A caller that names a pane is proved outside it only by reading
+        // it; one the system hides from this account cannot be.
+        if origin == origin::Origin::Hidden {
+            return Err(origin::UNAVAILABLE);
+        }
+        if let Some(engine) = engine
+            && crate::pane_auth::attest_local(peer, &request.pane_id, engine, core).is_ok()
+        {
+            return Ok(true);
+        }
     }
     let entries = match std::fs::read_dir(hide_kit::layout::pane_records(core.state_dir())) {
         Ok(entries) => entries,
@@ -320,21 +327,32 @@ pub(crate) fn in_a_pane(
         }
         let record =
             hide_holder_protocol::record::read(&entry.path()).map_err(|_| origin::UNAVAILABLE)?;
-        if let Some(program) = record.and_then(|record| record.program) {
-            match hide_platform::process::start_time(program.pid) {
-                Ok(started)
-                    if started == program.started
-                        && hide_platform::process::descends_from(peer, program.pid) =>
-                {
-                    return Ok(true);
-                }
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(origin::UNAVAILABLE),
-            }
+        if let Some(program) = record.and_then(|record| record.program)
+            && runs_under(peer, &program)?
+        {
+            return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether `peer` runs under the pane program `program` a holder record
+/// names while that program still runs, read from the process table, so a
+/// caller the system hides from this account is still found under it. A
+/// look that cannot answer is unavailable, never "not under it".
+fn runs_under(
+    peer: u32,
+    program: &hide_holder_protocol::record::Identity,
+) -> Result<bool, &'static str> {
+    match hide_platform::process::start_time(program.pid) {
+        Ok(started) if started == program.started => {
+            hide_platform::process::descends_listed(peer, program.pid)
+                .map_err(|_| origin::UNAVAILABLE)
+        }
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(origin::UNAVAILABLE),
+    }
 }
 
 /// A request's or a made bot's id, random so that nothing of the key or the

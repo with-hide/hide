@@ -477,6 +477,14 @@ impl Panes {
             let _ = answer_client(&mut stream, Err("bridge_unavailable".to_owned()), None);
             return;
         };
+        // A pane naming one of the other names this process answers for
+        // (`crate::kit::also_answers`) is answered under that name.
+        let own = request
+            .get("install")
+            .and_then(Value::as_str)
+            .filter(|asked| crate::kit::also_answers(asked))
+            .map(str::to_owned)
+            .or_else(|| self.install.clone());
         let mut core_refused = false;
         let mut issued_token = None;
         let mut token_new = false;
@@ -494,7 +502,7 @@ impl Panes {
             {
                 return Err("invalid_nonce".to_owned());
             }
-            install::refuse_other(&request, self.install.as_deref())?;
+            install::refuse_other(&request, own.as_deref())?;
             // An external tool connects to the core of its own machine only
             // (PRD hide-external-control D-07); a device's node takes none.
             if request.access.is_some() {
@@ -693,7 +701,7 @@ impl Panes {
         {
             report_refusal(output, named, reason);
         }
-        let delivered = answer_client(&mut stream, result.clone(), self.install.as_deref()).is_ok();
+        let delivered = answer_client(&mut stream, result.clone(), own.as_deref()).is_ok();
         if !delivered || result.is_err() {
             if let Some(path) = created_reference {
                 let _ = fs::remove_file(&path);

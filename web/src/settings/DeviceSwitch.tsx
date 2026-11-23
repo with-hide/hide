@@ -56,9 +56,10 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
   if (state.state === "failed") {
     return (
       <div className={cn("flex flex-wrap items-center gap-x-sm gap-y-xs", className)} data-device-switch-state={`${device.id}:failed`} data-device-switch-reason={state.reason ?? ""}>
-        <Status tone="warn">
+        {/* Why the switch stopped is a line under the row, never a second state beside the row's own (operator review 2026-11-23). */}
+        <Note tone="warn">
           {startedSilentOnWindows(device) ? <>{t("devices.problem.windowsNotStarted")} · <SmartAppControlHint deviceId={device.id} /></> : t(switchFailureKey(state.reason))}
-        </Status>
+        </Note>
         <DeviceSwitchButton device={device} actions={actions} retry size="sm" />
       </div>
     );

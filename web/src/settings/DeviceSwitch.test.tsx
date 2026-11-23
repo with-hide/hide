@@ -86,7 +86,7 @@ it("shows the step the switch is on in place of the button, then why it stopped 
   expect(q('[data-device-switch-state="mini:connecting"]')?.textContent).toBe("Installing→Connecting→Done");
   expect(q('[data-device-switch-state="mini:connecting"] [aria-current="step"]')?.textContent).toBe("Connecting");
   await show(helper({ switch: { state: "failed", reason: "ssh_not_reached" } }));
-  expect(q('[data-device-switch-state="mini:failed"]')?.textContent).toBe("!SSH did not reach it" + "Retry");
+  expect(q('[data-device-switch-state="mini:failed"]')?.textContent).toBe("SSH did not reach it" + "Retry");
   await act(async () => { q('[data-device-switch="mini"]')?.click(); });
   expect(switches(events)).toHaveLength(1);
   await unmount();

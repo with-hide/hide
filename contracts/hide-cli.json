@@ -6605,6 +6605,7 @@
                 "pairing_ended",
                 "ssh_hide_absent",
                 "ssh_update_there",
+                "ssh_refused_there",
                 "ssh_hide_not_running",
                 "ssh_not_reached",
                 "ssh_busy",
@@ -7035,6 +7036,7 @@
                 "ssh_mac_from_mac_only",
                 "ssh_mac_signed_out",
                 "ssh_update_there",
+                "ssh_refused_there",
                 "ssh_hide_not_running",
                 "wsl_not_reached",
                 "wsl_unavailable",
@@ -9742,7 +9744,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ce50e5f6626b96e5017b96c3290a8a13b41dd06d5a53e8e97e1d764f80e9ad79",
+    "digest": "sha256:7c0903cf18ee652f1a8607419e6df230685dd2471b4a9123fd68eac175233fea",
     "envelopes": {
         "access": {
             "answer": "value",

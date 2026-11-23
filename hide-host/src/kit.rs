@@ -404,6 +404,29 @@ pub fn answer_as(install: Option<PaneInstall>) -> bool {
     ANSWERS_AS.set(install).is_ok()
 }
 
+/// The other installation names whose panes this process answers for
+/// besides [`running_install`]'s ([`also_answer_for`]).
+static ALSO_ANSWERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Makes this process answer the panes that name any of `installs` too, for
+/// the rest of the process, each answer naming the pane's own name. A core
+/// run from a build in the account's install root is the app's core under
+/// two names, its build root's and the app's, and which one it starts panes
+/// under can change from one start to the next: the panes an earlier start
+/// named keep reaching it. Said once, before a pane asks; `false` when it
+/// was said before.
+pub fn also_answer_for(installs: Vec<String>) -> bool {
+    ALSO_ANSWERS.set(installs).is_ok()
+}
+
+/// Whether this process answers the panes that name `install` besides those
+/// of [`running_install`] ([`also_answer_for`]).
+pub fn also_answers(install: &str) -> bool {
+    ALSO_ANSWERS
+        .get()
+        .is_some_and(|installs| installs.iter().any(|name| name == install))
+}
+
 pub(crate) fn build_layout(executable: &Path) -> Option<(PathBuf, String)> {
     let version_dir = executable.parent()?;
     let version = version_dir
