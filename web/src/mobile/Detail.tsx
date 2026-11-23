@@ -177,7 +177,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
       )}
       <ReplyBar
         disabled={gone || !connected || sleep !== null}
-        about={viewing?.row.name ?? null}
+        about={viewing ? { name: viewing.row.name, kind: viewing.row.kind } : null}
         keys={!showsConversation && tab !== "looks"}
         ask={showsConversation ? (detail?.ask ?? null) : null}
         onComposing={setComposing}
@@ -489,10 +489,12 @@ export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean })
 }
 
 /**
- * `about` is the name of the View on screen: the reply leaves with it in front, in brackets (B30). `keys` is true on the terminal
- * alone (Doop 05), where the operator sees what a key does; the conversation answers an ask with its card, and 볼 것 with words.
+ * `about` is the View on screen: the reply leaves with its name in front, in brackets (B30), so the agent knows which one it is
+ * about, while the field says only `이 페이지에 대해 답장` or `이 파일에 대해 답장` (Doop 11, 12), which no long name cuts. `keys` is
+ * true on the terminal alone (Doop 05), where the operator sees what a key does; the conversation answers an ask with its card, and
+ * 볼 것 with words. Files go up the same way from the conversation and from a View, on a computer that takes them.
  */
-function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boolean; about: string | null; keys: boolean; ask: PhoneAsk | null; onComposing: (composing: boolean) => void }) {
+function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boolean; about: { name: string; kind: LookKind } | null; keys: boolean; ask: PhoneAsk | null; onComposing: (composing: boolean) => void }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const [composing, setComposingHere] = useState(false);
@@ -517,7 +519,7 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
       }),
     [],
   );
-  const reply = about ? replyAbout(about, text) : text;
+  const reply = about ? replyAbout(about.name, text) : text;
   const tooLong = useMemo(() => (agentKey ? replyProblem(reply, lines, agentKey, files.length) === "too_long" : false), [reply, lines, agentKey, files.length]);
   const blocked = disabled || pending !== null;
   const shown = tooLong ? inputFailure("too_long", lines) : error;
@@ -542,7 +544,7 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
       </div>
       ) : null}
       <div className={`${keys ? "mt-sm" : "mt-xs"} pb-md`}>
-        {takesFiles && !about ? (
+        {takesFiles ? (
           <>
             <ComposerFiles files={files} onRemove={removeFile} onRetry={retryFile} />
             <FileNoticeLine notice={fileNotice} />
@@ -554,10 +556,10 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
           onSubmit={() => sendReply(reply)}
           lines={lines}
           placeholder={
-            about ? t("mobile.look.replyAbout", { name: about }) : keys ? t("mobile.replyToTerminal") : ask?.kind === "question" ? t("mobile.ask.replyInstead") : t("mobile.replyPlaceholder")
+            about ? t(about.kind === "page" || about.kind === "html" ? "mobile.look.replyAboutPage" : "mobile.look.replyAboutFile") : keys ? t("mobile.replyToTerminal") : ask?.kind === "question" ? t("mobile.ask.replyInstead") : t("mobile.replyPlaceholder")
           }
           disabled={disabled}
-          lead={takesFiles && !about ? <AttachButton disabled={disabled} onPick={() => void pickFiles().then(attachPicked)} /> : undefined}
+          lead={takesFiles ? <AttachButton disabled={disabled} onPick={() => void pickFiles().then(attachPicked)} /> : undefined}
           sendDisabled={blocked || (text.trim().length === 0 && files.length === 0) || !filesReady || tooLong}
           input={{
             "aria-label": t("mobile.reply"),

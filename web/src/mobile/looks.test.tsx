@@ -141,9 +141,12 @@ it("asks for a View by its id alone, draws a Markdown document from its chunks, 
     expect(head.querySelector(".sr-only")!.textContent).toBe("Opened by 리뷰 반영");
     expect(head.textContent).toMatch(/Document·.*리뷰 반영·1m$/);
 
-    // A reply sent while looking carries the name of what is on screen in front (B30), and the quick keys are not offered.
+    // A reply sent while looking carries the name of what is on screen in front (B30), and the quick keys are not offered. The
+    // field says only what it is about, which no long name cuts (Doop 12), and a computer whose hello has no attachments offers no +.
     expect(container.querySelector("[data-phone-key]")).toBeNull();
     const field = container.querySelector<HTMLInputElement>("[data-phone-reply]")!;
+    expect(field.placeholder).toBe("Reply about this file");
+    expect(container.querySelector("[data-phone-attach]")).toBeNull();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "표를 고쳐 줘");
       field.dispatchEvent(new Event("input", { bubbles: true }));
