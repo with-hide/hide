@@ -128,29 +128,37 @@ pub fn valid_device(device: &str) -> bool {
 /// character that draws nothing or turns the text around it, so an allow
 /// window reads as what it is.
 pub fn valid_name(name: &str) -> bool {
-    !name.trim().is_empty()
-        && name.len() <= limits::MAX_NAME_BYTES
-        && !name.chars().any(|character| {
-            character.is_control()
-                || matches!(character, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
+    !name.trim().is_empty() && name.len() <= limits::MAX_NAME_BYTES && !name.chars().any(hidden)
 }
 
-/// A machine's name made showable: what [`valid_name`] refuses is left out
-/// and the rest is cut to its limit. `None` when nothing is left.
+/// A machine's name made showable: a character [`valid_name`] refuses is
+/// left out, any other space (a Mac's computer name spells `MacBook Pro`
+/// with U+00A0) is a plain one, and the rest is cut to its limit. `None`
+/// when nothing is left.
 pub fn clean_name(name: &str) -> Option<String> {
     let mut clean = String::new();
     for character in name.trim().chars() {
+        if hidden(character) {
+            continue;
+        }
+        let character = if character.is_whitespace() {
+            ' '
+        } else {
+            character
+        };
         if clean.len() + character.len_utf8() > limits::MAX_NAME_BYTES {
             break;
         }
-        let mut one = [0u8; 4];
-        if valid_name(character.encode_utf8(&mut one)) || character == ' ' {
-            clean.push(character);
-        }
+        clean.push(character);
     }
     let clean = clean.trim().to_owned();
     valid_name(&clean).then_some(clean)
+}
+
+/// A character that draws nothing or turns the text around it.
+fn hidden(character: char) -> bool {
+    character.is_control()
+        || matches!(character, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 fn valid_relay(relay: &str) -> bool {
@@ -382,5 +390,16 @@ mod tests {
         );
         assert_eq!(clean_name(&"가".repeat(40)).unwrap().len(), 63);
         assert_eq!(clean_name("\n\t"), None);
+        // A Mac spells `MacBook Pro` in its computer name with U+00A0;
+        // every space reads as a plain one.
+        assert_eq!(
+            clean_name("작업용 MacBook\u{a0}Pro").as_deref(),
+            Some("작업용 MacBook Pro")
+        );
+        assert_eq!(
+            clean_name("\u{3000}Mac\u{2009}mini\u{a0}").as_deref(),
+            Some("Mac mini")
+        );
+        assert_eq!(clean_name("\u{a0}\u{3000}"), None);
     }
 }
