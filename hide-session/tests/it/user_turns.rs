@@ -12,7 +12,8 @@ use hide_session::label_transcript::{
     LabelEventKind, LabelTranscript, LabelTranscriptRequest, read,
 };
 use hide_session::turns::{
-    QUESTION_CALL_LIMIT, TurnTracker, UserTurnContent, UserTurnFact, UserTurnKind, Waiting,
+    QUESTION_CALL_LIMIT, TurnEnded, TurnTracker, UserTurnContent, UserTurnFact, UserTurnKind,
+    Waiting,
 };
 use serde_json::{Value, json};
 
@@ -311,6 +312,38 @@ fn only_the_correlated_native_result_clears_a_question_and_a_replayed_call_stays
         ));
         assert_eq!(fact(&session.read()), None, "{agent:?} call-id replay");
     }
+}
+
+/// 2026-11-23: a Bash call refused with Esc, then a prompt that asks a
+/// question. Claude Code 2.1.330 drew the question before it wrote the call,
+/// so a read between the two must say the prompt has no record of the agent
+/// after it yet (what the core reads again on), and the call, once written,
+/// is read with its words and choices whatever the interruption before it.
+#[test]
+fn a_question_after_an_interrupted_call_waits_unanswered_until_its_call_is_written_then_carries_its_words()
+ {
+    let records = fixture("user-turns/claude-2.1.330-question-after-interrupt.jsonl");
+    let (prompted, call) = records
+        .trim_end()
+        .rsplit_once('\n')
+        .expect("the fixture ends with the question's call");
+    let mut session = Session::new(
+        Agent::Claude,
+        ".claude/projects/-work-app/question-after-interrupt.jsonl",
+        &format!("{prompted}\n"),
+    );
+    let drawn = session.read();
+    let turns = drawn.turns.as_ref().unwrap();
+    assert_eq!(turns.ended(), Some(TurnEnded::Unanswered));
+    assert_eq!(turns.waiting(), Some(Waiting::Nothing));
+
+    session.resume(&drawn);
+    session.append(&serde_json::from_str::<Value>(call).unwrap());
+    let asked = fact(&session.read()).expect("the call asks a question");
+    assert_eq!(asked.kind, UserTurnKind::Question);
+    let content = asked.content.expect("the call's words are read");
+    assert_eq!(content.text(), "Which font should the title use?");
+    assert_eq!(content.choices(), ["Serif", "Sans", "Mono"]);
 }
 
 #[test]

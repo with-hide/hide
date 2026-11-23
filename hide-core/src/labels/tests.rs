@@ -5584,6 +5584,57 @@ fn another_session_in_the_pane_gets_its_own_answer_reads() {
     assert_eq!(label.expected_reply.as_deref(), Some("S3/GCS 선택"));
 }
 
+/// 2026-11-23: Claude Code 2.1.330 drew an AskUserQuestion dialog, after a
+/// call refused with Esc, before it wrote the call to its session file. The
+/// engine read the dialog (`blocked`), the read under it found the prompt
+/// with nothing of the agent after it, and nothing read the session again,
+/// so the question reached the phone without its words. A dialog's stop
+/// reads again until the call is written, and no longer.
+#[test]
+fn a_question_dialog_drawn_before_its_call_is_written_reads_again_for_its_words() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    worker.set_summaries(false, Instant::now());
+    let records = include_str!(
+        "../../../hide-session/tests/fixtures/user-turns/claude-2.1.330-question-after-interrupt.jsonl"
+    );
+    let (prompted, call) = records
+        .trim_end()
+        .rsplit_once('\n')
+        .expect("the fixture ends with the question's call");
+    let path = harness
+        .home
+        .path()
+        .join(".claude/projects/-project/asked.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{prompted}\n")).unwrap();
+    observe(&mut worker, &agent(&path, "working", 4));
+    settle(&mut worker, &woken);
+    let dialog = agent(&path, "blocked", 5);
+    observe(&mut worker, &dialog);
+    settle(&mut worker, &woken);
+    assert!(shown_facts(&worker, &dialog).unwrap().user_turn.is_none());
+    let reads = source.reads.load(Ordering::SeqCst);
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    use std::io::Write;
+    writeln!(file, "{call}").unwrap();
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+    let asked = shown_facts(&worker, &dialog).unwrap().user_turn.unwrap();
+    let content = asked.content.expect("the question's words are read");
+    assert_eq!(content.text(), "Which font should the title use?");
+    assert_eq!(content.choices(), ["Serif", "Sans", "Mono"]);
+
+    // The call is written: the dialog's stop owes no more reads.
+    spend_answer_reads(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+}
+
 /// The read a stop scheduled ends with the stop: the answer found by another
 /// read, the agent working again, or another stop leaves no read behind it.
 #[test]

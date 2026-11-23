@@ -28,7 +28,9 @@ pub enum TurnEnded {
     Interrupted,
     /// The person's message has no agent record after it, in a format that
     /// records the agent's every reply (Claude Code): read under an agent at
-    /// rest, the turn never ran. Claude Code 2.1.314 puts a prompt
+    /// rest, the turn never ran; read under a dialog, the agent's record of
+    /// the call the dialog asks about is still to be written (Claude Code
+    /// 2.1.330 draws its question first). Claude Code 2.1.314 puts a prompt
     /// interrupted before its first output back in the composer and records
     /// nothing of the interruption.
     Unanswered,
