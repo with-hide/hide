@@ -226,7 +226,7 @@ export function AddProjectViews({
                     // The list's last entry is Add device, the one form every entry point opens (PRD home-device-rail B13).
                     if (next === ADD_DEVICE) {
                       onLeave?.();
-                      actions.openAddDevice();
+                      actions.openAddDevice("computer");
                       return;
                     }
                     setChosen(next);

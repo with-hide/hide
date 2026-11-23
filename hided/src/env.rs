@@ -196,7 +196,7 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_TAILSCALE_BIN,
         required: false,
-        format: "absolute path of the tailscale CLI Settings > Mobile runs; a path that does not exist reads as Tailscale not installed",
+        format: "absolute path of the tailscale CLI Settings › Devices runs; a path that does not exist reads as Tailscale not installed",
         absent_behavior: "The CLI the system's Tailscale app installs (/Applications/Tailscale.app/Contents/MacOS/Tailscale on macOS, %ProgramFiles%\\Tailscale\\tailscale.exe on Windows), then `tailscale` on PATH; isolated verification sets it so no test reaches the account's own Tailscale",
     },
     EnvKey {

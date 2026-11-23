@@ -1,18 +1,19 @@
-// Settings > Mobile on an isolated engine and a debug hided (PRD
-// settings-cleanup B57, B58, B59): the Tailscale checks fold into one line when
-// they all pass, opening the tab makes no pairing code and Show QR makes one,
-// and the push mode is one dropdown that describes only the mode it shows. The
-// paired phone, push delivery and revoke are `mobile.spec.ts`'s.
+// Settings › Devices' phones on an isolated engine and a debug hided (PRD
+// settings-cleanup B57, B58, B59; operator review 2026-11-23): the Tailscale
+// checks fold into one line when they all pass, opening the page makes no
+// pairing code and the QR window Add device › Phone opens makes one, and the
+// phone pause switch lives on Notifications. The paired phone, push delivery
+// and revoke are `mobile.spec.ts`'s.
 
 import { expect, test } from "@playwright/test";
 import { FakeTailscale } from "./fake-tailscale";
-import { chord } from "./chords";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { closePhoneQr, openPhoneConnection, openPhoneGroup, openPhoneQr } from "./phone-settings";
 
 test.describe.configure({ timeout: 120_000 });
 
-test("a ready Mac is one line, the QR waits for Show QR, and the phone pause switch lives on Notifications", async ({ page }) => {
+test("a ready Mac is one line, the QR waits for the QR window, and the phone pause switch lives on Notifications", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
   const engine = await startFixture();
   const tailscale = new FakeTailscale();
@@ -23,32 +24,34 @@ test("a ready Mac is one line, the QR waits for Show QR, and the phone pause swi
     daemon = await startHided(engine, "mobile-settings", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-sidebar-overview]")).toBeVisible({ timeout: 20_000 });
-    await page.keyboard.press(chord("settings"));
-    await page.locator('[data-settings-tab="mobile"]').click();
-    const tab = page.locator('[data-mobile-tab="true"]');
-    await expect(tab).toBeVisible();
+    await openPhoneGroup(page);
 
-    // B58: opening the tab asked Tailscale nothing and made no code.
-    await expect(page.locator('[data-mobile-pairing]')).toHaveCount(0);
+    // B58: opening the page asked Tailscale nothing and made no code.
+    await expect(page.locator("[data-mobile-pairing], [data-mobile-qr]")).toHaveCount(0);
     expect(tailscale.calls()).toBe("");
 
-    // Direct connection is an explicit choice under Advanced; opening it still makes no code.
-    await tab.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
-    await tab.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
-    await expect(tab.getByRole("switch", { name: "Use Tailscale", exact: true })).toHaveAttribute("aria-checked", "true");
+    // Direct connection is an explicit choice under Phone connection › Advanced; choosing it still makes no code.
+    const connection = await openPhoneConnection(page);
+    const direct = connection.getByRole("switch", { name: "Use Tailscale", exact: true });
+    await direct.click();
+    await expect(direct).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(connection).toHaveCount(0);
 
     // B57: every check passes, so one line stands where the steps were, and no step shows.
     await page.locator('[data-mobile-switch="true"]').click();
-    await expect(page.locator('[data-mobile-ready="true"]')).toContainText("Tailscale is ready", { timeout: 20_000 });
+    const checks = await openPhoneConnection(page);
+    await expect(checks.locator('[data-mobile-ready="true"]')).toContainText("Tailscale is ready", { timeout: 20_000 });
     await expect(page.locator("[data-mobile-step]")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(checks).toHaveCount(0);
 
-    // B58: still no code until Show QR; pressing it shows one with its countdown, Hide QR takes it away.
-    await expect(page.locator('[data-mobile-pairing="idle"]')).toBeVisible();
+    // B58: still no code until the QR window; opening it shows one with its countdown, closing it takes it away.
     await expect(page.locator("[data-mobile-qr]")).toHaveCount(0);
-    await page.locator('[data-mobile-show-code="true"]').click();
+    await openPhoneQr(page);
     await expect(page.locator("[data-mobile-qr]")).toBeVisible({ timeout: 20_000 });
     await expect(page.locator("[data-mobile-countdown]")).toHaveText(/Code expires in [45]:\d\d/);
-    await page.locator('[data-mobile-hide-code="true"]').click();
+    await closePhoneQr(page);
     await expect(page.locator("[data-mobile-qr]")).toHaveCount(0);
 
     // Phone delivery pauses on the desktop; the phone owns whether it receives notifications.

@@ -31,7 +31,6 @@ import type { HostBridge } from "../host";
 import type { SnapshotRest } from "../snapshot";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { clientI18n } from "../i18n/translator";
-import { MobileTab } from "../MobileTab";
 import { OverviewPage } from "../Overview";
 import { DevicesTab } from "../settings/DevicesTab";
 import { Sidebar } from "../sidebar";
@@ -218,9 +217,6 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
           {shot === "core" ? (
             <main className="min-w-0 flex-1 overflow-hidden px-xl py-lg" data-landing-settings>
               <DevicesTab actions={actions} />
-              <div className="mt-xl">
-                <MobileTab actions={actions} />
-              </div>
             </main>
           ) : null}
         </div>

@@ -245,11 +245,11 @@ it("shows a paired machine once, as its pairing's row, and an SSH device beside 
   await unmount();
 });
 
-// Operator review 2026-11-23: this computer with its share, then every other machine in one group; one Add window adds a Hide by its link or a machine over SSH.
+// Operator review 2026-11-23: this computer with its share, then every other machine in one group, then the phones; one Add window adds a Hide by its link or a machine over SSH.
 it("lists this computer, then every other machine in one group, and adds either kind from one window", async () => {
   const { q, events, unmount } = await mount(state([remote("mini")]));
   const sections = [...document.querySelectorAll("[data-device-section]")].map((section) => section.getAttribute("data-device-section"));
-  expect(sections).toEqual(["this", "other"]);
+  expect(sections).toEqual(["this", "other", "phones"]);
   const own = q('[data-device-section="this"] [data-device-row="local"]')!;
   // This computer's row is its name and system, with Share; nothing about the daemon or what is selected.
   // jsdom is no Mac: the row names this machine as its system does.
@@ -263,7 +263,8 @@ it("lists this computer, then every other machine in one group, and adds either 
   expect(q("[data-devices-intro]")?.textContent).toContain("use it just like This computer");
   await act(async () => { q("[data-device-add-open]")?.click(); });
   const dialog = () => document.body.querySelector("[data-add-device-dialog]");
-  // It opens on a Hide's link; the other choice is the SSH list.
+  // It asks computer or phone first; a computer opens on a Hide's link, and the other choice is the SSH list.
+  await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-choice="computer"]')?.click(); });
   expect(dialog()?.querySelector("[data-add-by-link]")).not.toBeNull();
   expect(dialog()?.querySelector('[data-ssh-hosts-state]')).toBeNull();
   await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-kind-choice="ssh"]')?.click(); });

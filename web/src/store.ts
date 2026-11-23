@@ -151,7 +151,7 @@ type Store = {
   connection: ConnectionState;
   /** The daemon this page is connected to; null until the first handshake. */
   daemon: DaemonInfo | null;
-  /** Settings > Mobile as the daemon reports it (`mobile` frame); null until the first one. */
+  /** Settings › Devices' phones as the daemon reports them (`mobile` frame); null until the first one. */
   mobile: MobileState | null;
   /** The pairings under way as the daemon reports them (`pairing` frame), sent to this machine's own windows only; null until the first one. */
   pairing: PairingView | null;

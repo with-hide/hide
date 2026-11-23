@@ -1,4 +1,4 @@
-// A fake `tailscale` CLI for the specs that open Settings > Mobile: nothing here
+// A fake `tailscale` CLI for the specs that open Settings › Devices: nothing here
 // runs the operator's Tailscale. HIDE_TAILSCALE_BIN names the script in the
 // test's own directory, and every call the daemon makes is recorded.
 

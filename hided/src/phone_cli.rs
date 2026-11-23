@@ -1,10 +1,10 @@
 //! `hide phone`: the phones paired with this computer (PRD device-connect-iroh
-//! D-70, B61), for a computer with no window to open Settings > Mobile in.
+//! D-70, B61), for a computer with no window to open Settings › Devices in.
 //!
 //! `pair` draws the pairing QR in this terminal and waits until a phone
 //! scans it. It draws only on a terminal a person reads, never prints the
 //! link the QR holds, and asks for a bigger window when the QR would not fit.
-//! `list` and `remove` read and change the paired phones; a program in a Hide
+//! `list`, `rename` and `remove` read and change the paired phones; a program in a Hide
 //! pane may run them, and only a terminal outside the panes pairs (D-53).
 //! This machine's own daemon answers each ask (`mobile::command`).
 
@@ -18,8 +18,7 @@ use hide_core::InterfaceLanguage;
 use crate::env::Env;
 use crate::mobile::command::next_action;
 
-pub const USAGE: &str =
-    "hide phone pair\nhide phone list [--json]\nhide phone remove <phone> [--json]";
+pub const USAGE: &str = "hide phone pair\nhide phone list [--json]\nhide phone rename <phone> <name> [--json]\nhide phone remove <phone> [--json]";
 
 /// How often `pair` asks whether a phone has scanned the code.
 const POLL: Duration = Duration::from_secs(1);
@@ -36,6 +35,12 @@ pub enum Verb {
     List,
     /// A phone by its id or its name.
     Remove(String),
+    /// A phone by its id or its name, and the name to show it under; an
+    /// empty name takes it back to the one it was paired under.
+    Rename {
+        phone: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -48,28 +53,43 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PhoneCli, Str
     let mut args = args;
     let verb = args.next().map(String::as_str);
     let mut json = false;
-    let mut phone = None;
+    let mut words = Vec::new();
+    // `rename` takes a phone and a name, `remove` a phone.
+    let takes = match verb {
+        Some("rename") => 2,
+        Some("remove") => 1,
+        _ => 0,
+    };
     for arg in args {
         match arg.as_str() {
             // `pair` answers a person at a terminal only.
             "--json" if !json && verb != Some("pair") => json = true,
+            // The name may be empty, which takes the phone back to its own.
             value
-                if verb == Some("remove")
-                    && phone.is_none()
-                    && !value.is_empty()
+                if words.len() < takes
+                    && (!value.is_empty() || words.len() == 1)
                     && value.len() <= 256
                     && !value.starts_with('-')
                     && !value.chars().any(char::is_control) =>
             {
-                phone = Some(value.to_owned());
+                words.push(value.to_owned());
             }
             _ => return Err(USAGE.to_owned()),
         }
     }
-    let verb = match (verb, phone) {
-        (Some("pair"), None) => Verb::Pair,
-        (Some("list"), None) => Verb::List,
-        (Some("remove"), Some(phone)) => Verb::Remove(phone),
+    let verb = match (verb, words.as_slice()) {
+        (Some("pair"), []) => Verb::Pair,
+        (Some("list"), []) => Verb::List,
+        (Some("remove"), [phone]) => Verb::Remove(phone.clone()),
+        (Some("rename"), [phone, name]) => Verb::Rename {
+            phone: phone.clone(),
+            name: match name.trim() {
+                "" => String::new(),
+                _ => hide_core::device_command::device_name(name)
+                    .ok_or_else(|| USAGE.to_owned())?
+                    .to_owned(),
+            },
+        },
         _ => return Err(USAGE.to_owned()),
     };
     Ok(PhoneCli { verb, json })
@@ -113,6 +133,12 @@ fn answer(env: &Env, cli: &PhoneCli) -> Result<(Value, String), Refused> {
         Verb::List => {
             let value = ask(env, json!({"verb": "list"}))?;
             let lines = list_lines(&value, crate::mobile::now_ms());
+            Ok((value, lines))
+        }
+        Verb::Rename { phone, name } => {
+            let value = ask(env, json!({"verb": "rename", "phone": phone, "name": name}))?;
+            let shown = value["name"].as_str().unwrap_or(phone);
+            let lines = format!("{phone} is now shown as {shown} on this computer.\n");
             Ok((value, lines))
         }
         Verb::Remove(phone) => {
@@ -332,7 +358,7 @@ impl Words {
                 "이 컴퓨터에서 Hide 중계 서버에 닿지 못했어요. 네트워크를 확인하고 hide phone pair를 다시 실행하세요.",
             ),
             (Korean, "mobile_failed") => Some(
-                "이 컴퓨터에서 모바일을 켜지 못했어요. hide status나 설정 › 모바일에서 이유를 볼 수 있어요.",
+                "이 컴퓨터에서 모바일을 켜지 못했어요. hide status나 설정 › 기기에서 이유를 볼 수 있어요.",
             ),
             (Japanese, "phone_pair_needs_terminal") => Some(
                 "hide phone pair は読み取るためのQRを描きます。ターミナルのウィンドウで実行してください。",
@@ -350,7 +376,7 @@ impl Words {
                 "このコンピューターから Hide の中継サーバーに届きませんでした。ネットワークを確認して、hide phone pair をもう一度実行してください。",
             ),
             (Japanese, "mobile_failed") => Some(
-                "このコンピューターでモバイルを有効にできませんでした。理由は hide status か 設定 › モバイルで確認できます。",
+                "このコンピューターでモバイルを有効にできませんでした。理由は hide status か 設定 › デバイスで確認できます。",
             ),
             (SimplifiedChinese, "phone_pair_needs_terminal") => {
                 Some("hide phone pair 会画出供人扫描的二维码。请在终端窗口中运行。")
@@ -368,7 +394,7 @@ impl Words {
                 Some("这台电脑无法连接 Hide 的中继服务器。请检查网络后重新运行 hide phone pair。")
             }
             (SimplifiedChinese, "mobile_failed") => {
-                Some("无法在这台电脑上开启移动端。原因可在 hide status 或 设置 › 移动端 中查看。")
+                Some("无法在这台电脑上开启移动端。原因可在 hide status 或 设置 › 设备 中查看。")
             }
             _ => None,
         }
@@ -489,6 +515,24 @@ mod tests {
         assert!(parsed(&["remove", "-x"]).is_err());
         assert!(parsed(&["remove", "a", "b"]).is_err());
         assert!(parsed(&["list", "extra"]).is_err());
+        assert_eq!(
+            parsed(&["rename", "iPhone", " 회사 폰 "]).map(|cli| cli.verb),
+            Ok(Verb::Rename {
+                phone: "iPhone".into(),
+                name: "회사 폰".into()
+            })
+        );
+        // An empty name takes the phone back to the one it was paired under.
+        assert_eq!(
+            parsed(&["rename", "iPhone", ""]).map(|cli| cli.verb),
+            Ok(Verb::Rename {
+                phone: "iPhone".into(),
+                name: String::new()
+            })
+        );
+        assert!(parsed(&["rename", "iPhone"]).is_err());
+        assert!(parsed(&["rename", "", "x"]).is_err());
+        assert!(parsed(&["rename", "iPhone", &"x".repeat(65)]).is_err());
     }
 
     /// Reads the drawing back into modules: each cell's foreground is the
