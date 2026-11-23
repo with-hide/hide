@@ -26,7 +26,12 @@ pub struct PeerMachine {
     pub key: String,
     /// Its product device id, which is its own core's node id.
     pub device_id: String,
+    /// The name it is shown under: the one this machine's operator chose,
+    /// else the one it gives itself.
     pub name: String,
+    /// `name` is the one this machine's operator chose.
+    #[serde(default)]
+    pub named: bool,
     /// This machine opens it: runs work there and looks at its screen.
     pub opens: Option<PeerOpens>,
     /// It opens this machine.
@@ -164,6 +169,7 @@ mod tests {
             key: key.to_string().repeat(KEY_CHARS),
             device_id: format!("device-{key}"),
             name: "Windows PC".to_owned(),
+            named: false,
             opens: Some(PeerOpens::Active),
             opened_by: None,
             connected: true,

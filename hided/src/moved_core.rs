@@ -300,6 +300,7 @@ fn save_host(state: &Path, accepted: &Accepted) -> Result<(), SplitFailure> {
             key: accepted.key,
             device: accepted.device.clone(),
             name: accepted.name.clone(),
+            chosen_name: None,
             grant: accepted.grant.clone(),
             state: KnownState::Confirming,
             candidates: accepted.candidates.clone(),

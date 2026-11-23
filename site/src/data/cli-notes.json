@@ -577,7 +577,7 @@
     "example": "hide device address mac-mini 192.168.1.20:50569"
   },
   "device rename": {
-    "line": "Changes the name this computer shows a paired computer or an SSH or WSL device under, on the rail, in its tabs and in Settings > Devices; the other computer keeps its own name.",
+    "line": "Changes the name this computer shows a paired computer or an SSH or WSL device under, on the rail, in its tabs and in Settings > Devices; the other computer keeps its own name, and an empty name (\"\") gives a paired computer that name back.",
     "example": "hide device rename mac-mini \"Studio Mac\""
   },
   "device switch": {

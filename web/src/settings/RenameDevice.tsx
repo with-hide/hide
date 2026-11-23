@@ -18,12 +18,15 @@ export function deviceNameToSave(text: string): string | null {
  * ⋯ › Rename (operator review 2026-11-23): the name this computer shows a
  * device or a paired machine under, on the rail, in its tabs and in
  * Settings. Save sends one event and closes; the row shows the name the
- * core or the pairing then holds.
+ * core or the pairing then holds. `chosen`: the name is one the operator
+ * chose for a paired machine, which an empty field gives back to the
+ * machine's own.
  */
-export function RenameDevice({ current, onSave, onClose, id }: { current: string; onSave: (name: string) => void; onClose: () => void; id: string }) {
+export function RenameDevice({ current, chosen = false, onSave, onClose, id }: { current: string; chosen?: boolean; onSave: (name: string) => void; onClose: () => void; id: string }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(current);
-  const name = deviceNameToSave(text);
+  // A paired machine's name the operator chose is taken back with an empty field.
+  const name = chosen && text.trim() === "" ? "" : deviceNameToSave(text);
   const save = name !== null && name !== current;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>

@@ -113,12 +113,31 @@ pub struct Grant {
     pub key: PeerKey,
     /// The guest's product device id.
     pub device: String,
+    /// The name the guest gave itself.
     pub name: String,
+    /// The name this machine's operator chose for it, which it is shown
+    /// under instead of `name` ([`Grant::shown_name`]); none until they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_name: Option<String>,
     pub state: GrantStatus,
     /// The generation its streams run under. It moves on every change.
     pub generation: u64,
     pub created_unix_ms: u64,
     pub via: Via,
+}
+
+impl Grant {
+    /// The name the machine is shown under: the operator's choice, else its own.
+    pub fn shown_name(&self) -> &str {
+        self.chosen_name.as_deref().unwrap_or(&self.name)
+    }
+}
+
+impl Host {
+    /// The name the machine is shown under: the operator's choice, else its own.
+    pub fn shown_name(&self) -> &str {
+        self.chosen_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A removed grant, remembered so its guest hears "removed".
@@ -262,11 +281,18 @@ impl Grants {
         if machines >= limits::MAX_GRANTS {
             return Err(StoreError::Full);
         }
+        // The name the operator chose stays through a pairing again.
+        let chosen_name = next
+            .grants
+            .iter()
+            .find(|grant| grant.key == key)
+            .and_then(|grant| grant.chosen_name.clone());
         let grant = Grant {
             id: new_id()?,
             key,
             device: device.to_owned(),
             name: name.to_owned(),
+            chosen_name,
             state: GrantStatus::Pending,
             generation: 0,
             created_unix_ms: now_unix_ms,
@@ -367,17 +393,18 @@ impl Grants {
         self.settle(key, GrantStatus::Active)
     }
 
-    /// Gives `key`'s grants the name this machine's operator chose. A name
-    /// opens nothing, so the generation stays and no stream is told.
-    /// Whether a grant for `key` was there.
-    pub fn rename(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+    /// Gives `key`'s grants the name this machine's operator chose, or with
+    /// `None` takes it back to the name the guest gave itself. A name opens
+    /// nothing, so the generation stays and no stream is told. Whether a
+    /// grant for `key` was there.
+    pub fn rename(&mut self, key: &PeerKey, chosen: Option<&str>) -> Result<bool, StoreError> {
         let mut next = self.record.clone();
         let mut found = false;
         let mut changed = false;
         for grant in next.grants.iter_mut().filter(|grant| grant.key == *key) {
             found = true;
-            if grant.name != name {
-                grant.name = name.to_owned();
+            if grant.chosen_name.as_deref() != chosen {
+                grant.chosen_name = chosen.map(str::to_owned);
                 changed = true;
             }
         }
@@ -490,7 +517,12 @@ pub struct Host {
     pub key: PeerKey,
     /// The host's product device id.
     pub device: String,
+    /// The name the host gave itself.
     pub name: String,
+    /// The name this machine's operator chose for it, which it is shown
+    /// under instead of `name` ([`Host::shown_name`]); none until they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_name: Option<String>,
     /// The grant the host gave.
     pub grant: String,
     pub state: KnownState,
@@ -551,8 +583,16 @@ impl Known {
     }
 
     /// Saves `host`, in place of what was known under its key.
-    pub fn put(&mut self, host: Host) -> Result<(), StoreError> {
+    pub fn put(&mut self, mut host: Host) -> Result<(), StoreError> {
         let mut next = self.record.clone();
+        // The name the operator chose stays through a pairing again.
+        if host.chosen_name.is_none() {
+            host.chosen_name = next
+                .hosts
+                .iter()
+                .find(|known| known.key == host.key)
+                .and_then(|known| known.chosen_name.clone());
+        }
         next.hosts.retain(|known| known.key != host.key);
         if next.hosts.len() >= limits::MAX_KNOWN {
             return Err(StoreError::Full);
@@ -575,15 +615,16 @@ impl Known {
         self.commit(next)
     }
 
-    /// Gives the host under `key` the name this machine's operator chose.
+    /// Gives the host under `key` the name this machine's operator chose,
+    /// or with `None` takes it back to the name the host gave itself.
     /// Whether it was known.
-    pub fn rename(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+    pub fn rename(&mut self, key: &PeerKey, chosen: Option<&str>) -> Result<bool, StoreError> {
         let mut next = self.record.clone();
         let Some(host) = next.hosts.iter_mut().find(|host| host.key == *key) else {
             return Ok(false);
         };
-        if host.name != name {
-            host.name = name.to_owned();
+        if host.chosen_name.as_deref() != chosen {
+            host.chosen_name = chosen.map(str::to_owned);
             self.commit(next)?;
         }
         Ok(true)
@@ -835,6 +876,7 @@ mod tests {
             key: key(7),
             device: "host-device".into(),
             name: "Windows PC".into(),
+            chosen_name: None,
             grant: "g1".into(),
             state: KnownState::Confirming,
             candidates: vec![Candidate::Relay("https://relay.example".into())],
@@ -870,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rename_is_saved_in_both_records_and_moves_no_generation() {
+    fn a_chosen_name_is_kept_apart_from_the_machines_own_and_survives_a_pairing_again() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = grants(&dir);
         let pending = store
@@ -878,28 +920,50 @@ mod tests {
             .unwrap();
         store.confirm(&key(1), &pending.id, 1).unwrap();
         let before = store.state_of(&key(1), 1);
-        assert!(store.rename(&key(1), "작업실 Mac").unwrap());
-        assert!(!store.rename(&key(2), "nobody").unwrap());
+        assert!(store.rename(&key(1), Some("작업실 Mac")).unwrap());
+        assert!(!store.rename(&key(2), Some("nobody")).unwrap());
         assert_eq!(store.state_of(&key(1), 1), before);
-        assert_eq!(grants(&dir).current(&key(1)).unwrap().name, "작업실 Mac");
+        let renamed = grants(&dir).current(&key(1)).unwrap().clone();
+        assert_eq!(
+            (renamed.name.as_str(), renamed.shown_name()),
+            ("MacBook", "작업실 Mac")
+        );
+        // Paired again under the name it gives itself: the operator's stays.
+        let again = store
+            .grant_pending(key(1), "dev", "MacBook Pro", Via::Link, 2)
+            .unwrap();
+        store.confirm(&key(1), &again.id, 3).unwrap();
+        assert_eq!(store.current(&key(1)).unwrap().shown_name(), "작업실 Mac");
+        // Taken back, it is shown under its own name again.
+        assert!(store.rename(&key(1), None).unwrap());
+        assert_eq!(store.current(&key(1)).unwrap().shown_name(), "MacBook Pro");
 
         let path = dir.path().join("peers").join("known.json");
         let mut known = Known::open(path.clone()).unwrap();
+        let host = Host {
+            key: key(7),
+            device: "host-device".into(),
+            name: "Windows PC".into(),
+            chosen_name: None,
+            grant: "g1".into(),
+            state: KnownState::Active,
+            candidates: Vec::new(),
+            started: None,
+        };
+        known.put(host.clone()).unwrap();
+        assert!(known.rename(&key(7), Some("회사 PC")).unwrap());
+        assert!(!known.rename(&key(8), Some("nobody")).unwrap());
         known
             .put(Host {
-                key: key(7),
-                device: "host-device".into(),
-                name: "Windows PC".into(),
-                grant: "g1".into(),
-                state: KnownState::Active,
-                candidates: Vec::new(),
-                started: None,
+                name: "DESKTOP-7Q2".into(),
+                ..host
             })
             .unwrap();
-        assert!(known.rename(&key(7), "회사 PC").unwrap());
-        assert!(!known.rename(&key(8), "nobody").unwrap());
         let reopened = Known::open(path).unwrap();
-        assert_eq!(reopened.of(&key(7)).unwrap().name, "회사 PC");
-        assert_eq!(reopened.of(&key(7)).unwrap().state, KnownState::Active);
+        let kept = reopened.of(&key(7)).unwrap();
+        assert_eq!(
+            (kept.name.as_str(), kept.shown_name(), kept.state),
+            ("DESKTOP-7Q2", "회사 PC", KnownState::Active)
+        );
     }
 }

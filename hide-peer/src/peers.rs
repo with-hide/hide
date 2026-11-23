@@ -789,12 +789,13 @@ impl<T: PeerTransport> Peers<T> {
     }
 
     /// Gives the machine under `key` the name this machine's operator
-    /// chose, in the grant it holds here and in the host record it keeps of
-    /// it, whichever it has; neither moves a generation or a connection.
-    /// Whether either knew it.
-    pub fn rename(&self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
-        let granted = lock(&self.inner.grants).rename(key, name)?;
-        let known = lock(&self.inner.known).rename(key, name)?;
+    /// chose, or with `None` takes it back to its own, in the grant it holds
+    /// here and in the host record it keeps of it, whichever it has; the
+    /// name it gives itself stays as it is, and neither moves a generation
+    /// or a connection. Whether either knew it.
+    pub fn rename(&self, key: &PeerKey, chosen: Option<&str>) -> Result<bool, StoreError> {
+        let granted = lock(&self.inner.grants).rename(key, chosen)?;
+        let known = lock(&self.inner.known).rename(key, chosen)?;
         Ok(granted || known)
     }
 

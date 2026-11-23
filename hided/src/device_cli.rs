@@ -283,11 +283,15 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("retry"), [device]) => Verb::Retry {
             device: named(device)?,
         },
+        // An empty name takes a paired machine back to the one it gives itself.
         (Some("rename"), [device, name]) => Verb::Rename {
             device: named(device)?,
-            name: hide_core::device_command::device_name(name)
-                .ok_or_else(|| USAGE.to_owned())?
-                .to_owned(),
+            name: match name.trim() {
+                "" => String::new(),
+                _ => hide_core::device_command::device_name(name)
+                    .ok_or_else(|| USAGE.to_owned())?
+                    .to_owned(),
+            },
         },
         (Some("switch"), [device]) => Verb::Switch {
             device: named(device)?,
@@ -471,10 +475,13 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
         Verb::Rename { device, name } => {
             let paired = pairing(env, json!({"verb":"rename","device":device,"name":name}));
             match paired {
-                Ok(value) => Ok(Printed::Value(
-                    value,
-                    format!("{device} is shown as {name} on this machine.\n"),
-                )),
+                Ok(value) => {
+                    let shown = value["name"].as_str().unwrap_or(name).to_owned();
+                    Ok(Printed::Value(
+                        value,
+                        format!("{device} is shown as {shown} on this machine.\n"),
+                    ))
+                }
                 // No paired machine of that name: an SSH or WSL device.
                 Err(refused) if refused.unknown() => core(
                     env,
@@ -1425,7 +1432,11 @@ mod tests {
             })
         );
         assert!(parse_words(&["rename", "win"]).is_err());
-        assert!(parse_words(&["rename", "win", "  "]).is_err());
+        // An empty name asks for the machine's own name back.
+        assert!(matches!(
+            parse_words(&["rename", "win", "  "]),
+            Ok(DeviceCli { verb: Verb::Rename { name, .. }, .. }) if name.is_empty()
+        ));
         assert!(parse_words(&["rename", "win", "a", "b"]).is_err());
     }
 

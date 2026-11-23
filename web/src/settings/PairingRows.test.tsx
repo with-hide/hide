@@ -166,6 +166,32 @@ it("renames a paired machine through its pairing, by its connection id (c2)", as
   await unmount();
 });
 
+it("takes a chosen name back to the machine's own with an empty name, and not one it gives itself", async () => {
+  const { q, press, events, unmount } = await mount(idle, [peer({ name: "회사 PC", named: true })]);
+  await act(async () => { q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-rename="windows-pc"]');
+  const input = q('[data-device-rename-input="windows-pc"]') as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "  ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(q('[data-device-rename-go="windows-pc"]')?.hasAttribute("disabled")).toBe(false);
+  await press('[data-device-rename-go="windows-pc"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_rename", payload: { device: "ab".repeat(32), name: "" } });
+  await unmount();
+
+  const own = await mount(idle, [peer()]);
+  await act(async () => { own.q('[data-peer-menu="windows-pc"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await own.press('[data-peer-rename="windows-pc"]');
+  const field = own.q('[data-device-rename-input="windows-pc"]') as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(own.q('[data-device-rename-go="windows-pc"]')?.hasAttribute("disabled")).toBe(true);
+  await own.unmount();
+});
+
 it("offers to update a machine too old to connect only from the computer that opens it (B22)", async () => {
   const older = peer({ connected: false, path: null, update: "there" });
   const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active", connected: false, path: null, update: "there" });

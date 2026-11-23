@@ -1506,6 +1506,7 @@ mod tests {
             key: "a".repeat(64),
             device_id: "mini".into(),
             name: "Mac mini".into(),
+            named: false,
             opens,
             opened_by,
             connected: true,

@@ -1466,16 +1466,6 @@ pub(super) struct PeerMachinesPayload {
     pub(super) machines: Vec<crate::peer_machines::PeerMachine>,
 }
 
-/// The name this machine's operator gave a paired machine, sent by hided
-/// once its pairing saved it (`hide device rename`, ⋯ › Rename). The list of
-/// paired machines carries it too; this says it was the operator's, so a
-/// device switched onto that machine takes it as well (B36).
-#[derive(Debug, Deserialize)]
-pub(super) struct PeerRenamedPayload {
-    pub(super) key: String,
-    pub(super) name: String,
-}
-
 /// The panes of other machines' work on this machine, sent by hided
 /// whenever a guest's node said its panes changed (PRD device-connect-iroh
 /// D-77 (5)). The whole list each time, as the paired machines are.
@@ -1900,7 +1890,6 @@ pub(super) enum Event {
     MachineProfileConnect(MachineProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     PeerMachines(PeerMachinesPayload),
-    PeerRenamed(PeerRenamedPayload),
     GuestPanes(GuestPanesPayload),
     PeerWork(PeerWorkPayload),
     DeviceSwitch(DeviceSwitchPayload),
@@ -2291,7 +2280,6 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
                 _ => Err(invalid_payload("device_switch")),
             })
         }
-        "peer_renamed" => decode!(PeerRenamedPayload, PeerRenamed),
         "peer_machines" => {
             decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
                 Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
@@ -2719,7 +2707,6 @@ impl Runtime {
             }
             Event::PeerWork(payload) => self.take_peer_work(&payload.key, payload.work),
             Event::DeviceSwitch(payload) => self.device_switch(payload),
-            Event::PeerRenamed(payload) => self.peer_renamed(&payload.key, &payload.name),
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;
                 if changed {

@@ -1418,14 +1418,22 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Rename { device, name } => {
-                let name = hide_core::device_command::device_name(&name).ok_or("name_invalid")?;
+                // An empty name takes the machine back to the one it gives itself.
+                let chosen = match name.trim() {
+                    "" => None,
+                    _ => Some(hide_core::device_command::device_name(&name).ok_or("name_invalid")?),
+                };
                 let paired = self.named(&peers, &device)?;
-                if !peers.rename(&paired.key, name).map_err(store)? {
+                if !peers.rename(&paired.key, chosen).map_err(store)? {
                     return Err("device_unknown");
                 }
-                self.tell_renamed(&paired.machine.key, name).await;
                 self.look.send_modify(|count| *count += 1);
-                Ok(json!({ "device_id": paired.machine.device_id, "name": name }))
+                let shown = self
+                    .paired(&peers)
+                    .into_iter()
+                    .find(|now| now.key == paired.key)
+                    .map_or(paired.machine.name, |now| now.machine.name);
+                Ok(json!({ "device_id": paired.machine.device_id, "name": shown }))
             }
             Ask::AcceptSsh {
                 request,
@@ -1700,10 +1708,7 @@ impl Pairing {
             connecting["needs"] = needs.payload();
         }
         self.switch_step(device, "connecting", connecting).await;
-        if let Some(mut paired) = paired.clone() {
-            if let Some(label) = label {
-                label.clone_into(&mut paired.accepted.name);
-            }
+        if let Some(paired) = paired.clone() {
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.
                 Ok(()) | Err(AcceptError::Already) => {}
@@ -1719,12 +1724,20 @@ impl Pairing {
         // the app answers a raise that its app updates it. The pairing
         // stands without the record, so a store that refuses it is only
         // logged.
+        // The machine is shown under the name its device had here, not the
+        // one it calls itself: the operator switched the device they know
+        // (B36). It is their chosen name, which the machine's own does not
+        // replace.
         let saved = peers.known(|known| {
             let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
-            if record.started.as_ref() == Some(through) {
+            let chosen = record.chosen_name.is_none() && label.is_some();
+            if record.started.as_ref() == Some(through) && !chosen {
                 return Ok(());
             }
             record.started = Some(through.clone());
+            if chosen {
+                record.chosen_name = label.map(str::to_owned);
+            }
             known.put(record)
         });
         if let Err(error) = saved {
@@ -1746,29 +1759,6 @@ impl Pairing {
                 return Err("switch_not_connected");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    }
-
-    /// Tells the core the operator named the machine under `key`
-    /// (`peer_renamed`), so a device switched onto it takes the name (B36).
-    async fn tell_renamed(&self, key: &str, name: &str) {
-        let event = json!({
-            "schema_version": hide_core::SCHEMA_VERSION,
-            "kind": "peer_renamed",
-            "payload": { "key": key, "name": name },
-        });
-        let core = Arc::clone(&self.core);
-        let told =
-            tokio::task::spawn_blocking(move || core.dispatch(event.to_string().into_bytes()))
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|told| told);
-        if let Err(error) = told {
-            hide_core::diagnostic!(json!({
-                "component": "pairing",
-                "kind": "pairing.rename_not_told",
-                "error": error,
-            }));
         }
     }
 
@@ -2025,7 +2015,8 @@ fn rows(
             machine: PeerMachine {
                 key: host.key.to_hex(),
                 device_id: host.device.clone(),
-                name: host.name.clone(),
+                name: host.shown_name().to_owned(),
+                named: host.chosen_name.is_some(),
                 opens: Some(opens),
                 opened_by: None,
                 connected: link.is_some(),
@@ -2054,7 +2045,8 @@ fn rows(
             machine: PeerMachine {
                 key: guest.key.to_hex(),
                 device_id: guest.device.clone(),
-                name: guest.name.clone(),
+                name: guest.shown_name().to_owned(),
+                named: guest.chosen_name.is_some(),
                 opens: None,
                 opened_by,
                 connected: link.is_some(),
@@ -2163,6 +2155,7 @@ mod tests {
             key: "ab".repeat(32),
             device_id: "windows-pc".into(),
             name: "Windows PC".into(),
+            named: false,
             opens: opens.then_some(PeerOpens::Active),
             opened_by: opened_by.then_some(PeerOpenedBy::Active),
             connected: false,
@@ -2205,6 +2198,7 @@ mod tests {
                 key: key.to_hex(),
                 device_id: device.into(),
                 name: name.into(),
+                named: false,
                 ..machine(true, false)
             },
         }
@@ -2241,6 +2235,7 @@ mod tests {
             key: PeerKey::from_bytes([key; 32]),
             device: format!("device-{key}"),
             name: format!("Machine {key}"),
+            chosen_name: None,
             grant: "grant".into(),
             state,
             candidates: Vec::new(),

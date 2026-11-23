@@ -78,7 +78,10 @@ export type Peer = {
   /** Its connection id. */
   key: string;
   device_id: string;
+  /** The name it is shown under: the one the operator chose, else its own. */
   name: string;
+  /** `name` is the one the operator chose (`PeerMachine::named`); absent from an older daemon. */
+  named?: boolean;
   /** This machine opens it. */
   opens?: "confirming" | "active" | "paused" | "paused_there" | "removing" | "unpaired" | null;
   /** It opens this machine. */
