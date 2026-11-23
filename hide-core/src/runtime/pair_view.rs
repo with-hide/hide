@@ -103,6 +103,12 @@ pub(super) struct PairViewPayload {
     /// The desk tab whose pin was pressed, which comes in front (B17).
     #[serde(default)]
     pub(super) display_id: Option<String>,
+    /// The pane's Workspace, and its device, come forward first, in the same
+    /// event: a View's chip pressed in a list, wherever the operator is
+    /// (operator decision 2026-11-23). Without it a pane of another
+    /// Workspace is refused.
+    #[serde(default)]
+    pub(super) bring_forward: bool,
 }
 
 impl Runtime {
@@ -117,6 +123,13 @@ impl Runtime {
         let Some(pane) = payload.pane_id else {
             return self.end_pair_view(PairEnd::Left);
         };
+        if payload.bring_forward
+            && let Some(owner) = self.pane_workspace_of(&pane)
+            && self.front_workspace_key().as_ref() != Some(&owner)
+            && !self.choose_agent_workspace(&owner)
+        {
+            return true;
+        }
         let Some(key) = self.front_workspace_key() else {
             crate::diagnostic!(serde_json::json!({
                 "component": "pair_view", "kind": "pair_view.no_workspace",

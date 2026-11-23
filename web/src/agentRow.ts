@@ -35,6 +35,13 @@ export type { LineMode };
 /** `pull_reference` is the line's pull request as its host named it, which the phone's line carries (`tally::Line`); the desktop finds it in the row's own list. */
 export type RowLine = { text: string; mode: LineMode; pull_request?: number; pull_reference?: ChangeRequestRef | null; subject?: AskSubject; look?: number };
 
+/** A row as a list draws its line when the View it opened rides a chip of its own, which names and counts it (operator decision 2026-11-23). */
+export function withoutLook<T extends { look?: unknown }>(agent: T): Omit<T, "look"> {
+  const rest: Partial<T> = { ...agent };
+  delete rest.look;
+  return rest as Omit<T, "look">;
+}
+
 /** The row's second line and why it shows, or null when the core gave it none. */
 export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
   const line = agent.state.line;
@@ -49,10 +56,16 @@ export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
  * draws its word (B5). A sleeping row has no line, its moon and hover say it;
  * a waking or failed one says so on its line (status-marks B31).
  */
-export function sidebarLine(agent: Pick<AgentRow, "state" | "status_code" | "mark" | "look">): RowLine | null {
+export function sidebarLine(agent: Pick<AgentRow, "state" | "status_code" | "mark" | "look">, { lookChip = false }: { lookChip?: boolean } = {}): RowLine | null {
   const own = stateLine(agent);
   if (own !== undefined) return own;
-  if (agent.mark === "look" && agent.look) return { text: agent.look.label, mode: "request", look: agent.look.count };
+  if (agent.mark === "look" && agent.look) {
+    if (!lookChip) return { text: agent.look.label, mode: "request", look: agent.look.count };
+    // The View rides its own chip, so the line is the agent's own (operator decision 2026-11-23); the eye outranks
+    // a request on it, an external tool's question, which is no line of the operator's (PRD hide-external-control B29).
+    const line = rowLine(agent);
+    return line && line.mode !== "quiet" && line.mode !== "request" ? line : null;
+  }
   const line = rowLine(agent);
   if (line && line.mode !== "quiet") return line;
   return agent.state.asking ? { text: "", mode: "request" } : null;

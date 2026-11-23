@@ -51,17 +51,22 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
     expect(rows(back).find((one) => one.look)?.look?.label).toBe("review-notes.md");
   });
 
-  it("marks the reviewer 볼 것 and shows its file only when that row is pressed", () => {
+  it("marks the reviewer 볼 것 and shows its file in focus mode only when its chip is pressed", () => {
     const model = looking();
     expect(doneAt("finishes", model)).toBe(true);
     expect(row(model, REV).mark).toBe("look");
-    expect(row(model, REV).look?.label).toBe("review-notes.md");
-    // Pressing the pane without the row's reveal leaves the View unseen.
+    const look = row(model, REV).look!;
+    expect(look.label).toBe("review-notes.md");
+    // The row goes to the agent only and leaves the View unseen (operator decision 2026-11-23).
     expect(doneAt("look", apply(model, focus(REV)))).toBe(false);
-    const seen = apply(model, focus(REV, { reveal_unseen: true }));
+    const seen = apply(model, { kind: "pair_view", payload: { pane_id: REV, display_id: look.view_id, bring_forward: true } });
     expect(doneAt("look", seen)).toBe(true);
     expect(row(seen, REV).mark).toBe("quiet");
-    expect(AGENTS_WORLD.snapshot(seen, Date.now()).frames!.documents!.file1!.contents_utf8).toContain("Review of the checkout fix");
+    const drawn = AGENTS_WORLD.snapshot(seen, Date.now());
+    expect(drawn.rest.workspace_view!.tray.pair).toMatchObject({ pane_id: REV, alone: false });
+    expect(drawn.frames!.documents!.file1!.contents_utf8).toContain("Review of the checkout fix");
+    // ⌘. leaves.
+    expect(AGENTS_WORLD.snapshot(apply(seen, { kind: "pair_view", payload: {} }), Date.now()).rest.workspace_view!.tray.pair ?? null).toBeNull();
   });
 
   it("goes back to the lead after the reviewer came back", () => {
