@@ -1532,7 +1532,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &[],
     },
     // The phones paired with this computer (PRD device-connect-iroh D-70),
-    // for a computer with no window to open Settings > Mobile in. `pair`
+    // for a computer with no window to open Settings › Devices in. `pair`
     // draws the pairing QR for a person at a terminal outside Hide's panes
     // and waits until a phone scans it; it never prints the link the QR
     // holds, and says each line and refusal as one sentence in the
@@ -1564,6 +1564,37 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["phone_list"],
         refusals: &[],
+    },
+    // The name this computer shows a phone under, kept beside the one it
+    // was paired under; an empty name takes it back. A phone by its id or,
+    // when only one phone has it, its name.
+    Spec {
+        words: &["phone", "rename"],
+        arguments: &[
+            Arg {
+                name: "phone",
+                value: Key,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "name",
+                value: Text,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["phone_renamed"],
+        refusals: &[
+            "phone_unknown",
+            "phone_ambiguous",
+            "phone_name_invalid",
+            "phone_rename_failed",
+        ],
     },
     // A phone by its id or, when only one phone has it, its name.
     Spec {
@@ -2852,12 +2883,13 @@ fn answers() -> Value {
         "device_list".into(),
         shape(&["devices", "peers", "guest_panes"]),
     );
-    // The phones paired with this computer, as Settings > Mobile lists them.
+    // The phones paired with this computer, as Settings › Devices lists them.
     map.insert(
         "phone_list".into(),
         shape(&["enabled", "phones", "max_phones"]),
     );
     map.insert("phone_removed".into(), shape(&["phone_id", "name"]));
+    map.insert("phone_renamed".into(), shape(&["phone_id", "name"]));
     map.insert("phone_paired".into(), shape(&["name"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));

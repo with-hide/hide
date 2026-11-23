@@ -188,7 +188,14 @@ pub enum PhoneOrigin {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneRecord {
     pub id: String,
+    /// The name the phone was paired under, from what it said it is.
     pub name: String,
+    /// The name this computer's operator chose for it, which Settings ›
+    /// Devices and `hide phone list` show instead of `name`
+    /// ([`PhoneRecord::shown_name`]); none until they rename it. An older
+    /// build reads past it and shows `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_name: Option<String>,
     /// SHA-256 of the credential, hex. The credential itself is never stored.
     pub credential_sha256: String,
     pub paired_at_ms: u64,
@@ -210,6 +217,11 @@ pub struct PhoneRecord {
 }
 
 impl PhoneRecord {
+    /// The name the phone is shown under: the operator's choice, else its own.
+    pub fn shown_name(&self) -> &str {
+        self.chosen_name.as_deref().unwrap_or(&self.name)
+    }
+
     /// Whether this phone can be sent a notice: a Web Push subscription or
     /// an app's registration.
     pub fn reachable(&self) -> bool {
@@ -305,6 +317,7 @@ mod tests {
             phones: vec![PhoneRecord {
                 id: "p1".into(),
                 name: "iPhone".into(),
+                chosen_name: Some("회사 폰".into()),
                 credential_sha256: "00".repeat(32),
                 paired_at_ms: 1,
                 last_seen_ms: 2,

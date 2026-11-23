@@ -936,7 +936,10 @@ impl Mobile {
             .map(|phone| {
                 json!({
                     "id": phone.id,
-                    "name": phone.name,
+                    "name": phone.shown_name(),
+                    // The operator's name for it, which a rename's empty
+                    // field takes back to the one it was paired under.
+                    "chosen_name": phone.chosen_name,
                     "last_seen_ms": phone.last_seen_ms,
                     "connected": live.contains(&phone.id),
                     "notifications": match (phone.notifications, phone.reachable()) {
@@ -1902,6 +1905,17 @@ impl Mobile {
                     .ok_or("mobile_revoke.phone_id must be a string")?;
                 self.revoke(id, "revoked_in_settings");
             }
+            "mobile_rename" => {
+                let id = payload
+                    .get("phone_id")
+                    .and_then(Value::as_str)
+                    .ok_or("mobile_rename.phone_id must be a string")?;
+                let name = payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("mobile_rename.name must be a string")?;
+                self.rename(id, name).map_err(str::to_owned)?;
+            }
             "mobile_push_mode" => {
                 let mode = payload
                     .get("mode")
@@ -1933,6 +1947,32 @@ impl Mobile {
         };
         if removed {
             self.publish();
+        }
+    }
+
+    /// Gives a phone the name this computer's operator chose; an empty
+    /// `name` takes it back to the one it was paired under. The name is
+    /// saved before any list shows it, and one that cannot be saved is
+    /// refused with the list as it was.
+    pub fn rename(&self, phone_id: &str, name: &str) -> Result<(), &'static str> {
+        let chosen = match name.trim() {
+            "" => None,
+            _ => Some(hide_core::device_command::device_name(name).ok_or("phone_name_invalid")?),
+        };
+        let renamed = self.lock().phones.rename(phone_id, chosen);
+        match renamed {
+            Ok(true) => {
+                self.publish();
+                Ok(())
+            }
+            Ok(false) => Err("phone_unknown"),
+            Err(error) => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_phone", "kind": "phone.rename_failed", "phone_id": phone_id,
+                    "message": error.to_string(),
+                }));
+                Err("phone_rename_failed")
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 //! What `hide phone` asks this machine's daemon (PRD device-connect-iroh
 //! D-70, B61): the phones paired with this computer, removing one, and a
-//! pairing code for a computer with no window to open Settings > Mobile in.
+//! pairing code for a computer with no window to open Settings › Devices in.
 //!
 //! Asked over the bootstrap socket (`pane_auth`), one ask per connection. A
 //! program in a Hide pane may list and remove; only a terminal outside the
@@ -31,6 +31,12 @@ pub enum Ask {
     /// A phone by its id or its name.
     Remove {
         phone: String,
+    },
+    /// A phone by its id or its name, and the name to show it under; an
+    /// empty `name` takes it back to the one it was paired under.
+    Rename {
+        phone: String,
+        name: String,
     },
     Pair,
     /// Where the code `pair` answered stands, named by its [`code_id`].
@@ -68,12 +74,18 @@ pub fn next_action(code: &str) -> &'static str {
             "Four phones are paired with this computer: remove one with hide phone remove <phone> first"
         }
         "phone_unknown" => "No phone of that id or name is paired: hide phone list shows them",
-        "phone_ambiguous" => "More than one phone has that name: remove it by its id",
+        "phone_ambiguous" => "More than one phone has that name: name it by its id",
+        "phone_name_invalid" => {
+            "A phone's name is one line of at most 64 bytes: choose a shorter name"
+        }
+        "phone_rename_failed" => {
+            "Hide could not save the name on this computer: hide status says why; try again"
+        }
         "mobile_unreachable" => {
             "Hide could not reach its relay from this computer: check the network and run hide phone pair again"
         }
         "mobile_failed" => {
-            "Mobile could not be set up on this computer: hide status and Settings > Mobile say why"
+            "Mobile could not be set up on this computer: hide status and Settings › Devices say why"
         }
         // A bot's refusal, another screen's, or one no phone code names.
         code => crate::pairing::next_action(code),
@@ -116,6 +128,7 @@ impl Mobile {
             }),
             Ask::List => self.cli_list(),
             Ask::Remove { phone } => self.cli_remove(&phone),
+            Ask::Rename { phone, name } => self.cli_rename(&phone, &name),
             Ask::Pair => self.cli_pair().await,
             Ask::PairStatus { code_id } => self.cli_pair_status(&code_id),
             Ask::PairEnd { code_id: wanted } => {
@@ -138,7 +151,7 @@ impl Mobile {
         }
     }
 
-    /// The phones as Settings > Mobile lists them, from the frame it draws.
+    /// The phones as Settings › Devices lists them, from the frame it draws.
     fn cli_list(&self) -> Value {
         let frame = self.subscribe_frame().borrow().clone();
         let phones = frame.get("phones").cloned().unwrap_or_else(|| json!([]));
@@ -150,29 +163,52 @@ impl Mobile {
         })
     }
 
-    fn cli_remove(&self, wanted: &str) -> Value {
-        let found = {
-            let inner = self.lock();
-            let by_id = inner.phones.current().find(|phone| phone.id == wanted);
-            match by_id {
-                Some(phone) => Ok((phone.id.clone(), phone.name.clone())),
-                None => {
-                    let mut named = inner.phones.current().filter(|phone| phone.name == wanted);
-                    match (named.next(), named.next()) {
-                        (Some(phone), None) => Ok((phone.id.clone(), phone.name.clone())),
-                        (Some(_), Some(_)) => Err("phone_ambiguous"),
-                        (None, _) => Err("phone_unknown"),
-                    }
+    /// The phone `wanted` names here: its id, or a name only one phone is
+    /// shown under. Its id and the name it is shown under.
+    fn find_phone(&self, wanted: &str) -> Result<(String, String), &'static str> {
+        let inner = self.lock();
+        let by_id = inner.phones.current().find(|phone| phone.id == wanted);
+        let phone = match by_id {
+            Some(phone) => phone,
+            None => {
+                let mut named = inner
+                    .phones
+                    .current()
+                    .filter(|phone| phone.shown_name() == wanted);
+                match (named.next(), named.next()) {
+                    (Some(phone), None) => phone,
+                    (Some(_), Some(_)) => return Err("phone_ambiguous"),
+                    (None, _) => return Err("phone_unknown"),
                 }
             }
         };
-        match found {
+        Ok((phone.id.clone(), phone.shown_name().to_owned()))
+    }
+
+    fn cli_remove(&self, wanted: &str) -> Value {
+        match self.find_phone(wanted) {
             Ok((id, name)) => {
                 self.revoke(&id, "revoked_from_cli");
                 json!({"ok": true, "phone_id": id, "name": name})
             }
             Err(code) => refused(code),
         }
+    }
+
+    fn cli_rename(&self, wanted: &str, name: &str) -> Value {
+        let id = match self.find_phone(wanted) {
+            Ok((id, _)) => id,
+            Err(code) => return refused(code),
+        };
+        if let Err(code) = self.rename(&id, name) {
+            return refused(code);
+        }
+        let shown = self
+            .lock()
+            .phones
+            .get(&id)
+            .map(|phone| phone.shown_name().to_owned());
+        json!({"ok": true, "phone_id": id, "name": shown})
     }
 
     /// Turns Mobile on when it is off, waits for it to be reachable, and
@@ -357,6 +393,42 @@ mod tests {
         assert_eq!(names, ["iPhone 3"]);
     }
 
+    /// Settings › Devices' 이름 바꾸기 and `hide phone rename`: the name the
+    /// operator chose is listed beside the one the phone was paired under,
+    /// names the phone to the other verbs, and an empty one takes it back.
+    #[tokio::test]
+    async fn rename_lists_the_chosen_name_and_an_empty_one_takes_it_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let mobile = mobile(directory.path());
+        let (code, _) = exposed_code(&mobile);
+        let (phone, _) = mobile.pair(&code, "iPhone").unwrap();
+        let renamed = mobile
+            .answer_cli(
+                Ask::Rename {
+                    phone: "iPhone".into(),
+                    name: " 회사 폰 ".into(),
+                },
+                Caller::Pane,
+            )
+            .await;
+        assert_eq!(
+            renamed,
+            json!({"ok": true, "phone_id": phone.id, "name": "회사 폰"})
+        );
+        let listed = mobile.cli_list();
+        assert_eq!(listed["phones"][0]["name"], "회사 폰");
+        assert_eq!(listed["phones"][0]["chosen_name"], "회사 폰");
+        assert_eq!(mobile.cli_remove("iPhone")["reason"], "phone_unknown");
+        assert_eq!(
+            mobile.cli_rename(&phone.id, &"x".repeat(65))["reason"],
+            "phone_name_invalid"
+        );
+        assert_eq!(mobile.cli_rename("Galaxy", "x")["reason"], "phone_unknown");
+        let back = mobile.cli_rename("회사 폰", "");
+        assert_eq!(back["name"], "iPhone");
+        assert_eq!(mobile.cli_list()["phones"][0]["chosen_name"], Value::Null);
+    }
+
     #[tokio::test]
     async fn only_a_terminal_outside_the_panes_pairs() {
         let directory = tempfile::tempdir().unwrap();
@@ -395,6 +467,10 @@ mod tests {
                 Ask::Pair,
                 Ask::Remove {
                     phone: "iPhone".to_owned(),
+                },
+                Ask::Rename {
+                    phone: "iPhone".to_owned(),
+                    name: "x".to_owned(),
                 },
                 Ask::PairStatus {
                     code_id: id.clone(),

@@ -59,7 +59,7 @@ pub enum CommandKind {
         reason: String,
     },
     Device(crate::device_cli::DeviceCli),
-    /// `hide phone pair|list|remove`: the phones paired with this computer.
+    /// `hide phone pair|list|rename|remove`: the phones paired with this computer.
     Phone(crate::phone_cli::PhoneCli),
     /// `hide always-on …`: a paired machine's login item and firewall rules.
     AlwaysOn(crate::always_on::cli::Command),

@@ -3276,6 +3276,21 @@
             ],
             "type": "object"
         },
+        "phone_renamed": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                },
+                "phone_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "phone_id",
+                "name"
+            ],
+            "type": "object"
+        },
         "plan": {
             "properties": {
                 "plan": {
@@ -7164,6 +7179,42 @@
         },
         {
             "answers": [
+                "phone_renamed"
+            ],
+            "arguments": [
+                {
+                    "name": "phone",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "phone rename",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "phone_unknown",
+                "phone_ambiguous",
+                "phone_name_invalid",
+                "phone_rename_failed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "phone_removed"
             ],
             "arguments": [
@@ -9537,7 +9588,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:12f4fe53df9c402390715de18d2286488ba8b53a8a86997d96e093c913bb7c37",
+    "digest": "sha256:4dba68c1c20b5e8c4941fb553bab0fd144b0e31c6eb779cae79d186f33f9f5cd",
     "envelopes": {
         "access": {
             "answer": "value",

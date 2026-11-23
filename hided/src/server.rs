@@ -6883,6 +6883,7 @@ mod tests {
             "mobile_hide_code",
             "mobile_enable",
             "mobile_method",
+            "mobile_rename",
             "mobile_unknown",
         ] {
             assert!(mobile_event_reaches(kind, false).is_err(), "{kind}");

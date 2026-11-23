@@ -592,6 +592,10 @@
     "line": "Lists the phones paired with this computer, with each one's name and id.",
     "example": "hide phone list"
   },
+  "phone rename": {
+    "line": "Changes the name this computer shows a paired phone under, by its name or id; an empty name gives back the one it paired with.",
+    "example": "hide phone rename iPhone 'Work phone'"
+  },
   "phone remove": {
     "line": "Disconnects a paired phone, by its name or the id hide phone list shows.",
     "example": "hide phone remove 'My iPhone'"
