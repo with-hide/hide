@@ -120,11 +120,18 @@ impl Machine {
 
     /// [`Self::log_in`], with the core's build of `order`.
     fn log_in_as(&mut self, order: u32) -> Value {
+        let program = self.old_daemon.clone();
+        self.log_in_with(&program, order)
+    }
+
+    /// The login item's core started from `program`, a build in the install
+    /// root, as a build of `order`.
+    fn log_in_with(&mut self, program: &Path, order: u32) -> Value {
         std::fs::create_dir_all(&self.state).unwrap();
         std::fs::write(hide_kit::layout::keep_alive(&self.state), "").unwrap();
         let log = std::fs::File::create(self.home.join("old-core.log")).unwrap();
         let child = self
-            .command(&self.old_daemon, order)
+            .command(program, order)
             .arg("core-login")
             .arg("--state-dir")
             .arg(&self.state)
@@ -133,8 +140,8 @@ impl Machine {
             .spawn()
             .expect("the old build's core starts");
         self.old_core = Some(child);
-        let old = build_of(&self.old_daemon);
-        self.health_until(|health| health["build"] == old.as_str())
+        let build = build_of(program);
+        self.health_until(|health| health["build"] == build.as_str())
     }
 
     /// `hide connect` of the newer app: whether it succeeded, and its line.
@@ -148,7 +155,35 @@ impl Machine {
     /// pane of `install`, as a pane names its installation: its refusal
     /// reason, none for an answer.
     fn workspace_info_as(&self, install: &str) -> Option<String> {
-        let mut info = self.command(&self.app_cli, NEW);
+        self.workspace_info_with(&self.app_cli, install)
+    }
+
+    /// What the running core answers an agent hook from a pane of
+    /// `install`, sent the way the hook sends it: the reason it gave, or
+    /// `ok`.
+    fn hook_as(&self, install: &str) -> String {
+        use hide_agent_hooks::hook_request::{Caller, HookCommand, fresh_request_id, send};
+        let caller = Caller {
+            state_dir: &self.state,
+            pane_id: None,
+            install: Some(install),
+            named: None,
+        };
+        let sent = send(
+            &caller,
+            &fresh_request_id().unwrap(),
+            HookCommand::Registration {},
+            Instant::now() + Duration::from_secs(30),
+        );
+        match sent.answer {
+            Ok(answer) => answer["reason"].as_str().unwrap_or("ok").to_owned(),
+            Err(failure) => failure.reason.to_owned(),
+        }
+    }
+
+    /// [`Self::workspace_info_as`] through the `hide` at `cli`.
+    fn workspace_info_with(&self, cli: &Path, install: &str) -> Option<String> {
+        let mut info = self.command(cli, NEW);
         info.env(hide_agent_hooks::route::INSTALL_VARIABLE, install)
             .args(["workspace", "info"])
             .current_dir(&self.home);
@@ -350,6 +385,14 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
     let old = machine.log_in();
     assert!(same_file(&program_of(&old), &machine.old_daemon), "{old}");
     let old_pid = machine.old_core.as_ref().unwrap().id();
+    let root_install = hide_kit::layout::install_of_root(&machine.core_root);
+    // A pane the login item's core started before the app was put here
+    // names the install root.
+    assert_ne!(
+        machine.workspace_info_as(&root_install),
+        Some("other_install".to_owned())
+    );
+    assert_ne!(machine.hook_as(&root_install), "other_install");
 
     let (ok, line) = machine.connect();
 
@@ -373,17 +416,52 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
         hide_kit::layout::keep_alive(&machine.state).is_file(),
         "the item's marker stays"
     );
-    // The core the item runs from a copy of the app's build is the app's:
-    // a pane the app's own daemon started reaches it, and none of the
-    // install root's own does (with-hide/hide#2876).
+    // The core the item runs from a copy of the app's build is the app's: a
+    // pane the app's own daemon started reaches it (with-hide/hide#2876),
+    // and so does one the core started before, under the install root's
+    // name, which outlives the core's restart.
     assert_ne!(
         machine.workspace_info_as(hide_agent_hooks::route::APP_INSTALL),
         Some("other_install".to_owned())
     );
-    assert_eq!(
-        machine.workspace_info_as(&hide_kit::layout::install_of_root(&machine.core_root)),
+    assert_ne!(
+        machine.workspace_info_as(&root_install),
         Some("other_install".to_owned())
     );
+    // Another installation's pane is still refused.
+    assert_eq!(
+        machine.workspace_info_as("root:/elsewhere"),
+        Some("other_install".to_owned())
+    );
+    for install in [hide_agent_hooks::route::APP_INSTALL, root_install.as_str()] {
+        assert_ne!(machine.hook_as(install), "other_install", "{install}");
+    }
+    assert_eq!(machine.hook_as("root:/elsewhere"), "other_install");
+
+    // The app is removed and the login item starts the core again, which is
+    // its install root's own once more: the panes started under the app's
+    // name keep reaching it.
+    let (stopped, line) = machine.answer({
+        let mut stop = machine.command(&machine.app_cli, NEW);
+        stop.arg("stop");
+        stop
+    });
+    assert!(stopped, "{line}");
+    std::fs::remove_dir_all(machine.app_cli.parent().unwrap()).unwrap();
+    let restarted = machine.log_in_with(&program, NEW);
+    assert!(same_file(&program_of(&restarted), &program), "{restarted}");
+    let cli = program.with_file_name(exe("hide"));
+    assert_ne!(
+        machine.workspace_info_with(&cli, hide_agent_hooks::route::APP_INSTALL),
+        Some("other_install".to_owned())
+    );
+    assert_ne!(
+        machine.workspace_info_with(&cli, &root_install),
+        Some("other_install".to_owned())
+    );
+    for install in [hide_agent_hooks::route::APP_INSTALL, root_install.as_str()] {
+        assert_ne!(machine.hook_as(install), "other_install", "{install}");
+    }
 }
 
 /// The app the operator puts on a machine is the build its login item
@@ -394,6 +472,14 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
 fn an_app_older_than_the_core_its_login_item_runs_puts_its_own_build_there() {
     let mut machine = Machine::new();
     machine.log_in_as(NEW + 1);
+    // What the newer build wrote that this one cannot read: the rollback
+    // keeps it for the newer build to read again.
+    let newer = br#"{"schema_version":99,"automations":[],"from":"a newer build"}"#;
+    std::fs::write(
+        machine.state.join(hide_kit::layout::AUTOMATIONS_STORE),
+        newer,
+    )
+    .unwrap();
 
     let (ok, line) = machine.connect();
 
@@ -408,6 +494,16 @@ fn an_app_older_than_the_core_its_login_item_runs_puts_its_own_build_there() {
         machine.workspace_info_as(hide_agent_hooks::route::APP_INSTALL),
         Some("other_install".to_owned())
     );
+    let kept = std::fs::read_dir(&machine.state)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(hide_kit::layout::AUTOMATIONS_STORE))
+        })
+        .any(|path| std::fs::read(path).is_ok_and(|bytes| bytes == newer));
+    assert!(kept, "the newer build's automations are kept as written");
 }
 
 /// B23: a machine that started this account's Hide over SSH or `wsl.exe`

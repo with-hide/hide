@@ -735,7 +735,7 @@ Files the previous Swift app left under `~/Library/Application Support/hide/` ar
 Each packaged launch replaces an outdated part of the kit on this machine, and each device connection does the same there, hook entries included; a part you removed stays removed.
 A connected device whose system the package carries gets the new helper and pane holder on its next connection, and its panes keep running the same way ([Connect another Mac](#connect-another-mac-over-ssh)); you do nothing on the device.
 When the core runs on another machine, a newer app updates it to its own build before it connects, once per connection, while agents keep running; it signs in to that machine twice, once to find the older core and once to update it and connect; if that fails, the window shows both builds with Retry, and the core goes on with its previous build.
-An updated app on the core's own machine updates the core the login item runs in the same way, and an older app there is told to update.
+An updated app on the core's own machine updates the core the login item runs in the same way, and an older app there puts its own build there, as it does with no login item (the operator's call: the app the operator opens is the build that runs); what a newer build wrote that the older one cannot read is set aside, never written over.
 
 ### When an update goes wrong
 

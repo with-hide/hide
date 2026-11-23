@@ -170,12 +170,28 @@ static APP_PACKAGE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::
 
 /// Reads [`app_package`] for the core about to start on `state_dir` and, for
 /// the app's, has this process answer as the app's installation
-/// (`hide_host::kit::answer_as`) before anything starts a pane. A note that
-/// cannot be read leaves the core its own installation and is logged.
+/// (`hide_host::kit::answer_as`) before anything starts a pane. A core run
+/// from a build in the install root answers the panes that name either of
+/// its two names whichever it starts panes under
+/// (`hide_host::kit::also_answer_for`): the app's package can come or go
+/// between two starts of the same login item, and the panes, which outlive
+/// a start, keep the name they were started under. A note that cannot be
+/// read leaves the core its own installation and is logged.
 pub fn adopt_app(home: &Path, state_dir: &Path) {
-    let package = std::env::current_exe()
+    let Some(program) = std::env::current_exe()
         .ok()
-        .and_then(|program| app_core_package(&program, home, state_dir));
+        .filter(|program| in_core_root(program, home))
+    else {
+        let _ = APP_PACKAGE.set(None);
+        return;
+    };
+    let package = noted_package(state_dir);
+    if let Some(own) = hide_host::kit::pane_install(&program) {
+        hide_host::kit::also_answer_for(vec![
+            own.id,
+            hide_agent_hooks::route::APP_INSTALL.to_owned(),
+        ]);
+    }
     if let Some(package) = &package {
         let cli = package.join(format!("hide{}", std::env::consts::EXE_SUFFIX));
         hide_host::kit::answer_as(Some(hide_host::kit::PaneInstall {
@@ -187,22 +203,27 @@ pub fn adopt_app(home: &Path, state_dir: &Path) {
     let _ = APP_PACKAGE.set(package);
 }
 
-/// The package `program` stands in for: the noted app's, when `program` is
-/// a build in `home`'s install root and the app's note on `state_dir`
-/// names a package that is still there.
-fn app_core_package(program: &Path, home: &Path, state_dir: &Path) -> Option<PathBuf> {
+/// Whether `program` is a build in `home`'s install root, where a paired
+/// machine's login item runs its core from.
+fn in_core_root(program: &Path, home: &Path) -> bool {
     let canonical = hide_platform::fs::identity::canonical;
-    let root = canonical(&hide_kit::layout::core_root(home)).ok()?;
-    let program = canonical(program).ok()?;
-    let build = program.parent()?;
-    let in_root = build.parent() == Some(root.as_path())
-        && build
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(hide_kit::is_build_name);
-    if !in_root {
-        return None;
-    }
+    let (Ok(root), Ok(program)) = (
+        canonical(&hide_kit::layout::core_root(home)),
+        canonical(program),
+    ) else {
+        return false;
+    };
+    program.parent().is_some_and(|build| {
+        build.parent() == Some(root.as_path())
+            && build
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(hide_kit::is_build_name)
+    })
+}
+
+/// The package the app's note on `state_dir` names, when it is still there.
+fn noted_package(state_dir: &Path) -> Option<PathBuf> {
     match hide_kit::app::package(state_dir) {
         Ok(package) => package,
         Err(message) => {
