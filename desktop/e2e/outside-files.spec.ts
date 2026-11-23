@@ -19,7 +19,7 @@ import { runInPane } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { quietFor } from "../../web/e2e/wait";
-import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
+import { enterWorkspace, openTaskFolds, showExplorer, showTasks } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
 import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 import { hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
@@ -333,18 +333,26 @@ test("an agent's outside file is its open: it waits in Needs You, view list name
   ]);
 
   // Pressing the row goes to the agent only: its pane takes the keyboard, and the image stays to look at, on no desk.
+  // Read, the row leaves Needs You for its project's tree, which draws no chip (operator decision 2026-11-23).
   await row.locator(`[data-agent-open="${pane}"]`).click();
   await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
   await quietFor(page, 1_000, "the row's press opens no View");
   await expect(outsideTab(page, "agent-shot.png")).toHaveCount(0);
-  await expect(row.locator("[data-agent-status-mark]")).toHaveAttribute("data-agent-status-mark", "look");
+  await expect(row.locator("[data-agent-status-mark]")).not.toHaveAttribute("data-agent-status-mark", "look");
+  await expect(page.locator(`[data-pane-views="${pane}"]`)).toHaveAttribute("data-pane-views-unseen", "true");
 
-  // Pressing the chip opens the image in focus mode, the agent's pane beside it, in its viewer as an External tab,
-  // which sees it.
-  await chip.click();
+  // The 태스크 list keeps the chip on the row where it rests; pressing it opens the image in focus mode, the agent's
+  // pane beside it, in its viewer as an External tab, which sees it.
+  const tasks = await showTasks(page);
+  await openTaskFolds(page);
+  const kept = tasks.locator(`[data-task-row="${pane}"] [data-look-chip]`);
+  await expect(kept).toContainText("agent-shot.png");
+  await kept.click();
   await expect(page.locator(`[data-pair-pane="${pane}"]`)).toBeVisible();
   await expect(outsideTab(page, "agent-shot.png")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await expect(page.locator('[data-viewer="image"]')).toBeVisible();
+  await expect(kept).toHaveCount(0);
+  await page.locator('[data-sidebar-lens-option="projects"]').click();
   await expect(row.locator("[data-agent-status-mark]")).not.toHaveAttribute("data-agent-status-mark", "look");
   await expect(chip).toHaveCount(0);
 
