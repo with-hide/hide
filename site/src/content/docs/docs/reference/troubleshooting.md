@@ -34,11 +34,17 @@ In PowerShell, from the folder that holds both downloads, the first line printed
 Get-Content .\hide-v<version>-windows-x64-setup.exe.sha256
 ```
 
-### hide does not run on Windows 11
+### Smart App Control blocks hide on Windows 11
 
-Windows 11 with Smart App Control turned on blocks every unsigned program, and hide is unsigned.
-hide does not run there.
-This is a known gap, listed in the install guide under "What each system supports".
+Windows 11's Smart App Control blocks programs that are not signed, and hide is not signed yet.
+To run hide on that PC, turn Smart App Control off:
+
+1. Open **Windows Security**, then **App & browser control**, then **Smart App Control settings**.
+2. Choose **Off**.
+
+Turning it back on later: from Windows 11 25H2 you can switch it on again on the same page; on earlier versions, Windows has to be reset before Smart App Control can be turned on again.
+
+When you connect that PC as a device from another computer, Windows shows the block only on that PC's own screen, so the other computer sees only that the connection did not come up.
 
 ### Settings > About says updates are off, or asks you to move the app
 
