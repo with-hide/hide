@@ -28,9 +28,7 @@ pub enum TurnEnded {
     Interrupted,
     /// The person's message has no agent record after it, in a format that
     /// records the agent's every reply (Claude Code): read under an agent at
-    /// rest, the turn never ran; read under a dialog, the agent's record of
-    /// the call the dialog asks about is still to be written (Claude Code
-    /// 2.1.330 draws its question first). Claude Code 2.1.314 puts a prompt
+    /// rest, the turn never ran. Claude Code 2.1.314 puts a prompt
     /// interrupted before its first output back in the composer and records
     /// nothing of the interruption.
     Unanswered,
@@ -518,6 +516,16 @@ impl TurnTracker {
             Some(End::Aborted) => Some(TurnEnded::Interrupted),
             None => turn.unreplied.then_some(TurnEnded::Unanswered),
         }
+    }
+
+    /// Whether the records read hold something a dialog could ask the
+    /// operator about: a native question or plan waiting, a tool call with no
+    /// result yet, or records that do not settle what the turn waits for. A
+    /// dialog drawn over none of these asks about a call the agent has not
+    /// written yet: Claude Code 2.1.330 draws its question before it writes
+    /// the call.
+    pub fn holds_open_call(&self) -> bool {
+        self.waiting() != Some(Waiting::Nothing) || self.calls.iter().any(|call| !call.answered)
     }
 
     /// The call keys ([`ToolTurnMark::Called`]) whose last remembered call

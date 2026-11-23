@@ -2169,8 +2169,8 @@ impl LabelWorker {
     /// past the backoff it waits for the agent's next state change and says
     /// so once. A dialog's stop (`blocked`) is the same: Claude Code draws
     /// its question before it writes the call that asks it, so the read under
-    /// the dialog can find the prompt with nothing of the agent after it, and
-    /// the question would wait wordless. An agent whose session is read on a
+    /// the dialog can find no call for the dialog to be about, and the
+    /// question would wait wordless. An agent whose session is read on a
     /// cadence of its own (`requires_native_file_proof`) needs none.
     fn await_answer(&mut self, pane_id: &str, now: Instant) {
         let (Some(pane), Some(record)) = (self.panes.get_mut(pane_id), self.records.get(pane_id))
@@ -2211,7 +2211,8 @@ impl LabelWorker {
                 "pane_id": pane_id,
                 "session_id": record.native_session_id,
                 "state_change_seq": seq,
-                "message": "A stopped turn's answer never reached its session file; its end waits for the agent's next state change",
+                "status": pane.status,
+                "message": "A stopped turn's answer, or the call its dialog asks about, never reached its session file; the read waits for the agent's next state change",
             }));
         }
         pane.answer_unwritten = Some(AnswerWait {
@@ -3333,9 +3334,9 @@ fn owed_requests(
 /// Whether the stop the engine reads from the agent's screen has records the
 /// agent has not written yet ([`LabelWorker::await_answer`]). At rest, the
 /// operator's message still being the newest event is a turn whose answer
-/// is owed: only an answer or an interruption ends it. Under a dialog, the
-/// session's last prompt with no record of the agent after it is a call
-/// owed: the dialog asks about a call the agent has made.
+/// is owed: only an answer or an interruption ends it. Under a dialog, records
+/// that hold no question, plan or call without a result owe the call the
+/// dialog asks about, wherever it falls in the turn.
 fn stop_unwritten(
     status: &str,
     events: &[LabelEvent],
@@ -3343,10 +3344,7 @@ fn stop_unwritten(
 ) -> bool {
     match status {
         "idle" | "done" => newest_user_is_last(events),
-        "blocked" => {
-            turns.and_then(hide_session::turns::TurnTracker::ended)
-                == Some(hide_session::turns::TurnEnded::Unanswered)
-        }
+        "blocked" => turns.is_some_and(|turns| !turns.holds_open_call()),
         _ => false,
     }
 }
