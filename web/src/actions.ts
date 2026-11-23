@@ -539,10 +539,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
   /**
-   * A row with a View to look at brings its newest unseen View forward with
-   * the pane (PRD unseen-agent-views B3): the core does both in the pane's
-   * focus. A device's pane is focused on its device, and its View, which
-   * this core holds, follows in the checkout's focus.
+   * An agent's pane, wherever it lives. With `look`, the pane head's own eye
+   * (`LookButton`): its newest unseen View comes forward with the pane (PRD
+   * unseen-agent-views B3), the core doing both in the pane's focus; a
+   * device's pane is focused on its device, and its View, which this core
+   * holds, follows in the checkout's focus. A row in a list never passes
+   * one: it goes to the agent only, and its View's chip opens the View in
+   * focus mode (`openLook`, operator decision 2026-11-23).
    */
   const openAgent = (paneId: string, look?: LookAt) => {
     beginOpening({ paneId });
@@ -662,8 +665,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * first, so the pane arriving with the core's answer takes the keys only if
    * the operator has not moved them since (`pairEntryInput`).
    */
-  const askPairView = (payload: { pane_id?: string; display_id?: string }) => {
-    if (payload.pane_id) useUiStore.setState({ pairEntryInput: keyboardInputRevision() });
+  const askPairView = (payload: { pane_id?: string; display_id?: string; bring_forward?: true }, keys: "pane" | "desk" = "pane") => {
+    if (payload.pane_id) useUiStore.setState({ pairEntry: { input: keyboardInputRevision(), keys } });
     dispatch({ schema_version: 2, kind: "pair_view", payload });
   };
 
@@ -2884,7 +2887,32 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // An automation run's row opens the run in the automation screen, where opening it puts the row away; a View it opened has its own chip (operator decision 2026-11-21).
       const run = automationOpening(state.automations, agent);
       if (run) return this.openAutomation(run.id, run.run);
-      this.openAgent(paneId, agent?.look);
+      // The agent only: a View it opened stays to look at, behind its chip (operator decision 2026-11-23).
+      this.openAgent(paneId);
+    },
+
+    /**
+     * A View's chip under a row, or a 볼 것 notice (operator decision
+     * 2026-11-23): that View in focus mode, the pane of the agent that
+     * opened it on the left and the View in front of its desk on the right,
+     * with the keyboard. One `pair_view` that brings the pane's Workspace and
+     * device forward too, so it works from anywhere; looking at the View sees
+     * it as any look does. An automation run's View opens in the run's
+     * screen, laid out as focus mode already, which brings what the run
+     * opened forward (operator decision 2026-11-21).
+     */
+    openLook(paneId: string, look: LookAt) {
+      const state = useShellStore.getState();
+      const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
+      const run = automationOpening(state.automations, agent);
+      if (run) return this.openAutomation(run.id, run.run);
+      beginOpening({ paneId });
+      if (look.workspace_id && look.checkout_id) {
+        const view = state.rest?.navigator?.workspaces?.find((workspace) => workspace.id === look.workspace_id);
+        const checkout = view?.checkouts.find((one) => one.id === look.checkout_id);
+        if (view && checkout) ui().setViewFocusRequest({ workspace: workspaceKey({ device_id: view.device_id, path: checkout.path }), displayId: look.view_id, from: null });
+      }
+      askPairView({ pane_id: paneId, display_id: look.view_id, bring_forward: true }, "desk");
     },
 
     openAgent,

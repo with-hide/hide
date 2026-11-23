@@ -1678,7 +1678,11 @@ fn own_node(
     // helper root, which a moved core's login item runs. A daemon anywhere
     // else, a development build among them, installs nothing (PRD
     // device-parity D-19).
-    if let Ok(executable) = std::env::current_exe() {
+    // A login item's copy of the app's build installs the app's kit, from
+    // the package it stands in for (`always_on::app_package`).
+    if let Some(package) = crate::always_on::app_package() {
+        node = node.with_kit(hide_host::serve::KitPlace::Bundled(package.to_path_buf()));
+    } else if let Ok(executable) = std::env::current_exe() {
         node = node.with_kit(hide_host::serve::KitPlace::of_program(
             &executable,
             Some(&home),

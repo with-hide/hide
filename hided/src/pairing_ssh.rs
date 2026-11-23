@@ -84,6 +84,9 @@ pub enum Looked {
     Absent,
     /// Its Hide is too old to pair over SSH.
     UpdateThere,
+    /// Its Hide runs and refused the look, for a reason this build has no
+    /// state of its own for: never read as an older Hide.
+    Refused { code: String },
     /// Its Hide is installed and does not run: on a Mac, nobody is logged
     /// in.
     NotRunning { system: String },
@@ -344,6 +347,29 @@ pub(crate) fn start_core(login: &dyn Login, reach: &Reach) -> Result<(), &'stati
     }
 }
 
+/// Whether a refusal is a Hide's answer to a command or a request it does
+/// not know: its `hide` refused the words (`usage`), or its daemon the ask
+/// (`invalid_request`). Only that says the Hide there is older.
+fn unknown_there(answer: &Value) -> bool {
+    matches!(
+        answer["error"]["code"].as_str(),
+        Some("usage" | "invalid_request")
+    )
+}
+
+/// The code of a refusal that does not say the Hide there is older, logged
+/// with the step it ended, and the reason a switch or a pairing gives.
+fn refused_there(login: &dyn Login, step: &str, code: &str) -> &'static str {
+    hide_core::diagnostic!(serde_json::json!({
+        "component": "pairing",
+        "kind": "ssh.refused_there",
+        "step": step,
+        "alias": login.name(),
+        "code": code,
+    }));
+    "ssh_refused_there"
+}
+
 fn look_of(said: Said) -> Looked {
     match said {
         Said::NoProgram => Looked::Absent,
@@ -356,9 +382,13 @@ fn look_of(said: Said) -> Looked {
             Some(look) => Looked::NotRunning {
                 system: look["system"].as_str().unwrap_or_default().to_owned(),
             },
-            // A refusal with no look is an older Hide's answer to a command
-            // it does not know.
-            None => Looked::UpdateThere,
+            None if unknown_there(&answer) => Looked::UpdateThere,
+            None => Looked::Refused {
+                code: answer["error"]["code"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            },
         },
     }
 }
@@ -401,12 +431,20 @@ pub fn look(reach: &Reach, alias: &str) -> Looked {
 /// [`look`], on a login.
 pub(crate) fn look_on(login: &dyn Login, reach: &Reach) -> Looked {
     match run(login, reach, &["look-ssh"]) {
-        Ok(said) => look_of(said),
+        Ok(said) => logged_look(login, look_of(said)),
         Err(error) => {
             not_reached(login, "look", &error);
             Looked::NotReached
         }
     }
+}
+
+/// `looked`, with a refusal the look did not know logged.
+fn logged_look(login: &dyn Login, looked: Looked) -> Looked {
+    if let Looked::Refused { code } = &looked {
+        refused_there(login, "look", code);
+    }
+    looked
 }
 
 /// What the target answered to a pairing, and the addresses of the SSH
@@ -509,7 +547,12 @@ pub(crate) fn accept_on(
             Some("hide_unavailable" | "request_timeout") => "ssh_hide_not_running",
             Some("invalid_request") => "invalid_request",
             Some("device_unknown") => "device_unknown",
-            _ => "ssh_update_there",
+            Some("usage") => "ssh_update_there",
+            _ => refused_there(
+                login,
+                "accept",
+                answer["error"]["code"].as_str().unwrap_or_default(),
+            ),
         });
     }
     Ok(answer["value"].take())
@@ -686,7 +729,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
     let (looked, desktop) = match run(login, switch.reach, &["look-ssh"]) {
         Ok(said) => {
             let desktop = desktop_of(&said);
-            (look_of(said), desktop)
+            (logged_look(login, look_of(said)), desktop)
         }
         Err(error) => return Err(not_reached(login, "look", &error)),
     };
@@ -721,6 +764,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
             return Ok(Switched::InstallNeeded { system });
         }
         Looked::UpdateThere => return Err("ssh_update_there"),
+        Looked::Refused { .. } => return Err("ssh_refused_there"),
         Looked::NotRunning { .. } => return Err("ssh_hide_not_running"),
         Looked::NotReached => return Err(unreached),
     }
@@ -907,6 +951,17 @@ mod tests {
         assert_eq!(
             look_of(said(1, &line(json!({"ok":false,"error":{"code":"usage"}})))),
             Looked::UpdateThere
+        );
+        // A Hide of this build that refused the look, as a Windows PC's did
+        // when it could not place a caller over SSH, is no older Hide.
+        assert_eq!(
+            look_of(said(
+                1,
+                &line(json!({"ok":false,"error":{"code":"caller_origin_unavailable"}}))
+            )),
+            Looked::Refused {
+                code: "caller_origin_unavailable".to_owned()
+            }
         );
     }
 

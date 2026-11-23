@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guestGroups, guestPaneRefuses, guestPanes, guestTabs, isGuestPaneId, peerRows } from "./guestWork";
+import { guestGroups, guestPaneRefuses, guestPanes, guestPlaces, guestTabs, isGuestPaneId, peerRows } from "./guestWork";
 import type { SnapshotRest, Workspace } from "./snapshot";
 
 const KEY = "cd".repeat(32);
@@ -8,11 +8,11 @@ function project(id: string, path: string): Workspace {
   return { id, label: id, path, device_id: "local", checkouts: [{ id: `${id}-main`, path }] } as unknown as Workspace;
 }
 
-function rest(panes: { pane: string; folder?: string; since?: number }[]): SnapshotRest {
+function rest(panes: { pane: string; folder?: string; name?: string; since?: number }[]): SnapshotRest {
   return {
     navigator: {
       peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: false }],
-      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder })) }],
+      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder, name: pane.name })) }],
     },
   } as SnapshotRest;
 }
@@ -25,6 +25,11 @@ describe("another machine's work on this computer (PRD device-connect-iroh B10, 
     expect(guestPanes(rest([{ pane: "w1:p2" }]), [])[0]).toMatchObject({ label: "w1:p2", folder: null });
   });
 
+  it("names a pane by the name its machine told, its folder only when it told none (B10)", () => {
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api", name: "로그인 고치기" }, { pane: "w1:p2", folder: "/work/shop-api" }]), []);
+    expect(panes.map((pane) => [pane.label, pane.folder])).toEqual([["로그인 고치기", "/work/shop-api"], ["shop-api", "/work/shop-api"]]);
+  });
+
   it("stands a pane under this computer's project that holds its folder, and under its machine's name otherwise", () => {
     const projects = [project("shop", "/work/shop-api"), project("shop-web", "/work/shop-api/web"), project("other", "/work/shop")];
     const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api/web/src" }, { pane: "w1:p2", folder: "/work/shop-api" }, { pane: "w1:p3", folder: "/scratch/try", since: 0 }, { pane: "w1:p4", folder: "/work/shop-api-2" }]), projects);
@@ -35,6 +40,29 @@ describe("another machine's work on this computer (PRD device-connect-iroh B10, 
     // A tab strip holds the same machine's panes of the same place.
     const loose = panes.find((pane) => pane.label === "try")!;
     expect(guestTabs(panes, loose).map((pane) => pane.label)).toEqual(["try", "shop-api-2"]);
+  });
+
+  it("stands a pane under the checkout row that holds its folder, at its project's end when that checkout has no row", () => {
+    const modakbul = { id: "modakbul", label: "modakbul", path: "/work/modakbul", device_id: "local", checkouts: [{ id: "main", path: "/work/modakbul" }, { id: "login", path: "/work/modakbul/.worktrees/login" }] } as unknown as Workspace;
+    const panes = guestPanes(rest([
+      { pane: "w1:p1", folder: "/work/modakbul/docs", name: "강의 정산" },
+      { pane: "w1:p2", folder: "/work/modakbul/.worktrees/login", name: "로그인 시험" },
+      { pane: "w1:p3", folder: "/work/modakbul", name: "리마인드 확인" },
+      { pane: "w1:p4", folder: "/scratch", name: "정리" },
+    ]), [modakbul]);
+    const names = (list: readonly { label: string }[] | undefined) => (list ?? []).map((pane) => pane.label);
+    // Both checkouts drawn as rows: each pane under the deepest checkout that holds its folder, in the order they came.
+    const open = guestPlaces(panes, "modakbul", new Set(["main", "login"]));
+    expect(names(open.byCheckout.get("main"))).toEqual(["강의 정산", "리마인드 확인"]);
+    expect(names(open.byCheckout.get("login"))).toEqual(["로그인 시험"]);
+    expect(open.atEnd).toEqual([]);
+    // A checkout folded away, or the main one the project's row stands for, leaves its panes at the project's end.
+    const folded = guestPlaces(panes, "modakbul", new Set(["main"]));
+    expect(names(folded.byCheckout.get("main"))).toEqual(["강의 정산", "리마인드 확인"]);
+    expect(names(folded.atEnd)).toEqual(["로그인 시험"]);
+    expect(names(guestPlaces(panes, "modakbul", new Set()).atEnd)).toEqual(["강의 정산", "로그인 시험", "리마인드 확인"]);
+    // A pane in no folder of the project is not the project's.
+    expect([...open.byCheckout.values()].flat().concat(open.atEnd).some((pane) => pane.label === "정리")).toBe(false);
   });
 
   it("does only the closed set to another machine's pane (D-74)", () => {

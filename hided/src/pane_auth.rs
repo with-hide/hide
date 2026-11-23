@@ -807,6 +807,17 @@ fn own_install() -> Option<&'static str> {
         .as_deref()
 }
 
+/// The installation this daemon answers a pane naming `asked` as: that name
+/// when it is one this daemon also answers for (`hide_host::kit::also_answers`,
+/// a login core's other name), so the answer confirms the pane's own
+/// (`install::confirm`), and [`own_install`] otherwise.
+fn answering_as(asked: Option<&str>) -> Option<&str> {
+    match asked {
+        Some(asked) if hide_host::kit::also_answers(asked) => Some(asked),
+        _ => own_install(),
+    }
+}
+
 /// Whether `peer` runs in a pane another machine's node holds on this
 /// account: the device folder was this machine's own node's until the two
 /// were split, and the paired machine's node took it over with its panes
@@ -1438,7 +1449,7 @@ fn answer_bootstrap(
             crate::access::answer_bootstrap(peer, request, ask, registry, core, engine, port);
         let mut answer = answer;
         if answer["ok"] == true {
-            install::stamp(&mut answer, own_install());
+            install::stamp(&mut answer, answering_as(request.install.as_deref()));
         }
         if writeln!(stream, "{answer}").is_err()
             && let Some(path) = issued
@@ -1540,9 +1551,15 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) =
-                attest_bootstrap(peer, request, engine, core, own_install(), &guests_pane)
-                    .map_err(|refused| refused.reason())?;
+            let (attestation, _) = attest_bootstrap(
+                peer,
+                request,
+                engine,
+                core,
+                answering_as(request.install.as_deref()),
+                &guests_pane,
+            )
+            .map_err(|refused| refused.reason())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1580,7 +1597,7 @@ fn answer_bootstrap(
             };
             let mut answer =
                 crate::hook_request::answer(core, &cap, hook, executor, lineage, desktop);
-            install::stamp(&mut answer, own_install());
+            install::stamp(&mut answer, answering_as(request.install.as_deref()));
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");
             }
@@ -1612,6 +1629,7 @@ fn answer_bootstrap(
         return;
     }
     let mut handed_to = None;
+    let asked = parsed.as_ref().and_then(|request| request.install.clone());
     let result = read
         .and({
             if line.len() <= 4096 {
@@ -1622,17 +1640,23 @@ fn answer_bootstrap(
         })
         .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
-            let (attestation, pane_reason) =
-                match attest_bootstrap(peer, &request, engine, core, own_install(), &guests_pane) {
-                    Ok(attested) => attested,
-                    Err(refused) => {
-                        let reason = refused.reason();
-                        if let Refused::HandedTo(install) = refused {
-                            handed_to = Some(install);
-                        }
-                        return Err(reason);
+            let (attestation, pane_reason) = match attest_bootstrap(
+                peer,
+                &request,
+                engine,
+                core,
+                answering_as(request.install.as_deref()),
+                &guests_pane,
+            ) {
+                Ok(attested) => attested,
+                Err(refused) => {
+                    let reason = refused.reason();
+                    if let Refused::HandedTo(install) = refused {
+                        handed_to = Some(install);
                     }
-                };
+                    return Err(reason);
+                }
+            };
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1666,7 +1690,7 @@ fn answer_bootstrap(
     let answer = match (&result, &wire) {
         (Ok(_), Some(reference)) => {
             let mut answer = json!({"ok": true, "reference": reference});
-            install::stamp(&mut answer, own_install());
+            install::stamp(&mut answer, answering_as(asked.as_deref()));
             answer
         }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),

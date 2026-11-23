@@ -41,6 +41,7 @@
 
 use super::*;
 use hide_host::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
+use hide_node_link::device::UnsupportedCause;
 
 /// The words that read the script as one line from the link's own input and
 /// run it, as a program run without a shell (`wsl.exe -e`) takes them.
@@ -330,7 +331,10 @@ pub(crate) enum ProbeError {
     /// The device never answered.
     Stopped(Stop),
     /// It answered, and it is not a machine this build runs on.
-    Unsupported(String),
+    Unsupported {
+        cause: UnsupportedCause,
+        reason: String,
+    },
 }
 
 /// Sends the script and reads the account's answer, skipping what a login
@@ -353,11 +357,15 @@ pub(crate) fn probe(pipe: &mut dyn Pipe, until: Instant) -> Result<Facts, ProbeE
             send(pipe, powershell_script())?;
             continue;
         }
-        return read_probe(&fields).map_err(ProbeError::Unsupported);
+        return read_probe(&fields)
+            .map_err(|(cause, reason)| ProbeError::Unsupported { cause, reason });
     }
-    Err(ProbeError::Unsupported(format!(
-        "The device printed more than {MAX_GREETING_LINES} lines before Hide's start script answered"
-    )))
+    Err(ProbeError::Unsupported {
+        cause: UnsupportedCause::Probe,
+        reason: format!(
+            "The device printed more than {MAX_GREETING_LINES} lines before Hide's start script answered"
+        ),
+    })
 }
 
 /// A line of the script's (`HIDE1` and tab-separated fields), or `None` for
@@ -368,19 +376,23 @@ fn answer(line: &[u8]) -> Option<Vec<String>> {
     (fields.next()? == "HIDE1").then(|| fields.map(str::to_owned).collect())
 }
 
-fn read_probe(fields: &[String]) -> Result<Facts, String> {
+/// The account's answer, or why the device is not one this build serves,
+/// with the class analytics counts.
+fn read_probe(fields: &[String]) -> Result<Facts, (UnsupportedCause, String)> {
     let [step, user, home, system, machine, id, digest, unpack] = fields else {
-        return Err(format!(
-            "The device answered an unreadable probe: {fields:?}"
+        return Err((
+            UnsupportedCause::Probe,
+            format!("The device answered an unreadable probe: {fields:?}"),
         ));
     };
     if step != "probe" {
-        return Err(format!(
-            "The device's start script failed: {}",
-            fields.join(" ")
+        return Err((
+            UnsupportedCause::Probe,
+            format!("The device's start script failed: {}", fields.join(" ")),
         ));
     }
-    let (os, arch) = platform_of(&format!("{system} {machine}"))?;
+    let (os, arch) = platform_of(&format!("{system} {machine}"))
+        .map_err(|reason| (UnsupportedCause::Platform, reason))?;
     let windows = os == "windows";
     let named = if windows {
         windows_user_name(user)
@@ -388,8 +400,9 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         hide_platform::wsl::valid_user_name(user)
     };
     if !named {
-        return Err(format!(
-            "The device's account {user:?} is not a name Hide can run as"
+        return Err((
+            UnsupportedCause::UserName,
+            format!("The device's account {user:?} is not a name Hide can run as"),
         ));
     }
     // A home in the wire spelling of the device's own system: `/home/me`, or
@@ -400,17 +413,21 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         home.starts_with('/')
     };
     if !rooted || home.chars().any(char::is_control) {
-        return Err("The device's account has no usable home folder".to_owned());
+        return Err((
+            UnsupportedCause::Home,
+            "The device's account has no usable home folder".to_owned(),
+        ));
     }
     if digest != "yes" {
-        return Err(
+        return Err((
+            UnsupportedCause::Checksum,
             "The device has neither sha256sum nor shasum, which Hide checks its install with"
                 .to_owned(),
-        );
+        ));
     }
     let machine_id = id.trim().to_lowercase();
     if !valid_machine_id(&machine_id) {
-        return Err(NO_MACHINE_ID.to_owned());
+        return Err((UnsupportedCause::MachineId, NO_MACHINE_ID.to_owned()));
     }
     Ok(Facts {
         user: user.clone(),

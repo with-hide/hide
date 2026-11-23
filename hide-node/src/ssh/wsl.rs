@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, CapabilityReport, DeviceTransport, DialedTransport, EstablishError, Established,
-    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, Wake, WslDistribution,
-    WslListing,
+    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, UnsupportedCause, Wake,
+    WslDistribution, WslListing,
 };
 use hide_node_link::protocol::{Call, Hello};
 use hide_platform::wsl::Distribution;
@@ -206,7 +206,7 @@ impl WslAccess {
         let installed = (|pipe: &mut UnaskedStart| {
             let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
                 Ok(facts) => facts,
-                Err(bootstrap::ProbeError::Unsupported(reason)) => return Err(reason),
+                Err(bootstrap::ProbeError::Unsupported { reason, .. }) => return Err(reason),
                 Err(bootstrap::ProbeError::Stopped(stop)) => {
                     return Err(WslDevice::stopped(pipe, stop));
                 }
@@ -233,9 +233,10 @@ impl WslAccess {
             .into_iter()
             .find(|found| found.name == name)
             .ok_or_else(|| {
-                EstablishError::Unsupported(format!(
-                    "The WSL distribution {name} is not installed on this PC"
-                ))
+                EstablishError::unsupported(
+                    UnsupportedCause::WslMissing,
+                    format!("The WSL distribution {name} is not installed on this PC"),
+                )
             })
     }
 }
@@ -426,16 +427,31 @@ impl DialedTransport for WslDevice {
         stage("distribution");
         let distribution = self.access.distribution(&self.distro)?;
         if distribution.wsl_version != 2 {
-            return Err(EstablishError::Unsupported(format!(
-                "{} runs on WSL 1; convert it with `wsl --set-version {} 2` to connect it",
-                self.distro, self.distro
-            )));
+            return Err(EstablishError::unsupported(
+                UnsupportedCause::Wsl1,
+                format!(
+                    "{} runs on WSL 1; convert it with `wsl --set-version {} 2` to connect it",
+                    self.distro, self.distro
+                ),
+            ));
         }
-        if !distribution.installed || distribution.first_run_pending {
-            return Err(EstablishError::Unsupported(format!(
-                "Finish setting up {} first: open it once and create its user",
-                self.distro
-            )));
+        // Both read as one sentence on the row; analytics tells WSL's own
+        // install apart from a first run nobody did.
+        let unfinished = if !distribution.installed {
+            Some(UnsupportedCause::WslInstalling)
+        } else if distribution.first_run_pending {
+            Some(UnsupportedCause::WslSetup)
+        } else {
+            None
+        };
+        if let Some(cause) = unfinished {
+            return Err(EstablishError::unsupported(
+                cause,
+                format!(
+                    "Finish setting up {} first: open it once and create its user",
+                    self.distro
+                ),
+            ));
         }
         if wake == Wake::NotAllowed {
             stage("running");
@@ -472,18 +488,18 @@ impl DialedTransport for WslDevice {
         let started = (|pipe: &mut UnaskedStart| -> Result<(bootstrap::Installed, HostIdentity), EstablishError> {
             let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
                 Ok(facts) => facts,
-                Err(bootstrap::ProbeError::Unsupported(reason)) => {
-                    return Err(EstablishError::Unsupported(reason));
+                Err(bootstrap::ProbeError::Unsupported { cause, reason }) => {
+                    return Err(EstablishError::unsupported(cause, reason));
                 }
                 Err(bootstrap::ProbeError::Stopped(stop)) => {
                     return Err(EstablishError::Helper(Self::stopped(pipe, stop)));
                 }
             };
             if facts.os != "linux" {
-                return Err(EstablishError::Unsupported(format!(
-                    "The distribution reported {}, not Linux",
-                    facts.os
-                )));
+                return Err(EstablishError::unsupported(
+                    UnsupportedCause::Platform,
+                    format!("The distribution reported {}, not Linux", facts.os),
+                ));
             }
             let identity = identity_of(&distribution, &facts.user);
             if let Some(bound) = consent.identity.as_ref()

@@ -356,6 +356,9 @@ pub fn next_action(code: &str) -> &'static str {
             "That machine has no Hide of its own: install Hide there and add it by a link it shares"
         }
         "ssh_update_there" => "Update Hide on that machine, then add it again",
+        "ssh_refused_there" => {
+            "Hide on that machine refused the request that came over SSH: this machine's diagnostic log names its reason; try again, or add the machine by a link it shares"
+        }
         "ssh_hide_not_running" => {
             "Hide is not running on that machine: log in there and open Hide, then add it again"
         }

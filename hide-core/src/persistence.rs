@@ -279,6 +279,10 @@ struct StoredUiState {
     /// The archived sessions; absent loads as none.
     #[serde(default)]
     session_archive: crate::session_archive::SessionArchive,
+    /// The agents' waits (PRD core-wait B26); absent loads as none, and a
+    /// store no wait was ever made in is not written.
+    #[serde(default, skip_serializing_if = "crate::waits::WaitStore::is_empty")]
+    waits: crate::waits::WaitStore,
     /// Absent in a store written before the recent list existed, which loads
     /// empty. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
@@ -880,6 +884,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 archive.after_load();
                 archive
             },
+            waits: stored.waits,
             recent_checkouts: {
                 let mut recent = stored.recent_checkouts;
                 recent.truncate(crate::model::RECENT_CHECKOUT_LIMIT);
@@ -1075,6 +1080,7 @@ pub fn save(
         }),
         agent_sleep: state.agent_sleep.clone(),
         session_archive: state.session_archive.clone(),
+        waits: state.waits.clone(),
         recent_checkouts: state.recent_checkouts.clone(),
         recent_pane_ids: state.recent_pane_ids.clone(),
         operator_tab_names: state.operator_tab_names.clone(),

@@ -1063,6 +1063,7 @@ HELP_SOURCES = (
     "hided/src/pane_cli.rs",
     "hided/src/phone_cli.rs",
     "hided/src/session_cli.rs",
+    "hided/src/wait_cli.rs",
 )
 NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),

@@ -345,6 +345,7 @@ impl DormantRecord {
                     .is_some_and(|adapter| adapter.resume.is_some()),
             checking: false,
             cause: self.cause,
+            wait: None,
         }
     }
 }
@@ -487,6 +488,10 @@ pub struct SleepingSessionSnapshot {
     /// Why Hide put it to sleep, when its hover says so; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<super::SleepCause>,
+    /// The open wait it sleeps on (PRD core-wait D-15, B18), laid by the
+    /// runtime; absent for one asleep with no wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<crate::waits::WaitLine>,
 }
 
 /// A sleeping record for tests that need one without a runtime.

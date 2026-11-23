@@ -193,6 +193,13 @@ pub const PR_FEEDBACK_FIELDS: &str = "body,statusCheckRollup,reviews";
 /// project's list does not hold it: open, closed or merged.
 pub const OUTSIDE_PR_FIELDS: &str = "state";
 
+/// The fields a CI wait's pull request is read for by its number when the
+/// project's list does not hold it (PRD core-wait D-05): the list's own
+/// fields and the open list's checks, so it is judged as the list would
+/// judge it. `PULL_REQUEST_FIELDS` with `statusCheckRollup`, which a test
+/// keeps equal.
+pub const WAIT_PR_FIELDS: &str = "number,title,headRefName,headRefOid,isCrossRepository,baseRefName,state,reviewDecision,isDraft,url,mergedAt,updatedAt,createdAt,closedAt,closingIssuesReferences,author,mergeStateStatus,reviewRequests,statusCheckRollup";
+
 /// The fields a plan step's `--pr` is checked by (PRD hide-plan-delegate
 /// D-19): the branch it was made from, whether that branch is in another
 /// repository, and its address, which names the repository it is in.
@@ -648,6 +655,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
             && (arguments[4] == "body"
                 || arguments[4] == PR_FEEDBACK_FIELDS
                 || arguments[4] == OUTSIDE_PR_FIELDS
+                || arguments[4] == WAIT_PR_FIELDS
                 || arguments[4] == PLAN_PR_FIELDS))
         || (arguments.len() == 7
             && arguments[..2] == ["issue", "view"]
@@ -1527,10 +1535,15 @@ mod tests {
             issues(ISSUE_LIST_FIELDS),
             issues(ISSUE_LIST_PROJECT_FIELDS),
             vec!["pr", "view", "1232", "--json", OUTSIDE_PR_FIELDS],
+            vec!["pr", "view", "1232", "--json", WAIT_PR_FIELDS],
             vec!["pr", "view", "1232", "--json", PLAN_PR_FIELDS],
         ] {
             assert!(allowed(&arguments), "{arguments:?} must be allowed");
         }
+        assert_eq!(
+            WAIT_PR_FIELDS,
+            format!("{PULL_REQUEST_FIELDS},statusCheckRollup")
+        );
         let mut with_web = pr_list("all", PULL_REQUEST_FIELDS);
         with_web.push("--web");
         let mut token = AUTH_STATUS.to_vec();
@@ -1548,6 +1561,8 @@ mod tests {
             vec!["pr", "list"],
             vec!["pr", "view", "main", "--json", OUTSIDE_PR_FIELDS],
             vec!["pr", "view", "main", "--json", PLAN_PR_FIELDS],
+            vec!["pr", "view", "main", "--json", WAIT_PR_FIELDS],
+            vec!["pr", "view", "1232", "--json", "statusCheckRollup"],
             vec!["pr", "view", "1232", "--json", "state,body"],
         ] {
             assert!(!allowed(&arguments), "{arguments:?} must be refused");

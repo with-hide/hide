@@ -83,7 +83,28 @@ const CHANGE_FIELDS: &str = "iid title state draft webUrl sourceBranch targetBra
 /// The verdict still comes from `detailedMergeStatus` alone.
 pub fn merge_requests_query() -> String {
     format!(
-        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus mergeable approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
+        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}",
+        open_fields()
+    )
+}
+
+/// What one open merge request is read with: its fields, what places it in
+/// the list (approvals, reviewers, author, merge status) and its head
+/// pipeline with its jobs. The list reads each open one with these, and a
+/// read by number reads its one with the same, so both judge it alike.
+fn open_fields() -> String {
+    format!(
+        "{CHANGE_FIELDS} detailedMergeStatus mergeable approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}"
+    )
+}
+
+/// One merge request by its number, of any state, read with what the list
+/// reads an open one with ([`open_fields`]): a CI wait on one the list no
+/// longer holds is judged from it as the list would judge it.
+pub fn listed_query() -> String {
+    format!(
+        "query=query HideGitlabMergeRequestListed($project:ID!,$iid:String!){{currentUser{{username}} project(fullPath:$project){{mergeRequest(iid:$iid){{{}}}}}}}",
+        open_fields()
     )
 }
 
@@ -127,6 +148,16 @@ fn graphql(query: String, variables: &[(&str, &str)]) -> Vec<String> {
 /// The list read of `project`.
 pub fn merge_requests_arguments(project: &str) -> Option<Vec<String>> {
     is_project_path(project).then(|| graphql(merge_requests_query(), &[("project", project)]))
+}
+
+/// The read of merge request `iid` of `project` as the list reads one.
+pub fn listed_arguments(project: &str, iid: u32) -> Option<Vec<String>> {
+    (is_project_path(project) && iid > 0).then(|| {
+        graphql(
+            listed_query(),
+            &[("project", project), ("iid", &iid.to_string())],
+        )
+    })
 }
 
 /// The card read of merge request `iid` of `project`.
@@ -342,7 +373,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
 /// sent as a write and a write endpoint cannot be reached at all.
 fn api_allowed(method: &str, endpoint: &str, fields: &[&str], arguments: &[&str]) -> bool {
     match (method, endpoint) {
-        // A GraphQL request is always a POST; only the three fixed queries
+        // A GraphQL request is always a POST; only the four fixed queries
         // ride it, each rebuilt from its variables and compared whole.
         ("POST", "graphql") => graphql_allowed(fields, arguments),
         // A REST read is a GET of one of the three endpoints, rebuilt from
@@ -434,6 +465,10 @@ fn graphql_allowed(fields: &[&str], arguments: &[&str]) -> bool {
         value("iid")
             .and_then(|iid| iid.parse::<u32>().ok().filter(|_| !iid.starts_with('0')))
             .and_then(|iid| card_arguments(project, iid))
+    } else if query == listed_query().trim_start_matches("query=") {
+        value("iid")
+            .and_then(|iid| iid.parse::<u32>().ok().filter(|_| !iid.starts_with('0')))
+            .and_then(|iid| listed_arguments(project, iid))
     } else {
         let commits: Vec<String> = (0..)
             .map_while(|index| value(&format!("c{index}")).map(str::to_owned))
@@ -508,6 +543,7 @@ mod tests {
         let lines = [
             merge_requests_arguments(PROJECT).unwrap(),
             card_arguments(PROJECT, 12).unwrap(),
+            listed_arguments(PROJECT, 12).unwrap(),
             commit_checks_arguments(PROJECT, &[SHA.to_owned()]).unwrap(),
             commit_checks_arguments(PROJECT, &[SHA.to_owned(), "f".repeat(40)]).unwrap(),
         ];
@@ -607,6 +643,15 @@ mod tests {
         let mut not_number = card;
         not_number[11] = "iid=12 OR 1".to_owned();
         assert!(!allowed(&words(&not_number)));
+        assert!(listed_arguments(PROJECT, 0).is_none());
+        let listed = listed_arguments(PROJECT, 12).unwrap();
+        let mut leading_zero = listed.clone();
+        leading_zero[11] = "iid=012".to_owned();
+        assert!(!allowed(&words(&leading_zero)));
+        // The read by number asks exactly what the list asks of an open one.
+        let fields = open_fields();
+        assert!(merge_requests_query().contains(&format!("nodes{{{fields}}}")));
+        assert!(listed[7].contains(&format!("mergeRequest(iid:$iid){{{fields}}}")));
 
         let commits = |count: usize| -> Vec<String> {
             (0..count).map(|index| format!("{index:040x}")).collect()

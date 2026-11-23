@@ -282,6 +282,9 @@ fn run_coordinator(
                                 SessionSyncTarget::Local { .. } => {
                                     guard.tick_agent_sleep(now_unix_ms)
                                         | guard.tick_automations(now_unix_ms)
+                                        // Every machine's waits are this
+                                        // core's (PRD core-wait D-10).
+                                        | guard.tick_waits(now_unix_ms)
                                 }
                                 SessionSyncTarget::Remote { target_id, .. } => {
                                     guard.tick_node_agent_sleep(target_id, now_unix_ms)
@@ -424,7 +427,7 @@ fn run_coordinator(
                     return;
                 };
                 if let Some(poll) = reader.read_if_due(request)
-                    && !ingest_github_poll(&context, poll)
+                    && !ingest_github_poll(&context, *host, poll)
                 {
                     return;
                 }
@@ -450,6 +453,24 @@ fn run_coordinator(
                 {
                     return;
                 }
+            }
+        }
+
+        // With no window, the projects an open wait reads are read on their
+        // host's read clock, and only they (PRD core-wait D-12).
+        if read_worktrees
+            && !window_attached
+            && matches!(context.target, SessionSyncTarget::Local { .. })
+            && let Some(reader) = github_reader.as_mut()
+        {
+            let Some(request) = read_github_wait_request(&context) else {
+                return;
+            };
+            if let Some(request) = request
+                && let Some(github) = reader.read_if_due(request)
+                && !publish_github_part(&context, github)
+            {
+                return;
             }
         }
 
@@ -1420,6 +1441,37 @@ fn read_github_request(
     Some(request)
 }
 
+/// The GitHub read due now with no window attached: the projects an open
+/// wait reads, or none. The outer none is a core that is gone.
+fn read_github_wait_request(
+    context: &SessionSyncContext,
+) -> Option<Option<crate::code_host::read::GithubRequest>> {
+    let runtime = context.runtime.upgrade()?;
+    let request = runtime.lock().ok()?.github_wait_request(Instant::now());
+    drop(runtime);
+    Some(request)
+}
+
+/// Takes the answer to a read of some projects (`read_github_wait_request`).
+/// False when the core is gone.
+fn publish_github_part(
+    context: &SessionSyncContext,
+    answer: crate::code_host::read::GithubAnswer,
+) -> bool {
+    let Some(runtime) = context.runtime.upgrade() else {
+        return false;
+    };
+    let changed = match runtime.lock() {
+        Ok(mut guard) => guard.ingest_github_part(answer.snapshot, &answer.request),
+        Err(_) => return false,
+    };
+    drop(runtime);
+    if changed {
+        context.notifier.notify();
+    }
+    true
+}
+
 /// What `host`'s watch reads now: this machine's projects on it with open
 /// pull requests, built from the last answers under the lock and read after
 /// it is released.
@@ -1438,7 +1490,11 @@ fn read_github_poll_request(
 
 /// Hands the projects the poll saw change to the runtime, which asks the full
 /// read for them by the rule a look follows. False when the core is gone.
-fn ingest_github_poll(context: &SessionSyncContext, poll: crate::code_host::WatchAnswer) -> bool {
+fn ingest_github_poll(
+    context: &SessionSyncContext,
+    host: crate::code_host::Host,
+    poll: crate::code_host::WatchAnswer,
+) -> bool {
     let Some(runtime) = context.runtime.upgrade() else {
         return false;
     };
@@ -1446,6 +1502,7 @@ fn ingest_github_poll(context: &SessionSyncContext, poll: crate::code_host::Watc
         return false;
     };
     guard.note_polled_changes(poll.changed);
+    guard.note_host_resting(host, poll.resting_until);
     let held = guard.note_poll_held(poll.held);
     drop(guard);
     drop(runtime);

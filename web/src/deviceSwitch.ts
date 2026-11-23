@@ -57,6 +57,8 @@ export function switchFailureKey(reason: string | null | undefined): MessageKey 
       return "devices.switch.failed.wslNotReached";
     case "ssh_update_there":
       return "pairing.ssh.updateThere";
+    case "ssh_refused_there":
+      return "pairing.ssh.refusedThere";
     case "ssh_hide_not_running":
       return "pairing.ssh.notRunning";
     case "ssh_core_not_started":

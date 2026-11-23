@@ -73,10 +73,14 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     const ship = map.locator('[data-mission-node="ship"]');
     await expect(ship.locator('[data-node-gate="ahead"]')).toHaveText("배포해도 될지");
     await expect(ship.locator("[data-node-turn], [data-node-gate-tag]")).toHaveCount(0);
-    // The waiting node has no worker: an hourglass and its word where one would be, and its pull request as its line (B12).
+    // The waiting node has no worker: its head's mark is how its wait stands and its line is what it waits for, its pull request
+    // in one sentence (B12; option A of the operator's decision on pull request 2848). Without a code host to read, its wait may
+    // stand unread, which is still a wait.
     const wait = map.locator('[data-mission-node="wait"]');
-    await expect(wait.locator("[data-node-run] [data-node-waiting]")).toHaveText("Watching");
-    await expect(wait.locator("[data-node-foot] [data-line-pr]")).toHaveText("↗#77");
+    await expect(wait.locator("[data-node-run]")).toHaveCount(0);
+    await expect(wait.locator("[data-node-wait-state]")).toHaveAttribute("data-node-wait-state", /^(waiting|unread)$/);
+    await expect(wait.locator('[data-node-line="wait"]')).toHaveAttribute("data-wait-kind", "pr");
+    await expect(wait.locator("[data-wait-condition]")).toHaveText("if #77 merges");
     await screenshot(page, "mission-presets-plan-desktop");
 
     await mission(conductor, ["start"]);
@@ -113,7 +117,9 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
       await expect(phoneFoot(key)).toHaveText(name);
     }
     await expect(phone.locator('[data-mission-node="ship"] [data-node-gate="open"]')).toHaveText("배포해도 될지");
-    await expect(phone.locator('[data-mission-node="wait"] [data-node-waiting]')).toHaveText("Watching");
+    const phoneWait = phone.locator('[data-mission-node="wait"]');
+    await expect(phoneWait.locator("[data-node-wait-state]")).toHaveAttribute("data-node-wait-state", /^(waiting|unread)$/);
+    await expect(phoneWait.locator("[data-wait-condition]")).toHaveText("if #77 merges");
     await screenshot(phone, "mission-presets-asking-phone");
   } finally {
     await phoneContext?.close();

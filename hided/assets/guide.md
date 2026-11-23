@@ -11,7 +11,7 @@ Every pane, agent and letter command here is a `hide` command; there is no other
 
 - Your session's start note from Hide, when there is one, names your checkout, the commands this pane may run and the exact prefix to run them with; use that prefix, and when the note and this guide differ, the note is right for this pane.
 - `hide workspace info` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
-- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help` and `hide mission help` are the guides to their topics.
+- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide wait help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
 
 ## Letters
@@ -65,6 +65,19 @@ hide agent end <id> [--actor <id>] [--keep-pane]
   `hide agent end <id>` instead ends its registration and closes its pane, which ends the agent and every program it started; its conversation waits under 보관됨, where 이어가기 resumes it, and `--keep-pane` ends only the registration.
   To end yourself, run `hide agent end <your id> --keep-pane`: without it your own pane closes, and the command never gets its answer.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
+
+## Waiting
+
+```
+hide wait pr <number> [--ci] [--for <2h|3d>]
+hide wait branch <name> [--for <2h|3d>]
+hide wait mission <id> [--node <key>] [--for <2h|3d>]
+hide wait list        hide wait cancel <wait-id>        hide wait help
+```
+
+- When your next step needs a pull request merged, its CI ended, a branch in main, or another mission or one of its nodes finished, ask Hide to wait instead of polling in a shell: `hide wait` answers its id, target and deadline (7 days unless `--for` says otherwise), and running it again for the same target answers the same wait.
+- Then end your turn. Resting off the operator's screen with no letter unread, you are put to sleep as after a report; one Hide notice tells you the wait was met, failed (closed without a merge, CI failed with the checks named, mission cancelled, node dropped) or passed its deadline, and wakes you if you sleep.
+- A Conductor waits inside its plan with a waiting node (`kind: wait`) instead; `hide wait help` has the targets, limits and refusals.
 
 ## Agent profiles
 

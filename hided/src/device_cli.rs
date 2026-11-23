@@ -794,6 +794,9 @@ fn add_alias(
         Some("update_there") => eprintln!(
             "Hide on {alias} is too old to connect as a Hide: update it there to connect that way. Adding it as an SSH device."
         ),
+        Some("refused") => eprintln!(
+            "Hide on {alias} refused the request that came over SSH (this machine's diagnostic log names its reason): connecting as a Hide needs it to answer. Adding it as an SSH device."
+        ),
         Some("not_running") => eprintln!(
             "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide. Adding it as an SSH device."
         ),

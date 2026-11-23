@@ -10,6 +10,8 @@ use super::super::{
     CLI_NAME, EstablishError, HELPER_NAME, HOLDER_NAME, HOOKS_NAME, HelperPackages, Payload,
     device_program, platform_label, read_package,
 };
+use hide_node_link::device::UnsupportedCause;
+
 use super::cache;
 use super::contract::{CONTRACT, admit};
 use hide_kit::holders::CONPTY_SOURCE;
@@ -49,7 +51,15 @@ impl HelperPackages {
         // they would be another build's.
         let own = os == std::env::consts::OS && arch == std::env::consts::ARCH;
         if own || CONTRACT.kit(os, arch).is_none() {
-            return Err(EstablishError::Unsupported(
+            // This platform's programs come only from this build; another
+            // platform without a kit gets none from anywhere.
+            let cause = if own {
+                UnsupportedCause::Build
+            } else {
+                UnsupportedCause::Platform
+            };
+            return Err(EstablishError::unsupported(
+                cause,
                 self.find(os, arch).unwrap_err(),
             ));
         }
@@ -58,11 +68,14 @@ impl HelperPackages {
                 || "this build's folder".to_owned(),
                 |dir| dir.display().to_string(),
             );
-            return Err(EstablishError::Unsupported(format!(
-                "This Hide build ({}) has no published release to download the {} {arch} device kit from; put that device's programs in {folder} as <name>-{os}-{arch} (desktop/scripts/device-helpers.mjs stage unpacks a release or CI kit there)",
-                self.release.version,
-                platform_label(os)
-            )));
+            return Err(EstablishError::unsupported(
+                UnsupportedCause::Build,
+                format!(
+                    "This Hide build ({}) has no published release to download the {} {arch} device kit from; put that device's programs in {folder} as <name>-{os}-{arch} (desktop/scripts/device-helpers.mjs stage unpacks a release or CI kit there)",
+                    self.release.version,
+                    platform_label(os)
+                ),
+            ));
         }
         Ok(Source::Release)
     }
@@ -98,12 +111,13 @@ impl HelperPackages {
         if let Source::Release = self.source(os, arch)? {
             return self.release_kit(os, arch);
         }
-        let kit = admit(os, arch, platform_label(os)).map_err(EstablishError::Unsupported)?;
+        let kit = admit(os, arch, platform_label(os))
+            .map_err(|reason| EstablishError::unsupported(UnsupportedCause::Platform, reason))?;
         let mut payload = self.local(os, arch)?;
         // A build that does not carry the holder for the device's system
         // connects nothing rather than a node that could run no pane.
         let holder = self.find_built_program(HOLDER_NAME, os, arch).map_err(|()| {
-            EstablishError::Unsupported(format!(
+            EstablishError::unsupported(UnsupportedCause::Build, format!(
                 "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
                 platform_label(os)
             ))
@@ -121,10 +135,13 @@ impl HelperPackages {
         // files a release kit carries, and nothing else in the folder.
         if !kit.runtime.is_empty() {
             let lacks = |what: &str| {
-                EstablishError::Unsupported(format!(
-                    "This Hide build does not include the pane holder's ConPTY runtime{what} for {} {arch}; the core's own engine cannot run this device's panes",
-                    platform_label(os)
-                ))
+                EstablishError::unsupported(
+                    UnsupportedCause::Build,
+                    format!(
+                        "This Hide build does not include the pane holder's ConPTY runtime{what} for {} {arch}; the core's own engine cannot run this device's panes",
+                        platform_label(os)
+                    ),
+                )
             };
             let folder = self
                 .find_built_folder(CONPTY_SOURCE, os, arch)
@@ -152,7 +169,9 @@ impl HelperPackages {
     /// the folder does not carry is left out and named, and the kit on the
     /// device reports it as missing from the build.
     pub(in crate::ssh) fn local(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
+        let helper = self
+            .find(os, arch)
+            .map_err(|reason| EstablishError::unsupported(UnsupportedCause::Build, reason))?;
         let helper = read_package(&device_program(HELPER_NAME, os), &helper, os, arch).map_err(
             |reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason),
         )?;

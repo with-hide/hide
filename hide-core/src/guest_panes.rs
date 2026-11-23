@@ -50,6 +50,10 @@ pub struct GuestPane {
     /// proved only by its folder is ([`folder_call`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// The name the guest's core shows the pane by, once it told one
+    /// (`work_names`, B10): what its row is called here, else its folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Whether `id` can name a guest in a pane's address: not empty, bounded,
@@ -58,6 +62,14 @@ pub fn device_names_a_guest(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_DEVICE_BYTES
         && hide_node_link::address::device_id_is_unambiguous(id)
+}
+
+/// Whether `name` is one a row draws: one line, not blank, bounded as the
+/// guest's core bounds what it tells (`work_names::MAX_NAME_CHARS`).
+pub fn name_is_shown(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= crate::work_names::MAX_NAME_CHARS
+        && !name.chars().any(char::is_control)
 }
 
 /// Whether `pane` is a pane id a list carries.
@@ -88,6 +100,7 @@ pub fn valid(guests: &[GuestPanes]) -> bool {
                             .folder
                             .as_deref()
                             .is_none_or(|folder| folder.len() <= MAX_FOLDER_BYTES)
+                        && pane.name.as_deref().is_none_or(name_is_shown)
                         && panes.insert(pane.pane.as_str())
                         && pane.id
                             == hide_node_link::address::guest_pane_id(&guest.device_id, &pane.pane)
@@ -169,6 +182,7 @@ mod tests {
                     pane: (*pane).to_owned(),
                     since_unix_ms: 1,
                     folder: None,
+                    name: None,
                 })
                 .collect(),
         }
@@ -191,6 +205,17 @@ mod tests {
         let mut key = guest("macbook", &[]);
         key.key = "AB".repeat(32);
         assert!(!valid(&[key]));
+        // A told name is one line a row draws, bounded as the core tells it.
+        let named = |name: String| {
+            let mut named = guest("macbook", &["w1:p1"]);
+            named.panes[0].name = Some(name);
+            valid(&[named])
+        };
+        assert!(named("로그인 고치기".to_owned()));
+        assert!(named("가".repeat(crate::work_names::MAX_NAME_CHARS)));
+        assert!(!named("가".repeat(crate::work_names::MAX_NAME_CHARS + 1)));
+        assert!(!named("  ".to_owned()));
+        assert!(!named("one\ntwo".to_owned()));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

@@ -59,6 +59,7 @@ pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
 pub mod started_cores;
+pub mod wait_cli;
 // The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
 // the deadlines those tests run them under.
 #[cfg(all(test, unix))]
@@ -99,6 +100,7 @@ pub mod state_move;
 mod supervisor;
 pub mod terminal_hub;
 pub mod watch;
+mod work_names;
 pub mod workspace_cli;
 pub mod worktree_cli;
 
@@ -344,6 +346,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "the core runs on another machine: this state folder starts the node role".to_owned(),
         );
     }
+    // A core a login item runs from a copy of the app's build is the app's,
+    // and answers as the app's installation from its first pane on.
+    always_on::adopt_app(&env.home, &env.state_dir);
     // Stored state from before node ids is converted once, before the core
     // reads it; a store that cannot be converted stops the start and names
     // the file (PRD core-host-node B2).
@@ -595,10 +600,22 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         command_folder: env.host_cli_dir.clone(),
         hide: None,
     };
+    // What this machine calls itself to the machines it pairs with: a
+    // Mac's computer name, read through a program, so off the runtime.
+    let machine_name = tokio::task::spawn_blocking(|| {
+        hide_platform::host::computer_name()
+            .ok()
+            .as_deref()
+            .and_then(hide_peer::link::clean_name)
+    })
+    .await
+    .ok()
+    .flatten();
     let peers = peer_host::PeerHost::new(
         peer_host::Settings::of(
             &env,
             &peer_device,
+            machine_name.clone(),
             // This PC's WSL distributions run Hides it connects to through
             // `wsl.exe` (D-27); there is no WSL to reach on any other
             // system.
@@ -636,6 +653,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         &peers,
         &desktop_notices,
         mobile.subscribe_projection(),
+        &guests,
         shutdown.clone(),
     );
     remote_screens.serve(&peers);
@@ -652,10 +670,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         env.build.clone(),
         always_on.clone(),
         hide_peer::pairing::Me {
-            name: host_name()
-                .as_deref()
-                .and_then(hide_peer::link::clean_name)
-                .unwrap_or_else(|| peer_device.clone()),
+            name: machine_name.unwrap_or_else(|| peer_device.clone()),
             device: peer_device,
         },
         reach,
@@ -933,7 +948,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
                 packages,
                 state_dir: env.state_dir.clone(),
                 // A node reaches no WSL distribution: only a core does.
-                peer: peer_host::Settings::of(&env, node.as_str(), None),
+                peer: peer_host::Settings::of(&env, node.as_str(), None, None),
             }),
     )?;
     hide_core::diagnostic!(serde_json::json!({

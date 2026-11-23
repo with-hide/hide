@@ -1258,6 +1258,7 @@ fn an_opened_conversation_typed_into_sleeps_and_closes_once_the_screen_looks_awa
             since_unix_ms: 0,
             progress: None,
             cause: None,
+            wait: None,
         });
     });
     harness.tick(1);

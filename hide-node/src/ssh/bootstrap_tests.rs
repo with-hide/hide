@@ -265,24 +265,57 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
             read_probe(&fields(&format!(
                 "probe\talice\t/home/alice\tLinux\tx86_64\t{id}\tyes\tgzip"
             ))),
-            Err(super::NO_MACHINE_ID.to_owned()),
+            Err((UnsupportedCause::MachineId, super::NO_MACHINE_ID.to_owned())),
             "{id:?}"
         );
     }
-    for refused in [
-        "probe\talice\t/home/alice\tLinux\tx86_64\t-\tnone\tgzip",
-        "probe\tAlice Smith\t/home/alice\tLinux\tx86_64\t-\tyes\tgzip",
-        "probe\talice\trelative\tLinux\tx86_64\t-\tyes\tgzip",
-        "probe\talice\t/home/alice\tFreeBSD\tx86_64\t-\tyes\tgzip",
-        "probe\talice\t/home/alice\tLinux\triscv64\t-\tyes\tgzip",
-        "fail\tsomething",
+    // Each refusal carries the class analytics counts, so a failure in the
+    // field says which part of the answer stopped it.
+    for (refused, cause) in [
+        (
+            "probe\talice\t/home/alice\tLinux\tx86_64\t-\tnone\tgzip",
+            UnsupportedCause::Checksum,
+        ),
+        (
+            "probe\tAlice Smith\t/home/alice\tLinux\tx86_64\t-\tyes\tgzip",
+            UnsupportedCause::UserName,
+        ),
+        (
+            "probe\talice\trelative\tLinux\tx86_64\t-\tyes\tgzip",
+            UnsupportedCause::Home,
+        ),
+        (
+            "probe\talice\t/home/alice\tFreeBSD\tx86_64\t-\tyes\tgzip",
+            UnsupportedCause::Platform,
+        ),
+        (
+            "probe\talice\t/home/alice\tLinux\triscv64\t-\tyes\tgzip",
+            UnsupportedCause::Platform,
+        ),
+        ("fail\tsomething", UnsupportedCause::Probe),
+        ("fail\tsomething\t\t\t\t\t\t", UnsupportedCause::Probe),
         // A Windows account's home is a drive path, and its name has none
         // of the characters Windows reserves in one.
-        "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes\tgzip",
-        "probe\ta\\b\tD:/profiles/a\tWindows\tamd64\tAB-12\tyes\tgzip",
-        "probe\talice\tD:/profiles/alice\tLinux\tx86_64\tAB-12\tyes\tgzip",
+        (
+            "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes\tgzip",
+            UnsupportedCause::Home,
+        ),
+        (
+            "probe\ta\\b\tD:/profiles/a\tWindows\tamd64\tAB-12\tyes\tgzip",
+            UnsupportedCause::UserName,
+        ),
+        (
+            "probe\talice\tD:/profiles/alice\tLinux\tx86_64\tAB-12\tyes\tgzip",
+            UnsupportedCause::Home,
+        ),
     ] {
-        assert!(read_probe(&fields(refused)).is_err(), "{refused}");
+        assert_eq!(
+            read_probe(&fields(refused))
+                .map(|_| ())
+                .map_err(|(cause, _)| cause),
+            Err(cause),
+            "{refused}"
+        );
     }
     let windows = read_probe(&fields(
         "probe\tAlice Smith\tD:/profiles/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes\tgzip",

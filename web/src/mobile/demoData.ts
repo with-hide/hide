@@ -374,9 +374,11 @@ export function prsFrame(t: T, state: DemoState): ServerFrame {
       group: "working",
       state: "pending",
       checks: "pending",
+      // Still being worked on, so nobody has reviewed it yet (Doop 17).
+      review: null,
       reason: { kind: "working", name: t("mobile.demo.a3.title"), since_unix_ms: state.t0 - 4 * MINUTE },
       agents: [{ device_id: DEMO_DEVICE, pane_id: "a3" }],
-      work: work({ merge_state: "blocked", pending_checks: 8, check_counts: counts(22, 14, 8) }),
+      work: work({ merge_state: "blocked", pending_checks: 8, check_counts: counts(22, 14, 8), reviewers: [] }),
       card: card({ head: HEAD, files: [{ path: "src/holders.rs", additions: 58, deletions: 19, generated: false }], files_total: 1 }),
     }),
     open(FAILED_PR_NUMBER, "feat: show children on the phone list", "feat/phone-children", {

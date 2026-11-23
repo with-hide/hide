@@ -16,7 +16,7 @@ import type { PointerEvent, ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import type { BranchLine, ResultLine } from "../missionLine";
+import { waitConditionWords, waitFootWords, type BranchLine, type ResultLine, type WaitCard } from "../missionLine";
 import { pacedSteps, type NodeLook, type NodePace, type NodeStep } from "../missions";
 import { lookWord, type RunLabel } from "../missionParts";
 import { planCount } from "../plans";
@@ -24,7 +24,7 @@ import { PR_LOOK } from "../prMark";
 import type { Mission, MissionGate, MissionNode } from "../snapshot";
 import { DeviceChip } from "./device-chip";
 import { OperatorBand } from "./mission-gate";
-import { BranchLineView, ResultLineView } from "./mission-line";
+import { BranchLineView, ResultLineView, WaitStateMark } from "./mission-line";
 import { MissionNodeMark } from "./mission-node-mark";
 import { ProgressCells, STEP_FILL } from "./mission-tone";
 import { Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
@@ -45,6 +45,8 @@ export type NodeHoverFacts = {
   work: { source: "worker" | "plan"; steps: NodeStep[]; now: string | null } | null;
   /** Where its result goes, for a node that changes code, or what it found for one that does not. */
   branch: BranchLine | null;
+  /** What a waiting node waits for and how that stands (option A). */
+  wait?: WaitCard | null;
   result: ResultLine | null;
   /** What the operator does on the node, the card's band. */
   gate: Pick<MissionGate, "state" | "look"> | null;
@@ -95,7 +97,7 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
   return (
     <div className="flex min-w-0 flex-col gap-sm text-caption">
       <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={facts.look} label={facts.word} pace={facts.pace} failed={facts.failed} hint={false} />
+        {facts.wait ? <WaitStateMark state={facts.wait.state} label={facts.word} /> : <MissionNodeMark look={facts.look} label={facts.word} pace={facts.pace} failed={facts.failed} hint={false} />}
         <span className="min-w-0 break-words text-body font-semibold text-foreground" data-node-hover-title="true">{node.title}</span>
       </span>
       <OperatorBand gate={facts.gate} mergeDue={facts.mergeDue} />
@@ -120,6 +122,12 @@ function NodeHoverBody({ mission, node, facts }: { mission: Mission; node: Missi
               {count ? <span className="shrink-0 tabular-nums text-muted-foreground" data-node-hover-count="true">{count}</span> : null}
             </span>
             {work.now && node.status === "working" ? <span className="break-words text-subtle-foreground">{t(facts.pace === "stopped" ? "mission.steps.stoppedAt" : "mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span> : null}
+          </Row>
+        ) : null}
+        {facts.wait ? (
+          <Row label={t("mission.popover.waits")} data="wait" column>
+            <span className="break-words text-foreground">{waitConditionWords(facts.wait.aim, t)}</span>
+            {waitFootWords(facts.wait, t).length > 0 ? <span className="break-words text-muted-foreground">{waitFootWords(facts.wait, t).join(" · ")}</span> : null}
           </Row>
         ) : null}
         {facts.branch ? (

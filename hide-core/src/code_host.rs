@@ -1190,6 +1190,17 @@ pub(crate) trait ByNumber: Sync {
     fn standing(&self, node: &dyn NodeLink, place: &Place, number: u32)
     -> Result<Standing, String>;
 
+    /// Change request `number` as the project's list holds one, its checks
+    /// judged as the list judges them: a CI wait on one the list no longer
+    /// holds is judged from it (PRD core-wait D-05). A read that fails says
+    /// why, and the wait reads as unread, never as open.
+    fn as_listed(
+        &self,
+        node: &dyn NodeLink,
+        place: &Place,
+        number: u32,
+    ) -> Result<crate::model::PullRequestSnapshot, String>;
+
     fn head(
         &self,
         node: &dyn NodeLink,
@@ -1330,6 +1341,12 @@ pub(crate) struct WatchAnswer {
     /// Paused after a failure, or every project at the host's rate floor:
     /// their marks are stale until a read answers (PRD git-freshness B23).
     pub(crate) held: Vec<String>,
+    /// The host's rate limit is near its floor until this unix second, so
+    /// nothing reads it by number before then: a wait's read of a change
+    /// request waits for the next look (PRD core-wait D-13, B25). The time
+    /// ends the rest by itself, so a watch that stops answering (no window)
+    /// leaves no host resting for good.
+    pub(crate) resting_until: Option<u64>,
 }
 
 pub(crate) trait Watch: Sync {

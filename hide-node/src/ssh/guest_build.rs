@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use hide_peer_protocol::build::{self, BuildFile};
 use sha2::{Digest, Sha256};
 
+use hide_node_link::device::UnsupportedCause;
+
 use super::{EstablishError, HELPER_NAME, HelperPackages, Payload, device_program};
 
 /// The most bytes of a file asked of its source, and held, at once.
@@ -51,7 +53,10 @@ impl HelperPackages {
     pub fn guest_build(&self, os: &str, arch: &str) -> Result<GuestBuild, EstablishError> {
         let payload = self.payload_for(os, arch)?;
         if !payload.missing.is_empty() {
-            return Err(EstablishError::Unsupported(payload.missing.join("; ")));
+            return Err(EstablishError::unsupported(
+                UnsupportedCause::Build,
+                payload.missing.join("; "),
+            ));
         }
         let files: Vec<BuildFile> = payload
             .files
