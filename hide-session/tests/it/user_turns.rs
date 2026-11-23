@@ -313,6 +313,75 @@ fn only_the_correlated_native_result_clears_a_question_and_a_replayed_call_stays
     }
 }
 
+/// 2026-11-23: Claude Code 2.1.330 drew a question before it wrote the call,
+/// so a read between the two must say it holds nothing a dialog could ask
+/// about (what the core reads again on), whether the question follows an
+/// interrupted call or a call that ran in the same turn. A call still
+/// waiting for its result is held, and the question's call, once written,
+/// carries its words and choices.
+#[test]
+fn a_read_before_a_questions_call_holds_no_open_call_and_the_written_call_carries_its_words() {
+    let records = fixture("user-turns/claude-2.1.330-question-after-interrupt.jsonl");
+    let records: Vec<&str> = records.lines().collect();
+    let call = records[5];
+    let session = |before: &[&str]| {
+        Session::new(
+            Agent::Claude,
+            ".claude/projects/-work-app/question-after-interrupt.jsonl",
+            &format!("{}\n", before.join("\n")),
+        )
+    };
+    let holds = |before: &[&str]| session(before).read().turns.unwrap().holds_open_call();
+    assert!(holds(&records[..2]), "the Bash call has no result yet");
+    for before in [&records[..5], &records[..3]] {
+        assert!(!holds(before), "{} records", before.len());
+        let mut session = session(before);
+        let drawn = session.read();
+        session.resume(&drawn);
+        session.append(&serde_json::from_str::<Value>(call).unwrap());
+        let read = session.read();
+        assert!(read.turns.as_ref().unwrap().holds_open_call());
+        let asked = fact(&read).expect("the call asks a question");
+        assert_eq!(asked.kind, UserTurnKind::Question);
+        let content = asked.content.expect("the call's words are read");
+        assert_eq!(content.text(), "Which font should the title use?");
+        assert_eq!(content.choices(), ["Serif", "Sans", "Mono"]);
+    }
+}
+
+/// Only a format that marks each of the agent's records (Claude Code) can
+/// say a turn holds no call: a running Codex turn may hold one it never
+/// marks. And a call an earlier turn left without a result holds no dialog
+/// of the next turn.
+#[test]
+fn only_a_turn_whose_every_call_is_marked_can_hold_no_open_call() {
+    let codex = Session::new(
+        Agent::Codex,
+        ".codex/sessions/2026/10/07/rollout-2026-10-07T01-00-00-0199a000-0000-7000-8000-0000000000b4.jsonl",
+        &[
+            json!({"type":"session_meta","timestamp":"2026-10-07T01:00:00Z","payload":{"id":"0199a000-0000-7000-8000-0000000000b4","timestamp":"2026-10-07T01:00:00Z","cwd":"/work/app","originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
+            json!({"type":"event_msg","timestamp":"2026-10-07T01:00:00Z","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}}),
+            json!({"type":"response_item","timestamp":"2026-10-07T01:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"빌드를 돌려줘"}]}}),
+        ]
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>(),
+    );
+    let turns = codex.read().turns.unwrap();
+    assert_eq!(turns.waiting(), Some(Waiting::Nothing));
+    assert!(turns.holds_open_call(), "Codex marks no call");
+
+    let records = fixture("user-turns/claude-2.1.330-question-after-interrupt.jsonl");
+    let records: Vec<&str> = records.lines().collect();
+    // A prompt, a Bash call that never got its result, and the next prompt.
+    let claude = Session::new(
+        Agent::Claude,
+        ".claude/projects/-work-app/question-after-interrupt.jsonl",
+        &format!("{}\n{}\n{}\n", records[0], records[1], records[4]),
+    );
+    assert!(!claude.read().turns.unwrap().holds_open_call());
+}
+
 #[test]
 fn a_human_answer_or_native_abort_clears_question_content() {
     for agent in [Agent::Claude, Agent::Codex] {
