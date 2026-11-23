@@ -843,7 +843,10 @@ pub enum EstablishError {
     /// device runs Windows, where a policy that blocks unsigned programs
     /// (Smart App Control) refuses it without a word back to this machine
     /// (issue #2855), so the row can say where to look.
-    NotStarted { windows: bool, reason: String },
+    NotStarted {
+        windows: bool,
+        reason: String,
+    },
     /// The machine the device's node reports is not the one its
     /// registration names, or cannot name it (`DeviceNaming`): nothing was
     /// opened on the link, and retrying reaches the same machine.

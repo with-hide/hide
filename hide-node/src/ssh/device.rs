@@ -433,7 +433,10 @@ impl DialedTransport for SshDevice {
         )?;
         // Until the helper starts, every way out ends and reaps the `ssh`
         // child before the attempt returns (B8, B26).
-        let started = (|pipe: &mut session::SigningIn| -> Result<(HostIdentity, bootstrap::Installed, String), EstablishError> {
+        let started = (|pipe: &mut session::SigningIn| -> Result<
+            (HostIdentity, bootstrap::Installed, String),
+            EstablishError,
+        > {
             let identity = HostIdentity {
                 user: resolved.user.clone(),
                 hostname: resolved.hostname.clone(),
@@ -452,8 +455,9 @@ impl DialedTransport for SshDevice {
             let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             let home = match &self.device_home {
                 Some(configured) => Some(
-                    resolve_device_home(configured, &facts.home, &facts.os)
-                        .map_err(|reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason))?,
+                    resolve_device_home(configured, &facts.home, &facts.os).map_err(|reason| {
+                        EstablishError::install(hide_node_link::device::InstallStop::Local, reason)
+                    })?,
                 ),
                 None => None,
             };
