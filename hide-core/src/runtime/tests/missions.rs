@@ -19185,7 +19185,11 @@ fn a_stopped_worker_holds_the_safety_net_only_after_twenty_minutes() {
     warn_stopped(&mut runtime, "fix", now - 19 * MINUTE, None);
     assert_eq!(net(&runtime), None, "19 minutes after the stop");
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    let fix = mission.nodes.iter_mut().find(|node| node.key == "fix").unwrap();
+    let fix = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
     for warning in &mut fix.warnings {
         warning.since_unix_ms = now - 21 * MINUTE;
     }
