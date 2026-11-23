@@ -185,6 +185,9 @@ export function toggledFold(folds: readonly string[], fold: string): string[] {
 /** The Hide AI tool's two tabs (PRD hide-ai-suggestions D-01). */
 export type HideAiTab = "suggestions" | "memory";
 
+/** What Settings › Devices was opened for (`devicesRequest`). */
+export type DevicesRequest = "add" | "add_computer" | "phones";
+
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
 /**
@@ -407,8 +410,8 @@ type UiStore = {
   projectSettingsFocus: "name" | null;
   /** The tab the Settings sheet opens on. */
   settingsTab: SettingsTab;
-  /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
-  addDeviceRequested: boolean;
+  /** What Settings › Devices was opened for, which the tab does once and clears: the Add dialog asking computer or phone, the Add dialog on a computer, or the phone group in view. */
+  devicesRequest: DevicesRequest | null;
   /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
   storeAskRequested: string | null;
   pendingClose: PendingClose | null;
@@ -495,9 +498,11 @@ type UiStore = {
   clearStoreAsk: () => void;
   openSettings: (tab: SettingsTab) => void;
   openProjectSettings: (target: ProjectSettingsTarget, returnFocus?: HTMLElement | null, focus?: "name") => void;
-  /** Opens Settings on Devices with the Add device dialog in front. */
-  openAddDevice: () => void;
-  clearAddDeviceRequest: () => void;
+  /** Opens Settings on Devices with the Add device dialog in front, asking computer or phone unless `kind` names a computer. */
+  openAddDevice: (kind?: "computer") => void;
+  /** Opens Settings on Devices with its phone group in view, where every way to a phone's settings leads. */
+  openPhones: () => void;
+  clearDevicesRequest: () => void;
   /** The devices whose switch to their machine's own Hide landed while this window watched, until their screen has been shown once (PRD device-connect-iroh D-48). */
   switchedDevices: string[];
   markSwitched: (deviceId: string) => void;
@@ -594,7 +599,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsReturnFocus: null,
   projectSettingsFocus: null,
   settingsTab: "general",
-  addDeviceRequested: false,
+  devicesRequest: null,
   storeAskRequested: null,
   switchedDevices: [],
   pendingClose: null,
@@ -683,8 +688,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   },
   openSettings: (settingsTab) => set({ overlay: "settings", settingsTab }),
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
-  openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
-  clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  openAddDevice: (kind) => set({ overlay: "settings", settingsTab: "devices", devicesRequest: kind === "computer" ? "add_computer" : "add" }),
+  openPhones: () => set({ overlay: "settings", settingsTab: "devices", devicesRequest: "phones" }),
+  clearDevicesRequest: () => set({ devicesRequest: null }),
   openStoreAsk: (id) => set({ overlay: "settings", settingsTab: "skills", storeAskRequested: id }),
   clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),

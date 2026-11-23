@@ -417,7 +417,7 @@ mod tests {
         );
         let listed = mobile.cli_list();
         assert_eq!(listed["phones"][0]["name"], "회사 폰");
-        assert_eq!(listed["phones"][0]["chosen_name"], "회사 폰");
+        assert_eq!(listed["phones"][0]["own_name"], "iPhone");
         assert_eq!(mobile.cli_remove("iPhone")["reason"], "phone_unknown");
         assert_eq!(
             mobile.cli_rename(&phone.id, &"x".repeat(65))["reason"],
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(mobile.cli_rename("Galaxy", "x")["reason"], "phone_unknown");
         let back = mobile.cli_rename("회사 폰", "");
         assert_eq!(back["name"], "iPhone");
-        assert_eq!(mobile.cli_list()["phones"][0]["chosen_name"], Value::Null);
+        assert_eq!(mobile.cli_list()["phones"][0]["own_name"], Value::Null);
     }
 
     #[tokio::test]

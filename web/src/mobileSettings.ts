@@ -1,8 +1,9 @@
-// The pure rules behind Settings > Mobile (PRD mobile-companion B1-B7,
-// B10, B14, B15, B29; settings-cleanup B57-B59): which Tailscale steps show
-// and with what fix, how the code countdown and a phone's row read, and the
-// phone push setting. hided owns every value; this only words what its `mobile` frame
-// reported, so each rule is tested without a browser.
+// The pure rules behind Settings › Devices' phone group (PRD mobile-companion
+// B1-B7, B10, B14, B15, B29; settings-cleanup B57-B59; operator review
+// 2026-11-23): which Tailscale steps show and with what fix, how the code
+// countdown and a phone's row read, when the group says why phones cannot
+// connect, and the phone push setting. hided owns every value; this only
+// words what its `mobile` frame reported, so each rule is tested without a browser.
 
 import type { TFunction } from "i18next";
 import { formatRelativeTime } from "./i18n/format";
@@ -33,7 +34,10 @@ export type MobileState = {
 
 export type PhoneRow = {
   id: string;
+  /** The name it is shown under: the operator's choice, else the one it paired with. */
   name: string;
+  /** The name it paired with, sent only once the operator renamed it; absent from a daemon older than renaming. */
+  own_name?: string | null;
   last_seen_ms: number;
   connected: boolean;
   notifications: "on" | "off" | "unasked";
@@ -124,12 +128,14 @@ export function lastSeen(lastSeenMs: number, nowMs: number, connected: boolean, 
 }
 
 /**
- * A phone row's second line (B15): last seen, the notification state when
- * the phone answered the permission question, and the days until the
- * seven-day revoke once it has been away a day.
+ * A phone row's second line (B15): when it was last seen while it is not
+ * connected (its row's state says connected otherwise), the notification
+ * state when the phone answered the permission question, and the days until
+ * the seven-day revoke once it has been away a day. Empty when there is
+ * nothing to say.
  */
 export function phoneLine(phone: PhoneRow, nowMs: number, t: TFunction<"translation">, language: InterfaceLanguage): string {
-  const parts = [lastSeen(phone.last_seen_ms, nowMs, phone.connected, t, language)];
+  const parts = phone.connected ? [] : [lastSeen(phone.last_seen_ms, nowMs, phone.connected, t, language)];
   if (phone.notifications === "on") parts.push(t("mobileSetup.notificationsOn"));
   if (phone.notifications === "off") parts.push(t("mobileSetup.notificationsOff"));
   const away = nowMs - phone.last_seen_ms;
@@ -140,6 +146,43 @@ export function phoneLine(phone: PhoneRow, nowMs: number, t: TFunction<"translat
   return parts.join(" · ");
 }
 
-export function phonesTitle(state: MobileState, t: TFunction<"translation">): string {
-  return t("mobileSetup.phones", { count: state.phones.length, limit: state.max_phones });
+/** What the group's one reason line offers: try the relay again, or update this Hide. */
+export type PhoneProblemAction = "retry" | "update" | null;
+
+/**
+ * Why no phone can connect now, said once over the phone rows, or null
+ * (operator review 2026-11-23): only while 폰에서 Hide 열기 is on (or a
+ * failed removal is still owed) and the selected way is down or refused;
+ * a relay still connecting, or a connection that works, says nothing.
+ * `machine`: the core's machine as this window names it.
+ */
+export function phoneProblem(state: MobileState, machine: string, t: TFunction<"translation">): { text: string; action: PhoneProblemAction } | null {
+  if (!state.enabled && state.exposure !== "failed") return null;
+  if (state.method === "tailscale") {
+    const line = exposureLine(state, machine, t);
+    if (line && line.tone !== "pending") return { text: line.text, action: null };
+    const view = checklistView(state, machine, t);
+    return view.kind === "failed" ? { text: view.steps[0]!.title, action: null } : null;
+  }
+  const status = state.relay.state;
+  if (state.failure) {
+    return { text: status === "connected" ? t("mobileSetup.relay.cleanupFailed") : (exposureLine({ ...state, exposure: "failed" }, machine, t)?.text ?? t("mobileSetup.relay.refused")), action: null };
+  }
+  if (status === "retrying") return { text: t("mobileSetup.relay.retrying"), action: "retry" };
+  if (status === "key_unavailable") return { text: t("mobileSetup.relay.keyUnavailable"), action: "retry" };
+  if (status === "refused") {
+    const outdated = state.relay.reason === "unsupported_version";
+    return { text: t(RELAY_REFUSAL[state.relay.reason as keyof typeof RELAY_REFUSAL] ?? "mobileSetup.relay.refused"), action: outdated ? "update" : "retry" };
+  }
+  return null;
 }
+
+const RELAY_REFUSAL = {
+  connection_limit: "mobileSetup.relay.connectionLimit",
+  room_limit: "mobileSetup.relay.roomLimit",
+  rate_limit: "mobileSetup.relay.rateLimit",
+  frame_limit: "mobileSetup.relay.frameLimit",
+  daily_limit: "mobileSetup.relay.dailyLimit",
+  room_occupied: "mobileSetup.relay.occupied",
+  unsupported_version: "mobileSetup.relay.outdated",
+} as const satisfies Record<string, MessageKey>;

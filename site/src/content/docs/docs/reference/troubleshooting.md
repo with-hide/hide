@@ -181,12 +181,12 @@ What ssh asks, such as a password or a key's passphrase, is answered on the mach
 ### The phone says "The code expired"
 
 The QR code works for five minutes, and one phone uses it once.
-On your computer, open Settings > Mobile, press **Show QR**, and scan the new code.
+On your computer, open Settings > Devices, choose **+ Add device**, then **Phone**, and scan the new code.
 
 ### The phone says "You can connect up to 4 phones"
 
 Each computer allows four paired phones.
-On your computer, open Settings > Mobile, find the phone under **Connected phones**, and press **Revoke** on one you no longer use.
+On your computer, open Settings > Devices, find the phone under **Phones**, and choose **Disconnect…** in the **⋯** of one you no longer use.
 
 ### The phone shows "This phone's connection was revoked"
 
@@ -197,8 +197,8 @@ Open a new QR code on your computer and scan it again.
 
 The phone connects through your computer, so the computer has to be awake, connected and running Hide.
 The phone retries by itself and connects when the computer answers; the relay does not keep messages for later.
-If it never does, check Settings > Mobile on the computer: its row should read `Connected · Hide relay (Tokyo)`.
-When it reads "Relay unreachable · Retrying", press **Retry now**.
+If it never does, check the **Phones** group in Settings > Devices on the computer: while the relay works it says nothing above the phones.
+When a line there reads "Relay unreachable · Retrying", press **Retry now**.
 When it reads "This Hide is too old", press **Update**, which opens Settings > About.
 
 ### The phone says "Camera unavailable"

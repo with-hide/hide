@@ -134,7 +134,7 @@ export function platformCards(state, { os = "", arch = "", phone = "" } = {}) {
   const phones = [
     {
       id: "ios", name: "iPhone", mark: "apple", requirement: "iOS 15 or later", guide: PHONE_GUIDE, mine: phone === "ios",
-      soon: false, sees: "Pair it with one QR scan from Settings > Mobile in hide", excluded: null,
+      soon: false, sees: "Pair it with one QR scan from Settings > Devices > Add device > Phone in hide", excluded: null,
       actions: [{ label: "App Store", href: APP_STORE_URL, primary: phone === "ios" }], commands: [], checksums: [],
     },
     {

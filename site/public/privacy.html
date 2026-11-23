@@ -169,7 +169,7 @@
             <li>A SHA-256 hash of its credential. The credential itself is never stored.</li>
             <li>Your notification choice, and, if you turned notifications on, what is needed to deliver them, as the next section says.</li>
           </ul>
-          <p>Each computer allows four paired phones. A phone that is not used for seven days is disconnected automatically, and you can disconnect one at any time from Settings › Mobile on the computer.</p>
+          <p>Each computer allows four paired phones. A phone that is not used for seven days is disconnected automatically, and you can disconnect one at any time from Settings › Devices on the computer.</p>
           <h4>4.3 Push notifications</h4>
           <p>Notifications are off until you turn them on in the app, and the app works without them. A notification says that an agent needs you or has finished. It carries the task's title, the project's name, the state, the agent row's short status sentence, and identifiers hide uses to find the agent. The title and the sentence come from your computer and can contain text you or your agent wrote. A notification never carries terminal content, code or a conversation.</p>
           <ul>
@@ -181,7 +181,7 @@
           <h4>4.4 The Android app and Google</h4>
           <p>The Android app uses Google's services in two places, and in neither can Google read anything that comes from your computer. It needs a phone with Google Play services.</p>
           <ul>
-            <li><strong>Notifications.</strong> When you turn notifications on, the app registers with Google's Firebase Cloud Messaging (FCM), which gives the phone a registration token, and Google's library keeps a Firebase installation ID for the app. Your computer sends the encrypted notification and that token to hide's relay. The relay passes both to Google with its own Google service account, while the request is in flight, and does not store the token or the notification or write them to its logs. The token is kept with the phone's record on your computer until you turn notifications off in the app or disconnect the phone in Settings › Mobile on the computer, and also when Google reports the token as no longer valid.</li>
+            <li><strong>Notifications.</strong> When you turn notifications on, the app registers with Google's Firebase Cloud Messaging (FCM), which gives the phone a registration token, and Google's library keeps a Firebase installation ID for the app. Your computer sends the encrypted notification and that token to hide's relay. The relay passes both to Google with its own Google service account, while the request is in flight, and does not store the token or the notification or write them to its logs. The token is kept with the phone's record on your computer until you turn notifications off in the app or disconnect the phone in Settings › Devices on the computer, and also when Google reports the token as no longer valid.</li>
             <li><strong>What Google sees.</strong> The FCM token and the Firebase installation ID, the app's package name and the Firebase project a notification was sent to, and when each notification arrived and how large it was. When the app registers, Google's library also sends the app's version. It also sends general device details (system version, model, brand and the store that installed the app), which Google says it does not link to an identifier. The message holds nothing but the ciphertext: no title, no text and not even a fixed general line, so Google cannot read it, and the app decrypts it on the phone with the key it gave your computer.</li>
             <li><strong>The code scanner.</strong> The app scans a pairing QR code with Google's code scanner, which is part of Google Play services and runs there, so the app asks for no camera permission and receives only the scanned text. As Google's ML Kit disclosure states, the scanner sends Google, for Google's own diagnostics and usage analytics, device information (maker, model, system version), the app's package name and version, a device identifier and a per-installation identifier, performance figures, and event types and error codes, under Google's own privacy policy. hide receives none of it.</li>
           </ul>
@@ -206,7 +206,7 @@
           <h3>8. Your choices and requests</h3>
           <ul>
             <li>Turn usage statistics off in Settings › Privacy on the computer.</li>
-            <li>Disconnect a phone in Settings › Mobile on the computer, or remove a paired computer in the phone app's device list.</li>
+            <li>Disconnect a phone in Settings › Devices on the computer, or remove a paired computer in the phone app's device list.</li>
             <li>Delete the desktop app's data by removing the two folders in section 1.2, <code>~/.hide</code> and the app's <code>hide-desktop</code> folder, and the phone's data by deleting the app.</li>
             <li>To ask what records may concern you, or to have them deleted, write to the address below. The installation identifier is random and tied to no person, so we may not be able to find records that belong to you; we will say so rather than guess.</li>
           </ul>

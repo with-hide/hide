@@ -73,7 +73,7 @@
           <h3>Connect your phone</h3>
           <p>The phone and the computer are the only places your conversation can be read; hide's relay passes encrypted messages along and cannot read them. No account, payment or Tailscale setup is needed.</p>
           <ol class="support-steps">
-            <li>On the computer, open <strong>Settings › Mobile</strong> and turn on <strong>Open hide from your phone</strong> (폰에서 Hide 열기).</li>
+            <li>On the computer, open <strong>Settings › Devices</strong>, choose <strong>+ Add device</strong> (기기 추가), then <strong>Phone</strong> (폰). It turns on <strong>Open hide from your phone</strong> (폰에서 Hide 열기) when it is off.</li>
             <li>Wait until the connection row says <strong>Connected · Hide relay (Tokyo)</strong> (연결됨 · Hide 중계 (도쿄)), then choose <strong>Show QR</strong> (QR 보기).</li>
             <li>On an iPhone, install <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">Hide from the App Store</a> and choose <strong>Scan QR code</strong>. The Android app is coming to Google Play. On an Android phone or any other phone, scan the code with the camera; the phone opens <code>app.withhide.dev</code>; choose <strong>Connect</strong> (연결).</li>
             <li>In a browser, you can keep it as an app with the Share menu and <strong>Add to Home Screen</strong>.</li>
@@ -100,7 +100,7 @@
           <h3>Remove a paired phone</h3>
           <p>There are two directions, and you may need only one of them.</p>
           <ul>
-            <li><strong>On the computer</strong>, <strong>Settings › Mobile</strong> lists the phones connected to it and gives each one <strong>Revoke</strong> (연결 해제). A revoked phone cannot connect again without a new code from this computer. Turning Mobile off disconnects every phone at once.</li>
+            <li><strong>On the computer</strong>, <strong>Settings › Devices</strong> lists the phones connected to it under <strong>Phones</strong> (폰), and each one's <strong>⋯</strong> holds <strong>Disconnect…</strong> (연결 해제). A revoked phone cannot connect again without a new code from this computer. Turning Mobile off disconnects every phone at once.</li>
             <li><strong>On the phone</strong>, open the device list and remove the computer (기기 지우기, Remove device). The phone forgets the computer's key and its own credential, and connecting again needs a new code.</li>
           </ul>
           <p>A phone that has not connected for seven days is disconnected automatically. Removing the phone app removes what the phone kept about its computers.</p>
@@ -113,11 +113,11 @@
             </details>
             <details id="phone-revoked">
               <summary>The phone says the connection was revoked</summary>
-              <p>Either that phone was revoked on the computer, or it has not connected for seven days. Show a new code in Settings › Mobile and scan it on the phone.</p>
+              <p>Either that phone was revoked on the computer, or it has not connected for seven days. Show a new code from Settings › Devices › Add device › Phone and scan it on the phone.</p>
             </details>
             <details id="phone-limit">
               <summary>A new phone will not pair</summary>
-              <p>One computer takes four phones. Revoke one in Settings › Mobile, then show a new code.</p>
+              <p>One computer takes four phones. Disconnect one in Settings › Devices, then show a new code.</p>
             </details>
             <details id="no-notifications">
               <summary>The phone does not show notifications</summary>

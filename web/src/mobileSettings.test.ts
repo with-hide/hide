@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { checklistView as checklistViewIn, codeCountdown, exposureLine as exposureLineIn, phoneLine as phoneLineIn, type MobileState, type PhoneRow } from "./mobileSettings";
+import { checklistView as checklistViewIn, codeCountdown, exposureLine as exposureLineIn, phoneLine as phoneLineIn, phoneProblem as phoneProblemIn, type MobileState, type PhoneRow } from "./mobileSettings";
 
-// Korean is the wording Settings > Mobile shipped with; the rules read the same under it.
+// Korean is the wording Settings › Devices shipped with; the rules read the same under it.
 const t = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const checklistView = (value: MobileState) => checklistViewIn(value, "이 Mac", t);
@@ -99,8 +99,10 @@ describe("codeCountdown", () => {
 describe("phoneLine", () => {
   const phone: PhoneRow = { id: "p", name: "iPhone", last_seen_ms: 0, connected: false, notifications: "on", revoke_at_ms: 7 * DAY };
 
-  it("reads 방금 while connected and carries the notification state", () => {
-    expect(phoneLine({ ...phone, connected: true }, 3 * DAY)).toBe("방금 · 알림 받는 중");
+  // The row's state says 연결됨 beside it (Settings › Devices, operator review 2026-11-23), so a connected phone's line leaves the time out.
+  it("leaves the time out while connected and carries the notification state", () => {
+    expect(phoneLine({ ...phone, connected: true }, 3 * DAY)).toBe("알림 받는 중");
+    expect(phoneLine({ ...phone, connected: true, notifications: "unasked" }, 3 * DAY)).toBe("");
   });
 
   it("counts the days to the seven-day revoke once away a day", () => {
@@ -119,7 +121,30 @@ describe("in English", () => {
       "Not exposed · tailscale serve HTTPS 443 on This Mac has an entry hide didn't create: Unknown target. hide will not change it.",
     );
     expect(phoneLineIn(phone, 3 * DAY, english, "en")).toBe("3 days ago · Receiving notifications · Automatically revoked in 4 days");
-    expect(phoneLineIn({ ...phone, connected: true, notifications: "off" }, 3 * DAY, english, "en")).toBe("Just now · Notifications off");
+    expect(phoneLineIn({ ...phone, connected: true, notifications: "off" }, 3 * DAY, english, "en")).toBe("Notifications off");
   });
 });
 
+
+describe("phoneProblem", () => {
+  const relay = (over: Partial<MobileState>) => state({ method: "relay", checklist: null, exposure: "checking", ...over });
+  const problem = (over: Partial<MobileState>) => phoneProblemIn(relay(over), "This Mac", t);
+
+  it("says nothing while the relay connects or works, or while phones are off", () => {
+    expect(problem({ relay: { state: "connecting" } })).toBeNull();
+    expect(problem({ relay: { state: "connected" }, exposure: "exposed" })).toBeNull();
+    expect(problem({ enabled: false, relay: { state: "off" } })).toBeNull();
+  });
+
+  it("names a relay that is down or refused, with the one thing to do about it", () => {
+    expect(problem({ relay: { state: "retrying" } })).toEqual({ text: "중계에 닿지 않아요 · 다시 시도 중", action: "retry" });
+    expect(problem({ relay: { state: "refused", reason: "daily_limit" } })).toEqual({ text: "오늘의 중계 데이터 상한에 닿았어요", action: "retry" });
+    expect(problem({ relay: { state: "refused", reason: "unsupported_version" } })?.action).toBe("update");
+    expect(problem({ relay: { state: "refused", reason: "something_new" } })?.text).toBe("중계가 연결을 거부했어요 · 다시 시도 중");
+  });
+
+  it("keeps a removal still owed after switch-off, and names a failing Tailscale step", () => {
+    expect(problem({ enabled: false, exposure: "failed", relay: { state: "off" }, failure: { step: "remove", message: "gone" } })?.text).toBe("폰에서 열 수 없음 · tailscale serve 항목을 지우지 못했어요: gone");
+    expect(phoneProblemIn(state({}), "This Mac", t)?.text).toBe("Tailscale에 로그인돼 있지 않아요");
+  });
+});

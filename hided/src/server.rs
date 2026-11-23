@@ -144,7 +144,7 @@ pub struct AppState {
     /// What Settings > About reads about this daemon, sent once after
     /// a handshake. No token, no environment beyond the paths it names.
     pub daemon_info: Arc<Value>,
-    /// Settings > Mobile and the phones it pairs (`mobile/`).
+    /// Settings › Devices and the phones it pairs (`mobile/`).
     pub mobile: Arc<crate::mobile::Mobile>,
     /// This machine's endpoint for other Hides (`peer_host`).
     pub peers: Arc<crate::peer_host::PeerHost>,
@@ -1088,7 +1088,7 @@ async fn screen_loop(
     // browser tab never does (PRD first-run-onboarding D-14), so it keeps no
     // receiver that would hold frames it never reads.
     let mut agent_notices = desktop.then(|| state.desktop_notices.subscribe());
-    // Settings > Mobile reads one `mobile` frame, sent now and on each change.
+    // Settings › Devices reads one `mobile` frame, sent now and on each change.
     let mut mobile_frames = state.mobile.subscribe_frame();
     // A linked node's screen and another machine's view are both a screen
     // another machine shows of this one (D-53, D-70).
@@ -6874,7 +6874,7 @@ mod tests {
     /// The same screen cannot make or end a code by asking, nor by turning
     /// Mobile off or changing its method, which end it too: the connection
     /// refuses them, removing a phone still goes through, and its watching of
-    /// Settings > Mobile never ends the code a person at this machine shows
+    /// Settings › Devices never ends the code a person at this machine shows
     /// (PRD device-connect-iroh D-53, D-70).
     #[test]
     fn a_screen_of_another_machine_cannot_make_or_end_a_pairing_code() {

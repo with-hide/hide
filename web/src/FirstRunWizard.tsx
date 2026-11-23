@@ -443,7 +443,7 @@ function NotificationsStep({ actions, reopened, primary, onBack, answered, onAns
       ) : null}
       <DialogFooter className={cn(!control || state === "off" ? "pt-md" : null)}>
         <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>
-        <button type="button" onClick={() => useUiStore.getState().openSettings("mobile")} className="mr-auto rounded-xs text-body font-medium text-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-first-run-phone="true">
+        <button type="button" onClick={() => useUiStore.getState().openPhones()} className="mr-auto rounded-xs text-body font-medium text-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-first-run-phone="true">
           {t("firstRun.notifications.phone")}
         </button>
         {goesOn ? (

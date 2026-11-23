@@ -33,15 +33,15 @@ Grok has three differences today:
 
 ## How do I connect my phone?
 
-1. On your computer, open Settings > Mobile and turn on **Open hide from your phone**.
-2. Wait until the connection row reads `Connected · Hide relay (Tokyo)`, then press **Show QR**.
+1. On your computer, open Settings > Devices, choose **+ Add device**, then **Phone**.
+2. The QR window turns on **Open hide from your phone** when it is off, and shows the QR once the relay is connected.
 3. On an iPhone, install [Hide from the App Store](https://apps.apple.com/app/hide-remote-coding-agents/id6832780181) and choose **Scan QR code**. The Android app is coming to Google Play. On an Android phone or any other phone, scan the code with the camera; it opens `app.withhide.dev`; tap **Connect**.
 4. In a browser, you can keep it as an app with Share, then Add to Home Screen.
 
 You need no Hide account, payment or Tailscale installation.
 The code works for five minutes, and one phone uses it once.
 Keep your computer awake and connected: when it sleeps or goes offline the phone says it cannot connect and retries when the computer returns.
-Each computer allows four paired phones; Settings > Mobile lists them under **Connected phones** and lets you **Revoke** any.
+Each computer allows four paired phones; Settings > Devices lists them under **Phones**, and each phone's **⋯** renames or disconnects it.
 On Android, notifications also need a computer running a Hide release that sends them to the Android app; an older Hide tells the app that the computer is older, and the rest of the app still works.
 To get notifications, allow them in the phone app, then choose when the computer pushes them in Settings > Notifications: `Off`, `Only when the app is closed` or `Always`.
 The phone is told only when an agent needs your answer, a question, an approval or a block, and an agent that settles on its question within a few seconds is one notification.

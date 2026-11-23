@@ -1,10 +1,11 @@
-import { PlusIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronRightIcon, LaptopIcon, PlusIcon, SmartphoneIcon } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Group, Note, Row } from "../components/settings-rows";
+import { RowButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { latestDraft } from "../editor/draft";
 import { Trans } from "react-i18next";
@@ -22,12 +23,15 @@ import { PeerRows, ShareDialog } from "./PairingRows";
 import { listedDevices, ownWindow, pairedMachines } from "../pairing";
 import { switchOffered } from "../deviceSwitch";
 import { openPractice } from "../practice/channel";
+import { PhoneGroup } from "./PhoneRows";
 import { RenameDevice } from "./RenameDevice";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
 
 type AddKind = "hide" | "ssh";
+/** What the Add dialog shows: the question computer or phone, then a computer's two ways. */
+type AddStep = "choose" | "computer";
 
 export function DevicesTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -44,6 +48,10 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const [adding, setAdding] = useState<number | null>(null);
   // Which kind of machine the Add dialog adds; it opens on a Hide's link.
   const [addKind, setAddKind] = useState<AddKind>("hide");
+  const [addStep, setAddStep] = useState<AddStep>("choose");
+  // The QR window, which Add device › 폰 opens: the one way to pair a phone (operator review 2026-11-23).
+  const [pairingPhone, setPairingPhone] = useState(false);
+  const phonesRef = useRef<HTMLDivElement>(null);
   // The removal waits for the device's drafts to be stored (B26, B44).
   const [removalBusy, setRemovalBusy] = useState(false);
   const [actedAt, setActedAt] = useState<number | null>(null);
@@ -78,18 +86,34 @@ export function DevicesTab({ actions }: { actions: Actions }) {
     ? deviceRemovalLines(removing.id, registrations ?? [], editorTabs ?? [], recoveryDrafts, (tabId) => bufferWarnings.has(tabId) && released(tabId), t)
     : [];
   const unstored = removing ? unstoredDeviceDrafts(removing.id, editorTabs ?? [], bufferWarnings, released) : [];
-  // Settings opened to add a device (the rail's `+`): the dialog opens once.
-  const addRequested = useUiStore((s) => s.addDeviceRequested);
+  // Settings opened to add a device (the rail's `+`, Add a project's host
+  // list, which adds a computer) or to a phone's settings: done once.
+  const request = useUiStore((s) => s.devicesRequest);
   useEffect(() => {
-    if (!addRequested || devices === undefined) return;
-    useUiStore.getState().clearAddDeviceRequest();
+    if (!request || devices === undefined) return;
+    useUiStore.getState().clearDevicesRequest();
+    if (request === "phones") {
+      phonesRef.current?.scrollIntoView({ block: "start" });
+      return;
+    }
+    setAddStep(request === "add_computer" ? "computer" : "choose");
     setAdding(devices.length);
-  }, [addRequested, devices]);
+  }, [request, devices]);
+  // hided rechecks the phone checklist while this machine's own window shows
+  // the tab; showing it makes no pairing code and voids none (B58). A
+  // restarted daemon has forgotten it, so every live connection says so again.
+  useEffect(() => {
+    if (!live || !ownScreen) return;
+    actions.observeMobile(true);
+    return () => actions.observeMobile(false);
+  }, [actions, live, ownScreen]);
   useEffect(() => {
     if (adding !== null && rows.length > adding) setAdding(null);
   }, [adding, rows.length]);
   useEffect(() => {
-    if (adding === null) setAddKind("hide");
+    if (adding !== null) return;
+    setAddKind("hide");
+    setAddStep("choose");
   }, [adding]);
   const handlers: DeviceRowHandlers = {
     onAct: () => setActedAt(Date.now()),
@@ -137,7 +161,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           </Button>
         </p>
         {canAdd ? (
-          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setAdding(rows.length)} data-device-add-open="true">
+          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => { setAddStep("choose"); setAdding(rows.length); }} data-device-add-open="true">
             <PlusIcon aria-hidden="true" />
             {t("devices.addTitle")}
           </Button>
@@ -168,6 +192,9 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         ) : null}
         {empty ? <Row label={canAdd ? <FirstDeviceGuide machine={ownName} /> : <Note>{t("devices.empty.none")}</Note>} data-devices-empty="true" /> : null}
       </Group>
+      <div ref={phonesRef} className="scroll-mt-md">
+        <PhoneGroup actions={actions} own={ownScreen} pairing={pairingPhone} onPairingClose={() => setPairingPhone(false)} />
+      </div>
       {sharing && ownScreen ? <ShareDialog actions={actions} onClose={() => setSharing(false)} /> : null}
       {renaming ? (
         <RenameDevice
@@ -187,12 +214,28 @@ export function DevicesTab({ actions }: { actions: Actions }) {
               <DialogTitle>{t("devices.addTitle")}</DialogTitle>
             </DialogHeader>
             <DialogBody className="space-y-md">
+              {addStep === "choose" ? (
+                // A computer or a phone first (operator review 2026-11-23): a phone goes to the QR window, the one way to pair it.
+                <div className="grid grid-cols-2 gap-sm" data-add-choose="true">
+                  <AddChoice icon={<LaptopIcon aria-hidden="true" />} title={t("devices.addKind.computer")} line={t("devices.addKind.computerLine")} onPick={() => setAddStep("computer")} data-add-choice="computer" />
+                  <AddChoice
+                    icon={<SmartphoneIcon aria-hidden="true" />}
+                    title={t("devices.addKind.phone")}
+                    line={t("devices.addKind.phoneLine")}
+                    onPick={() => {
+                      setAdding(null);
+                      setPairingPhone(true);
+                    }}
+                    data-add-choice="phone"
+                  />
+                </div>
+              ) : null}
               {/* Which kind of machine is added: one that runs its own Hide, by its link, or one reached over SSH or WSL (PRD device-connect-iroh B2, B7). */}
-              <ToggleGroup type="single" value={addKind} onValueChange={(next) => { if (next) setAddKind(next as AddKind); }} aria-label={t("devices.addTitle")} className="w-full" data-add-kind={addKind}>
+              {addStep === "computer" ? <ToggleGroup type="single" value={addKind} onValueChange={(next) => { if (next) setAddKind(next as AddKind); }} aria-label={t("devices.addTitle")} className="w-full" data-add-kind={addKind}>
                 <ToggleGroupItem value="hide" size="sm" className="flex-1" data-add-kind-choice="hide">{t("pairing.add.kindHide")}</ToggleGroupItem>
                 <ToggleGroupItem value="ssh" size="sm" className="flex-1" data-add-kind-choice="ssh">{t("pairing.add.kindSsh")}</ToggleGroupItem>
-              </ToggleGroup>
-              {addKind === "hide" ? (
+              </ToggleGroup> : null}
+              {addStep !== "computer" ? null : addKind === "hide" ? (
                 <AddByLink actions={actions} onStarted={() => setAdding(null)} />
               ) : (
                 <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
@@ -320,6 +363,20 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         </AlertDialog>
       ) : null}
     </>
+  );
+}
+
+/** One answer to Add device's question, computer or phone: its mark, its name and how it connects. */
+function AddChoice({ icon, title, line, onPick, ...data }: { icon: ReactNode; title: string; line: string; onPick: () => void } & Record<`data-${string}`, string>) {
+  return (
+    <RowButton className="items-start gap-sm rounded-md border border-border bg-card px-md py-md [&_svg]:size-(--size-icon)" onClick={onPick} {...data}>
+      <span className="mt-xxs shrink-0 text-muted-foreground">{icon}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+        <span className="text-subhead font-semibold text-foreground">{title}</span>
+        <span className="break-keep text-body text-muted-foreground">{line}</span>
+      </span>
+      <ChevronRightIcon aria-hidden="true" className="mt-xxs shrink-0 text-muted-foreground" />
+    </RowButton>
   );
 }
 
