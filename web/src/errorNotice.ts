@@ -8,8 +8,8 @@ import { coreErrorKey, coreErrorText } from "./coreError";
 
 type Shell = { rest: SnapshotRest | null };
 
-/** The failures of an open the keyboard may be waiting on. */
-const OPEN_FAILURES: ReadonlySet<string> = new Set(["file.open_failed", "browser.open_refused"]);
+/** The failures of an open the keyboard may be waiting on, each an open that showed nothing: a file whose read failed, a refused page, and focus mode refused for a View's chip (its pane in no Agent tab, or its Workspace gone). */
+const OPEN_FAILURES: ReadonlySet<string> = new Set(["file.open_failed", "browser.open_refused", "pair_view.no_agent_tab", "pair_view.other_workspace", "agent_group.workspace_unavailable"]);
 
 /** The core's `last_error` when it is new in `state` (a different occurrence than `previous` carried), else null. */
 export function freshError(state: Shell, previous: Shell) {
