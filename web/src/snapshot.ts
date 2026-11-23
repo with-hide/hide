@@ -1606,7 +1606,7 @@ export type MissionGate = {
 export type MissionExternal = { pr: number } | { branch: string };
 
 /** Where an outside node's work goes (`OutsideView`, PRD mission-destination D-14): its pull request's base and state as GitHub last answered, or the default branch its branch is judged against; each absent until read. */
-export type MissionOutside = { base?: string; state?: PrState };
+export type MissionOutside = { base?: string; state?: PrState; /** An outside pull request as its host's unit names it; absent for a branch and from an older core, which reads as `↗#n`. */ reference?: ChangeRequestRef };
 
 /** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
 export type MissionQuestion = {
@@ -1723,12 +1723,14 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** `base_pr` as its host's unit names it (`!12` on gitlab.com); absent with none and from an older core, which reads as `#n`. */
+  base_reference?: ChangeRequestRef | null;
   /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
   stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
-  /** `pr_url` as its host's unit names it; absent while no read named it. */
+  /** The current pull request as its host's unit names it; absent while the project's repository is not read and from an older core, which reads as `#n`. */
   pr_reference?: ChangeRequestRef | null;
   /** The node's step of four (D-42, D-48); none for a node without a pull request or branch (D-53). */
   stage: number | null;

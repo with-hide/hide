@@ -21,7 +21,7 @@ import { PhoneMissionMap } from "./PhoneMissionMap";
 import { MissionSteps } from "./MissionSteps";
 import { Composer, PageHead } from "./layout";
 import { OfflineText } from "./OfflineText";
-import { progress } from "./missionModel";
+import { phonePulls, progress } from "./missionModel";
 import type { MissionHeldNode, MissionSafetyNet, MissionSkip } from "../snapshot";
 import { noticeText, type AgentKey, type PhoneDecisionView, type PhoneMission } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
@@ -136,7 +136,7 @@ function HeldStep({ mission, held }: { mission: PhoneMission; held: MissionHeldN
     <li className="flex min-w-0 flex-col" data-phone-held-step={held.key}>
       <span className="break-keep text-body text-foreground wrap-anywhere">{held.title}</span>
       <span className="break-keep text-caption text-muted-foreground wrap-anywhere">
-        {attentionReasonText(held.reason, held.pr, t)}
+        {attentionReasonText(held.reason, held.pr, t, 0, phonePulls(mission))}
         {age ? ` · ${t("mission.net.age", { age })}` : null}
       </span>
     </li>

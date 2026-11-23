@@ -9,7 +9,7 @@ import type { TFunction } from "i18next";
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
 import {
-  attentionReasonText, cardGate, escalationWhy, holdReason, missionCounts, missionOpen, nodeLook, nodePace, openAttention, workerAsleep,
+  attentionReasonText, cardGate, escalationWhy, holdReason, missionCounts, missionOpen, nodeLook, nodePace, openAttention, pullsByNumber, workerAsleep, type MissionPulls,
   type NodeLook, type NodePace, type WorkerEscalation,
 } from "../missions";
 import type { LineNode } from "../missionLine";
@@ -59,9 +59,14 @@ export function phoneLineNode(node: PhoneMissionNode, nodes: readonly Pick<Phone
   const external = node.external_pr != null ? { pr: node.external_pr }
     : node.external_branch != null ? { branch: node.external_branch }
       : node.kind === "external" && node.pr != null ? { pr: node.pr } : null;
-  const outside = node.external_base != null || node.external_state != null ? { base: node.external_base, state: node.external_state } : null;
+  const outside = node.external_base != null || node.external_state != null || node.external_reference != null ? { base: node.external_base, state: node.external_state, reference: node.external_reference } : null;
   const base = node.base_pr == null ? null : nodes.find((one) => one.pr === node.base_pr);
   return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0, base_state: base?.pr_state ?? null };
+}
+
+/** The references a phone mission's steps carry, by number, so a reason names a gitlab.com merge request `!12`. */
+export function phonePulls(mission: PhoneMission): MissionPulls {
+  return pullsByNumber(mission.nodes.map((node) => phoneLineNode(node)));
 }
 
 /** The progress words and counts of the head: `n / m` of the steps in the plan. */
@@ -122,7 +127,7 @@ export function stepState(mission: PhoneMission, node: PhoneMissionNode, t: TFun
   const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
   const asleep = pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep") : null;
   const why = reason?.kind === "attention"
-    ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
+    ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t, 0, phonePulls(mission))}`
     : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
       : reason?.kind === "decision" ? t("mobile.mission.waitsDecision") : null;
   return {

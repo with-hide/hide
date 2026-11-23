@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionExternal, MissionOutside, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 import { pullLabel, pullName } from "./codeHost";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
@@ -433,14 +433,14 @@ export function stageWord(node: Pick<MissionNode, "kind" | "preset" | "delivery"
  * nothing is drawn for it.
  */
 export type NodeResult =
-  | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
+  | { kind: "pr"; number: number; reference: ChangeRequestRef | null; state: MissionNode["pr_state"] }
   | { kind: "commit"; commit: string }
   | { kind: "branch"; branch: string }
   | { kind: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
   | { kind: "line"; line: string };
 
 export function nodeResult(node: MissionNode): NodeResult | null {
-  if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
+  if (node.pr != null) return { kind: "pr", number: node.pr, reference: node.pr_reference ?? null, state: node.pr_state };
   if (node.kind === "change") {
     const commit = mainCommit(node);
     return commit ? { kind: "commit", commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
@@ -1046,15 +1046,20 @@ export function nodeQuestion(mission: Mission, node: MissionNode): string | null
 /** A mission's pull requests by number, each with the reference its node carries: events and marks name a number only. */
 export type MissionPulls = ReadonlyMap<number, ChangeRequestRef>;
 
-/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds. */
-export function pullsByNumber(nodes: readonly { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[] }[]): MissionPulls {
+/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds, the one it is stacked on and an outside one. */
+export function pullsByNumber(nodes: readonly PulledNode[]): MissionPulls {
   const pulls = new Map<number, ChangeRequestRef>();
   for (const node of nodes) {
+    if (node.base_pr != null && node.base_reference) pulls.set(node.base_pr, node.base_reference);
+    if (node.external && "pr" in node.external && node.outside?.reference) pulls.set(node.external.pr, node.outside.reference);
     for (const pr of node.prs ?? []) if (pr.reference) pulls.set(pr.number, pr.reference);
     if (node.pr != null && node.pr_reference) pulls.set(node.pr, node.pr_reference);
   }
   return pulls;
 }
+
+/** What `pullsByNumber` reads of a node: the desktop's node, or the phone's as `phoneLineNode` reads it. */
+type PulledNode = { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[]; base_pr?: number | null; base_reference?: ChangeRequestRef | null; external?: MissionExternal | null; outside?: MissionOutside | null };
 
 /** Pull request `number` of a mission, named by the reference a node carries for it (`!12` on gitlab.com). */
 export function missionPull(number: number, pulls: MissionPulls | undefined): { number: number; reference: ChangeRequestRef | null } {
@@ -1160,7 +1165,7 @@ export function projectAsks(asks: readonly MissionAsk[], projectId: string | nul
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;
   if (!attention) return null;
-  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes) };
+  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes, pullsByNumber([node])) };
 }
 
 /**
@@ -1247,11 +1252,11 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
  * raise's own, else the node's current one or the outside one it follows,
  * with its state as the project's list reads it, else as the node keeps it.
  */
-export function attentionPr(node: MissionNode, attention: MissionAttention, pulls: readonly PullRequest[] | null | undefined): { number: number; state: PrState | null } | null {
+export function attentionPr(node: MissionNode, attention: MissionAttention, pulls: readonly PullRequest[] | null | undefined): { number: number; state: PrState | null; reference: ChangeRequestRef | null } | null {
   const number = attention.pr ?? node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
   if (number == null) return null;
   const pull = pulls?.find((row) => row.number === number) ?? null;
-  return { number, state: pull?.state ?? (number === node.pr ? (node.pr_state ?? null) : null) };
+  return { number, state: pull?.state ?? (number === node.pr ? (node.pr_state ?? null) : null), reference: pull?.reference ?? pullsByNumber([node]).get(number) ?? null };
 }
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */

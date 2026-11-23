@@ -1723,3 +1723,36 @@ it("names the latest open PR and the additional open count in the merge turn", a
     } finally { await map.unmount(); }
   }
 });
+
+it("writes each change request a mission names as its host does: `!n` on gitlab.com, `#n` on GitHub and from a core that sent no reference (D1)", async () => {
+  // The references a core's host unit makes; the expected labels are written by hand below.
+  const ref = (host: "gitlab" | "github", number: number) => host === "gitlab"
+    ? { repository: { host, authority: "gitlab.com", path: "acme/app" }, number, key: `gitlab.com/acme/app#${number}`, label: `!${number}`, url: `https://gitlab.com/acme/app/-/merge_requests/${number}`, checks_url: "", files_url: "" }
+    : { repository: { host, authority: "github.com", path: "acme/app" }, number, key: `github.com/acme/app#${number}`, label: `#${number}`, url: `https://github.com/acme/app/pull/${number}`, checks_url: "", files_url: "" };
+  const nodes = (host: "gitlab" | "github" | null) => {
+    const at = (number: number) => (host ? ref(host, number) : null);
+    return [
+      node("guard", { status: "working", pr: 45, pr_state: "pending", pr_reference: at(45), prs: [{ number: 45, state: "pending", url: null, base: "main", reference: at(45) }], base_pr: 40, ...(host ? { base_reference: at(40) } : {}) }),
+      node("moved", { kind: "external", delivery: null, status: "working", external: { pr: 44 }, outside: { base: "main", state: "pending", ...(host ? { reference: ref(host, 44) } : {}) } }),
+    ];
+  };
+  for (const [host, own, outside, base, stack] of [
+    ["gitlab", "!45", "↗!44", "on !40", "MR 40"],
+    ["github", "#45", "↗#44", "on #40", "PR 40"],
+    [null, "#45", "↗#44", "on #40", "PR 40"],
+  ] as const) {
+    const map = await mount({ items: [mission({ nodes: nodes(host) })] });
+    try {
+      // The summary's PR row and each card's line.
+      expect(map.q('[data-mission-summary-row="pr"] dd')?.textContent, `${host}`).toBe(own);
+      expect(card(map, "guard").querySelector("[data-line-pr]")?.textContent, `${host}`).toBe(own);
+      expect(card(map, "moved").querySelector("[data-line-pr]")?.textContent, `${host}`).toBe(outside);
+      expect(card(map, "guard").querySelector("[data-line-to] [title]")?.getAttribute("title"), `${host}`).toBe(stack);
+      // The node panel: the base a change stacks on, and an outside node's pull request.
+      await act(async () => card(map, "guard").click());
+      expect(map.q("[data-panel-base]")?.textContent, `${host}`).toBe(base);
+      await act(async () => card(map, "moved").click());
+      expect(map.q("[data-panel-prs]")?.textContent, `${host}`).toBe(outside.slice(1));
+    } finally { await map.unmount(); }
+  }
+});

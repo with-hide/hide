@@ -218,6 +218,11 @@ pub struct PhoneNode {
     pub pr_reference: Option<crate::code_host::ChangeRequestRef>,
     pub pr_state: Option<String>,
     pub base_pr: Option<u32>,
+    /// The pull request it is stacked on as its host's unit names it
+    /// (`NodeView::base_reference`); absent with none, and from a core before
+    /// it, which an older bundle ignores and a newer one reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The branch its current pull request merges into, as GitHub last
     /// answered (`NodePrView::base`), which ends its branch line when it
     /// is not the destination (PRD mission-destination D-14); absent until
@@ -233,6 +238,11 @@ pub struct PhoneNode {
     /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
+    /// That pull request as its host's unit names it
+    /// (`OutsideView::reference`), so it reads `↗!12` on gitlab.com; absent
+    /// with none, and from a core before it, which reads as `↗#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The branch an outside step watches (`External::Branch`), its
     /// `↗ <branch>`; absent otherwise and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -466,6 +476,8 @@ struct NodeIn {
     #[serde(default)]
     base_pr: Option<u32>,
     #[serde(default)]
+    base_reference: Option<crate::code_host::ChangeRequestRef>,
+    #[serde(default)]
     prs: Vec<NodePrIn>,
     #[serde(default)]
     external: Option<ExternalIn>,
@@ -536,6 +548,8 @@ struct OutsideIn {
     base: Option<String>,
     #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    reference: Option<crate::code_host::ChangeRequestRef>,
 }
 
 /// The facts of one raw agent row the missions join on: whether the core
@@ -713,6 +727,7 @@ fn phone_mission(
                 pr_reference: source.pr_reference,
                 pr_state: source.pr_state,
                 base_pr: source.base_pr,
+                base_reference: source.base_reference,
                 pr_more: source.prs.len().saturating_sub(1),
                 pr_base: source.prs.into_iter().next_back().and_then(|pr| pr.base),
                 external_pr: source.external.as_ref().and_then(|external| external.pr),
@@ -721,6 +736,10 @@ fn phone_mission(
                     .outside
                     .as_ref()
                     .and_then(|outside| outside.base.clone()),
+                external_reference: source
+                    .outside
+                    .as_ref()
+                    .and_then(|outside| outside.reference.clone()),
                 external_state: source.outside.and_then(|outside| outside.state),
                 stage: source.stage,
                 attention: source.attention,
@@ -1171,34 +1190,62 @@ mod tests {
         assert!(!sent.to_string().contains("never-send"));
     }
 
-    /// A step's current pull request reaches the phone with the reference
-    /// its host's unit made, so the phone names a gitlab.com one `!12`
-    /// (docs/ARCHITECTURE.md, Code hosts); a step with none sends no key.
+    /// Every pull request a step names reaches the phone with the reference
+    /// its host's unit made, its current one, the one it is stacked on and
+    /// the one an outside step watches, so the phone names a gitlab.com one
+    /// `!12` (docs/ARCHITECTURE.md, Code hosts); a step with none sends no
+    /// key, which the phone reads as `#n`.
     #[test]
-    fn a_steps_pull_request_reaches_the_phone_with_its_hosts_reference() {
-        let reference = json!({
-            "repository": {"host": "gitlab", "authority": "gitlab.com", "path": "acme/shop"},
-            "number": 12, "key": "gitlab.com/acme/shop!12", "label": "!12",
-            "url": "https://gitlab.com/acme/shop/-/merge_requests/12",
-            "checks_url": "https://gitlab.com/acme/shop/-/merge_requests/12/pipelines",
-            "files_url": "https://gitlab.com/acme/shop/-/merge_requests/12/diffs",
-        });
+    fn a_steps_pull_requests_reach_the_phone_with_their_hosts_references() {
+        let reference = |number: u32| {
+            json!({
+                "repository": {"host": "gitlab", "authority": "gitlab.com", "path": "acme/shop"},
+                "number": number, "key": format!("gitlab.com/acme/shop#{number}"), "label": format!("!{number}"),
+                "url": format!("https://gitlab.com/acme/shop/-/merge_requests/{number}"),
+                "checks_url": format!("https://gitlab.com/acme/shop/-/merge_requests/{number}/pipelines"),
+                "files_url": format!("https://gitlab.com/acme/shop/-/merge_requests/{number}/diffs"),
+            })
+        };
         let rest = rest(
             vec![mission(
                 "m1",
                 10,
                 "running",
                 vec![
-                    node("a", json!({"pr": 12, "pr_reference": reference})),
-                    node("b", json!({"pr": 7})),
+                    node(
+                        "a",
+                        json!({"pr": 12, "pr_reference": reference(12), "base_pr": 11, "base_reference": reference(11)}),
+                    ),
+                    node("b", json!({"pr": 7, "base_pr": 6})),
+                    node(
+                        "c",
+                        json!({"kind": "external", "delivery": null, "external": {"pr": 44}, "outside": {"base": "main", "reference": reference(44)}}),
+                    ),
+                    node(
+                        "d",
+                        json!({"kind": "external", "delivery": null, "external": {"pr": 43}, "outside": {"base": "main"}}),
+                    ),
                 ],
             )],
             json!({}),
         );
         let sent = serde_json::to_value(projected(&rest)).unwrap();
-        let nodes = &sent["items"][0]["nodes"];
-        assert_eq!(nodes[0]["pr_reference"]["label"], json!("!12"));
-        assert_eq!(nodes[1].get("pr_reference"), None);
+        let labels = |at: usize| {
+            ["pr_reference", "base_reference", "external_reference"].map(|key| {
+                sent["items"][0]["nodes"][at]
+                    .get(key)
+                    .map(|one| one["label"].clone())
+            })
+        };
+        assert_eq!(
+            [labels(0), labels(1), labels(2), labels(3)],
+            [
+                [Some(json!("!12")), Some(json!("!11")), None],
+                [None, None, None],
+                [None, None, Some(json!("!44"))],
+                [None, None, None],
+            ]
+        );
     }
 
     #[test]

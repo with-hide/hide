@@ -17209,6 +17209,7 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
     let unread = OutsideView {
         base: None,
         state: None,
+        reference: None,
     };
     assert_eq!(
         published(&mut runtime),
@@ -17220,6 +17221,7 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
     let develop = Some(OutsideView {
         base: Some("develop".into()),
         state: None,
+        reference: None,
     });
     assert_eq!(
         published(&mut runtime),
@@ -17253,6 +17255,7 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
                 Some(OutsideView {
                     base: Some("release/1.2".into()),
                     state: Some(state),
+                    reference: None,
                 }),
                 develop.clone(),
                 None
@@ -20858,4 +20861,66 @@ fn a_nodes_change_request_of_another_host_or_repository_is_refused_and_attaches_
         json!({"pr": 16, "pr_place": {"host": "gitlab", "repository": "gitlab.com/acme/app"}}),
     )
     .unwrap();
+}
+
+/// Every change request a mission's node names reaches the screen with the
+/// reference its project's host's unit makes, so a gitlab.com project's map
+/// writes `!n` and a GitHub project's `#n`: the node's own, held in the
+/// project's list or not, the one it is stacked on and an outside one. While
+/// the project's repository is not read none is made, which a screen reads
+/// as `#n`.
+#[test]
+fn a_missions_change_requests_carry_their_hosts_reference() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", outside_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 45, "base_pr": 40}}),
+    )
+    .unwrap();
+    let labels = |runtime: &mut Runtime| {
+        runtime.missions.github_edit += 1;
+        runtime.refresh_missions();
+        let (fix, parser) = (node_view(runtime, "fix"), node_view(runtime, "parser"));
+        let label =
+            |reference: Option<crate::code_host::ChangeRequestRef>| reference.map(|one| one.label);
+        [
+            label(fix.pr_reference),
+            label(fix.prs.last().and_then(|pr| pr.reference.clone())),
+            label(fix.base_reference),
+            label(parser.outside.and_then(|outside| outside.reference)),
+        ]
+    };
+    assert_eq!(labels(&mut runtime), [None, None, None, None]);
+    let some = |label: &str| Some(label.to_owned());
+    for (stored, expected) in [
+        ("gitlab.com/acme/app", ["!45", "!45", "!40", "!1232"]),
+        ("acme/app", ["#45", "#45", "#40", "#1232"]),
+    ] {
+        runtime.github = read_as(stored);
+        assert_eq!(labels(&mut runtime), expected.map(some), "{stored}");
+        // The list's own reference is the one carried while it holds the change request.
+        let mut held = pull(45, "a1", PullRequestBadge::Open, None);
+        held.reference = runtime.github.projects[0]
+            .repository
+            .as_ref()
+            .and_then(|identity| identity.repository.clone())
+            .map(|repository| {
+                let host = crate::code_host::CodeHosts::STANDARD
+                    .of(&repository)
+                    .unwrap();
+                crate::code_host::change_request(host.unit(), repository, 45)
+            });
+        runtime.github.projects[0].pull_requests = vec![held];
+        assert_eq!(labels(&mut runtime), expected.map(some), "{stored}");
+    }
 }

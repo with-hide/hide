@@ -15,12 +15,14 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
 import type { ChangeRequestRef, MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
-import { pullLabel } from "./codeHost";
+import { pullHost, pullLabel } from "./codeHost";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
 export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_reference" | "pr_state" | "landing" | "merge"> & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** The pull request it is stacked on as its host's unit names it; absent from a core before it, which reads as `#n`. */
+  base_reference?: ChangeRequestRef | null;
   /** How the pull request it is stacked on stands, as the mission's own nodes know it; absent or null when no node holds it. */
   base_state?: PrState | null;
   /** The worker's branch; absent where the frame carries none. */
@@ -81,7 +83,7 @@ export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
 export type LineMark = PrState | "pull" | "branch" | "plan_pr" | "plan_direct";
 
 /** Where the result lands: a branch (bold when it is not the mission's destination) or the pull request it is stacked on, drawn as that pull request's mark by its state (grey when unknown) and a grey number (D-57). */
-export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number; state: PrState | null };
+export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number; reference: ChangeRequestRef | null; state: PrState | null };
 
 export type BranchLine = {
   mark: LineMark;
@@ -113,7 +115,7 @@ export function branchLine(node: LineNode, destination: string | null): BranchLi
 function ownLine(node: LineNode, destination: string | null): BranchLine {
   const byPr = node.delivery !== "direct" || node.pr != null;
   const person = node.merge?.by === "operator" ? node.merge.state : null;
-  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
+  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, reference: node.base_reference ?? null, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
   // A node only planned says how it will go; one replanned after it opened a pull request keeps the pull request it has.
   if (node.status === "planned" && node.pr == null) {
     return { mark: byPr ? "plan_pr" : "plan_direct", pr: null, branch: null, plan: byPr ? "pr" : "direct", direct: false, to, person };
@@ -124,13 +126,13 @@ function ownLine(node: LineNode, destination: string | null): BranchLine {
   return { mark: pr ? (node.pr_state ?? "pull") : "branch", pr, branch, plan: null, direct: false, to, person };
 }
 
-/** An outside node (D-07, D-52): `↗#n → <its base>` lit by the state GitHub last answered, or `↗ <branch> → <the default branch>`; done is the result in, whatever else was read. */
+/** An outside node (D-07, D-52): `↗#n → <its base>` (`↗!n` on gitlab.com) lit by the state GitHub last answered, or `↗ <branch> → <the default branch>`; done is the result in, whatever else was read. */
 function outsideLine(node: LineNode, destination: string | null): BranchLine {
   const done = node.status === "done";
   const to = branchTo(node.outside?.base ?? null, destination);
   const external = node.external;
   if (external && "pr" in external) {
-    return { mark: done ? "merged" : (node.outside?.state ?? "pull"), pr: { number: external.pr, outside: true, more: 0 }, branch: null, plan: null, direct: false, to, person: null };
+    return { mark: done ? "merged" : (node.outside?.state ?? "pull"), pr: { number: external.pr, reference: node.outside?.reference ?? null, outside: true, more: 0 }, branch: null, plan: null, direct: false, to, person: null };
   }
   return { mark: done ? "merged" : "branch", pr: null, branch: external ? { name: external.branch, outside: true } : null, plan: null, direct: false, to, person: null };
 }
@@ -171,9 +173,9 @@ export function lineToLabel(to: LineTo): string {
   return to.kind === "stack" ? String(to.pr) : to.name;
 }
 
-/** The destination in words, for the card's name and the hover: the branch, or `PR n` for a stack (D-57). */
+/** The destination in words, for the card's name and the hover: the branch, or `PR n` (`MR n` on gitlab.com) for a stack (D-57). */
 export function lineToWords(to: LineTo, t: TFunction<"translation">): string {
-  return to.kind === "stack" ? t("mission.foot.stackPr", { number: String(to.pr) }) : to.name;
+  return to.kind === "stack" ? t("mission.foot.stackPr", { item: pullHost({ number: to.pr, reference: to.reference }).item, number: String(to.pr) }) : to.name;
 }
 
 /** The pull request's words as the line draws them: `#n`, `↗#n`, `+N`. */

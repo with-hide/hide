@@ -50,7 +50,7 @@ export function PullList({ mission, onSelect }: { mission: Mission; onSelect: (k
       {pulls.map(({ node, pr }) => (
         <li key={pr.number} className="min-w-0 border-b border-border last:border-b-0">
           <RowButton onClick={() => onSelect(node.key)} title={node.title} className="gap-sm rounded-none px-sm text-body" data-mission-pull={pr.number}>
-            <MissionPrMark number={pr.number} state={pr.state} stale={mission.github_stale} />
+            <MissionPrMark number={pr.number} reference={pr.reference} state={pr.state} stale={mission.github_stale} />
             <span className="min-w-0 flex-1 truncate">{node.title}</span>
             {pr.state ? <span className={cn("shrink-0 text-caption", PR_LOOK[pr.state].tone)} data-mission-pull-state={pr.state}>{t(PR_LOOK[pr.state].word)}</span> : null}
           </RowButton>

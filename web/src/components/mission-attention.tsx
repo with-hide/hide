@@ -85,7 +85,7 @@ export function AttentionFacts({ mission, node, attention }: { mission: Mission;
     <>
       {pr ? (
         <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-attention-pr={pr.number} data-attention-pr-reason={row?.reason.kind ?? pr.state ?? "unread"}>
-          <MissionPrMark number={pr.number} state={pr.state} />
+          <MissionPrMark number={pr.number} reference={pr.reference} state={pr.state} />
           {row ? <ReasonLine reason={row.reason} group={row.group} className="text-caption" /> : pr.state ? <span className="min-w-0 truncate">{t(`agentSessions.pr.${pr.state}`)}</span> : null}
         </span>
       ) : null}
