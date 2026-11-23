@@ -703,8 +703,8 @@ fn messages_from(parsed: hide_session::ParsedSession) -> Vec<Message> {
 }
 
 /// The message a phone shows, cut at `MESSAGE_CHARS`; `None` for one with
-/// neither text nor, from the operator, an image. `part` names the native
-/// message a split record belongs to.
+/// neither text nor, from the operator, an image or a recorded file. `part`
+/// names the native message a split record belongs to.
 fn message(
     id: u64,
     who: &'static str,
@@ -720,7 +720,7 @@ fn message(
     } else {
         (0, Vec::new())
     };
-    if text.is_empty() && images == 0 {
+    if text.is_empty() && images == 0 && files.is_empty() {
         return None;
     }
     let truncated = text.chars().nth(MESSAGE_CHARS).is_some();
@@ -997,7 +997,8 @@ mod tests {
 
     /// Codex keeps the path of each file it attached beside the message: the
     /// phone gets each file's name (with the upload id a phone sent it
-    /// under), never the folders, and the words without Codex's wrappers.
+    /// under), never the folders, and the words without Codex's wrappers; a
+    /// file sent alone, with no words and no image, still reaches it.
     #[test]
     fn the_files_codex_recorded_with_a_message_reach_the_phone_by_name() {
         let user = |content: serde_json::Value, second: u32| {
@@ -1028,6 +1029,12 @@ mod tests {
                 serde_json::json!([{"type": "input_text", "text": "확인해줘"}]),
                 3,
             ),
+            // A log sent alone: no words and no image, only Codex's list.
+            user(
+                serde_json::json!([{"type": "input_text",
+                    "text": format!("\n# Files mentioned by the user:\n\n## holder.log: /Users/me/.hide/state/attachments/{log}\n")}]),
+                4,
+            ),
         ];
         let (_directory, path) = transcript(&lines);
         let (page, _) = page_before(&path, Agent::Codex, None).unwrap();
@@ -1040,6 +1047,7 @@ mod tests {
                 ("확인해줘", 1, vec![log.to_owned(), photo.to_owned()]),
                 ("", 1, vec![photo.to_owned()]),
                 ("확인해줘", 0, Vec::new()),
+                ("", 0, vec![log.to_owned()]),
             ]
         );
         let wire = serde_json::to_string(&page.messages).unwrap();

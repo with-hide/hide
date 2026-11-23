@@ -321,6 +321,11 @@ it("finds a reply by the upload id of a file the agent recorded beside the words
     ],
     words: "확인해줘",
   });
+  // A log sent alone, which the agent recorded beside no words and no image, is found by its own id too.
+  const [log] = sendFiles(["holder.log"]);
+  const onlyLog = you(550, "", 0, [`${log}-holder.log`]);
+  arrive(onlyLog);
+  expect(shown(onlyLog)).toEqual({ files: [expect.objectContaining({ name: "holder.log", kind: "file" })], words: "" });
   // Another phone's file the agent recorded is named, with no thumbnail.
   const elsewhere = you(600, "", 1, ["01234567-0123-4123-8123-0123456789ab-shot.jpg"]);
   arrive(elsewhere);

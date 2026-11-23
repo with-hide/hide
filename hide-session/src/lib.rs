@@ -1819,7 +1819,9 @@ fn parse_codex_line(item: &Value) -> LineResult {
     let attached = codex_attached(role, payload.get("content"));
     let text = match session_text(codex_own_text(role, payload.get("content")).as_ref()) {
         Some(text) => text,
-        None if role == "user" && images > 0 => String::new(),
+        // A message of attached files alone, images or any other file, is
+        // still the operator's.
+        None if role == "user" && (images > 0 || !attached.is_empty()) => String::new(),
         None => return LineResult::Ignore,
     };
     let timestamp = match timestamp_ms(item.get("timestamp")) {

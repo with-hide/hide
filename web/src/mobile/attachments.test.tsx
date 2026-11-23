@@ -163,6 +163,12 @@ it("draws a photo the agent took in as an image over the message that names its 
     const alone = mine().at(-1)!;
     expect(alone.querySelector<HTMLImageElement>('[data-phone-sent-photo="IMG_0002.jpg"] img')!.src).toBe("data:image/jpeg;base64,AA==");
     expect(alone.querySelector("p")).toBeNull();
+
+    // A log the agent recorded beside no words and no image stands as its chip alone.
+    await conversation("append", said(700, "you", "", 0, ["holder.log"]));
+    const onlyLog = mine().at(-1)!;
+    expect(onlyLog.querySelector('[data-phone-sent-file="holder.log"]')!.textContent).toContain("holder.log");
+    expect(onlyLog.querySelector("p")).toBeNull();
   } finally {
     await unmount();
   }
