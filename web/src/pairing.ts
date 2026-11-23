@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch" | "rename";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
@@ -210,8 +210,20 @@ export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" |
     const reason: MessageKey | null = peer.reason === "relay_monthly_limit" ? "pairing.reason.relayMonthlyLimit" : peer.reason === "relay_unreachable" ? "pairing.reason.relayUnreachable" : null;
     return line("pairing.state.notConnected", "warn", peer.opens != null ? "retry" : null, reason);
   }
-  // The path the connection takes now, in one word (D-86).
-  return line(peer.path === "relay" ? "pairing.state.relay" : peer.path === "tailscale" ? "pairing.state.tailscale" : "pairing.state.direct", "ok");
+  // Connected says only that: the path it takes is the row's Connection
+  // details (`peerRouteKey`), and a relay path adds its tip (`relayTip`).
+  return line("pairing.state.connected", "ok");
+}
+
+/** The path a connected machine's connection takes now, in one word (D-86); null while it is not connected. */
+export function peerRouteKey(peer: Peer): MessageKey | null {
+  if (!peer.connected) return null;
+  return peer.path === "relay" ? "pairing.state.relay" : peer.path === "tailscale" ? "pairing.state.tailscale" : "pairing.state.direct";
+}
+
+/** Whether the row says that Tailscale on both computers would connect them directly: only while the connection goes through the relay. */
+export function relayTip(peer: Peer): boolean {
+  return peer.connected && peer.path === "relay" && peerState(peer).key === "pairing.state.connected";
 }
 
 /** Whether this machine may ask `peer` to be let in the other way (B50): it is opened by a machine it does not open. */

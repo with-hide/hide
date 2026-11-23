@@ -164,6 +164,13 @@ pub enum Ask {
         device: String,
         address: String,
     },
+    /// Gives a paired machine the name this machine shows it under: on
+    /// the rail, in its tabs and in Settings › Devices. Only this machine's
+    /// records change; the machine keeps calling itself what it did.
+    Rename {
+        device: String,
+        name: String,
+    },
     /// Asks a machine this one reaches over SSH whether it can pair that
     /// way; nothing changes there (B7).
     LookSsh {
@@ -257,6 +264,7 @@ impl Ask {
             | Self::Pause { .. }
             | Self::Remove { .. }
             | Self::DismissRequest { .. }
+            | Self::Rename { .. }
             | Self::Retry { .. } => false,
         }
     }
@@ -314,6 +322,7 @@ pub fn next_action(code: &str) -> &'static str {
         "request_waiting" => "The earlier request still waits for its answer on the other machine",
         "ask_gone" => "The request is over; nothing was changed",
         "address_invalid" => "Give the address as ip:port",
+        "name_invalid" => "Give a name of one to 64 bytes, on one line, that is not only spaces",
         "peer_unavailable" => {
             "This machine could not open its connection; the reason is in Hide's diagnostic log"
         }
@@ -1408,6 +1417,15 @@ impl Pairing {
                 peers.network_changed();
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
+            Ask::Rename { device, name } => {
+                let name = hide_core::device_command::device_name(&name).ok_or("name_invalid")?;
+                let paired = self.named(&peers, &device)?;
+                if !peers.rename(&paired.key, name).map_err(store)? {
+                    return Err("device_unknown");
+                }
+                self.look.send_modify(|count| *count += 1);
+                Ok(json!({ "device_id": paired.machine.device_id, "name": name }))
+            }
             Ask::AcceptSsh {
                 request,
                 key,
@@ -2309,6 +2327,7 @@ mod tests {
             json!({"verb": "pause", "device": "pc"}),
             json!({"verb": "remove", "device": "pc"}),
             json!({"verb": "resume", "device": "pc"}),
+            json!({"verb": "rename", "device": "pc", "name": "회사 PC"}),
             json!({"verb": "share"}),
             json!({"verb": "join", "link": "hide://pair#v=1"}),
         ] {
@@ -2367,6 +2386,8 @@ mod tests {
             json!({"verb": "retry", "device": "pc"}),
             json!({"verb": "dismiss_join"}),
             json!({"verb": "dismiss_request", "device": "pc"}),
+            // A name is this machine's word for the other one.
+            json!({"verb": "rename", "device": "pc", "name": "회사 PC"}),
         ];
         for ask in anyone {
             let parsed: Ask = serde_json::from_value(ask.clone()).unwrap();

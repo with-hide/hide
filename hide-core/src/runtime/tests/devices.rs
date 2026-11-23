@@ -897,6 +897,100 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }
 
+/// A device's name is the operator's (Settings › Devices' ⋯ › Rename,
+/// `hide device rename`): a helper device takes the new name on its row,
+/// which the rail and its tabs read, and keeps it in the store; a paired
+/// machine's device is named by its pairing, so the core refuses to rename
+/// it and follows the name the list of paired machines carries, a switched
+/// device's too once that name moves.
+#[test]
+fn a_device_is_renamed_by_the_operator_and_a_paired_one_by_its_pairing() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let core = crate::node::TEST_NODE;
+    assert!(register_device(&mut runtime, "win"));
+    let rename = |runtime: &mut Runtime, id: &str, name: &str| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "rename_device",
+            "payload": { "device_id": id, "name": name }
+        }))
+        .expect("rename event");
+        runtime.dispatch_json(&event)
+    };
+    assert!(rename(&mut runtime, "win", "  회사 PC "));
+    assert_eq!(device(&runtime, "win").label.as_deref(), Some("회사 PC"));
+    assert_eq!(
+        runtime.snapshot.ui_state.device_registrations[0].label,
+        "회사 PC"
+    );
+    assert!(
+        !rename(&mut runtime, "win", "회사 PC"),
+        "the same name changes nothing"
+    );
+    let (answer, changed) = runtime
+        .device_command(
+            core,
+            DeviceCommand::Rename {
+                device_id: "win".into(),
+                name: "Windows".into(),
+            },
+        )
+        .expect("renamed");
+    assert!(changed);
+    assert_eq!(
+        answer,
+        serde_json::json!({"device_id": "win", "name": "Windows"})
+    );
+    assert_eq!(device(&runtime, "win").label.as_deref(), Some("Windows"));
+    // A blank name and an unknown device are refused and change nothing.
+    rename(&mut runtime, "win", "   ");
+    assert_eq!(device(&runtime, "win").label.as_deref(), Some("Windows"));
+    assert_eq!(
+        runtime
+            .device_command(
+                core,
+                DeviceCommand::Rename {
+                    device_id: "nope".into(),
+                    name: "x".into()
+                }
+            )
+            .err()
+            .as_deref(),
+        Some("device_unknown")
+    );
+
+    // A machine this one opens: its name is the pairing's.
+    let told = |runtime: &mut Runtime, name: &str| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": "ab".repeat(32), "device_id": "mini", "name": name,
+                "opens": "active", "opened_by": null, "connected": true, "path": "direct",
+                "reason": null, "update": null,
+            }] }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    told(&mut runtime, "Mac mini");
+    assert_eq!(device(&runtime, "mini").label.as_deref(), Some("Mac mini"));
+    rename(&mut runtime, "mini", "거실 Mac");
+    assert_eq!(device(&runtime, "mini").label.as_deref(), Some("Mac mini"));
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("device.paired")
+    );
+    told(&mut runtime, "거실 Mac");
+    assert_eq!(device(&runtime, "mini").label.as_deref(), Some("거실 Mac"));
+}
+
 /// Only the core's machine adds, retries or removes a device, an unknown
 /// one is not retried, an alias `ssh` would
 /// read as an option is refused, and a device with a file tab open is not

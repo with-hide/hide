@@ -28,6 +28,12 @@ pub enum DeviceCommand {
     Retry {
         device_id: String,
     },
+    /// The name the device is shown under from now on: its rail tile, its
+    /// tabs and its row.
+    Rename {
+        device_id: String,
+        name: String,
+    },
 }
 
 /// The most bytes an alias, name or id may take.
@@ -45,8 +51,24 @@ impl DeviceCommand {
                 valid_value(ssh_alias) && name.as_deref().is_none_or(valid_value)
             }
             Self::Remove { device_id } | Self::Retry { device_id } => valid_value(device_id),
+            Self::Rename { device_id, name } => {
+                valid_value(device_id) && device_name(name).is_some()
+            }
         }
     }
+}
+
+/// The most bytes a name the operator gives a device takes: what the list of
+/// paired machines holds (`peer_machines`), so a device and a paired machine
+/// are named alike.
+pub const MAX_NAME_BYTES: usize = crate::peer_machines::MAX_NAME_BYTES;
+
+/// A name the operator gives a device or a paired machine, trimmed: one line
+/// of at most [`MAX_NAME_BYTES`] that is not only spaces. `None` otherwise.
+pub fn device_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    (!name.is_empty() && name.len() <= MAX_NAME_BYTES && !name.chars().any(char::is_control))
+        .then_some(name)
 }
 
 /// The id a device added under `alias` goes by until its first connection
@@ -100,6 +122,12 @@ pub fn next_action(code: &str) -> &'static str {
         "device_local_remove_denied" => "The core's own machine cannot be removed",
         "device_dials_in" => {
             "The device connects to the core itself and reconnects when it can reach it; check its network"
+        }
+        "device_name_invalid" => {
+            "Give a name of one to 64 bytes, on one line, that is not only spaces"
+        }
+        "device_paired" => {
+            "A paired machine is renamed by its pairing: run hide device rename again"
         }
         "device_files_open" => {
             "Ask the operator to close the device's file tabs, or to remove it in Settings > Devices, which stores their drafts first"
@@ -281,6 +309,23 @@ fn connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_name_is_one_trimmed_line_a_paired_machine_could_hold() {
+        assert_eq!(device_name("  회사 PC "), Some("회사 PC"));
+        assert_eq!(device_name("   "), None);
+        assert_eq!(device_name("a\nb"), None);
+        let most = "가".repeat(MAX_NAME_BYTES / 3);
+        assert_eq!(device_name(&most), Some(most.as_str()));
+        assert_eq!(device_name(&format!("{most}가")), None);
+        assert!(
+            !DeviceCommand::Rename {
+                device_id: "win".into(),
+                name: " ".into()
+            }
+            .valid()
+        );
+    }
 
     #[test]
     fn a_device_id_is_the_alias_in_id_letters_numbered_past_taken_ids() {

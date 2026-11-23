@@ -576,6 +576,10 @@
     "line": "Saves an address to try first for a paired computer and dials again; it does not say whether the address is reachable, the path in hide device list does.",
     "example": "hide device address mac-mini 192.168.1.20:50569"
   },
+  "device rename": {
+    "line": "Changes the name this computer shows a paired computer or an SSH or WSL device under, on the rail, in its tabs and in Settings > Devices; the other computer keeps its own name.",
+    "example": "hide device rename mac-mini \"Studio Mac\""
+  },
   "device switch": {
     "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals: --install starts a Hide there when that machine runs none, and --own-folder goes on after another computer switched the device first.",
     "example": "hide device switch mini --install"

@@ -216,8 +216,13 @@ impl Runtime {
                 }));
                 continue;
             }
-            // A switched device keeps the name its operator gave it (B36).
-            if !registration.origin.switched() && registration.label != machine.name {
+            // A switched device keeps the name its operator gave it (B36),
+            // until the operator names the machine again: a rename moves the
+            // name the list carries.
+            let renamed = before
+                .iter()
+                .any(|earlier| earlier.key == machine.key && earlier.name != machine.name);
+            if (!registration.origin.switched() || renamed) && registration.label != machine.name {
                 registration.label = machine.name.clone();
                 self.rebuild_device_rows();
                 self.persist_current_ui_state();

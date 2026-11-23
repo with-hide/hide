@@ -7,8 +7,8 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTi
 import { Group, Note, Row } from "../components/settings-rows";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { latestDraft } from "../editor/draft";
+import { Trans } from "react-i18next";
 import { useInterfaceTranslation } from "../i18n/client";
-import { frontDeviceId } from "../devices";
 import { coreMachineName, isCoreMachine, machineName, registeredName, windowDeviceId, windowFirst } from "../screenMachine";
 import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts } from "../settings";
 import type { Device } from "../snapshot";
@@ -18,8 +18,11 @@ import { switchFailureKey } from "../deviceSwitch";
 import { AddByLink, AddDevice } from "./AddDevice";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
-import { PairedRows } from "./PairingRows";
-import { listedDevices, ownWindow } from "../pairing";
+import { PeerRows, ShareDialog } from "./PairingRows";
+import { listedDevices, ownWindow, pairedMachines } from "../pairing";
+import { switchOffered } from "../deviceSwitch";
+import { openPractice } from "../practice/channel";
+import { RenameDevice } from "./RenameDevice";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -29,12 +32,13 @@ type AddKind = "hide" | "ssh";
 export function DevicesTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const focused = useShellStore((s) => frontDeviceId(s.rest));
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const [removing, setRemoving] = useState<Device | null>(null);
   const [allowing, setAllowing] = useState<Device | null>(null);
   const [revoking, setRevoking] = useState<Device | null>(null);
   const [details, setDetails] = useState<Device | null>(null);
+  const [renaming, setRenaming] = useState<Device | null>(null);
+  const [sharing, setSharing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   // The device count when the Add dialog opened: a new row means the device was added, which closes it.
   const [adding, setAdding] = useState<number | null>(null);
@@ -90,17 +94,18 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const handlers: DeviceRowHandlers = {
     onAct: () => setActedAt(Date.now()),
     onDetails: setDetails,
+    onRename: setRenaming,
     onAllow: setAllowing,
     onRevoke: setRevoking,
     onRemove: setRemoving,
     onDisconnect: () => setDisconnecting(true),
+    onShare: () => setSharing(true),
   };
   const row = (device: Device) => (
     <DeviceRow
       key={device.id}
       device={device}
       status={remote?.find((line) => line.target_id === device.id)}
-      focused={focused === device.id}
       place={{
         name: machineName(devices, device.id, t),
         own: device.id === own,
@@ -111,30 +116,47 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       handlers={handlers}
     />
   );
-  // The list stands in three groups (operator review 2026-11-22): this
-  // computer, the Hides it is paired with, and the machines it reaches over
-  // SSH or WSL; one Add device above them adds either kind.
-  // This window's own machine leads, even where it is a node that dials in (B16).
-  const localRows = listed.filter((device) => device.id === own || device.kind !== "remote");
-  const sshRows = listed.filter((device) => !localRows.includes(device));
-  const sshTitle = sshRows.some((device) => device.wsl_distro) ? t("devices.section.sshWsl") : t("devices.section.ssh");
+  // The list stands in two groups (operator review 2026-11-23): this
+  // computer, with its share; then every other machine, the Hides it is
+  // paired with and the devices it still reaches the old way, over SSH or
+  // WSL, each of those marked so. One Add device above them adds either kind.
+  const ownRows = listed.filter((device) => device.id === own);
+  const otherRows = listed.filter((device) => device.id !== own);
+  const peerCount = useShellStore((s) => pairedMachines(s.rest).length);
+  const ownName = machineName(devices, own, t);
+  // The devices that can move to the new connection, from this computer's own window only (B35, B52).
+  const movable = ownScreen ? otherRows.filter((device) => switchOffered(device)).length : 0;
+  const empty = otherRows.length === 0 && peerCount === 0 && !notAdded;
   return (
     <>
-      {canAdd ? (
-        <div className="mb-sm flex justify-end">
-          <Button variant="secondary" size="sm" onClick={() => setAdding(rows.length)} data-device-add-open="true">
+      <div className="mb-md flex items-start justify-between gap-md">
+        <p className="min-w-0 break-keep text-body text-muted-foreground" data-devices-intro="true">
+          {t("devices.intro", { machine: ownName })}{" "}
+          <Button variant="text" size="inline" onClick={() => openPractice("connect", true)} data-devices-try="true">
+            {t("devices.introTry")} ›
+          </Button>
+        </p>
+        {canAdd ? (
+          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setAdding(rows.length)} data-device-add-open="true">
             <PlusIcon aria-hidden="true" />
             {t("devices.addTitle")}
           </Button>
-        </div>
+        ) : null}
+      </div>
+      {movable > 0 ? (
+        <p className="mb-md break-keep rounded-md bg-selected px-md py-sm text-body text-foreground" data-devices-old-way={movable}>
+          <span className="font-semibold text-primary">{t("devices.oldWay.title")}</span>
+          {" · "}
+          {t("devices.oldWay.line", { count: movable, machine: ownName })}
+        </p>
       ) : null}
       <Group title={t("devices.section.thisComputer")} data-device-section="this">
-        {localRows.map(row)}
+        {ownRows.map(row)}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
-      <PairedRows actions={actions} />
-      <Group title={sshTitle} data-device-section="ssh">
-        {sshRows.map(row)}
+      <Group title={t("devices.section.other")} data-device-section="other">
+        <PeerRows actions={actions} />
+        {otherRows.map(row)}
         {notAdded ? (
           <Row
             label={
@@ -144,8 +166,20 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             }
           />
         ) : null}
-        {sshRows.length === 0 && !notAdded ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
+        {empty ? <Row label={canAdd ? <FirstDeviceGuide machine={ownName} /> : <Note>{t("devices.empty.none")}</Note>} data-devices-empty="true" /> : null}
       </Group>
+      {sharing && ownScreen ? <ShareDialog actions={actions} onClose={() => setSharing(false)} /> : null}
+      {renaming ? (
+        <RenameDevice
+          id={renaming.id}
+          current={machineName(devices, renaming.id, t)}
+          onSave={(name) => {
+            setActedAt(Date.now());
+            actions.renameDevice(renaming.id, name);
+          }}
+          onClose={() => setRenaming(null)}
+        />
+      ) : null}
       {adding !== null && canAdd ? (
         <Dialog open onOpenChange={(next) => { if (!next) setAdding(null); }}>
           <DialogContent showCloseButton data-add-device-dialog="true">
@@ -286,5 +320,24 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         </AlertDialog>
       ) : null}
     </>
+  );
+}
+
+/**
+ * What the other devices' group says while there is none (operator review
+ * 2026-11-23): three steps, the last that the other computer is then used
+ * as this one is.
+ */
+function FirstDeviceGuide({ machine }: { machine: string }) {
+  const { t, i18n } = useInterfaceTranslation();
+  return (
+    <div className="space-y-xs" data-devices-guide="true">
+      <p className="text-body font-semibold text-foreground">{t("devices.empty.title")}</p>
+      <ol className="list-decimal space-y-xxs pl-lg text-body text-muted-foreground">
+        <li><Trans i18n={i18n} t={t} i18nKey="devices.empty.step1" components={{ b: <span className="font-semibold text-foreground" /> }} /></li>
+        <li>{t("devices.empty.step2")}</li>
+        <li>{t("devices.empty.step3", { machine })}</li>
+      </ol>
+    </div>
   );
 }

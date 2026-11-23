@@ -16,7 +16,7 @@ pub const MAX_PEERS: usize = 96;
 
 const KEY_CHARS: usize = 64;
 const MAX_DEVICE_BYTES: usize = 128;
-const MAX_NAME_BYTES: usize = 64;
+pub const MAX_NAME_BYTES: usize = 64;
 
 /// One paired machine and both directions of the pair.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

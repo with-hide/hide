@@ -60,7 +60,7 @@ const switches = (events: Parameters<DispatchFn>[0][]) => events.filter((event) 
 
 it("offers the switch over a helper device's screen, and a press asks hided for that device once (B35)", async () => {
   const { events, q, unmount } = await mount(helper());
-  expect(q('[data-device-switch-strip="mini"]')?.textContent).toBe("Switch Mac mini to the new connection · running terminals carry on" + "Switch");
+  expect(q('[data-device-switch-strip="mini"]')?.textContent).toBe("Switch Mac mini to the new connection · running terminals carry on" + "Connect the new way");
   await act(async () => { q('[data-device-switch="mini"]')?.click(); });
   expect(switches(events).map((event) => ({ device: event.payload.device, own_folder: event.payload.own_folder }))).toEqual([{ device: "mini", own_folder: undefined }]);
   await unmount();
@@ -97,7 +97,7 @@ it("asks before a later computer's switch closes its terminals, and goes on with
   await act(async () => { q('[data-device-switch="mini"]')?.click(); });
   await answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
   const dialog = q('[data-device-switch-held="mini"]')!;
-  expect(dialog.textContent).toContain("Switch Mac mini?");
+  expect(dialog.textContent).toContain("Connect Mac mini the new way?");
   expect(dialog.textContent).toContain("Office Mac switched this device to the new connection first · 3 running terminals close · AI conversations can be resumed");
   await act(async () => { q('[data-device-switch-held-go="true"]')?.click(); });
   expect(switches(events).map((event) => event.payload.own_folder)).toEqual([undefined, true]);

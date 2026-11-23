@@ -213,6 +213,9 @@ export function deviceState(device: Device, remote: RemoteStatus | undefined): {
   if (device.kind !== "remote") return { state: "local", tone: "local" };
   if (device.state === "ready") return { state: "ready", tone: "ok" };
   if (device.state === "disabled") return { state: "disabled", tone: "warn" };
+  // An attempt that stopped on a reason is not connected, whatever the
+  // link's own status still says: one state at a time.
+  if (device.problem != null && device.sign_in == null) return { state: "unavailable", tone: "warn" };
   if (remote?.state === "not_connected" || remote?.state === "connecting") return { state: "connecting", tone: "pending" };
   return { state: "unavailable", tone: "warn" };
 }
@@ -220,21 +223,6 @@ export function deviceState(device: Device, remote: RemoteStatus | undefined): {
 export function deviceLine(device: Device, remote: RemoteStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "pending" | "local" } {
   const { state, tone } = deviceState(device, remote);
   return { text: t(`devices.line.${state}`), tone };
-}
-
-/**
- * The line under a device's name (B54): its SSH alias, the platform its helper
- * runs on, in that order. Nothing here is
- * read on this machine, so a fact the device has not reported is left out
- * rather than filled in; this machine has no alias to show.
- */
-export function deviceSubtitle(device: Device, t: Translate, coreName?: string): string {
-  if (device.kind !== "remote") return t("devices.localAlias");
-  const parts: string[] = [device.ssh_alias ?? registeredName(device)];
-  // A WSL distribution is named where it is, the core's PC, in place of its Linux platform (PRD wsl-device B5).
-  if (device.wsl_distro && coreName) parts.push(coreName);
-  else if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
-  return parts.join(" · ");
 }
 
 /**
@@ -271,6 +259,25 @@ export function deviceProblemLine(problem: DeviceProblem | null | undefined, ali
     default:
       return null;
   }
+}
+
+/**
+ * Why a device this core dials is not connected, in one plain line for its
+ * row (operator review 2026-11-23): what stopped its last attempt, else
+ * what its helper says, on a connected device too; nothing while it is
+ * still connecting or has nothing to say.
+ * ssh's last line, the helper's own message and a test's stages are
+ * Connection details', not the row's.
+ */
+export function deviceReason(device: Device, remote: RemoteStatus | undefined, t: Translate, platform?: string | null): string | null {
+  if (device.kind !== "remote" || device.dials_in === true || device.sign_in != null) return null;
+  const { state } = deviceState(device, remote);
+  const problem = state === "unavailable" || state === "disabled" ? deviceProblemLine(device.problem, device.ssh_alias, t, platform) : null;
+  if (problem) return problem.note ?? problem.headline;
+  // The helper's failure is said on a connected device too: its Retry helper is on the row.
+  const host = device.host;
+  if (state !== "connecting" && host && host.consent !== "this_machine" && (host.state === "unavailable" || host.state === "unsupported" || host.state === "identity_changed" || host.state === "not_allowed")) return hostLine(host, t).text;
+  return null;
 }
 
 /**

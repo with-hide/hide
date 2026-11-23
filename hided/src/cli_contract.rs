@@ -1350,6 +1350,39 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_changed"],
         refusals: &["device_from_pane", "device_unknown", "device_ambiguous"],
     },
+    // The name this machine shows a paired machine or an SSH or WSL device
+    // under: on the rail, in its tabs and in Settings > Devices. A paired
+    // machine is renamed in its pairing's records, any other device in the
+    // core's; the machine itself keeps calling itself what it did.
+    Spec {
+        words: &["device", "rename"],
+        arguments: &[
+            Arg {
+                name: "device",
+                value: Key,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "name",
+                value: Text,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_ambiguous",
+            "name_invalid",
+            "device_name_invalid",
+        ],
+    },
     // A paired machine is dialed again now. An SSH device starts its row's
     // Retry, an attempt that may ask the operator; with --wait it answers
     // the attempt's outcome. Nothing answers what the attempt asks: that is

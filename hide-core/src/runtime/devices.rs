@@ -1092,6 +1092,50 @@ impl Runtime {
 }
 
 impl Runtime {
+    /// Gives a device this core dials the name the operator chose
+    /// (Settings › Devices' ⋯ › Rename, `hide device rename`): the name its
+    /// rail tile, its tabs and its row show. A paired machine is named in
+    /// its pairing's records instead (hided's `Ask::Rename`), which the list
+    /// of paired machines then carries here (`reconcile_peer_devices`).
+    /// Whether the name changed.
+    pub(super) fn rename_device(
+        &mut self,
+        device_id: &str,
+        name: &str,
+    ) -> Result<bool, DeviceRefusal> {
+        let name = crate::device_command::device_name(name).ok_or_else(|| {
+            DeviceRefusal::new(
+                "device.name_invalid",
+                "A device's name is one line of 1 to 64 bytes",
+            )
+        })?;
+        let registration = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == device_id)
+            .ok_or_else(|| {
+                DeviceRefusal::new(
+                    "device.unknown",
+                    format!("Device {device_id} is not registered"),
+                )
+            })?;
+        if registration.origin.peer_key().is_some() {
+            return Err(DeviceRefusal::new(
+                "device.paired",
+                format!("Device {device_id} is a paired machine, named by its pairing"),
+            ));
+        }
+        if registration.label == name {
+            return Ok(false);
+        }
+        registration.label = name.to_owned();
+        self.rebuild_device_rows();
+        self.persist_current_ui_state();
+        Ok(true)
+    }
+
     /// `hide device` from a caller on `caller_device`: the answer, and
     /// whether the snapshot changed. Only the core's own machine may ask,
     /// as only it may start agents on another machine.
@@ -1179,6 +1223,14 @@ impl Runtime {
                 }
                 self.remove_device(&device_id).map_err(refused)?;
                 Ok((serde_json::json!({ "device_id": device_id }), true))
+            }
+            DeviceCommand::Rename { device_id, name } => {
+                let device_id = self.machine_named(&device_id)?;
+                let changed = self.rename_device(&device_id, &name).map_err(refused)?;
+                Ok((
+                    serde_json::json!({ "device_id": device_id, "name": name.trim() }),
+                    changed,
+                ))
             }
             DeviceCommand::Retry { device_id } => {
                 let device_id = self.machine_named(&device_id)?;

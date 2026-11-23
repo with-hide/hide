@@ -973,7 +973,9 @@ pub fn device_need(command: &crate::device_command::DeviceCommand) -> Need {
     use crate::device_command::DeviceCommand;
     match command {
         DeviceCommand::List | DeviceCommand::Retry { .. } => Need::All,
-        DeviceCommand::Add { .. } | DeviceCommand::Remove { .. } => Need::Operator,
+        DeviceCommand::Add { .. } | DeviceCommand::Remove { .. } | DeviceCommand::Rename { .. } => {
+            Need::Operator
+        }
     }
 }
 

@@ -1742,6 +1742,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "device_host_retry", payload: { device_id: deviceId } });
     },
 
+    /** The name this computer shows an SSH or WSL device under; a paired machine is renamed through `pairing("rename")`. */
+    renameDevice(deviceId: string, name: string) {
+      dispatch({ schema_version: 2, kind: "rename_device", payload: { device_id: deviceId, name } });
+    },
+
     testDevice(deviceId: string) {
       dispatch({ schema_version: 2, kind: "test_device", payload: { device_id: deviceId } });
     },

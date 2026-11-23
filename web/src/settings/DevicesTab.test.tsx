@@ -68,19 +68,22 @@ it("says in one line which device the last Add over SSH did not add, and why (B4
   await none.unmount();
 });
 
-it("says nothing about a healthy kit on a device row, and names the device by alias and platform (B54)", async () => {
+it("says nothing about a healthy kit on a device row, and names the device by its name and system (B54; operator review 2026-11-23)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));
   const mini = row("mini")!;
-  expect(q('[data-device-subtitle="mini"]')?.textContent).toBe("mini · macos aarch64");
+  expect(q('[data-device-subtitle="mini"]')?.textContent).toBe("macOS");
+  expect(q('[data-device-state="mini:ready"]')?.textContent).toBe("●connected");
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
-  // Test, the switch to the new connection and the menu are the only controls a healthy helper device row carries.
-  expect(mini.querySelectorAll("button")).toHaveLength(3);
-  expect(q('[data-device-old-link="mini"]')?.textContent).toBe("·old connection");
-  expect(q('[data-device-switch="mini"]')?.textContent).toBe("Switch");
-  expect(q('[data-device-test="mini"]')).not.toBeNull();
+  // The switch to the new connection and the menu are the only controls a healthy helper device row carries; Test is in ⋯.
+  expect(mini.querySelectorAll("button")).toHaveLength(2);
+  expect(q('[data-device-old-link="mini"]')?.textContent).toBe("old way");
+  expect(q('[data-device-switch="mini"]')?.textContent).toBe("Connect the new way");
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
+  await openMenu(q, "mini");
+  const items = [...document.querySelectorAll('[data-device-menu-content="mini"] [role="menuitem"]')].map((item) => item.textContent);
+  expect(items).toEqual(["Rename", "Test", "Connection details…", "Revoke helper…", "Remove…"]);
   await unmount();
 });
 
@@ -146,19 +149,21 @@ it("shows a reinstall under way, and the first install, as one pending line", as
 it("shows helper failures on a connected device and consent before Herdr can connect (B54, bootstrap B1-B2)", async () => {
   const stopped = remote("mini", { host: { ...host, state: "unavailable", message: "The helper did not answer." } });
   const unavailable = await mount(state([stopped]));
-  expect(unavailable.q('[data-device-host="mini:unavailable"]')?.textContent).toContain("helper unavailable");
+  expect(unavailable.q('[data-device-reason="mini"]')?.textContent).toContain("helper unavailable");
+  // The helper's own words are Connection details'.
+  expect(unavailable.row("mini")?.textContent).not.toContain("The helper did not answer.");
   await act(async () => { unavailable.q('[data-device-host-retry="mini"]')?.click(); });
   expect(sent(unavailable.events, "device_host_retry")).toHaveLength(1);
   await unavailable.unmount();
 
   const notAllowed = await mount(state([remote("studio", { host: { ...host, consent: "none", state: "not_allowed", helper_root: null } })]));
-  expect(notAllowed.q('[data-device-host="studio:not_allowed"]')?.textContent).toContain("helper not allowed");
+  expect(notAllowed.q('[data-device-reason="studio"]')?.textContent).toContain("helper not allowed");
   expect(notAllowed.q('[data-device-host-allow-inline="studio"]')).not.toBeNull();
   await notAllowed.unmount();
 
   // A failed helper can prevent the device session from connecting.
   const down = await mount(state([remote("mini", { state: "unavailable", host: { ...host, state: "unavailable" } })]));
-  expect(down.q('[data-device-host="mini:unavailable"]')?.textContent).toContain("helper unavailable");
+  expect(down.q('[data-device-reason="mini"]')?.textContent).toContain("helper unavailable");
   expect(down.q('[data-device-host-retry="mini"]')).not.toBeNull();
   await down.unmount();
 
@@ -169,7 +174,7 @@ it("shows helper failures on a connected device and consent before Herdr can con
       host: { ...host, consent: "none", state: "not_allowed", helper_root: null },
     })]));
     try {
-      expect(blocked.q('[data-device-host="studio:not_allowed"]')?.textContent).toContain("helper not allowed");
+      expect(blocked.q('[data-device-reason="studio"]')?.textContent).toContain("helper not allowed");
       await act(async () => { blocked.q('[data-device-host-allow-inline="studio"]')?.click(); });
       expect(document.body.querySelector('[data-device-host-allow-confirm="studio"]')).not.toBeNull();
       await act(async () => { (document.body.querySelector('[data-device-host-allow-go]') as HTMLButtonElement).click(); });
@@ -187,7 +192,9 @@ it("says an Intel Mac reached over ssh could not connect, once and in plain word
     host: { ...host, platform: "macos-x86_64", consent: "granted", state: "unsupported", message },
   })]));
   try {
-    expect(view.q('[data-device-problem="mini:unsupported"]')?.textContent).toBe("!Couldn't connectHide does not run on this device's system.");
+    // One state, one plain reason.
+    expect(view.q('[data-device-state="mini:unavailable"]')?.textContent).toBe("!not connected");
+    expect(view.q('[data-device-reason="mini"]')?.textContent).toBe("Hide does not run on this device's system.");
     // The helper is the link: its unsupported line would say the same reason again.
     expect(view.q('[data-device-host]')).toBeNull();
     expect(view.row("mini")?.textContent).not.toContain(message);
@@ -208,7 +215,13 @@ it.each([
     host: { ...host, consent: "granted", state: "unavailable", message },
   })]));
   try {
-    expect(view.q('[data-device-host="mini:unavailable"]')?.textContent).toContain(message);
+    expect(view.q('[data-device-reason="mini"]')?.textContent).toBe("helper unavailable");
+    expect(view.row("mini")?.textContent).not.toContain(message);
+    // What the helper said stays one press away, in Connection details.
+    await openMenu(view.q, "mini");
+    await act(async () => { (document.querySelector('[data-device-details="mini"]') as HTMLElement).click(); });
+    expect(document.querySelector('[data-device-details-dialog="mini"] [data-device-detail="message"]')?.textContent).toContain(message);
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     const retry = view.q('[data-device-host-retry="mini"]');
     expect(retry).not.toBeNull();
     await act(async () => { retry!.click(); });
@@ -232,15 +245,22 @@ it("shows a paired machine once, as its pairing's row, and an SSH device beside 
   await unmount();
 });
 
-// Operator review 2026-11-22: this computer, the paired Hides and the SSH devices stand in their own groups, and one Add window adds a Hide by its link or a machine over SSH.
-it("lists this computer, the paired Hides and the SSH devices in three groups, and adds either kind from one window", async () => {
-  const { q, unmount } = await mount(state([remote("mini")]));
+// Operator review 2026-11-23: this computer with its share, then every other machine in one group; one Add window adds a Hide by its link or a machine over SSH.
+it("lists this computer, then every other machine in one group, and adds either kind from one window", async () => {
+  const { q, events, unmount } = await mount(state([remote("mini")]));
   const sections = [...document.querySelectorAll("[data-device-section]")].map((section) => section.getAttribute("data-device-section"));
-  expect(sections).toEqual(["this", "hides", "ssh"]);
-  expect(q('[data-device-section="this"] [data-device-row="local"]')).not.toBeNull();
-  expect(q('[data-device-section="ssh"] [data-device-row="mini"]')).not.toBeNull();
-  expect(q('[data-device-section="hides"] [data-pair-share-make]')?.textContent).toBe("Share this computer");
-  expect(q('[data-device-section="hides"]')?.textContent).toContain("No computer yet.");
+  expect(sections).toEqual(["this", "other"]);
+  const own = q('[data-device-section="this"] [data-device-row="local"]')!;
+  // This computer's row is its name and system, with Share; nothing about the daemon or what is selected.
+  // jsdom is no Mac: the row names this machine as its system does.
+  expect(own.querySelector("[data-device-name]")?.textContent).toBe("This computer");
+  expect(own.querySelector("[data-device-state]")).toBeNull();
+  expect(own.textContent).not.toMatch(/local, no SSH alias|this daemon's machine|selected/);
+  expect(own.querySelector("[data-pair-share-make]")?.textContent).toBe("Share");
+  expect(q('[data-device-section="other"] [data-device-row="mini"]')).not.toBeNull();
+  expect(q("[data-devices-guide]")).toBeNull();
+  // The line on top says what connecting gives, and Try it opens the practice's connection chapter.
+  expect(q("[data-devices-intro]")?.textContent).toContain("use it just like This computer");
   await act(async () => { q("[data-device-add-open]")?.click(); });
   const dialog = () => document.body.querySelector("[data-add-device-dialog]");
   // It opens on a Hide's link; the other choice is the SSH list.
@@ -249,6 +269,48 @@ it("lists this computer, the paired Hides and the SSH devices in three groups, a
   await act(async () => { dialog()?.querySelector<HTMLElement>('[data-add-kind-choice="ssh"]')?.click(); });
   expect(dialog()?.querySelector("[data-add-by-link]")).toBeNull();
   expect(dialog()?.querySelector("[data-ssh-hosts-state]")).not.toBeNull();
+  expect(events.length).toBeGreaterThan(0);
+  await unmount();
+});
+
+it("says what moving gains once while a device can move to the new connection, and nothing once none can", async () => {
+  const two = await mount(state([remote("mini"), remote("studio")]));
+  expect(two.q("[data-devices-old-way]")?.textContent).toBe("New connection · 2 devices are connected the old way (SSH). Move them, and their agents keep running with This computer turned off, and they reconnect when the network changes.");
+  await two.unmount();
+  const none = await mount(state([remote("mini", { switchable: false })]));
+  expect(none.q("[data-devices-old-way]")).toBeNull();
+  // The row still says it is on the old way.
+  expect(none.q('[data-device-old-link="mini"]')?.textContent).toBe("old way");
+  await none.unmount();
+});
+
+it("guides a first device in three steps while no other machine is connected", async () => {
+  const { q, unmount } = await mount(state([]));
+  const guide = q("[data-devices-guide]")!;
+  expect([...guide.querySelectorAll("li")].map((step) => step.textContent)).toEqual([
+    "Press + Add device",
+    "Open the link on that computer, or pick it over SSH and Hide installs itself there",
+    "Then it works just like This computer: open a terminal on that computer and run agents",
+  ]);
+  await unmount();
+  const other = await mount({ ...state([]), pairing: null } as never);
+  expect(other.q("[data-devices-guide]")).toBeNull();
+  expect(other.q("[data-devices-empty]")?.textContent).toBe("No other device yet.");
+  await other.unmount();
+});
+
+it("renames an SSH device from its ⋯, which the core keeps (c2)", async () => {
+  const { q, events, unmount } = await mount(state([remote("mini")]));
+  await openMenu(q, "mini");
+  await act(async () => { (document.querySelector('[data-device-rename="mini"]') as HTMLElement).click(); });
+  const input = document.querySelector('[data-device-rename-input="mini"]') as HTMLInputElement;
+  expect(input.value).toBe("Mac mini");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Studio Mac");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { (document.querySelector('[data-device-rename-go="mini"]') as HTMLElement).click(); });
+  expect(sent(events, "rename_device")).toEqual([{ schema_version: 2, kind: "rename_device", payload: { device_id: "mini", name: "Studio Mac" } }]);
   await unmount();
 });
 
@@ -379,7 +441,7 @@ it("draws a changed server key with its terminal check and a connection that cou
   const unavailable = { ...host, state: "unavailable" as const, message: "Host key verification failed." };
   const changed = await mount(state([remote("mini", { state: "unavailable", problem: "host_key_changed", message: "Host key verification failed.", host: unavailable })]));
   try {
-    expect(changed.q('[data-device-problem="mini:host_key_changed"]')?.textContent).toContain("Server key changed");
+    expect(changed.q('[data-device-reason="mini"]')?.textContent).toBe("Server key changed");
     expect(changed.q('[data-device-problem-command="mini"]')?.textContent).toBe("ssh mini");
     // The terminal check is its one action: a retry before it would be refused again.
     expect(changed.q('[data-device-retry="mini"]')).toBeNull();
@@ -392,17 +454,25 @@ it("draws a changed server key with its terminal check and a connection that cou
   const policy = "tailscale: tailnet policy does not permit you to SSH to this node";
   const lost = await mount(state([remote("mini", { state: "unavailable", problem: "cannot_connect", message: policy, host: { ...unavailable, message: policy } })]));
   try {
-    const line = lost.q('[data-device-problem="mini:cannot_connect"]');
-    expect(line?.querySelector('[data-device-message="mini"]')?.textContent).toBe(policy);
-    expect(line?.textContent).toBe(`!Couldn't connect${policy}`);
-    expect(lost.q('[data-device-retry="mini"]')?.textContent).toBe("Retry");
+    expect(lost.q('[data-device-reason="mini"]')?.textContent).toBe("Couldn't connect");
+    // ssh's last line is Connection details'.
+    expect(lost.row("mini")?.textContent).not.toContain(policy);
+    // A device that can move offers that in the one button's place (mockup 6).
+    expect(lost.q('[data-device-switch="mini"]')).not.toBeNull();
+    expect(lost.q('[data-device-retry="mini"]')).toBeNull();
   } finally {
     await lost.unmount();
   }
   // Without ssh there is no line of ssh's to show, so Hide's sentence stands in it.
+  const fixed = await mount(state([remote("mini", { switchable: false, state: "unavailable", problem: "cannot_connect", message: policy, host: { ...unavailable, message: policy } })]));
+  try {
+    expect(fixed.q('[data-device-retry="mini"]')?.textContent).toBe("Retry");
+  } finally {
+    await fixed.unmount();
+  }
   const missing = await mount(state([remote("mini", { state: "unavailable", problem: "ssh_missing", message: "/usr/bin/ssh was not found on this computer", host: unavailable })]));
   try {
-    expect(missing.q('[data-device-problem="mini:ssh_missing"]')?.textContent).toBe("!Couldn't connectThis computer has no ssh. Install the OpenSSH client.");
+    expect(missing.q('[data-device-reason="mini"]')?.textContent).toBe("This computer has no ssh. Install the OpenSSH client.");
     expect(missing.row("mini")?.textContent).not.toContain("was not found");
   } finally {
     await missing.unmount();
@@ -413,9 +483,7 @@ it("draws a Hide an update replaced as opening Hide again, with no Retry from it
   const unavailable = { ...host, state: "unavailable" as const, message: "Hide was updated since it started." };
   const view = await mount(state([remote("mini", { state: "unavailable", problem: "hide_updated", message: "Hide was updated since it started.", host: unavailable })]));
   try {
-    expect(view.q('[data-device-problem="mini:hide_updated"]')?.textContent).toBe(
-      "!Couldn't connectHide was updated after it started. Quit Hide and open it again to connect.",
-    );
+    expect(view.q('[data-device-reason="mini"]')?.textContent).toBe("Hide was updated after it started. Quit Hide and open it again to connect.");
     // Only Hide opened again can connect: a retry from this one starts the same old program.
     expect(view.q('[data-device-retry="mini"]')).toBeNull();
     expect(view.q('[data-device-host]')).toBeNull();
@@ -427,7 +495,7 @@ it("draws a Hide an update replaced as opening Hide again, with no Retry from it
 it("reads a refused sign-in with the same Sign in as a needed one", async () => {
   const view = await mount(state([remote("mini", { state: "unavailable", problem: "sign_in_refused", message: "Permission denied (publickey,password).", host: { ...host, state: "unavailable", message: "Permission denied (publickey,password)." } })]));
   try {
-    expect(view.q('[data-device-problem="mini:sign_in_refused"]')?.textContent).toBe("!Sign-in refused");
+    expect(view.q('[data-device-reason="mini"]')?.textContent).toBe("Sign-in refused");
     expect(view.q('[data-device-retry="mini"]')?.textContent).toBe("Sign in");
     expect(view.row("mini")?.textContent).not.toContain("Permission denied");
   } finally {
@@ -440,7 +508,7 @@ it("stops a reconnect nobody could be asked for at Sign in, which starts an atte
   next.rest.status.remote = [{ target_id: "mini", state: "unavailable", message: null }];
   const view = await mount(next);
   try {
-    expect(view.q('[data-device-problem="mini:sign_in_needed"]')?.textContent).toContain("Sign-in needed");
+    expect(view.q('[data-device-reason="mini"]')?.textContent).toBe("Sign-in needed");
     const signIn = view.q('[data-device-retry="mini"]')!;
     expect(signIn.textContent).toBe("Sign in");
     await act(async () => { signIn.click(); });

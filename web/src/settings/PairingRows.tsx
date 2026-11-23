@@ -1,9 +1,9 @@
 // Settings › Devices' rows for the Hides this computer is paired with (PRD
-// device-connect-iroh B1, B21, B24-B27, B50, B51): the row that shares this
-// computer by a one-time link, and one row per paired machine with who opens
-// whom, how the two are connected, and each direction stopped or removed on
-// its own. hided owns every value (`pairing.ts`); a press sends one
-// `pairing_*` event.
+// device-connect-iroh B1, B21, B24-B27, B50, B51): the window that shares
+// this computer by a one-time link, and one row per paired machine with its
+// state, and in its menu its name, how the two are connected, who opens whom
+// and each direction stopped or removed on its own. hided owns every value
+// (`pairing.ts`); a press sends one `pairing_*` event.
 
 import { CheckIcon, MoreHorizontalIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -12,16 +12,19 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { Group, Note, Row, Status } from "../components/settings-rows";
+import { Note, Row, Status } from "../components/settings-rows";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../ui";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
-import { directionKey, guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
+import { guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, relayTip, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { DeviceNeedsLine, DeviceNotCarriedLine } from "./DeviceSwitch";
 import { askForFirewallOnce, useFirewall } from "./firewall";
+import { machineSystem } from "./agentRows";
+import { PeerDetails } from "./DeviceDetails";
+import { RenameDevice } from "./RenameDevice";
 
 /** The time now, read again each second while `ticking`. */
 export function useNow(ticking: boolean): number {
@@ -186,17 +189,22 @@ function ShareStep({ index, state, title, children }: { index: number; state: "d
 }
 
 /**
- * One paired machine: its name, its one state line, who opens whom, and,
- * on this computer's own window, what can be done about it. An ask names
- * the machine by its connection id: a device id is what a machine says of
- * itself, and two rows can say the same one.
+ * One paired machine (operator review 2026-11-23): its name and system, one
+ * state (`● 연결됨` while connected, the path being Connection details'),
+ * the relay tip on a row whose connection goes through the relay, and, on
+ * this computer's own window, the one action its state offers and ⋯ with
+ * Rename, Connection details and each direction's pause and removal. An ask
+ * names the machine by its connection id: a device id is what a machine says
+ * of itself, and two rows can say the same one.
  */
-export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer; request: PairRequest | undefined; actions: Actions; own: boolean; onRemove: (peer: Peer, direction: Direction) => void }) {
+export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRename }: { peer: Peer; request: PairRequest | undefined; actions: Actions; own: boolean; onRemove: (peer: Peer, direction: Direction) => void; onDetails: (peer: Peer) => void; onRename: (peer: Peer) => void }) {
   const { t } = useInterfaceTranslation();
   const state = peerState(peer);
   const asked = requestLine(request);
   const device = peer.device_id;
   const named = peer.key;
+  // The machine's system, as the device the core made of it reports it.
+  const system = useShellStore((s) => machineSystem(s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key)) ?? null);
   const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
   const ask = () => {
     if (request) actions.pairing("dismiss_request", { device: named });
@@ -207,18 +215,18 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
       data-peer-row={device}
       data-peer-state={state.key}
       label={
-        <>
-          <div className="truncate">{peer.name}</div>
-          <div className="flex flex-wrap items-baseline gap-x-sm">
-            <Status tone={state.tone}>{state.reason ? `${t(state.key)} · ${t(state.reason)}` : t(state.key)}</Status>
-            <span className="text-body text-muted-foreground" data-peer-direction="true">{t(directionKey(peer))}</span>
-          </div>
+        <span className="flex min-w-0 flex-col">
+          <span className="break-words font-semibold">{peer.name}</span>
+          {system ? <span className="text-caption text-muted-foreground" data-peer-system={device}>{system}</span> : null}
+          {state.reason ? <Note tone="warn" data-peer-reason={device}>{t(state.reason)}</Note> : null}
+          {relayTip(peer) ? <Note data-peer-relay-tip={device}>{t("devices.relayTip")}</Note> : null}
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
           <DeviceNotCarriedLine deviceId={device} />
           <DeviceNeedsLine deviceId={device} actions={actions} />
-        </>
+        </span>
       }
     >
+      <Status tone={state.tone === "ok" ? "live" : state.tone} data-peer-status={device}>{t(state.key)}</Status>
       {own ? (
       <>
       {state.action === "retry" ? (
@@ -251,6 +259,9 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
           </DropdownMenuTrigger>
         </Hint>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => onRename(peer)} data-peer-rename={device}>{t("devices.renameMenu")}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onDetails(peer)} data-peer-details={device}>{t("devices.detailsMenu")}</DropdownMenuItem>
+          <DropdownMenuSeparator />
           {peer.opens != null && peer.opens !== "unpaired" && peer.opens !== "removing" ? (
             <>
               {peer.opens === "paused" ? (
@@ -348,36 +359,28 @@ function RemovedWork({ panes, end, onEnd }: { panes: number; end: boolean; onEnd
 }
 
 /**
- * Settings › Devices' group of the Hides this computer is paired with (B24,
- * B52): on this computer's own window its head offers sharing this
- * computer, which opens the share window; then every paired machine with its
- * actions and the confirm a removal asks.
+ * The paired machines' rows in Settings › Devices' one group of other
+ * devices (B24, B52; operator review 2026-11-23): the firewall row while
+ * Windows blocks direct connections, every paired machine with its actions,
+ * and the windows its menu opens (details, rename, the confirm a removal
+ * asks). The share window opens from this computer's own row.
  */
-export function PairedRows({ actions }: { actions: Actions }) {
+export function PeerRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const own = useShellStore((s) => ownWindow(s.pairing));
   const peers = useShellStore((s) => pairedMachines(s.rest));
   const requests = useShellStore((s) => s.pairing?.requests);
   const sharing = useShellStore((s) => s.pairing?.offer != null);
   const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction; end: boolean } | null>(null);
+  const [details, setDetails] = useState<Peer | null>(null);
+  const [renaming, setRenaming] = useState<Peer | null>(null);
   // The terminals the machine being removed runs on this computer.
   const removingPanes = useShellStore((s) => (removing ? guestPaneCount(s.rest, removing.peer.key) : 0));
   const opened = sharing || peers.length > 0;
   const firewall = useFirewall(own && opened);
-  const [sharingOpen, setSharingOpen] = useState(false);
   return (
     <>
-      <Group
-        title={t("devices.section.hides")}
-        data-device-section="hides"
-        action={own ? (
-          <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => setSharingOpen(true)}>
-            {t("pairing.share.title")}
-          </Button>
-        ) : undefined}
-      >
       {own && opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
-      {peers.length === 0 && !(own && opened && firewall.state === "missing") ? <Row label={<Note>{t("pairing.hides.none")}</Note>} /> : null}
       {peers.map((peer) => (
         <PeerRow
           key={peer.key}
@@ -386,10 +389,19 @@ export function PairedRows({ actions }: { actions: Actions }) {
           actions={actions}
           own={own}
           onRemove={(target, direction) => setRemoving({ peer: target, direction, end: false })}
+          onDetails={setDetails}
+          onRename={setRenaming}
         />
       ))}
-      </Group>
-      {own && sharingOpen ? <ShareDialog actions={actions} onClose={() => setSharingOpen(false)} /> : null}
+      {details ? <PeerDetails peer={peers.find((peer) => peer.key === details.key) ?? details} onClose={() => setDetails(null)} /> : null}
+      {renaming ? (
+        <RenameDevice
+          id={renaming.device_id}
+          current={renaming.name}
+          onSave={(name) => actions.pairing("rename", { device: renaming.key, name })}
+          onClose={() => setRenaming(null)}
+        />
+      ) : null}
       {removing ? (
         <AlertDialog open onOpenChange={(next) => { if (!next) setRemoving(null); }}>
           <AlertDialogContent data-peer-remove-confirm={`${removing.peer.device_id}:${removing.direction}`}>

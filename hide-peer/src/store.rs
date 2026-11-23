@@ -367,6 +367,26 @@ impl Grants {
         self.settle(key, GrantStatus::Active)
     }
 
+    /// Gives `key`'s grants the name this machine's operator chose. A name
+    /// opens nothing, so the generation stays and no stream is told.
+    /// Whether a grant for `key` was there.
+    pub fn rename(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let mut found = false;
+        let mut changed = false;
+        for grant in next.grants.iter_mut().filter(|grant| grant.key == *key) {
+            found = true;
+            if grant.name != name {
+                grant.name = name.to_owned();
+                changed = true;
+            }
+        }
+        if changed {
+            self.commit(next)?;
+        }
+        Ok(found)
+    }
+
     /// Removes `key`'s grants. With `id`, only when that grant is the one
     /// held now, so a late removal of an old grant does not take the new
     /// one. `None` when there was nothing to remove: the answer to the
@@ -553,6 +573,20 @@ impl Known {
         }
         host.state = state;
         self.commit(next)
+    }
+
+    /// Gives the host under `key` the name this machine's operator chose.
+    /// Whether it was known.
+    pub fn rename(&mut self, key: &PeerKey, name: &str) -> Result<bool, StoreError> {
+        let mut next = self.record.clone();
+        let Some(host) = next.hosts.iter_mut().find(|host| host.key == *key) else {
+            return Ok(false);
+        };
+        if host.name != name {
+            host.name = name.to_owned();
+            self.commit(next)?;
+        }
+        Ok(true)
     }
 
     /// Whether anything was removed.
@@ -833,5 +867,39 @@ mod tests {
         assert_eq!(Known::open(path).unwrap().of(&key(7)), Some(&host));
         assert!(known.remove(&key(7)).unwrap());
         assert!(!known.remove(&key(7)).unwrap());
+    }
+
+    #[test]
+    fn a_rename_is_saved_in_both_records_and_moves_no_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = grants(&dir);
+        let pending = store
+            .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
+            .unwrap();
+        store.confirm(&key(1), &pending.id, 1).unwrap();
+        let before = store.state_of(&key(1), 1);
+        assert!(store.rename(&key(1), "작업실 Mac").unwrap());
+        assert!(!store.rename(&key(2), "nobody").unwrap());
+        assert_eq!(store.state_of(&key(1), 1), before);
+        assert_eq!(grants(&dir).current(&key(1)).unwrap().name, "작업실 Mac");
+
+        let path = dir.path().join("peers").join("known.json");
+        let mut known = Known::open(path.clone()).unwrap();
+        known
+            .put(Host {
+                key: key(7),
+                device: "host-device".into(),
+                name: "Windows PC".into(),
+                grant: "g1".into(),
+                state: KnownState::Active,
+                candidates: Vec::new(),
+                started: None,
+            })
+            .unwrap();
+        assert!(known.rename(&key(7), "회사 PC").unwrap());
+        assert!(!known.rename(&key(8), "nobody").unwrap());
+        let reopened = Known::open(path).unwrap();
+        assert_eq!(reopened.of(&key(7)).unwrap().name, "회사 PC");
+        assert_eq!(reopened.of(&key(7)).unwrap().state, KnownState::Active);
     }
 }
