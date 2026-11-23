@@ -3348,7 +3348,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const paneId = ui().guestClose;
       if (paneId === null) return;
       ui().setGuestClose(null);
-      const panes = guestPanes(rest(), catalogWorkspaces(rest()).filter((project) => !project.remote_target_id));
+      const panes = guestPanes(rest(), catalogWorkspaces(rest()).filter((project) => !project.remote_target_id), (branch) => branch);
       const pane = panes.find((row) => row.id === paneId);
       const after = pane ? afterGuestClose(panes, pane) : ({ kind: "workspace" } as const);
       const answer = await callGuestClose(paneId);
