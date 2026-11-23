@@ -1480,8 +1480,8 @@ export type MissionBlocked = "upstream_dropped";
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
-/** A standing cell that is not a raise and only the Conductor moves (a stopped worker, an outside pull request closed unmerged), as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
-export const MISSION_HELD_CELL_REASONS = ["outside_failed", "warning_stopped"] as const;
+/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). The core sends only `outside_failed` and `warning_stopped` since 2026-11-23; the other four stay because a phone reads a Mac of the same `PHONE_PROTOCOL` built before then. */
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
