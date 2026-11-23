@@ -517,3 +517,16 @@ it("stops a reconnect nobody could be asked for at Sign in, which starts an atte
     await view.unmount();
   }
 });
+
+it("points a Windows device whose Hide did not start at turning Smart App Control off, and no other failure (issue #2855)", async () => {
+  const windows = { ...host, platform: "windows x86_64" };
+  const silent = await mount(state([remote("win", { label: "Windows PC", state: "unavailable", problem: "windows_not_started", host: windows })]));
+  const line = silent.q('[data-device-reason="win"]');
+  expect(line?.textContent).toBe("Hide did not start on Windows · if Smart App Control is on, how to turn it off");
+  expect(silent.q('[data-device-sac-docs="win"]')?.getAttribute("href")).toBe("https://withhide.dev/docs/reference/troubleshooting/#smart-app-control-blocks-hide-on-windows-11");
+  await silent.unmount();
+
+  const other = await mount(state([remote("win", { label: "Windows PC", state: "unavailable", problem: "cannot_connect", host: windows })]));
+  expect(other.q('[data-device-sac-docs="win"]')).toBeNull();
+  await other.unmount();
+});

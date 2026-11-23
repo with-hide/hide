@@ -79,7 +79,7 @@ impl Runtime {
             EstablishError::IdentityChanged { .. } => DeviceFailure::IdentityChanged,
             EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
             EstablishError::Install { stop, .. } => DeviceFailure::Install(*stop),
-            EstablishError::Helper(_) => DeviceFailure::Helper,
+            EstablishError::Helper(_) | EstablishError::NotStarted { .. } => DeviceFailure::Helper,
             EstablishError::MachineName(_) => DeviceFailure::MachineName,
         };
         self.finish_device_connect(device, DeviceOutcome::Failed(failure));

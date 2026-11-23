@@ -256,6 +256,8 @@ export function deviceProblemLine(problem: DeviceProblem | null | undefined, ali
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.unsupported"), command: null };
     case "hide_updated":
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.hideUpdated"), command: null };
+    case "windows_not_started":
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.windowsNotStarted"), command: null };
     default:
       return null;
   }

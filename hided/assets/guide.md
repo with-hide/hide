@@ -145,6 +145,7 @@ hide device remove <device> [--outgoing|--incoming|--both] [--json]
 hide device request <device> [--json]
 hide device update <device> [--json]
 hide device address <device> <ip:port> [--json]
+hide device rename <device> <name> [--json]
 hide device retry <device> [--wait] [--json]
 hide device switch <device> [--install] [--own-folder] [--json]
 ```

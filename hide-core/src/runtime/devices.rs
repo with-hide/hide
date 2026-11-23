@@ -747,9 +747,13 @@ impl Runtime {
                 None => ("unavailable", link_failure),
             };
             let problem = host
-                .and_then(|host| host.problem)
+                .and_then(|host| {
+                    host.problem.map(crate::model::DeviceProblem::of).or(host
+                        .not_started_on_windows
+                        .then_some(crate::model::DeviceProblem::WindowsNotStarted))
+                })
                 .filter(|_| state != "ready")
-                .map(|problem| crate::model::DeviceProblem::of(problem).code().to_owned());
+                .map(|problem| problem.code().to_owned());
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
             let switch = switches.get(&device.id).cloned();

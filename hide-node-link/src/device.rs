@@ -839,6 +839,11 @@ pub enum EstablishError {
         reason: String,
     },
     Helper(String),
+    /// The program started on the device never answered. `windows` says the
+    /// device runs Windows, where a policy that blocks unsigned programs
+    /// (Smart App Control) refuses it without a word back to this machine
+    /// (issue #2855), so the row can say where to look.
+    NotStarted { windows: bool, reason: String },
     /// The machine the device's node reports is not the one its
     /// registration names, or cannot name it (`DeviceNaming`): nothing was
     /// opened on the link, and retrying reaches the same machine.
@@ -860,6 +865,7 @@ impl fmt::Display for EstablishError {
             | Self::Unsupported(reason)
             | Self::Install { reason, .. }
             | Self::Helper(reason)
+            | Self::NotStarted { reason, .. }
             | Self::MachineName(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
         }

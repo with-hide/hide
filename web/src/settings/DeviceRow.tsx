@@ -18,6 +18,7 @@ import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
 import { machineSystem } from "./agentRows";
+import { SmartAppControlHint } from "./SmartAppControlHint";
 
 /** What a row's menu and buttons ask the tab to open or record. */
 export type DeviceRowHandlers = {
@@ -83,7 +84,12 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
               {system}
             </span>
           ) : null}
-          {reason ? <Note tone="warn" data-device-reason={device.id}>{reason}</Note> : null}
+          {reason ? (
+            <Note tone="warn" data-device-reason={device.id}>
+              {reason}
+              {device.problem === "windows_not_started" ? <> · <SmartAppControlHint deviceId={device.id} /></> : null}
+            </Note>
+          ) : null}
         </span>
       }
       detail={<DeviceAttention device={device} place={place} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
