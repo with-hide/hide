@@ -1654,6 +1654,37 @@ pub fn started_by_other_account(pid: u32) -> io::Result<bool> {
     sys::started_by_other_account(pid)
 }
 
+/// Windows: whether `pid`, a process the system will not describe to this
+/// account, is another account's or one that keeps even its owner out: it
+/// refuses this account its access list too, or names an owner that is not
+/// this account. That is the process of an administrator's SSH login seen
+/// from the account's desktop session, whose access list names only the
+/// administrators and that login; a process of this account that only
+/// hides itself is not. `InvalidData` for a process this account may read,
+/// whose account [`same_account`] reads; `NotFound` once it has ended.
+#[cfg(windows)]
+pub fn owned_elsewhere(pid: u32) -> io::Result<bool> {
+    sys::owned_elsewhere(pid)
+}
+
+/// Whether `pid` is `ancestor` or one of its descendants, read from one
+/// look at the parent column of the system's process table, through
+/// processes this account may not read as well. A step whose two processes
+/// can both be read stops where the parent started after the child, whose
+/// pid now names a later process; a walk deeper than [`MAX_DEPTH`] cannot
+/// be shown and is an error, never `false`. Unix reads every process, so
+/// there it is [`descends_from`].
+pub fn descends_listed(pid: u32, ancestor: u32) -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        sys::descends_listed(pid, ancestor)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(descends_from(pid, ancestor))
+    }
+}
+
 /// Every process this account can see whose program file is `file`, read
 /// from one look at the system's process table: a process that runs the
 /// file under another path (renamed, linked or deleted since) is one of
@@ -6910,22 +6941,54 @@ mod sys {
             .iter()
             .find(|(candidate, _)| *candidate == pid)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        match open_live(*parent, PROCESS_QUERY_LIMITED_INFORMATION) {
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "the parent is readable, so its account is read from it",
-                ));
-            }
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
-            Err(error) => return Err(error),
-        }
-        let other = crate::fs::private::process_owned_elsewhere(*parent)?;
+        let other = owned_elsewhere(*parent)?;
         // The pid still names the process whose parent was read.
         if start_time(pid)? != started {
             return Err(io::ErrorKind::NotFound.into());
         }
         Ok(other)
+    }
+
+    pub(super) fn owned_elsewhere(pid: u32) -> io::Result<bool> {
+        match open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the process is readable, so its account is read from it",
+            )),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                crate::fs::private::process_owned_elsewhere(pid)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn descends_listed(pid: u32, ancestor: u32) -> io::Result<bool> {
+        let table = process_table()?;
+        let mut current = pid;
+        for _ in 0..=super::MAX_DEPTH {
+            if current == ancestor {
+                return Ok(true);
+            }
+            if current <= 4 {
+                return Ok(false);
+            }
+            let Some((_, parent)) = table.iter().find(|(candidate, _)| *candidate == current)
+            else {
+                return Ok(false);
+            };
+            if *parent == current || *parent == 0 {
+                return Ok(false);
+            }
+            // Read where both can be: a parent that started after its child
+            // is a later process holding an ended parent's pid.
+            if let (Ok(child), Ok(parent_started)) = (start_time(current), start_time(*parent))
+                && parent_started > child
+            {
+                return Ok(false);
+            }
+            current = *parent;
+        }
+        Err(io::Error::other("the ancestry is deeper than a walk reads"))
     }
 
     pub(super) fn set_output_aside(_: &Path, _: &Path, _: u64) -> io::Result<bool> {
