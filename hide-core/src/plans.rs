@@ -290,6 +290,12 @@ pub enum PlanCommand {
         /// The pull request a done step made (`--pr <n>`, B10, B11).
         #[serde(default)]
         pr: Option<u32>,
+        /// Where `pr`'s written form said its change request is, which the
+        /// session's project must hold
+        /// ([`crate::code_host::CodeHosts::admit_place`]); absent for a bare
+        /// number and from an older `hide`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pr_place: Option<crate::code_host::ChangeRequestPlace>,
         /// The file a done step wrote, below the checkout (`--file`, B12).
         #[serde(default)]
         file: Option<String>,
@@ -332,6 +338,7 @@ impl PlanCommand {
                 line,
                 pr,
                 file,
+                ..
             } => {
                 let evidence = pr.is_some() || file.is_some();
                 dag::valid_key(key)
@@ -1172,6 +1179,9 @@ pub fn progress(plan: &Plan) -> Progress {
 /// The refusal's next step, which a hint or a refusal gives an agent as a
 /// command it can run (D-27).
 pub fn next_action(code: &str) -> &'static str {
+    if let Some(next) = crate::code_host::place_next_action(code) {
+        return next;
+    }
     match code {
         "plan_invalid" => {
             "Fix the plan where the reason says: each node needs key, title, depends_on (other nodes' keys, no loop) and status planned|working|done|dropped; then run hide task set again"

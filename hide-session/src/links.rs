@@ -14,7 +14,7 @@
 //! address) leave this module.
 
 use crate::account::Accounts;
-use crate::{EventKind, PrSighting, call_shell, pull_request_addresses};
+use crate::{EventKind, PrSighting, call_shell};
 use hide_agent_adapter::HookDialect;
 use hide_shell::Syntax;
 use serde_json::Value;
@@ -453,15 +453,25 @@ pub(crate) fn claude_line(item: &Value, offset: u64, links: &mut LinkAccumulator
     }
     let at = crate::timestamp_ms(item.get("timestamp")).ok();
     if item.get("type").and_then(Value::as_str) == Some("pr-link") {
+        // `prRepository` is a bare `owner/name`, which names a GitHub
+        // repository; an address of another host is read from `prUrl`.
+        let url = item.get("prUrl").and_then(Value::as_str);
+        // An address with a user part (`hide_session::hosts::carries_user`)
+        // names nothing, its record's other fields included.
+        if url.is_some_and(|url| url.contains('@')) {
+            return;
+        }
         let repository = item.get("prRepository").and_then(Value::as_str);
         let number = item.get("prNumber").and_then(Value::as_u64);
-        let from_url = item
-            .get("prUrl")
-            .and_then(Value::as_str)
-            .and_then(|url| pull_request_addresses(url).into_iter().next());
-        let address = match (repository, number) {
-            (Some(repository), Some(number)) => Some((repository.to_owned(), number)),
-            _ => from_url,
+        let from_url = url.and_then(crate::hosts::change_request_address);
+        let address = match (from_url, repository, number) {
+            (Some((host, repository, number)), _, _)
+                if crate::hosts::recorded_key(host).is_some() =>
+            {
+                Some((repository, number))
+            }
+            (_, Some(repository), Some(number)) => Some((repository.to_owned(), number)),
+            (from_url, _, _) => from_url.map(|(_, repository, number)| (repository, number)),
         };
         if let (Some((repository, number)), Some(at)) = (address, at) {
             links.pr(&repository, number, at, false);

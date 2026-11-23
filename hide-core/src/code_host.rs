@@ -85,6 +85,110 @@ pub(crate) fn change_request(
     }
 }
 
+/// A change request as a person or an agent writes it on a command line
+/// (`hide links pr`, a `--pr` option): its number, written bare, with a
+/// registered host's label (`#12`, `!12`) or as a registered host's address.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WrittenChangeRequest {
+    pub number: u64,
+    /// The key of the host its label or address is of; `None` for a bare
+    /// number, which any host's project may hold.
+    pub host: Option<String>,
+    /// The repository key of the repository its address names, server and
+    /// path ([`CodeHost::repository_key`]); `None` without an address. A
+    /// change request is placed by this key, never by the record's name,
+    /// which GitHub keeps without a server.
+    pub repository: Option<String>,
+}
+
+impl WrittenChangeRequest {
+    /// Where it says the change request is, beside its number.
+    pub fn place(&self) -> ChangeRequestPlace {
+        ChangeRequestPlace {
+            host: self.host.clone(),
+            repository: self.repository.clone(),
+        }
+    }
+}
+
+/// Where a written change request says it is (a `--pr` option's label or
+/// address): what an event carries beside the number, so the owner that
+/// knows the project can refuse one of another host or repository
+/// ([`CodeHosts::admit_place`]). Both `None` for a bare number, which is
+/// how an event without it reads.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ChangeRequestPlace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+
+impl ChangeRequestPlace {
+    /// Whether it names nothing beside the number.
+    pub fn is_bare(&self) -> bool {
+        self.host.is_none() && self.repository.is_none()
+    }
+}
+
+/// The refusals of [`CodeHosts::admit_place`] that carry what was expected.
+pub const PLACE_REFUSALS: [&str; 2] = [
+    "change_request_other_host",
+    "change_request_other_repository",
+];
+
+/// What to do after a refusal of [`CodeHosts::admit_place`], for the
+/// mission's and the task's own next actions.
+pub fn place_next_action(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "change_request_other_host" => {
+            "That change request is of another host than this project's (the reason names the project's host): give its number bare, with the project's host's label, or as its address"
+        }
+        "change_request_other_repository" => {
+            "That address is of another repository than this project's (the reason names the project's): give the number of this project's change request"
+        }
+        "change_request_project_unknown" => {
+            "Hide has not read this project's repository yet: give the number bare, or run the command again once the project's change requests show"
+        }
+        _ => return None,
+    })
+}
+
+/// Read `word` as [`WrittenChangeRequest`], or `None` for anything else.
+pub fn written_change_request(word: &str) -> Option<WrittenChangeRequest> {
+    let hosts = CodeHosts::STANDARD;
+    let word = word.trim();
+    let positive = |digits: &str| {
+        (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse::<u32>().ok())
+            .flatten()
+            .filter(|number| *number > 0)
+    };
+    if let Some(number) = positive(word) {
+        return Some(WrittenChangeRequest {
+            number: u64::from(number),
+            host: None,
+            repository: None,
+        });
+    }
+    let digits = word.trim_start_matches(|character: char| !character.is_ascii_digit());
+    if let Some(number) = positive(digits)
+        && let Some(host) = hosts.hosts().find(|host| host.number_label(number) == word)
+    {
+        return Some(WrittenChangeRequest {
+            number: u64::from(number),
+            host: Some(host.key().to_owned()),
+            repository: None,
+        });
+    }
+    let (host, repository, number) = hosts.change_request_at(word)?;
+    Some(WrittenChangeRequest {
+        number: u64::from(number),
+        host: Some(host.key().to_owned()),
+        repository: Some(host.repository_key(&repository)),
+    })
+}
+
 /// What a host tells the screen and the phone about itself, beside a
 /// project's read and a change request's card: its key, the optional
 /// operations it offers, and what to do when it cannot be read. Made from
@@ -319,6 +423,20 @@ pub(crate) trait CodeHost: Sync {
     /// common code and the screen compare references by equality alone.
     fn repository_key(&self, repository: &RepositoryRef) -> String;
 
+    /// The name the link record and a session's references key
+    /// `repository` by: its [`repository_key`](Self::repository_key), which
+    /// already carries the server, unless the host's records held another
+    /// form before hosts were named.
+    fn record_name(&self, repository: &RepositoryRef) -> String {
+        self.repository_key(repository)
+    }
+
+    /// The record's key for the host's own id of `repository`: the id under
+    /// the repository's server, so two hosts' ids never meet.
+    fn record_id(&self, repository: &RepositoryRef, id: &str) -> String {
+        format!("{}/{id}", repository.authority)
+    }
+
     /// Whether the host finds a checkout's repository itself from the
     /// checkout's remotes, so a checkout whose remotes Hide does not know is
     /// read in place ([`Place::Checkout`]).
@@ -449,14 +567,53 @@ impl ReadClock {
 /// against them. Production code has one registry ([`CodeHosts::STANDARD`]);
 /// a test registers its own units the same way.
 #[derive(Clone, Copy)]
-pub(crate) struct CodeHosts(&'static [&'static dyn CodeHost]);
+pub(crate) struct CodeHosts {
+    units: &'static [&'static dyn CodeHost],
+    /// The host every reference saved or sent before hosts were named
+    /// belongs to: a link record row, a session's named change request or an
+    /// older node's payload that names no host. Said here once, by name,
+    /// and never read from the order of `units`; `hide_session::hosts` names
+    /// the same host for what a session's reader sends, and a test holds the
+    /// two equal.
+    before_hosts: &'static dyn CodeHost,
+}
 
 impl CodeHosts {
-    pub(crate) const STANDARD: Self =
-        Self(&[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB]);
+    pub(crate) const STANDARD: Self = Self {
+        units: &[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB],
+        before_hosts: &crate::github::host::GITHUB,
+    };
+
+    /// A registry of `units`, with the host of references from before
+    /// hosts were named, which is one of them: a test's own.
+    #[cfg(test)]
+    pub(crate) const fn new(
+        units: &'static [&'static dyn CodeHost],
+        before_hosts: &'static dyn CodeHost,
+    ) -> Self {
+        Self {
+            units,
+            before_hosts,
+        }
+    }
 
     pub(crate) fn hosts(self) -> impl Iterator<Item = Host> {
-        self.0.iter().map(|unit| Host(*unit))
+        self.units.iter().map(|unit| Host(*unit))
+    }
+
+    /// The host a reference that names none belongs to: one saved or sent
+    /// before hosts were named.
+    pub(crate) fn before_hosts(self) -> Host {
+        Host(self.before_hosts)
+    }
+
+    /// The host a reference's recorded key names, or, for none, the host of
+    /// references from before hosts were named.
+    pub(crate) fn recorded(self, key: Option<&str>) -> Option<Host> {
+        match key {
+            None | Some("") => Some(self.before_hosts()),
+            Some(key) => self.host(key),
+        }
     }
 
     /// The registered host of `key`.
@@ -502,6 +659,57 @@ impl CodeHosts {
     pub(crate) fn on_named_server(self, repository: &RepositoryRef) -> bool {
         self.of(repository)
             .is_some_and(|host| host.names_server(&repository.authority))
+    }
+
+    /// Whether a change request written at `place` can be one of the
+    /// project whose repository is `project`: a bare number always is; a
+    /// label or address of another host, or an address of another
+    /// repository, is refused, and so is anything but a bare number while
+    /// the project's repository is not known. The refusal names what was
+    /// expected, never what was written, which may carry a credential.
+    pub(crate) fn admit_place(
+        self,
+        place: &ChangeRequestPlace,
+        project: Option<&RepositoryRef>,
+    ) -> Result<(), String> {
+        if place.is_bare() {
+            return Ok(());
+        }
+        let Some((host, project)) = project.and_then(|project| Some((self.of(project)?, project)))
+        else {
+            return Err("change_request_project_unknown".into());
+        };
+        if place.host.as_deref().is_some_and(|key| key != host.key()) {
+            return Err(crate::coordination::refusal(
+                "change_request_other_host",
+                host.name(),
+            ));
+        }
+        if place
+            .repository
+            .as_ref()
+            .is_some_and(|written| *written != host.repository_key(project))
+        {
+            return Err(crate::coordination::refusal(
+                "change_request_other_repository",
+                &host.stored_name(project),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The name the link record and a session's references key
+    /// `repository` by, as its host answers it ([`CodeHost::record_name`]).
+    /// `None` for a host not registered.
+    pub(crate) fn record_name(self, repository: &RepositoryRef) -> Option<String> {
+        self.of(repository).map(|host| host.record_name(repository))
+    }
+
+    /// The record's key for the host's own id of `repository`, as its host
+    /// answers it ([`CodeHost::record_id`]).
+    pub(crate) fn record_id(self, repository: &RepositoryRef, id: &str) -> Option<String> {
+        self.of(repository)
+            .map(|host| host.record_id(repository, id))
     }
 
     fn best(self, read: impl Fn(Host) -> Option<RepositoryRef>) -> Option<(Host, RepositoryRef)> {

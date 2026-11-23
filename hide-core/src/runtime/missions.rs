@@ -2846,6 +2846,17 @@ impl Runtime {
                     .iter()
                     .position(|row| row.key == node)
                     .ok_or("mission_node_unknown")?;
+                // A change request written with its host's label or address
+                // is the mission project's, or nothing is attached.
+                let repository = self
+                    .github_project_on(&current.device_id, &current.project)
+                    .and_then(|project| project.repository.as_ref()?.repository.as_ref());
+                for place in [&patch.pr_place, &patch.base_pr_place]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.code_hosts.admit_place(place, repository)?;
+                }
                 let named = [
                     patch.reviewer.as_deref(),
                     patch.verifier.as_deref(),

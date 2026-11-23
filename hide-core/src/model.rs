@@ -7197,13 +7197,15 @@ impl PullRequestSnapshot {
     }
 
     /// The key a session's printed address and the link record name it by:
-    /// its repository's path in lower case and its number, on a server its
-    /// host names ([`crate::code_host::CodeHosts::on_named_server`]).
+    /// its repository's record name ([`crate::code_host::CodeHosts::record_name`])
+    /// and its number, on a server its host names
+    /// ([`crate::code_host::CodeHosts::on_named_server`]).
     pub(crate) fn sighting_key(&self, hosts: crate::code_host::CodeHosts) -> Option<(String, u64)> {
         let (repository, number) = self.named(hosts)?;
-        hosts
-            .on_named_server(&repository)
-            .then(|| (repository.path.to_ascii_lowercase(), u64::from(number)))
+        if !hosts.on_named_server(&repository) {
+            return None;
+        }
+        Some((hosts.record_name(&repository)?, u64::from(number)))
     }
 
     /// Something on its head's checks has not finished: they are pending,
