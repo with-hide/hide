@@ -402,7 +402,7 @@ What is not certain is raised on the node to you, with a letter naming the node 
 A raise is yours to settle, never the operator's: record the line, skip it with its reason, restart the worker, wait on purpose with a `hide mission delay` or a node `--hold`, reorder the plan, attach the pull request with `--pr`, set the node's status or drop it.
 Several nodes raised by one cause (a login that expired, a CI that is down on main) are one problem: settle it once for all of them.
 Nothing reaches the operator per node.
-When a raise, or the warning that a worker stopped (below), stands 20 minutes without you settling it, or any such stands while no Conductor holds the mission, the mission shows the operator one card for all of them, the safety net, which leads them to your terminal (or, with no Conductor, to 지휘 다시 열기); a delay, a node's hold, an open decision and a gate waiting on the operator hold it off, as they hold off a stall; a gate that asks while its node still owes other lines (its own, CI, a review) holds off nothing, and its question holds the mission only while the gate is all its node owes.
+When a raise, or the warning that a worker stopped (below), stands unsettled while you rest (your turn ended, you ask the operator nothing and wait on no task of your own; your workers at work do not count) and 20 minutes passed since the latest of it, your arrival and your rest, or any such stands while no Conductor holds the mission, the mission shows the operator one card for all of them, the safety net, which leads them to your terminal (or, with no Conductor, to 지휘 다시 열기); a delay, a node's hold, an open decision and a gate waiting on the operator hold it off, as they hold off a stall; a gate that asks while its node still owes other lines (its own, CI, a review) holds off nothing, and its question holds the mission only while the gate is all its node owes.
 A failed CI, a review asking for changes and a review failing at its round limit are the working worker's to answer and never reach the operator by themselves: only once the worker stops on one (its stopped warning) or ends (a raise), counted from then.
 The operator can still settle a raised node from its panel on the map; you then get a letter saying what they did.
 The same cause is raised once.
@@ -431,9 +431,9 @@ Every node not finished is someone's move, and a move that does not come is rais
 | --- | --- |
 | Yours: start a node whose dependencies are all done, or, behind a start gate answered with a fix, make the fix and record its line | 20 minutes after it could start |
 | The worker's, after a stopped warning above | 30 minutes after the warning's letter, if it still stands |
-| Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push |
+| Others': the pull request waits on CI, a review or the merge (not one stacked on a node of the mission not merged yet: that node's wait is the one timed) | 1 hour after the node's last push |
 
-A stall is a raise like any other: yours to settle, and part of the safety net when it stands 20 minutes more.
+A stall is a raise like any other: yours to settle, and part of the safety net once it stands 20 minutes while you rest.
 
 No move is owed while a delay holds the mission, a decision waits on the operator, or the node's gate waits on the operator's answer with nothing else of the node open; a node not started also waits while the mission has as many workers as its cap, a warning stands only once its letter reached you, and a pull request's wait is judged only on GitHub's current answer.
 A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
