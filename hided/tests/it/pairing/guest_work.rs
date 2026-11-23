@@ -448,7 +448,20 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         .unwrap()
         .to_owned();
     let on_guest = format!("remote:{HOST}:pane:{local}");
-    let node_runs = || process_naming(&[build.as_str(), "node", "serve", "--guest"]);
+    // The build id is the same in every run of this test, so the node is
+    // told by the host's state folder too: its program and its folder are
+    // below it. A run the runner killed leaves its daemons and their node
+    // behind, and a retry must not wait on that one.
+    let host_state = host.terminal.state.to_str().unwrap().to_owned();
+    let node_runs = || {
+        process_naming(&[
+            host_state.as_str(),
+            build.as_str(),
+            "node",
+            "serve",
+            "--guest",
+        ])
+    };
     let node = node_runs().expect("the guest's node, a process of the guest's build");
     // The line that leaves the shell's own process id: the same id later is
     // the same shell, whatever started anew around it.

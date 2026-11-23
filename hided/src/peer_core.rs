@@ -12,8 +12,10 @@
 //! What the two machines show of each other's work rides the same stream
 //! (D-50, D-60): this machine's own Needs You and Done go to the machines
 //! that may open it, as its list changes; this computer's seat goes to the
-//! machines it may open, as it changes; and a notification is handed to
-//! the computer someone is at, which answers whether it showed it. Which
+//! machines it may open, as it changes; a notification is handed to the
+//! computer someone is at, which answers whether it showed it; and the
+//! names this core shows its work on a machine it opens by go to that
+//! machine, which keeps them with the panes (B10, `crate::work_names`). Which
 //! way each goes is checked here by who opened a stream, which is who
 //! holds a grant: the list and the place are the core's and
 //! `desktop_notices`' to judge.
@@ -186,6 +188,44 @@ impl Cores for CoreHandle {
     }
 }
 
+/// Where the names a machine that may open this one told of its work here
+/// are kept: that guest's panes (`Guests::name_panes`). Blocking.
+pub trait WorkNamed: Send + Sync + 'static {
+    fn named(&self, guest: &PeerKey, names: &HashMap<String, String>);
+}
+
+impl WorkNamed for crate::guests::Guests {
+    fn named(&self, guest: &PeerKey, names: &HashMap<String, String>) {
+        self.name_panes(guest, names);
+    }
+}
+
+/// The names of the work two machines run for each other (B10): what this
+/// core shows its work on the machines it opens by, and where a guest's
+/// names for its work here are kept.
+pub struct Names {
+    /// This core's names, each machine's by its connection key
+    /// (`work_names::follow`).
+    pub told: watch::Receiver<crate::work_names::Told>,
+    /// Set while a stream this side opened is open: the names are read
+    /// from the core only then.
+    pub wanted: watch::Sender<bool>,
+    /// Where a guest's names are kept; none where nothing is hosted.
+    pub kept: Option<Arc<dyn WorkNamed>>,
+}
+
+fn names_out(names: &[hide_core::work_names::WorkName]) -> CoreMessage {
+    CoreMessage::WorkNames {
+        names: names
+            .iter()
+            .map(|named| hide_peer::protocol::core::WorkName {
+                pane: named.pane.clone(),
+                name: named.name.clone(),
+            })
+            .collect(),
+    }
+}
+
 fn seat_out(seat: Seat) -> CoreMessage {
     let ms = |length: Duration| u64::try_from(length.as_millis()).unwrap_or(u64::MAX);
     CoreMessage::Seat {
@@ -215,6 +255,8 @@ struct Open {
 struct Standing {
     work: std::sync::atomic::AtomicBool,
     seat: std::sync::atomic::AtomicBool,
+    /// This core's names of its work on the machine this side opens.
+    names: std::sync::atomic::AtomicBool,
     moved: Notify,
 }
 
@@ -287,6 +329,7 @@ pub struct PeerCore {
     next: AtomicU64,
     /// The letters that wait to go changed, or a stream opened.
     moved: Notify,
+    names: Names,
 }
 
 impl PeerCore {
@@ -301,13 +344,21 @@ impl PeerCore {
         host: &Arc<PeerHost>,
         desktop: &Arc<DesktopNotices>,
         list: watch::Receiver<Arc<Projection>>,
+        guests: &Arc<crate::guests::Guests>,
         shutdown: Ending,
     ) -> Arc<Self> {
+        let (wanted, reading) = watch::channel(false);
+        let names = Names {
+            told: crate::work_names::follow(Arc::clone(core), reading, shutdown.clone()),
+            wanted,
+            kept: Some(Arc::clone(guests) as Arc<dyn WorkNamed>),
+        };
         let service = Self::over(
             Arc::clone(core) as Arc<dyn Cores>,
             host,
             desktop,
             list,
+            names,
             shutdown,
             RESEND_AFTER,
         );
@@ -320,6 +371,7 @@ impl PeerCore {
         host: &Arc<PeerHost>,
         desktop: &Arc<DesktopNotices>,
         list: watch::Receiver<Arc<Projection>>,
+        names: Names,
         shutdown: Ending,
         resend_after: Duration,
     ) -> Arc<Self> {
@@ -339,6 +391,7 @@ impl PeerCore {
             working: Mutex::new(JoinSet::new()),
             next: AtomicU64::new(1),
             moved: Notify::new(),
+            names,
         });
         let taking = Arc::clone(&service);
         host.handle(StreamKind::Core, move |incoming: Incoming| {
@@ -354,7 +407,45 @@ impl PeerCore {
         tokio::spawn(Arc::clone(&service).tell_work(list));
         tokio::spawn(Arc::clone(&service).tell_seat());
         tokio::spawn(Arc::clone(&service).hand_work());
+        tokio::spawn(Arc::clone(&service).tell_names());
         service
+    }
+
+    /// Tells each machine this one opens the names of this core's work
+    /// there, whole, whenever its own list reads differently (B10).
+    async fn tell_names(self: Arc<Self>) {
+        let mut told = self.names.told.clone();
+        let mut last = crate::work_names::Told::default();
+        loop {
+            tokio::select! {
+                () = self.shutdown.ended() => return,
+                moved = told.changed() => if moved.is_err() { return },
+            }
+            let now = Arc::clone(&told.borrow_and_update());
+            let open = lock(&self.open);
+            for (key, streams) in open.iter() {
+                let hex = key.to_hex();
+                if now.get(&hex) == last.get(&hex) {
+                    continue;
+                }
+                if let Some(stream) = streams.iter().find(|stream| stream.mine) {
+                    stream.standing.tell(&stream.standing.names);
+                }
+            }
+            drop(open);
+            last = now;
+        }
+    }
+
+    /// Whether a stream this side opened is open anywhere: the names are
+    /// read from the core only while one is. Called under `open`.
+    fn want_names(&self, open: &HashMap<PeerKey, Vec<Open>>) {
+        let wanted = open.values().flatten().any(|stream| stream.mine);
+        self.names.wanted.send_if_modified(|was| {
+            let moved = *was != wanted;
+            *was = wanted;
+            moved
+        });
     }
 
     /// Hands the core what each machine this one opens told of its own
@@ -534,18 +625,25 @@ impl PeerCore {
         let (out, mut outbound) = mpsc::channel(OUTBOUND);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let standing = Arc::new(Standing::default());
-        lock(&self.open).entry(key).or_default().push(Open {
-            id,
-            out: out.clone(),
-            standing: Arc::clone(&standing),
-            mine,
-        });
+        {
+            let mut open = lock(&self.open);
+            open.entry(key).or_default().push(Open {
+                id,
+                out: out.clone(),
+                standing: Arc::clone(&standing),
+                mine,
+            });
+            self.want_names(&open);
+        }
         record("peer_core.opened", &key, json!({"mine": mine}));
         // What waited for this machine goes now, and it is told where this
         // one stands: this computer's seat for a machine it may open, this
         // machine's own work for one that may open it.
         self.moved.notify_one();
         standing.tell(if mine { &standing.seat } else { &standing.work });
+        if mine {
+            standing.tell(&standing.names);
+        }
         let ended = 'stream: loop {
             tokio::select! {
                 () = self.shutdown.ended() => break None,
@@ -554,11 +652,17 @@ impl PeerCore {
                     // a change that lands meanwhile marks it again.
                     let work = standing.work.swap(false, Ordering::SeqCst);
                     let seat = standing.seat.swap(false, Ordering::SeqCst);
+                    let names = standing.names.swap(false, Ordering::SeqCst);
                     let told = [
                         work.then(|| lock(&self.told).clone())
                             .flatten()
                             .map(|work| CoreMessage::Work { work }),
                         seat.then(|| seat_out(self.desktop.seat())),
+                        // A machine whose session this core does not hold
+                        // now keeps what it was told.
+                        names
+                            .then(|| self.names.told.borrow().get(&key.to_hex()).map(|names| names_out(names)))
+                            .flatten(),
                     ];
                     for message in told.into_iter().flatten() {
                         if let Err(error) = write_message(&mut send, &message).await {
@@ -612,6 +716,7 @@ impl PeerCore {
             if gone {
                 open.remove(key);
             }
+            self.want_names(&open);
             // A machine this one opens no longer tells nothing of its work.
             let tells_no_more = !opened && {
                 let mut heard = lock(&self.heard);
@@ -901,6 +1006,42 @@ impl PeerCore {
                     self.desktop.show_phone_paired(&hex, &phone);
                 } else {
                     record("peer_core.phone_paired_refused", &key, Value::Null);
+                }
+                None
+            }
+            // The names of a machine's work here, from a machine that may
+            // open this one (B10): only its own panes take them.
+            CoreMessage::WorkNames { names } => {
+                let refused = if !self.has(&key, false) {
+                    Some("not_opened_by_it")
+                } else if !hide_peer::protocol::core::valid_work_names(&names) {
+                    Some("out_of_bounds")
+                } else {
+                    None
+                };
+                if let Some(reason) = refused {
+                    record(
+                        "peer_core.work_names_refused",
+                        &key,
+                        json!({"reason": reason, "names": names.len()}),
+                    );
+                    return None;
+                }
+                if let Some(kept) = &self.names.kept {
+                    let kept = Arc::clone(kept);
+                    let names: HashMap<String, String> = names
+                        .into_iter()
+                        .map(|named| (named.pane, named.name))
+                        .collect();
+                    if let Err(error) =
+                        tokio::task::spawn_blocking(move || kept.named(&key, &names)).await
+                    {
+                        record(
+                            "peer_core.work_names_not_kept",
+                            &key,
+                            json!({"reason": error.to_string()}),
+                        );
+                    }
                 }
                 None
             }
@@ -1199,8 +1340,36 @@ mod tests {
         pc_desktop: Arc<DesktopNotices>,
         /// The PC's own list, as its follower would read it.
         pc_list: watch::Sender<Arc<Projection>>,
+        /// The names the Mac's core shows its work on other machines by.
+        mac_names: watch::Sender<crate::work_names::Told>,
+        /// Whether each side reads its names, and what each side kept of
+        /// the names another machine told it.
+        mac_wants: watch::Receiver<bool>,
+        pc_wants: watch::Receiver<bool>,
+        mac_kept: Arc<Kept>,
+        pc_kept: Arc<Kept>,
         mac_key: String,
         pc_key: String,
+    }
+
+    /// What one side kept of the names a guest told it, in order, and how
+    /// many lists it has kept, for a test to wait on.
+    struct Kept(
+        Mutex<Vec<(String, HashMap<String, String>)>>,
+        watch::Sender<usize>,
+    );
+
+    impl Default for Kept {
+        fn default() -> Self {
+            Self(Mutex::default(), watch::channel(0).0)
+        }
+    }
+
+    impl WorkNamed for Kept {
+        fn named(&self, guest: &PeerKey, names: &HashMap<String, String>) {
+            lock(&self.0).push((guest.to_hex(), names.clone()));
+            self.1.send_modify(|count| *count += 1);
+        }
     }
 
     impl Pair {
@@ -1215,15 +1384,30 @@ mod tests {
             let (mac_core, pc_core) = (Arc::new(Core::default()), Arc::new(Core::default()));
             let pc_desktop = Arc::new(DesktopNotices::new());
             let (pc_list, _) = watch::channel(Arc::<Projection>::default());
+            let (mac_names, _) = watch::channel(crate::work_names::Told::default());
+            let (mac_kept, pc_kept) = (Arc::new(Kept::default()), Arc::new(Kept::default()));
+            let names = |told: watch::Receiver<crate::work_names::Told>, kept: &Arc<Kept>| {
+                let (wanted, wants) = watch::channel(false);
+                let names = Names {
+                    told,
+                    wanted,
+                    kept: Some(Arc::clone(kept) as Arc<dyn WorkNamed>),
+                };
+                (names, wants)
+            };
+            let (mac_naming, mac_wants) = names(mac_names.subscribe(), &mac_kept);
+            let (pc_naming, pc_wants) = names(watch::channel(Arc::default()).1, &pc_kept);
             let serve = |machine: &Machine,
                          core: &Arc<Core>,
                          desktop: &Arc<DesktopNotices>,
-                         list: watch::Receiver<Arc<Projection>>| {
+                         list: watch::Receiver<Arc<Projection>>,
+                         names: Names| {
                 PeerCore::over(
                     Arc::clone(core) as Arc<dyn Cores>,
                     &machine.host,
                     desktop,
                     list,
+                    names,
                     machine.shutdown.clone(),
                     resend_after,
                 )
@@ -1233,8 +1417,9 @@ mod tests {
                 &mac_core,
                 &mac_desktop,
                 watch::channel(Arc::default()).1,
+                mac_naming,
             );
-            let pc_service = serve(&pc, &pc_core, &pc_desktop, pc_list.subscribe());
+            let pc_service = serve(&pc, &pc_core, &pc_desktop, pc_list.subscribe(), pc_naming);
             let link = paired(&pc, &mac).await;
             let pc_key = link.key().to_hex();
             let mac_key = mac.host.peers().unwrap().key().to_hex();
@@ -1248,6 +1433,11 @@ mod tests {
                 mac_desktop,
                 pc_desktop,
                 pc_list,
+                mac_names,
+                mac_wants,
+                pc_wants,
+                mac_kept,
+                pc_kept,
                 mac_key,
                 pc_key,
             }
@@ -1429,6 +1619,87 @@ mod tests {
                 lock(&core.works).last() == Some(&(pair.pc_key.clone(), None))
             })
             .await;
+    }
+
+    /// B10: the Mac, which opens the PC, reads its names while it is
+    /// connected there and tells the PC the names of its work on the PC,
+    /// whole, on connecting and whenever they read differently, never
+    /// another machine's; the PC keeps them with its panes. The same message
+    /// from the PC, which the Mac does not open, is not kept on the Mac.
+    #[tokio::test]
+    async fn the_names_of_a_machines_work_go_to_the_machine_it_runs_on_and_not_the_other_way() {
+        let named = |pairs: &[(&str, &str)]| -> Vec<hide_core::work_names::WorkName> {
+            pairs
+                .iter()
+                .map(|(pane, name)| hide_core::work_names::WorkName {
+                    pane: (*pane).to_owned(),
+                    name: (*name).to_owned(),
+                })
+                .collect()
+        };
+        let mut pair = Pair::new(Duration::from_secs(30)).await;
+        within(
+            "the Mac reads its names",
+            pair.mac_wants.wait_for(|wants| *wants),
+        )
+        .await
+        .unwrap();
+        assert!(!*pair.pc_wants.borrow(), "the PC opens nothing");
+
+        let kept = |pair: &Pair| lock(&pair.pc_kept.0).clone();
+        let until = |pair: &Pair, count: usize| {
+            let mut kept = pair.pc_kept.1.subscribe();
+            async move {
+                within("the names on the PC", kept.wait_for(|told| *told >= count))
+                    .await
+                    .unwrap();
+            }
+        };
+        let mut told = std::collections::BTreeMap::new();
+        told.insert(pair.pc_key.clone(), named(&[("w1:p1", "로그인 고치기")]));
+        told.insert("ef".repeat(32), named(&[("w9:p9", "another machine's")]));
+        pair.mac_names.send_replace(Arc::new(told.clone()));
+        until(&pair, 1).await;
+        let (from, names) = kept(&pair).remove(0);
+        assert_eq!(from, pair.mac_key);
+        assert_eq!(
+            names,
+            HashMap::from([("w1:p1".to_owned(), "로그인 고치기".to_owned())])
+        );
+
+        // Another machine's names moving tells the PC nothing; its own do.
+        told.insert("ef".repeat(32), named(&[]));
+        pair.mac_names.send_replace(Arc::new(told.clone()));
+        told.insert(
+            pair.pc_key.clone(),
+            named(&[("w1:p1", "로그인 고치기"), ("w1:p2", "배포 확인")]),
+        );
+        pair.mac_names.send_replace(Arc::new(told));
+        until(&pair, 2).await;
+        assert_eq!(kept(&pair).len(), 2);
+        assert_eq!(kept(&pair)[1].1.len(), 2);
+
+        // The PC may not open the Mac: names it tells are not kept there.
+        // A letter follows on the same stream, so the names were read.
+        assert!(
+            pair.pc_service
+                .tell(&pair.mac_key, names_out(&named(&[("w1:p1", "theirs")])))
+        );
+        lock(&pair.pc_core.waiting).push((pair.mac_key.clone(), letter("letter-1")));
+        pair.pc_service.outbox_moved();
+        pair.mac_core
+            .until("the PC's letter", |core| !lock(&core.taken).is_empty())
+            .await;
+        assert!(lock(&pair.mac_kept.0).is_empty());
+
+        // The connection ends: the Mac reads its names no more.
+        pair.pc.shutdown.end();
+        within(
+            "the Mac stops reading",
+            pair.mac_wants.wait_for(|wants| !*wants),
+        )
+        .await
+        .unwrap();
     }
 
     /// D-70 (security pre-review O2): a phone paired with the PC reaches

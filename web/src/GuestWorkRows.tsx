@@ -6,7 +6,7 @@ import { AgentRowMark } from "./AgentRowMark";
 import { Elapsed } from "./components/elapsed";
 import { SessionRowBody } from "./components/session-row";
 import { GuestMark, useGuestPanes } from "./GuestPaneScreen";
-import { guestGroups, peerMachines, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { guestGroups, guestPlaces, peerMachines, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
 import { ownWindow } from "./pairing";
 import { tileMonogram } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -28,7 +28,7 @@ function markOf(mark: string): RowMark | null {
  * opens the pane in the center; the work's state is the other machine's to
  * show, so the row carries none.
  */
-function GuestPaneRow({ pane, actions }: { pane: GuestPane; actions: Actions }) {
+function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; /** Where the name starts, to line up under a checkout's own rows. */ inset?: string }) {
   const { t } = useInterfaceTranslation();
   const selected = useUiStore((s) => s.screen?.kind === "guest" && s.screen.paneId === pane.id);
   return (
@@ -39,6 +39,7 @@ function GuestPaneRow({ pane, actions }: { pane: GuestPane; actions: Actions }) 
         data-guest-row={pane.id}
         data-task-focus="row"
         className={cn("min-h-(--size-control-lg) gap-sm rounded-sm px-sm py-0 text-caption", selected ? "bg-secondary text-foreground hover:bg-secondary" : "text-subtle-foreground hover:text-foreground")}
+        style={inset ? { paddingLeft: inset } : undefined}
         onClick={() => actions.openGuestPane(pane.id)}
       >
         <span className="min-w-0 flex-1 truncate">{pane.label}</span>
@@ -48,17 +49,38 @@ function GuestPaneRow({ pane, actions }: { pane: GuestPane; actions: Actions }) 
   );
 }
 
-/** The panes of other machines' work started in one of `projectId`'s folders, under that project (B10). */
-export function GuestProjectRows({ projectId, actions }: { projectId: string; actions: Actions }) {
+const NO_ROWS: ReadonlySet<string> = new Set();
+
+/**
+ * The panes of other machines' work started in one of `projectId`'s folders
+ * that stand at the project's end (B10): every one when the list draws no
+ * checkout rows, else those whose checkout `rows` leaves out
+ * (`guestPlaces`).
+ */
+export function GuestProjectRows({ projectId, rows = NO_ROWS, actions }: { projectId: string; rows?: ReadonlySet<string>; actions: Actions }) {
   const panes = useGuestPanes();
-  const mine = useMemo(() => panes.filter((pane) => pane.projectId === projectId), [panes, projectId]);
-  if (mine.length === 0) return null;
+  const atEnd = useMemo(() => guestPlaces(panes, projectId, rows).atEnd, [panes, projectId, rows]);
+  if (atEnd.length === 0) return null;
   return (
     <>
-      {mine.map((pane) => (
+      {atEnd.map((pane) => (
         <GuestPaneRow key={pane.id} pane={pane} actions={actions} />
       ))}
     </>
+  );
+}
+
+/** The panes of other machines' work started in `checkoutId`'s folder, after that checkout's own rows (B10). */
+export function GuestCheckoutRows({ projectId, checkoutId, inset, actions }: { projectId: string; checkoutId: string; inset: string; actions: Actions }) {
+  const panes = useGuestPanes();
+  const mine = useMemo(() => guestPlaces(panes, projectId, new Set([checkoutId])).byCheckout.get(checkoutId) ?? [], [panes, projectId, checkoutId]);
+  if (mine.length === 0) return null;
+  return (
+    <ul data-checkout-guests={checkoutId}>
+      {mine.map((pane) => (
+        <GuestPaneRow key={pane.id} pane={pane} actions={actions} inset={inset} />
+      ))}
+    </ul>
   );
 }
 

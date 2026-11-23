@@ -159,6 +159,10 @@ it("opens a page that reads the card, shows its files and lines and GitHub's add
     expect(q('[data-phone-pr-file="hided/src/mobile/wire.rs"] [data-phone-pr-lines]')!.getAttribute("data-phone-pr-lines")).toBe("+71 -8");
     expect(q("[data-phone-pr-files]")!.querySelector("[data-phone-pr-lines]")!.getAttribute("data-phone-pr-lines")).toBe("+77 -10");
     expect(q('[data-phone-pr-reviewer="tansfil"]')!.getAttribute("data-phone-pr-reviewer-state")).toBe("approved");
+    // Doop 18: the review is one row, the count and then the reviewer on the same line; the chip and Merge are words alone.
+    expect(q("[data-phone-pr-review]")!.textContent).toBe("Reviewapprovals 1/1 · tansfil");
+    expect(q("[data-phone-pr-pill] svg")).toBeNull();
+    expect((q("[data-phone-pr-merge]") as HTMLButtonElement).querySelector("svg")).toBeNull();
     expect((q("[data-phone-pr-merge]") as HTMLButtonElement).disabled).toBe(false);
 
     await click('[data-phone-back="prs"]');

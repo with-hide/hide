@@ -56,6 +56,17 @@ impl Machine {
         Self::with_clock(net, name, dir, Clock::system())
     }
 
+    /// A machine that says it is called `shown` in its hello.
+    pub fn calling_itself(net: &Arc<Net>, name: &'static str, shown: &'static str) -> Self {
+        Self::started(
+            net,
+            name,
+            Arc::new(tempfile::tempdir().unwrap()),
+            Clock::system(),
+            Some(shown),
+        )
+    }
+
     /// A machine whose records are stamped by `clock`.
     pub fn with_clock(
         net: &Arc<Net>,
@@ -63,12 +74,23 @@ impl Machine {
         dir: Arc<tempfile::TempDir>,
         clock: Clock,
     ) -> Self {
+        Self::started(net, name, dir, clock, None)
+    }
+
+    fn started(
+        net: &Arc<Net>,
+        name: &'static str,
+        dir: Arc<tempfile::TempDir>,
+        clock: Clock,
+        shown: Option<&'static str>,
+    ) -> Self {
         let (key, _) = MachineKey::load_or_create(&layout::machine_key(dir.path()), name).unwrap();
         let config = Config {
             state_dir: dir.path(),
             build: "1.3.0-test",
             device: name,
             release: false,
+            name: shown,
             clock,
         };
         let (peers, incoming) = Peers::start(net.join(key), config).unwrap();

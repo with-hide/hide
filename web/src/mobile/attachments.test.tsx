@@ -121,6 +121,33 @@ it("sends the words and the files as one input once every file is in, and draws 
   }
 });
 
+it("offers the same + on a page the agent opened, sending a photo and a log with the page's name in front (Doop 11)", async () => {
+  const { container, serve, type, submit, of, uploads, unmount } = await openDetail({ attachments: true });
+  try {
+    const name = "install-guide-mockup.html";
+    await serve({ type: "looks", device_id: "local", pane_id: "w1:p1", views: [{ id: "v1", kind: "html", name, unseen: true, at: Date.now() }], omitted: 0 });
+    const connection = await import("./connection");
+    await act(async () => connection.setTab("looks"));
+    await act(async () => container.querySelector<HTMLElement>('[data-phone-look="v1"]')!.click());
+    expect(container.querySelector<HTMLTextAreaElement>("[data-phone-reply]")!.placeholder).toBe("Reply about this page");
+    expect(container.querySelector("[data-phone-attach]")!.getAttribute("aria-label")).toBe("Attach files");
+    const photo = uploads.reserveFile("IMG_0002.jpg", "photo")!;
+    await act(async () => uploads.addFile(photo, { name: "IMG_0002.jpg", bytes: new Uint8Array([1, 2, 3]), kind: "photo", thumb: "data:image/jpeg;base64,AA==" }));
+    const log = uploads.reserveFile("build.log", "file")!;
+    await act(async () => uploads.addFile(log, { name: "build.log", bytes: new TextEncoder().encode("ok"), kind: "file", thumb: null }));
+    expect(container.querySelectorAll("[data-phone-attached]")).toHaveLength(2);
+    const shot = (of("attach_begin")[0] as { stage: string }).stage;
+    await serve({ type: "attach_ack", stage: shot, done: true });
+    const logStage = (of("attach_begin")[1] as { stage: string }).stage;
+    await serve({ type: "attach_ack", stage: logStage, done: true });
+    await type("이 단계 순서가 이상해");
+    await submit();
+    expect(of("input")).toEqual([expect.objectContaining({ text: `[${name}] 이 단계 순서가 이상해`, stages: [shot, logStage] })]);
+  } finally {
+    await unmount();
+  }
+});
+
 it("draws a photo the agent took in as an image over the message that names its upload, an image with no path as a photo with no name, and a photo sent alone with no bubble", async () => {
   const { container, serve, type, submit, of, uploads, unmount } = await openDetail({ attachments: true });
   try {

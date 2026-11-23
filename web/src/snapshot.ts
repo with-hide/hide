@@ -3942,8 +3942,11 @@ export type GuestPanes = {
   device_id: string;
   /** Its connection id. */
   key: string;
-  /** `folder`: the folder the pane was started in on this machine, once its node said it. */
-  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null }[];
+  /**
+   * `folder`: the folder the pane was started in on this machine, once its node said it.
+   * `name`: what the guest's core shows the pane by (its agent's label, else its tab's name), once it told one.
+   */
+  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null }[];
 };
 
 /**

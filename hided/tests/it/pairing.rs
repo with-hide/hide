@@ -1106,6 +1106,7 @@ async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
         state_dir: state.clone(),
         build: "1.3.0-test".to_owned(),
         device: "moved-off".to_owned(),
+        name: None,
         release: false,
         direct: Some("127.0.0.1:0".parse().unwrap()),
         relay: None,
