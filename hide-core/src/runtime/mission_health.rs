@@ -708,9 +708,12 @@ impl Runtime {
             made: true,
         };
         self.note_conductors_seen(&made.present, now);
+        // A Conductor coming to rest, or moving again, changes when its
+        // safety net may come up, which only the mission views read.
+        let rest_moved = self.note_conductors_resting(now);
         if made == self.missions.health_made {
             self.drive_mission_cleanup(false);
-            return false;
+            return rest_moved;
         }
         self.missions.health_made = made;
         let ids: Vec<String> = self
@@ -736,7 +739,7 @@ impl Runtime {
         changed |= self.warn_missions(now);
         // A node this evaluation finished is looked at in the same pass.
         self.drive_mission_cleanup(true);
-        changed
+        changed | rest_moved
     }
 
     /// Brings each mission's node warnings to what `warn_acts` answers at
@@ -2212,12 +2215,10 @@ impl Runtime {
         if self.mission_stale(mission) {
             return None;
         }
-        let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
         let operator_waits = self.operator_waits(mission);
         crate::mission_health::safety_net(
             mission,
-            present,
-            self.conductor_present_since(&mission.id, now),
+            self.conductor_now(mission, now),
             &operator_waits,
             now,
         )
@@ -2226,19 +2227,65 @@ impl Runtime {
     /// When the view of a mission whose Conductor is present must be made
     /// again for its safety net to come up (`mission_health::safety_net_due`).
     pub(super) fn mission_safety_net_due(&self, mission: &Mission, now: u64) -> Option<u64> {
-        if self.mission_stale(mission)
-            || !mission.status.open()
-            || !self.conductor_present(&mission.conductor.actor)
-        {
+        if self.mission_stale(mission) {
             return None;
         }
         let operator_waits = self.operator_waits(mission);
         crate::mission_health::safety_net_due(
             mission,
-            self.conductor_present_since(&mission.id, now),
+            self.conductor_now(mission, now),
             &operator_waits,
             now,
         )
+    }
+
+    /// The mission's Conductor as its safety net reads it: present only
+    /// while the mission is open, since a closed mission's Conductor has
+    /// finished with it, and resting from when this daemon first saw it rest
+    /// (`conductor_rest_seen`), or from `now` when it rests and no pass saw
+    /// it yet.
+    fn conductor_now(&self, mission: &Mission, now: u64) -> crate::mission_health::ConductorNow {
+        if !mission.status.open() || !self.conductor_present(&mission.conductor.actor) {
+            return crate::mission_health::ConductorNow::Absent;
+        }
+        crate::mission_health::ConductorNow::Present {
+            since: self.conductor_present_since(&mission.id, now),
+            resting: self.conductor_rests(mission).then(|| {
+                self.missions
+                    .conductor_rest_seen
+                    .get(&mission.id)
+                    .copied()
+                    .unwrap_or(now)
+            }),
+        }
+    }
+
+    /// Whether the mission's present Conductor rests: its row says its turn
+    /// ended, it asks the operator nothing (a question, an approval, a block
+    /// or a person's turn brings its own row to Needs You), and it waits on
+    /// no work of its own (a background task, a reply, checks, subagents).
+    /// Its workers at work are not its move (`AgentWait::Children`): they
+    /// carry the mission's nodes, not what the Conductor owes on a raise. A
+    /// sleeping Conductor rests. False while its device does not answer or
+    /// its row is not its session's.
+    pub(super) fn conductor_rests(&self, mission: &Mission) -> bool {
+        let actor = &mission.conductor.actor;
+        if !mission.status.open()
+            || !self.conductor_present(actor)
+            || !self.device_answers(&actor.device_id)
+        {
+            return false;
+        }
+        self.agent_row(&actor.pane_id)
+            .filter(|row| row.lineage_session == actor.session)
+            .is_some_and(|row| {
+                row.activity == "stopped"
+                    && !matches!(row.demand.as_str(), "question" | "approval")
+                    && !row.blocked
+                    && row.human_turn.is_none()
+                    && row.declared_human_turn.is_none()
+                    && matches!(row.wait, None | Some(crate::model::AgentWait::Children))
+            })
     }
 
     /// Since when this daemon has seen the mission's Conductor present, `now`
@@ -2275,10 +2322,34 @@ impl Runtime {
         seen.retain(|id, _| ids.contains(id.as_str()));
     }
 
+    /// Follows each open mission's Conductor rest as the health pass reads
+    /// it (`conductor_rests`): first seen resting keeps `now`, at work or
+    /// gone forgets it. At most one entry per mission of the book. Whether
+    /// an entry came or went, which the mission views are made again for
+    /// (`rows_and_holds_digest`).
+    fn note_conductors_resting(&mut self, now: u64) -> bool {
+        let mut rest = std::mem::take(&mut self.missions.conductor_rest_seen);
+        let mut moved = false;
+        for mission in &self.missions.book.missions {
+            if !self.conductor_rests(mission) {
+                moved |= rest.remove(&mission.id).is_some();
+            } else if !rest.contains_key(&mission.id) {
+                rest.insert(mission.id.clone(), now);
+                moved = true;
+            }
+        }
+        let before = rest.len();
+        rest.retain(|id, _| self.missions.book.get(id).is_some());
+        moved |= rest.len() != before;
+        self.missions.conductor_rest_seen = rest;
+        moved
+    }
+
     /// A Conductor came to the mission (a take or a resume): its safety-net
-    /// time starts now.
+    /// time starts now, and a rest of the one before it is not its own.
     pub(super) fn note_conductor_arrived(&mut self, mission: &str, now: u64) {
         self.missions.conductor_seen.insert(mission.to_owned(), now);
+        self.missions.conductor_rest_seen.remove(mission);
     }
 
     /// Whether the mission worker `target` waits on someone else now
