@@ -1,5 +1,5 @@
 import { CheckCircle2Icon, LoaderCircleIcon, ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
-import { hostLook, offers, projectActionHost, projectHost, pullHost, pullLabel, pullWords } from "./codeHost";
+import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -105,12 +105,12 @@ export function PrCardView({ workspaceId, number, actions, front = true }: { wor
     if (livePanel && !livePanel.loading && !livePanel.failure) keptPanels.keep(keyOf, livePanel);
   }, [livePanel, keyOf]);
   const scroller = useRef<HTMLElement>(null);
-  if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted", { noun: t(hostLook(null).noun) })}</p>;
+  if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted")}</p>;
   const panel: LinkPanel | null = front ? livePanel : livePanel ?? keptPanels.get(keyOf);
   return (
     <article ref={scroller} aria-label={t("work.card.aria", pullWords(pr ?? { number }))} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [overflow-wrap:anywhere] text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
       <div className="flex w-full flex-col gap-lg p-lg">
-        {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted", { noun: t(hostLook(projectHost(project)?.key).noun) })}</p>}
+        {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted")}</p>}
         {pr ? <DecisionBox project={project} pr={pr} entry={entry} card={card} actions={actions} /> : null}
         <Timeline project={project} pr={pr} card={card} panel={panel} waiting={!front && !panel} number={number} actions={actions} />
         {pr ? <FilesRow pr={pr} project={project} card={card} actions={actions} open={filesOpen} onToggle={toggleFiles} /> : null}
@@ -359,13 +359,13 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
           </span>
         </div>
       ) : null}
-      <WriteLine write={write} base={base} host={words.host} item={pullHost(pr).item} card={card} actions={actions} projectId={project.id} number={pr.number} />
+      <WriteLine write={write} base={base} host={words.host} card={card} actions={actions} projectId={project.id} number={pr.number} />
     </div>
   );
 }
 
 /** What the last Merge or branch update did, in one line under the buttons (B37). */
-function WriteLine({ write, base, host, item, card, actions, projectId, number }: { write: PrCard["write"]; base: string; host: string; item: string; card: PrCard | null; actions: Actions; projectId: string; number: number }) {
+function WriteLine({ write, base, host, card, actions, projectId, number }: { write: PrCard["write"]; base: string; host: string; card: PrCard | null; actions: Actions; projectId: string; number: number }) {
   const { t } = useInterfaceTranslation();
   if (!write) return null;
   if (write.phase === "working") return <p role="status" className="text-caption text-muted-foreground" data-pr-card-write="working">{t("work.card.writing")}</p>;
@@ -373,7 +373,7 @@ function WriteLine({ write, base, host, item, card, actions, projectId, number }
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-caption text-warning" data-pr-card-write="failed" data-pr-card-write-reason={reason}>
-      <span>{t(`work.card.fail.${reason}`, { base, host, item })}</span>
+      <span>{t(`work.card.fail.${reason}`, { base, host })}</span>
       <Button size="sm" variant="secondary" disabled={card?.reading === true} onClick={() => actions.lookAgainPrCard(projectId, number)} data-pr-card-look-again="true">{t("work.card.lookAgain")}</Button>
     </p>
   );

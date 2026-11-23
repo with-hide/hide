@@ -95,8 +95,9 @@ it("names the host that wants another approval beside Merge, GitLab's once it de
   expect(gitlab.container.querySelector("[data-pr-card-merge-why]")?.textContent).toBe("GitLab needs another approval");
 });
 
-// The card's words about the pull request itself say what its host calls it: `MR` on a gitlab.com card, `PR` on GitHub's as on main.
-it("calls a merge request MR in the card's menu and in a merge that met a moved head", async () => {
+// The card's menu says what its host calls the item: `MR` on a gitlab.com card, `PR` on GitHub's as on main.
+// A merge that met a moved head keeps main's words on both hosts, so a GitHub screen reads as on main.
+it("calls a merge request MR in the card's menu and keeps main's words for a merge that met a moved head", async () => {
   const moved = async (host: HostDeclaration, reference: ChangeRequestRef, url: string) => {
     const mounted = await mountCard(url, reference, "merge", { host });
     const rest = structuredClone(useShellStore.getState().rest)!;
@@ -107,5 +108,5 @@ it("calls a merge request MR in the card's menu and in a merge that met a moved 
   expect(await moved(GITHUB, githubReference("github.com", "https://github.com/acme/app/pull/12"), "https://github.com/acme/app/pull/12")).toEqual(["PR actions", "The PR changed · look again"]);
   document.body.innerHTML = "";
   const url = "https://gitlab.com/acme/app/-/merge_requests/12";
-  expect(await moved(GITLAB_MERGING, { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number: NUMBER, key: "gitlab.com/acme/app!12", label: "!12", url, checks_url: `${url}/pipelines`, files_url: `${url}/diffs` }, url)).toEqual(["MR actions", "The MR changed · look again"]);
+  expect(await moved(GITLAB_MERGING, { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number: NUMBER, key: "gitlab.com/acme/app!12", label: "!12", url, checks_url: `${url}/pipelines`, files_url: `${url}/diffs` }, url)).toEqual(["MR actions", "The PR changed · look again"]);
 });
