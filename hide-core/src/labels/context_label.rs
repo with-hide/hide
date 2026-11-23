@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v30";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v31";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -227,12 +227,13 @@ fn end_prompt(limits: LabelLimits) -> String {
         "4 unfinished: work is not reported finished, nothing runs and no blocking cause is stated; includes giving up and unclear/interim stops. ",
         "5 done: assigned work is reported finished and no result remains pending. ",
         "With goal=null still judge the actual turn: an answered greeting/name question without a required action has line='' and end=done, never unfinished or 'waiting for instructions'. Do not infer states Herdr already knows, such as an approval prompt. ",
-        "work uses the schema's missed and resolved. ",
+        "work uses the schema's missed, resolved and only_asks_again. ",
         "missed: at most 3 items whose same_as is null, and besides them any ask with a same_as, each {kind:problem|follow_up|ask,text:<max 80 characters>,same_as:<an open-missed id>|null}. same_as is the id of the <open-missed> ask this item repeats, rewords or refines, the same question still waiting; null for a problem, a follow_up and a question <open-missed> does not hold. When a reply to the agent came this turn (the operator's request, or a letter from the session's parent), every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. With goal_update replace, moving on answered the previous flow's asks: list none of them again. ",
         "problem is unrelated breakage found and follow_up a separate proposed deliverable nobody took, both OUTSIDE the assignment and abandoned on session close. Exclude optional offers, work already in an issue/PR by number/link, remaining assigned work, rechecking its result (real app/other environment/pre-release), and merge/install/deploy/app replacement, even if called a follow-up or limitation: the PR and CI already own these. ",
         "resolved: only real <open-missed> IDs actually handled this turn, an ask the operator answered in this turn's requests included, with issue_number null or a number and reason an empty string; do not re-list open problem or follow_up items in missed. ",
         "Also list an open ask this turn's events settled without the operator answering it here (another agent relayed the operator's decision, the agent decided or did it itself, the work moved past it), with reason: one line of at most 80 characters naming what settled it. The operator keeps it folded with that reason, so list one only when the events show it settled, never an ask still waiting on the operator; an operator's own step (signing in, approving, granting a permission, typing information) only when the events show it taken or no longer needed. ",
         "Use open-missed only for its IDs, in resolved and same_as, never to decide end. ",
+        "only_asks_again: true only when the last assistant answer does nothing but ask again <open-missed> asks it lists in missed with their same_as: every sentence asks one of them again, or only acknowledges the message that woke the turn ('Got it.') without saying what it reported. false when the answer also says what was received, done, found or still to do, reports progress, or asks anything new, and false when unsure. Hide keeps a turn quiet only on true. ",
         ASKS,
         &improvements_rule(),
         DATA,
@@ -291,7 +292,8 @@ fn end_schema(limits: LabelLimits) -> Value {
                 "type":"object","additionalProperties":false,"required":["missed","resolved"],
                 "properties":{
                     "missed":{"type":"array","maxItems":TURN_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text","same_as","quote","ask_type","addressed_to"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS},"same_as":{"type":["string","null"]},"quote":{"type":"string"},"ask_type":{"type":["string","null"],"enum":["decision","human_only",null]},"addressed_to":{"type":["string","null"],"enum":["operator","parent",null]}}}},
-                    "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number","reason"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1},"reason":{"type":"string","maxLength":MISSED_CHARS}}}}
+                    "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number","reason"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1},"reason":{"type":"string","maxLength":MISSED_CHARS}}}},
+                    "only_asks_again":{"type":"boolean"}
                 }
             },
             // Named for the provider and never checked: the router holds
@@ -382,6 +384,11 @@ struct EndAnswer {
 pub(crate) struct JudgedWork {
     missed: Vec<MissedAnswer>,
     resolved: Vec<ResolvedMissedWork>,
+    /// Hide AI's own word that the answer did nothing but ask open questions
+    /// again. Left out of `required`, so an answer that skips it keeps its
+    /// label and reads as news: quiet needs this said, never inferred.
+    #[serde(default)]
+    only_asks_again: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -431,12 +438,17 @@ pub(crate) struct AskChecks {
 impl JudgedWork {
     /// The open questions a turn that ended on a question (`end`) only asked
     /// again: each line naming an open one (`same_as`) whose quoted sentence
-    /// is in the turn's own answer `answer`. Empty when the turn listed
-    /// anything new, a question, a problem or a follow-up, or quoted none:
-    /// such a turn is news, and only one that asks the same again and does
-    /// nothing else is not (docs/status-model.md, A question still waiting).
+    /// is in the turn's own answer `answer`. Empty unless Hide AI said the
+    /// answer did nothing else (`only_asks_again`), and empty when the turn
+    /// listed anything new, a question, a problem or a follow-up, or quoted
+    /// none: such a turn is news, and only one that asks the same again and
+    /// does nothing else is not (docs/status-model.md, A question still
+    /// waiting).
     pub(crate) fn asked_only_again(&self, end: LabelEnd, answer: &str) -> Vec<String> {
-        if end != LabelEnd::Question || self.missed.iter().any(|line| line.same_as.is_none()) {
+        if !self.only_asks_again
+            || end != LabelEnd::Question
+            || self.missed.iter().any(|line| line.same_as.is_none())
+        {
             return Vec::new();
         }
         let answer = quote_form(answer);

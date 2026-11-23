@@ -7319,3 +7319,61 @@ fn an_agents_session_is_read_in_the_account_its_hook_reported() {
         "{named:?}"
     );
 }
+
+/// A question still waiting (docs/status-model.md): a turn reads as only
+/// asking an open question again when Hide AI says so itself. An answer that
+/// leaves `only_asks_again` out, says false, or lists anything new beside the
+/// repeated ask is news, so a finish misread as a question is never buried.
+#[test]
+fn a_turn_only_asks_again_when_the_answer_says_so_itself() {
+    let ask = "아까 진정서 건도 정해 주세요. 승인 뒤로 미룰까요?";
+    let again = json!({"kind": "ask", "text": "진정서 작성을 승인 뒤로 미룰지 정하기", "same_as": "m1",
+        "quote": ask, "ask_type": "decision", "addressed_to": "operator"});
+    let follow_up = json!({"kind": "follow_up", "text": "판례 요약을 문서로 남기기", "same_as": null,
+        "quote": "", "ask_type": null, "addressed_to": null});
+    let finished = format!("판례 3건을 반영해서 PR #41 올렸어요. {ask}");
+    for (answer, work, expected) in [
+        (
+            finished.as_str(),
+            json!({"missed": [again], "resolved": []}),
+            &[][..],
+        ),
+        (
+            ask,
+            json!({"missed": [again], "resolved": [], "only_asks_again": false}),
+            &[][..],
+        ),
+        (
+            ask,
+            json!({"missed": [again, follow_up], "resolved": [], "only_asks_again": true}),
+            &[][..],
+        ),
+        (
+            ask,
+            json!({"missed": [again], "resolved": [], "only_asks_again": true}),
+            &["m1"][..],
+        ),
+    ] {
+        let harness = Harness::new();
+        let store = harness.store();
+        let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+        let path = harness.session(
+            "petition",
+            "native-petition",
+            &[("user", "진정서 초안을 써 줘"), ("assistant", answer)],
+        );
+        harness.backend.answers.lock().unwrap().push_back(json!({
+            "goal": "진정서 초안 작성", "goal_update": "replace", "line": "진정서 미룰지 정하기",
+            "end": "question", "work": work,
+        }));
+        observe(&mut worker, &agent(&path, "idle", 1));
+        settle(&mut worker, &woken);
+        let record = &store.target(LOCAL_TARGET)["w1:p1"];
+        assert_eq!(
+            record.end,
+            Some(super::analysis::LabelEnd::Question),
+            "{work}"
+        );
+        assert_eq!(record.asks_again, expected, "{work}");
+    }
+}
