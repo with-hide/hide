@@ -32,7 +32,7 @@ mod session_reads;
 pub(crate) use ledger::main_flow;
 pub use session_reads::{ListedSession, MainFlow, SessionFile, SessionPage, named_by_goal};
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -2053,7 +2053,7 @@ impl LinkStore {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT n.device, n.agent, n.id, n.repo_name, n.folder, n.at, n.request, s.cwd \
+                "SELECT n.device, n.agent, n.id, n.repo_name, n.folder, n.at, n.request, s.cwd, n.host \
                  FROM session_named_prs n LEFT JOIN sessions s \
                  ON s.device=n.device AND s.agent=n.agent AND s.id=n.id WHERE n.number=?1",
             )
@@ -2071,14 +2071,29 @@ impl LinkStore {
                     at: row.get::<_, i64>(5)? as u64,
                     request: row.get(6)?,
                     cwd: row.get(7)?,
+                    host: row.get(8)?,
                 })
             })
             .and_then(Iterator::collect)
             .map_err(failed)?;
         let mut places: Option<Vec<(String, DevicePath)>> = None;
         let mut named: BTreeMap<SessionKey, (u64, Option<String>)> = BTreeMap::new();
+        // A number named alone is of the folder's project only when the
+        // command that named it is of that project's host: `glab mr view 12`
+        // names no GitHub pull request. A project whose name the registry
+        // does not read is of the host from before hosts, as every project
+        // the record held then.
+        let hosts = crate::code_host::CodeHosts::STANDARD;
+        let project_host = project
+            .name
+            .as_deref()
+            .and_then(|name| hosts.repository(name))
+            .map_or_else(|| hosts.before_hosts(), |(host, _)| host);
         for row in rows {
             let admitted = if row.repo_name.is_empty() {
+                if hosts.recorded(Some(&row.host)) != Some(project_host) {
+                    continue;
+                }
                 let place = Some(row.folder)
                     .filter(|folder| !folder.is_empty())
                     .or(row.cwd);
@@ -2840,13 +2855,15 @@ fn deepest_checkout<'a>(checkouts: &'a [WorktreeFact], cwd: &str) -> Option<&'a 
 
 /// The pull requests a session's tool calls named (`hide_session::NamedPr`):
 /// `repo_name` is empty for a number named alone, which belongs to the
-/// project whose folder `folder` (empty: the session's own) lies in.
-/// Version 10; a store a test rolled back to an earlier version may still
-/// hold it.
+/// project whose folder `folder` (empty: the session's own) lies in, and
+/// `host` names the host whose command named it ([`NAMED_HOST`]). Version
+/// 10, keyed by its host since version 18; a store a test rolled back to an
+/// earlier version may still hold it.
 const NAMED_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS session_named_prs(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
     file TEXT NOT NULL, repo_name TEXT NOT NULL, number INTEGER NOT NULL, folder TEXT NOT NULL,
-    at INTEGER NOT NULL, request TEXT, PRIMARY KEY(device, agent, id, repo_name, number, folder));
+    at INTEGER NOT NULL, request TEXT, host TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(device, agent, id, host, repo_name, number, folder));
 CREATE INDEX IF NOT EXISTS session_named_prs_number ON session_named_prs(number);
 ";
 
@@ -2859,6 +2876,44 @@ const NAMED_REREAD: &str = "
 UPDATE cursors SET checkpoint=NULL, stamp='';
 DELETE FROM meta WHERE key='listed_at' OR key LIKE 'listed_at:%';
 ";
+
+/// The host whose command named a change request (version 18,
+/// `hide_session::NamedPr::host`) is part of what a named reference is:
+/// `gh pr view 7` and `glab mr view 7` in one session are two rows, and a
+/// number named alone belongs only to a project of its host. SQLite cannot
+/// change a primary key in place, so the table is built again with the
+/// host in its key and every row copied; a row from before it is empty,
+/// which reads as the host every reference from before hosts belongs to
+/// (`CodeHosts::before_hosts`), so nothing is read again. A store a test
+/// rolled back may already hold the column, whose values are kept.
+fn named_host(host_column: bool) -> String {
+    let host = if host_column { "host" } else { "''" };
+    format!(
+        "CREATE TABLE session_named_prs_keyed(device TEXT NOT NULL, agent TEXT NOT NULL, \
+         id TEXT NOT NULL, file TEXT NOT NULL, repo_name TEXT NOT NULL, number INTEGER NOT NULL, \
+         folder TEXT NOT NULL, at INTEGER NOT NULL, request TEXT, host TEXT NOT NULL DEFAULT '', \
+         PRIMARY KEY(device, agent, id, host, repo_name, number, folder)); \
+         INSERT INTO session_named_prs_keyed(device,agent,id,file,repo_name,number,folder,at,request,host) \
+         SELECT device,agent,id,file,repo_name,number,folder,at,request,{host} FROM session_named_prs; \
+         DROP TABLE session_named_prs; \
+         ALTER TABLE session_named_prs_keyed RENAME TO session_named_prs; \
+         CREATE INDEX IF NOT EXISTS session_named_prs_number ON session_named_prs(number);"
+    )
+}
+
+/// Whether the named references' table exists and keys a row by its host.
+fn named_keyed_by_host(connection: &Connection) -> Result<(bool, bool, bool), OpenFailure> {
+    connection
+        .query_row(
+            "SELECT count(*) > 0, \
+                    coalesce(sum(name='host'), 0) > 0, \
+                    coalesce(sum(name='host' AND pk > 0), 0) > 0 \
+             FROM pragma_table_info('session_named_prs')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(classify)
+}
 
 /// When a Hide pane first carried each session (version 11), the durable
 /// point a `hide_agent_started` statistic is sent from. Every session the
@@ -2964,6 +3019,14 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             } else {
                 MADE_COLUMN
             };
+        // A table older than version 10 is made keyed by its host
+        // ([`NAMED_SCHEMA`]); a later one is built again unless it already is.
+        let (named_held, host_column, keyed) = named_keyed_by_host(connection)?;
+        let named_host = if named_held && !keyed {
+            named_host(host_column)
+        } else {
+            String::new()
+        };
         let pane_seen = if version >= 11 {
             String::new()
         } else if version > 0 && has_column(connection, "sessions", "pane_first_at")? {
@@ -2973,7 +3036,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} {folds} {reopens} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} {folds} {reopens} {named_host} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");
@@ -3018,19 +3081,47 @@ fn apply_named(
             |row| row.get(0),
         )
         .map_err(failed)?;
+    let hosts = crate::code_host::CodeHosts::STANDARD;
     for mark in &facts.named {
-        let repo_name = mark
-            .pr
-            .repository
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
+        // The record names a repository by its host's record name, and
+        // keeps change requests only on a server their host names, as it
+        // does a printed address (`PullRequestSnapshot::sighting_key`):
+        // GitHub's record name drops the server, so an Enterprise server's
+        // `acme/app` would read as github.com's. A name the registry does
+        // not read (a newer node's host) is kept by nothing either, never
+        // guessed.
+        let repo_name = match mark.pr.repository.as_deref() {
+            None => String::new(),
+            Some(name) => match hosts
+                .repository(name)
+                .filter(|(_, repository)| hosts.on_named_server(repository))
+                .and_then(|(_, repository)| hosts.record_name(&repository))
+            {
+                Some(record) => record,
+                None => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "links", "kind": "session.named_unkept",
+                        "device_id": device, "agent": agent, "session_id": id,
+                    }));
+                    continue;
+                }
+            },
+        };
+        let host = mark.pr.host.as_deref().unwrap_or_default();
         let folder = mark.pr.folder.as_deref().unwrap_or_default();
         let known = tx
             .query_row(
                 "SELECT 1 FROM session_named_prs WHERE device=?1 AND agent=?2 AND id=?3 \
-                 AND repo_name=?4 AND number=?5 AND folder=?6",
-                params![device, agent, id, repo_name, mark.pr.number as i64, folder],
+                 AND host=?4 AND repo_name=?5 AND number=?6 AND folder=?7",
+                params![
+                    device,
+                    agent,
+                    id,
+                    host,
+                    repo_name,
+                    mark.pr.number as i64,
+                    folder
+                ],
                 |_| Ok(()),
             )
             .optional()
@@ -3044,8 +3135,8 @@ fn apply_named(
             break;
         }
         tx.execute(
-            "INSERT INTO session_named_prs VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
-             ON CONFLICT(device,agent,id,repo_name,number,folder) DO UPDATE SET \
+            "INSERT INTO session_named_prs(device,agent,id,file,repo_name,number,folder,at,request,host) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(device,agent,id,host,repo_name,number,folder) DO UPDATE SET \
              request=CASE WHEN excluded.at < at THEN excluded.request ELSE request END, \
              at=MIN(at, excluded.at)",
             params![
@@ -3058,6 +3149,7 @@ fn apply_named(
                 folder,
                 mark.at_unix_ms as i64,
                 mark.request.as_ref().or(before),
+                host,
             ],
         )
         .map_err(failed)?;
@@ -3495,6 +3587,8 @@ impl SessionRow {
 struct NamedRow {
     key: SessionKey,
     repo_name: String,
+    /// The key of the host whose command named it; empty from before hosts.
+    host: String,
     folder: String,
     at: u64,
     request: Option<String>,

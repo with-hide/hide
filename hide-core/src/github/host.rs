@@ -128,6 +128,18 @@ impl CodeHost for Github {
         )
     }
 
+    /// The record has keyed a GitHub repository by its path in lower case
+    /// since before hosts were named, on github.com and on an Enterprise
+    /// server alike, so that form stays GitHub's.
+    fn record_name(&self, repository: &RepositoryRef) -> String {
+        repository.path.to_ascii_lowercase()
+    }
+
+    /// GitHub's ids are global and the record has held them bare.
+    fn record_id(&self, _repository: &RepositoryRef, id: &str) -> String {
+        id.to_owned()
+    }
+
     fn resolves_checkout(&self) -> bool {
         true
     }

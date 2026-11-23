@@ -391,6 +391,7 @@ fn named_twelve(folder: Option<&str>) -> Vec<hide_session::NamedPr> {
         repository: None,
         number: 12,
         folder: folder.map(str::to_owned),
+        host: None,
     }]
 }
 
@@ -482,6 +483,7 @@ fn named_five(folder: &str) -> Vec<hide_session::NamedPr> {
         repository: None,
         number: 5,
         folder: Some(folder.to_owned()),
+        host: None,
     }]
 }
 
@@ -707,4 +709,261 @@ fn a_creating_calls_output_read_in_a_later_poll_is_still_its_making() {
         Some(false),
         "a listing's lone address is not made"
     );
+}
+
+/// gitlab.com's merge request address, with a subgroup, in place of the
+/// fixtures' GitHub pull request 12.
+const MERGE_REQUEST: &str = "https://gitlab.com/acme/platform/app/-/merge_requests/12";
+const GITLAB_PROJECT: &str = "gitlab.com/acme/platform/app";
+
+fn gitlab_named(repository: Option<&str>, folder: Option<&str>) -> Vec<hide_session::NamedPr> {
+    vec![hide_session::NamedPr {
+        repository: repository.map(str::to_owned),
+        number: 12,
+        folder: folder.filter(|_| repository.is_none()).map(str::to_owned),
+        host: Some("gitlab".into()),
+    }]
+}
+
+/// Every format's recorded session with `contents`' call and output
+/// replaced, read as its reader reads it: the shell formats from their
+/// fixture, OpenCode from its database in both schemas.
+fn every_format(
+    call: &str,
+    address: &str,
+) -> Vec<(String, Option<&'static str>, links::LinkFacts)> {
+    let mut read = Vec::new();
+    for (agent, path, folder) in CALL_FIXTURES {
+        let contents = fs::read_to_string(fixture(path))
+            .unwrap()
+            .replace("bash scripts/ship.sh", call)
+            .replace("https://github.com/acme/app/pull/12", address);
+        read.push((
+            format!("{agent:?}"),
+            folder,
+            parse_events(agent, &contents).links,
+        ));
+    }
+    for schema in ["opencode-1.18.30", "opencode-2.0.29"] {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join(".local/share/opencode");
+        fs::create_dir_all(&folder).unwrap();
+        let sql = fs::read_to_string(fixture(&format!("{schema}/opencode.sql")))
+            .unwrap()
+            // The SQL string quotes a quote by doubling it.
+            .replace("bash scripts/ship.sh", &call.replace('\'', "''"))
+            .replace("https://github.com/acme/app/pull/12", address);
+        rusqlite::Connection::open(folder.join("opencode.db"))
+            .unwrap()
+            .execute_batch(&sql)
+            .unwrap();
+        let answer = links::read(
+            &hide_session::Accounts::new(home.path()),
+            &[ReadRequest {
+                agent: Agent::OpenCode,
+                path: "opencode/ses_0a1b2c3d4e5f60718293a4b5c6".into(),
+                checkpoint: None,
+            }],
+        )
+        .remove(0);
+        assert_eq!(answer.error, None, "{schema}");
+        read.push((schema.to_owned(), None, answer.facts));
+    }
+    read
+}
+
+/// The reader contract for gitlab.com in every format: a merge request
+/// address with a subgroup that a tool printed is seen under the project's
+/// stored name, and a `glab` call names its merge request by `!12`, by
+/// number with `-R`, or by its address; a number alone belongs to the
+/// folder's project of gitlab.com, never to another host's.
+#[test]
+fn a_merge_request_a_tool_printed_or_a_glab_call_named_is_read_in_every_format() {
+    for (format, _, facts) in every_format("bash scripts/ship.sh", MERGE_REQUEST) {
+        assert!(
+            facts
+                .prs
+                .iter()
+                .any(|pr| pr.repository == GITLAB_PROJECT && pr.number == 12),
+            "{format} sees the printed merge request"
+        );
+        assert_eq!(named(&facts), vec![], "{format} names nothing");
+    }
+    for (call, repository) in [
+        ("glab mr view !12", None),
+        ("glab mr view 12 --comments", None),
+        (
+            "glab mr note 12 -R acme/platform/app -m done",
+            Some(GITLAB_PROJECT),
+        ),
+        (
+            "glab mr merge --repo=https://gitlab.com/acme/platform/app.git 12",
+            Some(GITLAB_PROJECT),
+        ),
+        (
+            "glab mr checkout https://gitlab.com/acme/platform/app/-/merge_requests/12",
+            Some(GITLAB_PROJECT),
+        ),
+        (
+            "glab api projects/acme%2Fplatform%2Fapp/merge_requests/12/notes",
+            Some(GITLAB_PROJECT),
+        ),
+        ("glab api projects/:id/merge_requests/12", None),
+        (
+            "open https://gitlab.com/acme/platform/app/-/merge_requests/12/diffs",
+            Some(GITLAB_PROJECT),
+        ),
+    ] {
+        for (format, folder, facts) in every_format(call, MERGE_REQUEST) {
+            assert_eq!(
+                named(&facts),
+                gitlab_named(repository, folder),
+                "{format}: {call}"
+            );
+        }
+    }
+}
+
+/// What a reader cannot place on a repository of gitlab.com names nothing
+/// rather than the folder's project: an issue's `#12`, a project by its
+/// numeric id, another server, a listing.
+#[test]
+fn a_glab_reference_that_names_no_gitlab_com_project_names_nothing_in_every_format() {
+    for call in [
+        "glab mr view '#12'",
+        "glab issue view 12",
+        "glab api projects/12345/merge_requests/12",
+        "GITLAB_HOST=gitlab.example.com glab mr view 12",
+        "glab mr view 12 -R https://gitlab.example.com/acme/app",
+        "glab api --hostname gitlab.example.com projects/:id/merge_requests/12",
+        "glab mr list",
+    ] {
+        for (format, _, facts) in every_format(call, MERGE_REQUEST) {
+            assert_eq!(named(&facts), vec![], "{format}: {call}");
+        }
+    }
+}
+
+/// An address with a user part is no reference on either host, in every
+/// format and every path: printed by a tool, given to `-R` or `GH_REPO`, or
+/// given back by a call that makes one. Nothing of it is kept, so the
+/// credential it carries never leaves the reader.
+#[test]
+fn an_address_with_a_user_part_is_no_reference_in_every_format() {
+    for address in [
+        "https://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+        "https://user:example-secret@github.com/acme/app/pull/12",
+        "https://example-secret@www.github.com/acme/app/pull/12",
+        "ssh://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+    ] {
+        for call in [
+            "bash scripts/ship.sh",
+            "glab mr create --fill --yes",
+            "gh pr create --fill",
+            "git push -o merge_request.create origin fix/x",
+        ] {
+            for (format, _, facts) in every_format(call, address) {
+                // Some fixtures print another pull request beside it.
+                assert!(
+                    facts.prs.iter().all(|pr| pr.number != 12),
+                    "{format}: {call}: {address}"
+                );
+                assert_eq!(named(&facts), vec![], "{format}: {call}: {address}");
+                let kept = format!("{facts:?}");
+                assert!(!kept.contains("example-secret"), "{format}: {call}: {kept}");
+            }
+        }
+    }
+    for call in [
+        "glab mr view 12 -R https://oauth2:example-secret@gitlab.com/acme/platform/app",
+        "glab mr checkout https://user:example-secret@gitlab.com/acme/platform/app/-/merge_requests/12",
+        "gh pr view 12 -R https://user:example-secret@github.com/acme/app",
+        "GH_REPO=https://user:example-secret@github.com/acme/app gh pr view 12",
+        "gh pr checkout https://user:example-secret@github.com/acme/app/pull/12",
+    ] {
+        for (format, _, facts) in every_format(call, MERGE_REQUEST) {
+            assert_eq!(named(&facts), vec![], "{format}: {call}");
+            let kept = format!("{facts:?}");
+            assert!(!kept.contains("example-secret"), "{format}: {call}: {kept}");
+        }
+    }
+}
+
+/// A merge request made by a push option is that push's making in every
+/// format that pairs a call with its output, as `glab mr create` is.
+#[test]
+fn a_merge_request_a_push_option_or_glab_made_is_made_in_every_format() {
+    for call in [
+        "git push -o merge_request.create origin fix/x",
+        "git push --push-option=mr.create -u origin fix/x",
+        "glab mr create --fill --yes",
+    ] {
+        for (format, _, facts) in every_format(call, MERGE_REQUEST) {
+            let pairs = format != "Antigravity";
+            assert_eq!(made(&facts, 12), Some(pairs), "{format}: {call}");
+        }
+    }
+    for (format, _, facts) in every_format("git push origin fix/x", MERGE_REQUEST) {
+        assert_eq!(made(&facts, 12), Some(false), "{format}: a plain push");
+    }
+}
+
+/// The output gitlab.com gave a push on the test project: the made merge
+/// request's address after git's `remote:`, padded with spaces. The same
+/// lines follow a plain push to a branch whose merge request exists, which
+/// makes nothing.
+#[test]
+fn a_push_options_recorded_output_gives_back_the_merge_request_it_made() {
+    let output = "remote: \nremote: View merge request for fix/x:        \nremote:   https://gitlab.com/example-user/hide-code-host-check/-/merge_requests/18        \nremote: \nTo https://gitlab.com/example-user/hide-code-host-check.git\n * [new branch]      fix/x -> fix/x\n";
+    let lines = [
+        claude_call(
+            "toolu_push",
+            "git push -o merge_request.create -o merge_request.title=x origin fix/x",
+            "2026-10-03T01:00:01Z",
+        ),
+        claude_result("toolu_push", output, "2026-10-03T01:00:03Z"),
+        claude_call(
+            "toolu_again",
+            "git push origin fix/x",
+            "2026-10-03T01:00:04Z",
+        ),
+        claude_result(
+            "toolu_again",
+            &output.replace("/18", "/21"),
+            "2026-10-03T01:00:05Z",
+        ),
+    ];
+    let facts = parse_events(Agent::Claude, &(lines.join("\n") + "\n")).links;
+    let mark = |number| {
+        facts
+            .prs
+            .iter()
+            .find(|pr| pr.number == number)
+            .map(|pr| (pr.repository.clone(), pr.made))
+    };
+    assert_eq!(
+        mark(18),
+        Some((
+            "gitlab.com/example-user/hide-code-host-check".to_owned(),
+            true
+        ))
+    );
+    assert_eq!(
+        mark(21),
+        Some((
+            "gitlab.com/example-user/hide-code-host-check".to_owned(),
+            false
+        ))
+    );
+}
+
+/// A record or an older node's payload from before hosts were named
+/// carries no host: it reads as the host every such record belongs to.
+#[test]
+fn a_named_pull_request_from_before_hosts_reads_with_no_host() {
+    let older: hide_session::NamedPr =
+        serde_json::from_str(r#"{"repository":null,"number":12,"folder":"/work/app"}"#).unwrap();
+    assert_eq!(older.host, None);
+    let github = &named_twelve(None)[0];
+    assert!(!serde_json::to_string(github).unwrap().contains("host"));
 }

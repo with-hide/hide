@@ -3284,6 +3284,15 @@ pub struct NodePatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub base_pr: Option<Option<u32>>,
+    /// Where `pr`'s written form said its change request is (its host's
+    /// label or its address), which the mission's project must hold
+    /// ([`crate::code_host::CodeHosts::admit_place`]); absent for a bare
+    /// number and from an older `hide`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_place: Option<crate::code_host::ChangeRequestPlace>,
+    /// The same for `base_pr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_pr_place: Option<crate::code_host::ChangeRequestPlace>,
     #[serde(
         default,
         deserialize_with = "double",
@@ -3361,6 +3370,8 @@ impl NodePatch {
             agent_id,
             pr: _,
             base_pr,
+            pr_place: _,
+            base_pr_place,
             branch: _,
             attempts,
             line: _,
@@ -3378,6 +3389,7 @@ impl NodePatch {
             && status.is_none()
             && agent_id.is_none()
             && base_pr.is_none()
+            && base_pr_place.is_none()
             && attempts.is_none()
             && change.is_none()
             && review.is_none()
@@ -4369,6 +4381,9 @@ pub struct Overlap {
 
 /// What an agent should do after a refusal, by its code.
 pub fn next_action(code: &str) -> &'static str {
+    if let Some(next) = crate::code_host::place_next_action(code) {
+        return next;
+    }
     match code {
         "mission_unknown" => "Run hide mission list to see the missions of this project",
         "mission_none" => "Start one with hide mission create --title <title>",
