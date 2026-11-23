@@ -96,11 +96,13 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   A click, focus, creation or resend is one explicit action outside the poll; an action repeated inside `toPass` or `expect.poll` turns one intent into several and can satisfy the assertion with the wrong one.
 - Prefer subject IDs, request identity and generation or revision numbers over wall-clock comparisons and the last diagnostic string.
 - A value the page computes from its own clock (a countdown, an age, a duration) is read with that clock held: `page.clock.setFixedTime` in a web e2e, `vi.useFakeTimers({ toFake: ["Date"] })` with `vi.setSystemTime` in a unit test.
-  The test and the page each read a real clock, and a minute or an hour turning between the two reads draws a different answer: `weekly-usage.spec.ts` drew `5d 3h` for `5d 4h` (with-hide/hide-private#315), and `MissionMap.test.tsx` drew `held 26m` for `held 25m` (#354).
+  The test and the page each read a real clock, and a minute or an hour turning between the two reads draws a different answer: `weekly-usage.spec.ts` drew `5d 3h` for `5d 4h` (with-hide/hide-private#315), `MissionMap.test.tsx` drew `held 26m` for `held 25m` (#354), and the phone's `sleep.test.tsx`, which loads the whole app between taking its time and drawing it, drew `Thinking·5s` for `Thinking·4s` on a Windows runner.
 - A test's time limit does not pay for loading the runtime it runs on.
   Every web unit test file runs in a new Node process, and on a Windows runner the first ones read the Node binary from the slow system disk a few kilobytes at a time while their first test's limit ran.
   `web/e2e/unit-node-binary.ts` reads the binary once, in vitest's own process before any worker starts, which moves that cold read out of the tests.
   It is a mitigation: whether the cold read caused the 12 to 18 s first-test stalls of with-hide/hide-private#354 is not confirmed.
+  A phone test file imports the whole phone app, and its first import transforms the app's module graph: that file pays it in a hook of its own, `importAppFirst` in `web/src/mobile/appImport.ts`, whose budget guards against a hang and does not bound the import's speed.
+  The hook it replaced ran under vitest's 10 s default for a hook and ran past it on a Windows runner.
 - A barrier on what the page sent is not a barrier on what the daemon accepted.
   After a burst of clicks, `terminal_mouse` release frames counted at the page say the page sent them; hided may still hold a dozen on its socket, and the last `pane.focus` diagnostic the page has seen can be an earlier request's confirmation.
   Count the diagnostics the daemon sent back against the changes the page sent, with a cumulative count (`observeDiagnostics(...).added` in `web/e2e/pane-focus-ordering.spec.ts`): the list is capped and drops from its front, so the number of entries of one kind in it falls while a burst appends.

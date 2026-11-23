@@ -7,7 +7,8 @@
 // builds, and what stays when the Mac cannot be reached.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { importAppFirst } from "./appImport";
 import { HEAD, card, keyOf, pr, project, standing } from "./prFixture";
 import type { PhonePr, PhonePrFeedback, ServerFrame } from "./protocol";
 
@@ -81,13 +82,7 @@ async function connect(items: PhonePr[], feedback: PhonePrFeedback | null = null
   return { container, socket, serve, prs, q, click, sent, lose, connection, store, unmount };
 }
 
-// The first import of the app transforms its whole module graph, seconds on a busy machine; that cost is paid in this hook, with the
-// hook's own budget, so the first test's budget is for what it asserts.
-beforeAll(async () => {
-  vi.stubGlobal("WebSocket", FakeSocket);
-  await import("./App");
-  vi.unstubAllGlobals();
-});
+importAppFirst(FakeSocket);
 
 afterEach(() => {
   vi.unstubAllGlobals();
