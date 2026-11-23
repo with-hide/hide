@@ -217,13 +217,14 @@ async fn one_kind_at_its_cap_is_refused_and_frees_its_place_when_a_stream_ends()
 }
 
 /// A paired machine renamed since its pairing is shown by its new name from
-/// its next connection, on both sides, with no pairing again; one that says
-/// no name keeps the name it paired under.
+/// its next connection, on both sides, with no pairing again, every space
+/// in it a plain one; one that says no name keeps the name it paired under.
 #[tokio::test]
 async fn a_paired_machine_is_named_by_what_it_calls_itself_from_its_next_connection() {
     let net = Net::new();
     let mut mini = Machine::calling_itself(&net, "mini", "Mac mini");
-    let mut mac = Machine::calling_itself(&net, "macbook", "작업용 MacBook Pro");
+    // A Mac's computer name spells `MacBook Pro` with U+00A0.
+    let mut mac = Machine::calling_itself(&net, "macbook", "작업용 MacBook\u{a0}Pro");
     let plain = Machine::new(&net, "plain");
     pair(&mini, &mac);
     pair(&mini, &plain);

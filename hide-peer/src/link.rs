@@ -133,8 +133,8 @@ pub fn valid_name(name: &str) -> bool {
 
 /// A machine's name made showable: a character [`valid_name`] refuses is
 /// left out, any other space (a Mac's computer name spells `MacBook Pro`
-/// with U+00A0) is a plain one, and the rest is cut to its limit. `None`
-/// when nothing is left.
+/// with U+00A0) is a plain one and a run of them one, and the rest is cut
+/// to its limit. `None` when nothing is left.
 pub fn clean_name(name: &str) -> Option<String> {
     let mut clean = String::new();
     for character in name.trim().chars() {
@@ -142,6 +142,9 @@ pub fn clean_name(name: &str) -> Option<String> {
             continue;
         }
         let character = if character.is_whitespace() {
+            if clean.ends_with(' ') {
+                continue;
+            }
             ' '
         } else {
             character
@@ -400,6 +403,11 @@ mod tests {
             clean_name("\u{3000}Mac\u{2009}mini\u{a0}").as_deref(),
             Some("Mac mini")
         );
+        assert_eq!(
+            clean_name("Mac \u{a0}\u{3000} mini").as_deref(),
+            Some("Mac mini")
+        );
+        assert_eq!(clean_name("\u{a0}"), None);
         assert_eq!(clean_name("\u{a0}\u{3000}"), None);
     }
 }
