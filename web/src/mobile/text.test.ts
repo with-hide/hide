@@ -27,14 +27,14 @@ describe("the phone's key tables", () => {
   });
 
   it("states the phone limit the Mac enforces and shows one line for each refusal", () => {
-    expect(noticeText(korean, REFUSAL_NOTICE.phone_limit)).toBe("폰은 4대까지 연결할 수 있어요. Mac의 설정 > 모바일에서 연결을 하나 해제하세요.");
+    expect(noticeText(korean, REFUSAL_NOTICE.phone_limit)).toBe("폰은 4대까지 연결할 수 있어요. Mac의 설정 > 기기에서 연결을 하나 해제하세요.");
     const refusals: Refusal[] = ["code_expired", "phone_limit", "revoked", "mobile_off", "no_credential"];
     expect(refusals.map((refusal) => noticeText(english, REFUSAL_NOTICE[refusal]))).toEqual([
       "The code expired. Reopen the QR code on your Mac.",
-      "You can connect up to 4 phones. Revoke one in Settings > Mobile on your Mac.",
+      "You can connect up to 4 phones. Disconnect one in Settings > Devices on your Mac.",
       "This phone's connection was revoked. Reopen the QR code on your Mac.",
       "Not connected · hide on your Mac or Tailscale on your phone is off. Retrying",
-      "Scan the QR code in Settings > Mobile on your Mac.",
+      "Scan the QR code from Settings > Devices > Add device > Phone on your Mac.",
     ]);
   });
 

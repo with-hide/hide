@@ -20,9 +20,10 @@ export function deviceNameToSave(text: string): string | null {
  * Settings. Save sends one event and closes; the row shows the name the
  * core or the pairing then holds. `chosen`: the name is one the operator
  * chose for a paired machine, which an empty field gives back to the
- * machine's own.
+ * machine's own. `description`: what the name changes, which differs
+ * between a computer and a phone.
  */
-export function RenameDevice({ current, chosen = false, onSave, onClose, id }: { current: string; chosen?: boolean; onSave: (name: string) => void; onClose: () => void; id: string }) {
+export function RenameDevice({ current, chosen = false, description, onSave, onClose, id }: { current: string; chosen?: boolean; description: string; onSave: (name: string) => void; onClose: () => void; id: string }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(current);
   // A paired machine's name the operator chose is taken back with an empty field.
@@ -42,7 +43,7 @@ export function RenameDevice({ current, chosen = false, onSave, onClose, id }: {
         >
           <DialogHeader>
             <DialogTitle>{t("devices.renameTitle", { name: current })}</DialogTitle>
-            <DialogDescription>{t("devices.renameDescription")}</DialogDescription>
+            <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
           <DialogBody>
             <Input autoFocus aria-label={t("devices.renameLabel")} value={text} onChange={(event) => setText(event.target.value)} data-device-rename-input={id} />

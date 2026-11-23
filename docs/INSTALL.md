@@ -572,8 +572,8 @@ If a folder cannot be removed, it stays, the diagnostic log records why, and the
 
 ## Connect your phone
 
-On macOS, Windows or Linux, open Settings > Mobile and turn on **폰에서 Hide 열기**.
-When the connection row says **연결됨 · Hide 중계 (도쿄)**, choose **QR 보기** and scan it.
+On macOS, Windows or Linux, open Settings › Devices, choose **+ 기기 추가** and then **폰**: it turns on **폰에서 Hide 열기** when it is off and shows the QR once the relay is connected.
+Scan that QR.
 On an iPhone, install the App Store app (Hide - Remote Coding Agents) and scan with its **Scan QR code** button; on another phone, scan with the camera, which opens `app.withhide.dev`.
 Choose **연결** to see your agents and reply to them.
 You need no Hide account, payment or Tailscale installation.
@@ -588,16 +588,16 @@ The relay does not keep messages for later delivery.
 Add the phone app to the Home Screen and enable notifications there if you want them.
 If you used the older Tailscale address, scan the new QR and enable notifications once at the new address.
 The device name in the phone header lets you switch computers; **다른 기기 연결** adds another one, including inside the Home Screen app.
-Each computer allows four paired phones, and Settings > Mobile lets you disconnect any of them.
+Each computer allows four paired phones; Settings › Devices lists them in its **폰** group, where each phone's ⋯ renames or disconnects it.
 
-On a computer with no screen, such as a server you reach over SSH, run `hide phone pair` in a terminal outside Hide's panes: it turns Mobile on, draws the QR in the terminal and waits until a phone scans it.
+On a computer with no screen, such as a server you reach over SSH, run `hide phone pair` in a terminal outside Hide's panes: it turns **Open hide from your phone** on, draws the QR in the terminal and waits until a phone scans it.
 It needs a terminal window big enough for the QR, about 80 columns by 45 rows, and says how big when the window is smaller; it never prints the link the QR holds.
-`hide phone list` shows the paired phones and `hide phone remove <phone>` disconnects one, by its name or the id the list shows.
+`hide phone list` shows the paired phones, `hide phone rename <phone> <name>` changes the name this computer shows one under (an empty name gives back the one it paired with), and `hide phone remove <phone>` disconnects one, by its name or the id the list shows.
 When a new phone pairs, the phones already paired with that computer are told once.
 
-**고급 · Tailscale로 직접 연결** keeps the existing direct option on systems that support it.
+**폰 연결 방식** in the **폰** group holds the relay's state and, under **고급**, **Tailscale로 직접 연결**, the existing direct option on systems that support it.
 Switching connection method shows only that method's paired phones; scan its QR to pair again, or switch back to see the earlier phones.
-Turning Mobile off closes the relay and all phone connections.
+Turning **Open hide from your phone** off closes the relay and all phone connections.
 
 ## Connect another computer that runs Hide
 
