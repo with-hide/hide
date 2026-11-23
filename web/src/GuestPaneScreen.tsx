@@ -1,9 +1,9 @@
 import { EllipsisIcon } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { Actions } from "./actions";
-import { DeviceChip } from "./components/device-chip";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
+import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { RowButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
@@ -35,24 +35,27 @@ export function guestPaneMenu(machine: string, t: TFunction<"translation">): Men
   ];
 }
 
-/** Every pane of another machine's work on this computer, placed among this computer's projects. */
+/** Every pane of another machine's work on this computer, placed among this computer's projects and named in this window's words. */
 export function useGuestPanes(): GuestPane[] {
+  const { t } = useInterfaceTranslation();
   const guests = useShellStore((s) => s.rest?.navigator?.guest_panes);
   const peers = useShellStore((s) => s.rest?.navigator?.peers);
   const projects = useShellStore((s) => s.rest?.navigator?.workspaces);
-  // The three inputs are the whole of what the list reads.
+  // The three inputs and the language are the whole of what the list reads.
   return useMemo(() => {
     const rest = useShellStore.getState().rest;
-    return guestPanes(rest, catalogWorkspaces(rest).filter((project) => !project.remote_target_id));
-  }, [guests, peers, projects]);
+    return guestPanes(rest, catalogWorkspaces(rest).filter((project) => !project.remote_target_id), (branch) => t("pairing.work.terminal", { branch }));
+  }, [guests, peers, projects, t]);
 }
 
 /**
  * The center while it shows a pane of another machine's work on this
- * computer: the tabs of that machine's panes in the same place, the pane's
- * line with the machine's mark, and its terminal. The pane is the other
- * machine's, so this window keeps no state of it: when it is gone from the
- * list, the page says so.
+ * computer, drawn as this computer's own pane is: the tabs of that
+ * machine's work in the same project by their names, the pane's line with
+ * where it stands, its name, its project, and once the machine that
+ * started it, and its terminal. The pane is the other machine's, so this
+ * window keeps no state of it: when it is gone from the list, the page says
+ * so.
  */
 export function GuestPaneScreen({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -79,12 +82,15 @@ export function GuestPaneScreen({ paneId, actions }: { paneId: string; actions: 
         </div>
       </div>
       <EntryContextMenu label={t("pairing.work.menu", { label: pane.label })} items={() => guestPaneMenu(pane.machine, t)} onSelect={select} className="flex min-h-0 min-w-0 flex-1 flex-col" data-guest-pane-menu={pane.id}>
-        <header className="flex h-(--size-pane-header) shrink-0 items-center gap-sm bg-card pl-sm pr-xs text-caption text-muted-foreground" data-guest-pane-header={pane.id}>
+        <header className="flex h-(--size-pane-header) shrink-0 items-center gap-xs bg-card pl-sm pr-xs text-caption text-muted-foreground" data-guest-pane-header={pane.id}>
+          {pane.status ? <StatusMark mark={pane.status} data-guest-pane-status={pane.status} /> : null}
           <Hint label={pane.folder ?? pane.label}>
-            <span className="min-w-0 truncate">{pane.folder ?? pane.label}</span>
+            <span className="min-w-0 truncate font-medium text-foreground" data-guest-pane-name="true">{pane.label}</span>
           </Hint>
-          <DeviceChip label={pane.machine} variant="remote" className="shrink-0" />
+          {pane.project ? <span className="min-w-0 shrink-[2] truncate" data-guest-pane-project="true">· {pane.project}</span> : null}
           <span className="min-w-0 flex-1" />
+          <GuestMark pane={pane} />
+          <span className="min-w-0 shrink-[3] truncate" data-guest-pane-started="true">{t("pairing.work.group", { name: pane.machine })}</span>
           <EntryDropdown
             label={t("pairing.work.menu", { label: pane.label })}
             items={() => guestPaneMenu(pane.machine, t)}
@@ -123,7 +129,6 @@ function GuestTab({ tab, active, actions }: { tab: GuestPane; active: boolean; a
         onClick={() => actions.openGuestPane(tab.id)}
       >
         <span className="min-w-0 truncate">{tab.label}</span>
-        <GuestMark pane={tab} />
       </RowButton>
     </EntryContextMenu>
   );

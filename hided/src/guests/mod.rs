@@ -27,6 +27,7 @@ use hide_kit::layout;
 use hide_node::ssh::host::{HelperPackages, guest_build};
 use hide_node_link::address::guest_pane_id;
 use hide_peer::protocol::build::{self, FileMessage};
+use hide_peer::protocol::core::Work;
 use hide_peer::protocol::launch::{EndMode, Position};
 use hide_peer::protocol::manage::{Manage, NodeStop};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
@@ -401,16 +402,27 @@ impl Guests {
         Ok(())
     }
 
-    /// Names `guest`'s panes here as its core told them (B10), whole; a
-    /// guest with no work here has nothing to name. Blocking: the core is
-    /// told when a name moved.
-    pub fn name_panes(&self, guest: &PeerKey, names: &HashMap<String, String>) {
-        let tap = lock(&self.hosted)
-            .get(guest)
-            .map(|hosted| Arc::clone(&hosted.tap));
-        if let Some(tap) = tap {
-            tap.name(names);
+    /// Names and marks `guest`'s panes here as its core told them (B10),
+    /// whole; a guest with no work here has nothing to name. Blocking: the
+    /// core is told when a name or a mark moved.
+    pub fn name_panes(&self, guest: &PeerKey, work: &HashMap<String, Work>) {
+        if let Some(tap) = self.hosted_tap(guest) {
+            tap.name(work);
         }
+    }
+
+    /// `guest`'s core no longer tells where its work here stands: its
+    /// panes' marks go, and their names stay (B10). Blocking.
+    pub fn guest_away(&self, guest: &PeerKey) {
+        if let Some(tap) = self.hosted_tap(guest) {
+            tap.away();
+        }
+    }
+
+    fn hosted_tap(&self, guest: &PeerKey) -> Option<Arc<GuestTap>> {
+        lock(&self.hosted)
+            .get(guest)
+            .map(|hosted| Arc::clone(&hosted.tap))
     }
 
     /// Every guest's panes on this machine, as each guest's node last
@@ -433,6 +445,8 @@ impl Guests {
                             since_unix_ms: pane.since_unix_ms,
                             folder: pane.folder,
                             name: pane.name,
+                            branch: pane.branch,
+                            mark: pane.mark,
                         })
                         .collect(),
                 }
@@ -2335,6 +2349,8 @@ mod tests {
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
                     name: Some("로그인 고치기".to_owned()),
+                    branch: Some("main".to_owned()),
+                    mark: None,
                 }],
             })
             .unwrap(),
@@ -2557,6 +2573,8 @@ mod tests {
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
                     name: Some("로그인 고치기".to_owned()),
+                    branch: Some("main".to_owned()),
+                    mark: None,
                 }],
             }],
             "the panes show before the node is back"

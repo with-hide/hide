@@ -144,7 +144,18 @@ pub enum CoreMessage {
     /// id the receiving machine's tap lists it under, with its agent's
     /// label or else its tab's name. A pane left out has no name, and the
     /// receiving machine words its row by its folder.
-    WorkNames { names: Vec<WorkName> },
+    ///
+    /// `work` is every such pane with what its row and its screen show
+    /// there besides (B10): the name when it has one, the branch of the
+    /// checkout it stands in and the mark its own rows are drawn with. A
+    /// reader that has it reads it in place of `names`; `names` stays for a
+    /// build before it, which takes the message without `work` and words a
+    /// pane with no name by its folder, with no mark.
+    WorkNames {
+        names: Vec<WorkName>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        work: Vec<Work>,
+    },
 }
 
 /// One pane of the sending machine's work on the receiving one and the name
@@ -154,6 +165,31 @@ pub struct WorkName {
     pub pane: String,
     pub name: String,
 }
+
+/// One pane of the sending machine's work on the receiving one, as the
+/// sending core shows it (B10): its name, else the branch its plain
+/// terminal stands on, and the mark its row is drawn with there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Work {
+    pub pane: String,
+    /// Its agent's label or its tab's given name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The branch of the checkout it stands in, when that is a repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The mark its row is drawn with on the sending machine (`quiet`,
+    /// `going`, `turn`, ...): a word the receiving machine draws when its
+    /// build knows it and leaves out when not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
+}
+
+/// The longest branch a [`Work`] carries: git refuses a longer ref name on
+/// most systems.
+pub const MAX_WORK_BRANCH_BYTES: usize = 255;
+/// The longest mark a [`Work`] carries; every mark is one short word.
+pub const MAX_WORK_MARK_BYTES: usize = 16;
 
 /// The most panes one [`CoreMessage::WorkNames`] names: the most a host
 /// keeps of one guest (`panes.json`).
@@ -175,6 +211,37 @@ pub fn valid_work_names(names: &[WorkName]) -> bool {
                 && !named.name.trim().is_empty()
                 && named.name.chars().count() <= MAX_WORK_NAME_CHARS
                 && !named.name.chars().any(char::is_control)
+        })
+}
+
+/// Whether `work` is a list a receiving machine keeps: bounded as
+/// [`valid_work_names`] bounds the names, no pane twice, every name one line
+/// that is not blank, every branch one line, and every mark one lower-case
+/// word.
+pub fn valid_work(work: &[Work]) -> bool {
+    let mut panes = std::collections::HashSet::new();
+    work.len() <= MAX_WORK_NAMES
+        && work.iter().all(|told| {
+            !told.pane.is_empty()
+                && told.pane.len() <= MAX_WORK_PANE_BYTES
+                && panes.insert(told.pane.as_str())
+                && told.name.as_deref().is_none_or(|name| {
+                    !name.trim().is_empty()
+                        && name.chars().count() <= MAX_WORK_NAME_CHARS
+                        && !name.chars().any(char::is_control)
+                })
+                && told.branch.as_deref().is_none_or(|branch| {
+                    !branch.trim().is_empty()
+                        && branch.len() <= MAX_WORK_BRANCH_BYTES
+                        && !branch.chars().any(char::is_control)
+                })
+                && told.mark.as_deref().is_none_or(|mark| {
+                    !mark.is_empty()
+                        && mark.len() <= MAX_WORK_MARK_BYTES
+                        && mark
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                })
         })
 }
 
@@ -331,6 +398,7 @@ mod tests {
         };
         let told = CoreMessage::WorkNames {
             names: vec![named("w1:p1", "로그인 고치기")],
+            work: Vec::new(),
         };
         let body = serde_json::to_vec(&told).unwrap();
         assert_eq!(
@@ -354,6 +422,110 @@ mod tests {
                 .collect(),
         ] {
             assert!(!valid_work_names(&wrong), "{wrong:?}");
+        }
+    }
+
+    /// B10: each pane's branch and mark cross beside its name, a list past
+    /// the bounds is not kept, and the builds on either side of the change
+    /// read each other: an earlier build's message is read with no `work`,
+    /// and an earlier reader takes a later message by its `names`.
+    #[test]
+    fn work_crosses_with_its_branch_and_mark_and_reads_across_builds() {
+        let work =
+            |pane: &str, name: Option<&str>, branch: Option<&str>, mark: Option<&str>| Work {
+                pane: pane.to_owned(),
+                name: name.map(str::to_owned),
+                branch: branch.map(str::to_owned),
+                mark: mark.map(str::to_owned),
+            };
+        let told = CoreMessage::WorkNames {
+            names: vec![WorkName {
+                pane: "w1:p1".to_owned(),
+                name: "로그인 고치기".to_owned(),
+            }],
+            work: vec![
+                work("w1:p1", Some("로그인 고치기"), Some("main"), Some("going")),
+                work("w1:p2", None, Some("m75-relay"), Some("quiet")),
+            ],
+        };
+        let body = serde_json::to_vec(&told).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::json!({"t": "work_names",
+            "names": [{"pane": "w1:p1", "name": "로그인 고치기"}],
+            "work": [
+                {"pane": "w1:p1", "name": "로그인 고치기", "branch": "main", "mark": "going"},
+                {"pane": "w1:p2", "branch": "m75-relay", "mark": "quiet"},
+            ]})
+        );
+        assert_eq!(CoreMessage::parse(&body).unwrap(), Some(told));
+
+        // An earlier build sends `names` alone: read, with no work.
+        let earlier = br#"{"t":"work_names","names":[{"pane":"w1:p1","name":"a"}]}"#;
+        assert_eq!(
+            CoreMessage::parse(earlier).unwrap(),
+            Some(CoreMessage::WorkNames {
+                names: vec![WorkName {
+                    pane: "w1:p1".to_owned(),
+                    name: "a".to_owned()
+                }],
+                work: Vec::new(),
+            })
+        );
+        // An earlier reader, which knew `names` alone, reads a later message.
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(tag = "t", rename_all = "snake_case")]
+        enum Earlier {
+            WorkNames { names: Vec<WorkName> },
+        }
+        assert_eq!(
+            serde_json::from_slice::<Earlier>(&body).unwrap(),
+            Earlier::WorkNames {
+                names: vec![WorkName {
+                    pane: "w1:p1".to_owned(),
+                    name: "로그인 고치기".to_owned()
+                }]
+            }
+        );
+
+        assert!(valid_work(&[]));
+        assert!(valid_work(&[
+            work("w1:p1", None, None, None),
+            work("w1:p2", Some("a"), Some("feat/x"), Some("look")),
+        ]));
+        for wrong in [
+            vec![
+                work("w1:p1", None, None, None),
+                work("w1:p1", None, None, None),
+            ],
+            vec![work("", None, None, None)],
+            vec![work("w1:p1", Some(" "), None, None)],
+            vec![work(
+                "w1:p1",
+                Some(&"가".repeat(MAX_WORK_NAME_CHARS + 1)),
+                None,
+                None,
+            )],
+            vec![work("w1:p1", None, Some("a\nb"), None)],
+            vec![work(
+                "w1:p1",
+                None,
+                Some(&"b".repeat(MAX_WORK_BRANCH_BYTES + 1)),
+                None,
+            )],
+            vec![work("w1:p1", None, None, Some("Going"))],
+            vec![work("w1:p1", None, None, Some(""))],
+            vec![work(
+                "w1:p1",
+                None,
+                None,
+                Some(&"a".repeat(MAX_WORK_MARK_BYTES + 1)),
+            )],
+            (0..=MAX_WORK_NAMES)
+                .map(|n| work(&format!("w1:p{n}"), None, None, None))
+                .collect(),
+        ] {
+            assert!(!valid_work(&wrong), "{wrong:?}");
         }
     }
 

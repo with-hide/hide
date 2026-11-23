@@ -11,7 +11,7 @@
 
 import { tileMonogram } from "./devices";
 import type { MessageKey } from "./i18n/catalogs";
-import type { GuestPanes, PeerWork, PeerWorkRow, SnapshotRest, Workspace } from "./snapshot";
+import type { GuestPanes, PeerWork, PeerWorkRow, RowMark, SnapshotRest, Workspace } from "./snapshot";
 
 /** One pane of another machine's work on this computer, as a row and a tab draw it. */
 export type GuestPane = {
@@ -24,10 +24,19 @@ export type GuestPane = {
   /** The machine's letters, as its rail tile would draw them (`MB`). */
   mark: string;
   folder: string | null;
-  /** What the row is called: the name its machine shows it by, else the folder's own name, else the pane's id there. */
+  /**
+   * What the row is called, as its machine calls it: the name it shows it by
+   * (its agent's label or its tab's given name), else for a plain terminal
+   * the branch it stands on in this window's words ("터미널 · main"), else
+   * the folder's own name, else the pane's id there.
+   */
   label: string;
+  /** Where the work stands, as its machine draws its row; `null` while that machine has told none (an earlier build, or a machine away). */
+  status: RowMark | null;
   /** This computer's project that holds the folder, when one does. */
   projectId: string | null;
+  /** That project's name. */
+  project: string | null;
   /** That project's checkout that holds the folder, by its longest path: the row the work stands under. */
   checkoutId: string | null;
 };
@@ -39,6 +48,13 @@ const NO_WORK: PeerWork[] = [];
 function within(path: string, root: string): boolean {
   const trimmed = root.replace(/\/+$/, "");
   return trimmed !== "" && (path === trimmed || path.startsWith(`${trimmed}/`));
+}
+
+const MARKS: readonly string[] = ["turn", "look", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep"] satisfies RowMark[];
+
+/** The mark another machine drew its row with, when this build knows it. */
+export function markOf(mark: string | null | undefined): RowMark | null {
+  return mark && MARKS.includes(mark) ? (mark as RowMark) : null;
 }
 
 function folderName(folder: string): string {
@@ -55,21 +71,21 @@ export function peerName(rest: SnapshotRest | null | undefined, deviceId: string
  * Every pane of another machine's work on this computer, oldest first within
  * its machine. `projects` are this computer's own: a pane started in a folder
  * one of them holds stands under that project, by the longest checkout path
- * that holds it.
+ * that holds it. `terminal` words a plain terminal by its branch.
  */
-export function guestPanes(rest: SnapshotRest | null | undefined, projects: readonly Workspace[]): GuestPane[] {
+export function guestPanes(rest: SnapshotRest | null | undefined, projects: readonly Workspace[], terminal: (branch: string) => string): GuestPane[] {
   const guests = rest?.navigator?.guest_panes ?? NO_GUESTS;
   if (guests.length === 0) return [];
-  const placeOf = (folder: string | null): { projectId: string | null; checkoutId: string | null } => {
-    let best: { projectId: string; checkoutId: string; length: number } | null = null;
-    if (folder === null) return { projectId: null, checkoutId: null };
+  const placeOf = (folder: string | null): { projectId: string | null; project: string | null; checkoutId: string | null } => {
+    let best: { project: Workspace; checkoutId: string; length: number } | null = null;
+    if (folder === null) return { projectId: null, project: null, checkoutId: null };
     for (const project of projects) {
       for (const checkout of project.checkouts) {
         if (!within(folder, checkout.path)) continue;
-        if (best === null || checkout.path.length > best.length) best = { projectId: project.id, checkoutId: checkout.id, length: checkout.path.length };
+        if (best === null || checkout.path.length > best.length) best = { project, checkoutId: checkout.id, length: checkout.path.length };
       }
     }
-    return { projectId: best?.projectId ?? null, checkoutId: best?.checkoutId ?? null };
+    return { projectId: best?.project.id ?? null, project: best?.project.label ?? null, checkoutId: best?.checkoutId ?? null };
   };
   return guests.flatMap((guest) => {
     const machine = peerName(rest, guest.device_id);
@@ -77,8 +93,9 @@ export function guestPanes(rest: SnapshotRest | null | undefined, projects: read
       .sort((left, right) => left.since_unix_ms - right.since_unix_ms)
       .map((pane) => {
         const folder = pane.folder ?? null;
-        const label = pane.name?.trim() || (folder ? folderName(folder) : pane.pane);
-        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, ...placeOf(folder) };
+        const branch = pane.branch?.trim();
+        const label = pane.name?.trim() || (branch ? terminal(branch) : null) || (folder ? folderName(folder) : pane.pane);
+        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, status: markOf(pane.mark), ...placeOf(folder) };
       });
   });
 }

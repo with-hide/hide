@@ -1,6 +1,7 @@
-//! The names this machine's core shows its work on other machines by, read
-//! from the core as it changes, for the `core` stream to tell each machine
-//! its own (PRD device-connect-iroh B10, `hide_core::work_names`).
+//! What this machine's core shows its work on other machines by (names,
+//! branches and marks), read from the core as it changes, for the `core`
+//! stream to tell each machine its own (PRD device-connect-iroh B10,
+//! `hide_core::work_names`).
 //!
 //! The follower reads only while a machine this one opens is connected
 //! (`wanted`): one snapshot read per change burst the core announces, the
@@ -25,6 +26,8 @@ use crate::ending::Ending;
 const _: () = assert!(
     hide_core::work_names::MAX_NAMES == hide_peer::protocol::core::MAX_WORK_NAMES
         && hide_core::work_names::MAX_NAME_CHARS == hide_peer::protocol::core::MAX_WORK_NAME_CHARS
+        && hide_core::work_names::MAX_BRANCH_BYTES
+            == hide_peer::protocol::core::MAX_WORK_BRANCH_BYTES
 );
 
 /// Each machine's names by its connection key, as the core last read.

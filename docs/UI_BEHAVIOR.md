@@ -2545,15 +2545,15 @@ A split that did not happen leaves the window as it was, the node of its core, a
 
 Web owner: `web/src/guestWork.ts`, `web/src/GuestWorkRows.tsx`, `web/src/GuestPaneScreen.tsx`.
 
-A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's sidebar whether or not that machine is connected (PRD device-connect-iroh B10, B68).
+A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's 프로젝트 list whether or not that machine is connected (PRD device-connect-iroh B10, B68).
+The 태스크 list does not list it, in 상태별 or 프로젝트별: the work is that machine's, and it shows in that machine's own 태스크 list and notices (D-50, D-59, D-60; operator review 2026-11-23).
 A pane started in a folder one of this computer's projects holds stands in that project: under the checkout row whose folder holds it (the longest such path), after that checkout's own rows, and at the project's end when that checkout has no row (the project's row stands for its main checkout, the project is folded, or the checkout waits in the 다른 체크아웃 fold), so no fold hides it (`guestPlaces`).
 Every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`).
-In the 태스크 list, 프로젝트별 ends each project's section with that project's panes, and a pane whose project has no section there, like every pane in 상태별, stands in its machine's group at the end.
-The row is the name that machine shows the work by, its agent's label or else the name its tab was given, and follows it when it changes there; with none told it is the folder's own name, or the pane's id on its machine when its node said no folder.
-Beside it stand the machine's letters in the other-device colour (`MB`) with its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
-A name told is kept while that machine is away, and a machine that tells none (a build before names) keeps its rows' folder names.
+The row is named as that machine names the work: its agent's label or else the name its tab was given, else for a plain terminal `터미널 · <branch>` with the branch its checkout stands on, and the folder's own name only when that machine told neither (or the pane's id on its machine when its node said no folder); it follows the name when it changes there.
+It starts with the status mark that machine draws the work's row with, following it as it changes there, and ends with the machine's letters in the other-device colour (`MB`) with its name as the hint; it carries no count or time.
+A name and a branch told are kept while that machine is away; the mark is not, so a machine that is not connected, or a build that tells none (before marks), leaves the mark's slot empty, and a build before names keeps its rows' folder names.
 Screen copy never calls that machine a guest: it is named, or its work is `<machine>에서 시킨 일`.
-Pressing a row shows the pane in the center as the window's own page (`Screen` `guest`), since the pane is no tab of this core's: a tab strip of that machine's panes in the same place (the project, or the machine's own group), the pane's folder with the machine's chip, and its terminal.
+Pressing a row shows the pane in the center as the window's own page (`Screen` `guest`), since the pane is no tab of this core's, drawn as this computer's own pane is: a tab strip of that machine's work in the same place (the project, or the machine's own group) by the rows' names, a header with the status mark, the work's name (the folder as its hint), `· <project>`, and at its end the machine's letters and `<machine>에서 시킨 일` once, and its terminal.
 The operator reads it, types into it, and it follows this window's size while this window is the one typing; this computer's tile is ringed.
 Splitting, a new tab, renaming and starting an agent are drawn dimmed in its menu with `<machine>에서 할 수 있어요` under each, whether or not that machine is connected (D-74), and their shortcuts say the same line as a notice in place of acting.
 `닫기…`, ⌘W and the pane-close shortcut ask first (`이 터미널을 닫을까요?`, with what ends and that the machine is told); confirming sends `guest_pane_close`, and the page leaves for the Overview.

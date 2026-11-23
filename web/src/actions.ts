@@ -3339,7 +3339,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** A Workspace command pressed over another machine's pane: said, not done (D-74). */
     refuseOnGuestPane(paneId: string) {
       const state = rest();
-      const pane = guestPanes(state, []).find((row) => row.id === paneId);
+      const pane = guestPanes(state, [], (branch) => branch).find((row) => row.id === paneId);
       if (!pane) return;
       ui().showNotice({ level: "info", text: translate("pairing.work.onThatMachine", { name: pane.machine }), refreshable: false, key: "guest_pane_refused" });
     },

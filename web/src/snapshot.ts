@@ -3945,8 +3945,10 @@ export type GuestPanes = {
   /**
    * `folder`: the folder the pane was started in on this machine, once its node said it.
    * `name`: what the guest's core shows the pane by (its agent's label, else its tab's name), once it told one.
+   * `branch`: the branch the guest's core says the pane stands on, once it told one.
+   * `mark`: the mark the guest's core draws the pane's row with, while it is connected and has told one.
    */
-  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null }[];
+  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null; branch?: string | null; mark?: string | null }[];
 };
 
 /**
