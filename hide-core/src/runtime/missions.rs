@@ -240,6 +240,11 @@ pub struct NodeView {
     /// mission-node-simple D-10): the card draws one PR mark each.
     pub prs: Vec<NodePrView>,
     pub base_pr: Option<u32>,
+    /// `base_pr` as its host's unit names it (`!12` on gitlab.com); absent
+    /// with no base, while the project's repository is not read, and from a
+    /// core before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The node it stacks on while that one's work has not reached main
     /// (`mission_landing::node_stack`): its branch starts there and its pull
     /// request takes that branch as its base. Absent for a node not stacked.
@@ -248,9 +253,10 @@ pub struct NodeView {
     pub branch: Option<String>,
     pub pr_state: Option<PrState>,
     pub pr_url: Option<String>,
-    /// The current pull request as its host's unit named it when it read
-    /// it, which the screen compares and opens it by; absent while no read
-    /// holds it.
+    /// The current pull request as its host's unit names it, which the
+    /// screen compares, names and opens it by: the read's own, else made
+    /// from the repository the project's read named; absent while neither
+    /// is read.
     pub pr_reference: Option<crate::code_host::ChangeRequestRef>,
     /// The node's four steps (D-42, D-48): work, PR or branch, review, merge
     /// or main; none for a node with no pull request or branch (D-53).
@@ -615,8 +621,8 @@ pub struct NodePrView {
     pub number: u32,
     pub state: Option<PrState>,
     pub url: Option<String>,
-    /// As its host's unit named it when it read it; absent while no read
-    /// holds it.
+    /// As its host's unit names it, as `NodeView::pr_reference` is made;
+    /// absent while the project's repository is not read.
     pub reference: Option<crate::code_host::ChangeRequestRef>,
     /// The branch it merges into, as GitHub last answered (PRD
     /// mission-destination D-14): the destination, the lower pull
@@ -638,6 +644,12 @@ pub struct OutsideView {
     /// a branch and before GitHub answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<PrState>,
+    /// An outside pull request as its host's unit names it (`!12` on
+    /// gitlab.com), as `NodeView::pr_reference` is made; absent for a
+    /// branch, while the project's repository is not read, and from a core
+    /// before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
 }
 
 /// The mission's safety net as its card draws it (`MissionView::safety_net`).
@@ -661,6 +673,11 @@ pub struct HeldNodeView {
     pub title: String,
     pub reason: crate::mission_health::HeldReason,
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it, as `NodeView::pr_reference` is
+    /// made; absent with none, while the project's repository is not read
+    /// and from a core before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     pub since_unix_ms: u64,
 }
 
@@ -716,6 +733,12 @@ pub(crate) fn skipped_alone(mission: &Mission) -> Vec<SkippedAloneView> {
 pub struct AttentionView {
     pub reason: crate::missions::AttentionReason,
     pub pr: Option<u32>,
+    /// `pr` as its host's unit names it, as `NodeView::pr_reference` is
+    /// made, so an unplanned change request no node holds reads `!12` on
+    /// gitlab.com; absent with none, while the project's repository is not
+    /// read and from a core before it, which a screen reads as `#n`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::code_host::ChangeRequestRef>,
     /// The operator only for a reason only they settle
     /// (`AttentionReason::operator_first`); every other raise is the
     /// Conductor's, and the safety net is the mission's.
@@ -5212,17 +5235,38 @@ impl Runtime {
         let conductor_present = self.conductor_present(&mission.conductor.actor);
         let operator_waits = self.operator_waits(mission);
         let lines = self.lines_now(mission);
+        let pull_of = |number: u32| {
+            github?
+                .pull_requests
+                .iter()
+                .find(|pull| pull.number == number)
+        };
+        // The repository the project's read named and its host, found once.
+        let project = github
+            .and_then(|github| github.repository.as_ref()?.repository.as_ref())
+            .and_then(|repository| Some((self.code_hosts.of(repository)?, repository)));
+        // A number of the mission's project as its host's unit names it: the
+        // read's own reference, else the one the unit makes from the
+        // repository the read named, so a change request the list does not
+        // hold (one no longer listed, an outside one, a stack's base, an
+        // unplanned one) reads `!12` on gitlab.com too.
+        let reference_of = |number: u32| {
+            pull_of(number)
+                .and_then(|pull| pull.reference.clone())
+                .or_else(|| {
+                    let (host, repository) = project?;
+                    Some(crate::code_host::change_request(
+                        host.unit(),
+                        repository.clone(),
+                        number,
+                    ))
+                })
+        };
         let nodes = mission
             .nodes
             .iter()
             .map(|node| {
                 let record = node.agent_id.as_deref().and_then(|id| agents.get(id));
-                let pull_of = |number: u32| {
-                    github?
-                        .pull_requests
-                        .iter()
-                        .find(|pull| pull.number == number)
-                };
                 let pull = node.current_pr().and_then(pull_of);
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
@@ -5237,7 +5281,7 @@ impl Runtime {
                                 PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                             }),
                             url: pull.map(|pull| pull.url.clone()),
-                            reference: pull.and_then(|pull| pull.reference.clone()),
+                            reference: reference_of(number),
                             base: pull.map(|pull| pull.base_branch.clone()),
                         }
                     })
@@ -5281,11 +5325,12 @@ impl Runtime {
                     pr: node.current_pr(),
                     prs,
                     base_pr: node.base_pr,
+                    base_reference: node.base_pr.and_then(reference_of),
                     stack: node_stack(mission, node),
                     branch: node.branch.clone(),
                     pr_state,
                     pr_url: pull.map(|pull| pull.url.clone()),
-                    pr_reference: pull.and_then(|pull| pull.reference.clone()),
+                    pr_reference: node.current_pr().and_then(reference_of),
                     stage: node_stage(node, pr_state),
                     attempts: node.attempts,
                     line: node.line.clone(),
@@ -5310,11 +5355,13 @@ impl Runtime {
                                 state: pull.map(|pull| {
                                     PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review)
                                 }),
+                                reference: reference_of(*number),
                             }
                         }
                         External::Branch(_) => OutsideView {
                             base: self.project_default_branch(&mission.device_id, &mission.project),
                             state: None,
+                            reference: None,
                         },
                     }),
                     unread: self.missions.outside.unread(&mission.id, &node.key),
@@ -5337,6 +5384,7 @@ impl Runtime {
                         AttentionView {
                             reason: attention.reason,
                             pr: attention.pr,
+                            reference: attention.pr.and_then(reference_of),
                             to: if operator {
                                 AttentionTo::Operator
                             } else {
@@ -5543,6 +5591,7 @@ impl Runtime {
                                 title: node.title.clone(),
                                 reason,
                                 pr,
+                                reference: pr.and_then(reference_of),
                                 since_unix_ms,
                             })
                         })

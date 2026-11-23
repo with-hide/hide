@@ -125,12 +125,16 @@ export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
 export type PhoneMissionNode = MissionNodeBrief & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** `base_pr` as its host's unit names it (`!12` on gitlab.com); absent with none and from a Mac before it, which reads as `#n`. */
+  base_reference?: ChangeRequestRef | null;
   /** The branch its current pull request merges into, as GitHub last answered; absent until it answered and from a Mac before it. */
   pr_base?: string;
   /** How many pull requests it holds besides its current one, the `+N` beside its pull request's number; absent at zero and from a Mac before it. */
   pr_more?: number;
   /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
   external_pr?: number;
+  /** That pull request as its host's unit names it (`↗!12` on gitlab.com); absent with none and from a Mac before it, which reads as `↗#n`. */
+  external_reference?: ChangeRequestRef;
   /** The branch an outside step watches, which its line names; absent otherwise and from a Mac before it. */
   external_branch?: string;
   /** Where an outside step's work goes, its pull request's base or the default branch its branch is judged against; absent until read and from a Mac before it. */

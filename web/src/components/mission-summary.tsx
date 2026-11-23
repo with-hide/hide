@@ -4,7 +4,7 @@ import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { planNowLine } from "../plans";
 import type { TFunction } from "i18next";
-import { attentionReasonText, cardLine, escalationWhy, holdReason, missionOpen, missionPulls, missionResultCounts, skipWords, stageWord, summaryGroups, type HoldReason } from "../missions";
+import { attentionReasonText, cardLine, escalationWhy, holdReason, missionOpen, missionPulls, missionResultCounts, pullsByNumber, skipWords, stageWord, summaryGroups, type HoldReason, type MissionPulls } from "../missions";
 import { useWorkerEscalation } from "../missionWorkers";
 import type { Mission, MissionAttentionTo, MissionNode, MissionSkip } from "../snapshot";
 import { formatElapsed, useElapsed } from "./elapsed";
@@ -92,7 +92,7 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
   // What waits on the operator stands in 내 차례 above the map and nowhere else here; what waits on the Conductor is work in progress, said in its line.
   const held = attention.flatMap((node) => {
     const reason = holdReason(mission, node, escalationOf);
-    const words = reason ? holdWords(reason, t) : null;
+    const words = reason ? holdWords(reason, t, pullsByNumber(mission.nodes)) : null;
     return words?.to === "operator" ? [] : [{ node, words }];
   });
   const going = [...held, ...working.map((node) => ({ node, words: null }))];
@@ -131,10 +131,10 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
  * own reason, a raised worker's line or cause, and the decision; the last
  * two are the operator's turn.
  */
-function holdWords(reason: HoldReason, t: TFunction<"translation">): { to: MissionAttentionTo; who: string; why: string } {
+function holdWords(reason: HoldReason, t: TFunction<"translation">, pulls: MissionPulls): { to: MissionAttentionTo; who: string; why: string } {
   switch (reason.kind) {
     case "attention":
-      return { to: reason.attention.to, who: t(`mission.attention.to.${reason.attention.to}`), why: attentionReasonText(reason.attention.reason, reason.attention.pr, t) };
+      return { to: reason.attention.to, who: t(`mission.attention.to.${reason.attention.to}`), why: attentionReasonText(reason.attention.reason, reason.attention.pr, t, 0, pulls) };
     case "worker":
       return { to: "operator", who: t("mission.attention.to.operator"), why: escalationWhy(reason.escalation, t) };
     case "decision":
@@ -174,7 +174,7 @@ function NodeName({ node, onSelect }: { node: MissionNode; onSelect: (key: strin
 function Pulls({ mission, nodes }: { mission: Mission; nodes: ReturnType<typeof missionPulls> }) {
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs">
-      {nodes.map(({ node, pr }) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} title={node.title} data-mission-summary-pr={pr.number} />)}
+      {nodes.map(({ node, pr }) => <MissionPrMark key={pr.number} number={pr.number} reference={pr.reference} state={pr.state} stale={mission.github_stale} title={node.title} data-mission-summary-pr={pr.number} />)}
     </span>
   );
 }

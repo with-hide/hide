@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeWait, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeSpans, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeWait, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeSpans, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, attentionReasonText, pullsByNumber, type EscalationCause } from "./missions";
 import { kindWord } from "./missionLine";
 import { missionEntry, rowLine, rowLineText } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
@@ -267,7 +267,7 @@ describe("what a running mission's pane says (PRD mission-plan-visibility B9, B1
 
 describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
   it("is its pull request, a direct change's branch, or a done general node's verdict or line as its card reads it, and nothing the record does not hold", () => {
-    expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
+    expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, reference: null, state: "merged" });
     expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
     expect(nodeResult(node("c", { kind: "general", preset: "research", status: "done", line: "cache first" }))).toEqual({ kind: "line", line: "cache first" });
     expect(nodeResult(node("d", { kind: "general", preset: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "line", line: "6 of 6" });
@@ -618,6 +618,25 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(attentionWords(node("n"), t)).toBeNull();
   });
 
+  it("names an outside or stacked-on merge request of a gitlab.com project `MR !n` from the reference the core carries beside its number (D1)", () => {
+    const ref = (number: number) => ({ repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number, key: `gitlab.com/acme/app#${number}`, label: `!${number}`, url: "", checks_url: "", files_url: "" });
+    const outside = node("n", { kind: "external", delivery: null, external: { pr: 44 }, outside: { reference: ref(44) }, attention: raised("conductor", "pr_closed", 44) });
+    expect(attentionWords(outside, t)?.why).toBe("MR !44 closed without a merge");
+    expect(attentionPr(outside, outside.attention!, null)).toEqual({ number: 44, state: null, reference: ref(44) });
+    const stacked = node("n", { pr: 45, base_pr: 40, base_reference: ref(40), attention: raised("conductor", "pr_closed", 40) });
+    expect(attentionWords(stacked, t)?.why).toBe("MR !40 closed without a merge");
+    // A raise in the node's record names it the same way.
+    expect(eventWords({ at_unix_ms: 1, kind: "raised", node: "n", reason: "pr_closed", pr: 44 }, t, pullsByNumber([outside])).line).toBe("MR !44 closed without a merge");
+    // An unplanned one no node holds: the raise and the held cell carry its reference.
+    const unplanned = node("n", { pr: 45, attention: { ...raised("operator", "unplanned_pr", 50), reference: ref(50) } });
+    expect(attentionWords(unplanned, t)?.why).toBe("Unplanned MR !50");
+    expect(attentionReasonText("unplanned_pr", 50, t, 0, pullsByNumber([{ attention: { pr: 50, reference: ref(50) } }]))).toBe("Unplanned MR !50");
+    // A core that sent no reference beside the number: GitHub's words, as before.
+    expect(attentionWords(node("n", { kind: "external", delivery: null, external: { pr: 44 }, attention: raised("conductor", "pr_closed", 44) }), t)?.why).toBe("PR #44 closed without a merge");
+    expect(attentionWords(node("n", { attention: raised("operator", "unplanned_pr", 50) }), t)?.why).toBe("Unplanned PR #50");
+    expect(eventWords({ at_unix_ms: 1, kind: "raised", node: "n", reason: "pr_closed", pr: 44 }, t, pullsByNumber([])).line).toBe("PR #44 closed without a merge");
+  });
+
   it("draws the missions the device scope names as Needs You items, in its order, each with its oldest node no row carries (PRD mission-node-simple D-19, B14)", () => {
     const waiting = (since: number, onRow: boolean): MissionAttention => ({ ...raised("operator", "pr_closed", 7), since_unix_ms: since, on_row: onRow, item: !onRow });
     const orphan = mission("a", { nodes: [node("late", { status: "working", attention: waiting(30, false) }), node("carried", { status: "working", attention: waiting(5, true) }), node("early", { status: "working", attention: waiting(20, false) })] });
@@ -684,10 +703,10 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     const ended = raised("operator", "worker_ended");
     const at = node("n", { pr: 7, pr_state: "pending" });
     expect(attentionPr(node("n"), ended, [])).toBeNull();
-    expect(attentionPr(at, ended, [pull(7, "failed")])).toEqual({ number: 7, state: "failed" });
-    expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending" });
+    expect(attentionPr(at, ended, [pull(7, "failed")])).toEqual({ number: 7, state: "failed", reference: null });
+    expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending", reference: null });
     // A raise about another pull request names it, with no state the node's would lend it.
-    expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null });
+    expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null, reference: null });
     expect(attentionPr(node("o", { kind: "external", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
   });
 

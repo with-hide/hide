@@ -43,7 +43,7 @@ export function ResultTail({ result, stale, full = false }: { result: NodeResult
   const { t } = useInterfaceTranslation();
   switch (result.kind) {
     case "pr":
-      return <MissionPrMark number={result.number} state={result.state} stale={stale} data-node-pr={result.number} />;
+      return <MissionPrMark number={result.number} reference={result.reference} state={result.state} stale={stale} data-node-pr={result.number} />;
     case "commit":
       return <span className="shrink-0 font-mono text-caption text-mission-done" title={result.commit} data-node-commit={result.commit}>{t("mission.result.main", { commit: shortCommit(result.commit) })}</span>;
     case "verdict":

@@ -22,12 +22,12 @@ it("draws a change by pull request as its PR list mark, number, branch and desti
 });
 
 it("ends in another base, or in the pull request it is stacked on with that pull request's state as the mission's nodes know it (B55, D-57)", () => {
-  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
+  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: null });
   // The desktop reads the base's state from whichever node of the mission holds that pull request; none holds it, none is named.
   const held = (number: number, state: MissionNode["prs"][number]["state"]) => ({ prs: [{ number, state, url: null }] });
   const stacked = { kind: "change", status: "working", pr: 3106, pr_state: "pending", landing: null, merge: null, delivery: "pr", base_pr: 3105, branch: "feat/screen", prs: [{ number: 3106, state: "pending", url: null }] } as unknown as MissionNode;
-  expect(branchLine(lineNode(stacked, [held(3104, "merged"), held(3105, "mergeable")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: "mergeable" });
-  expect(branchLine(lineNode(stacked, [held(3104, "merged")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
+  expect(branchLine(lineNode(stacked, [held(3104, "merged"), held(3105, "mergeable")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: "mergeable" });
+  expect(branchLine(lineNode(stacked, [held(3104, "merged")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: null });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "release/1.2" }), "main")?.to).toEqual({ kind: "branch", name: "release/1.2", elsewhere: true });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "main" }), "main")?.to).toEqual({ kind: "branch", name: "main", elsewhere: false });
 });
@@ -53,7 +53,7 @@ it("puts the operator's merge before the destination as where it stands, and not
 
 it("draws an outside node as `↗#n` lit by GitHub's answer or `↗ <branch>`, to the base it goes to, merged once it is done (D-52, B55)", () => {
   const outside = { kind: "external" as const, delivery: null, branch: null };
-  expect(branchLine(node({ ...outside, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }), "main")).toEqual({ mark: "pending", pr: { number: 1232, outside: true, more: 0 }, branch: null, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
+  expect(branchLine(node({ ...outside, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }), "main")).toEqual({ mark: "pending", pr: { number: 1232, reference: null, outside: true, more: 0 }, branch: null, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
   expect(branchLine(node({ ...outside, status: "done", external: { pr: 1232 }, outside: { base: "release/1.2" } }), "main")).toMatchObject({ mark: "merged", to: { kind: "branch", name: "release/1.2", elsewhere: true } });
   expect(branchLine(node({ ...outside, external: { branch: "vendor/sdk" }, outside: { base: "develop" } }), "main")).toMatchObject({ mark: "branch", branch: { name: "vendor/sdk", outside: true }, to: { kind: "branch", name: "develop", elsewhere: true } });
 });

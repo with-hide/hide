@@ -387,7 +387,7 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
       </ul>,
     ]);
   }
-  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url, reference: null }] : [];
+  const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url, reference: node.outside?.reference ?? null }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
   const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
   if (prs.length > 0 || node.base_pr != null) {
@@ -395,7 +395,7 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
         {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} reference={pr.reference} state={pr.state} stale={mission.github_stale} />)}
-        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { label: pullLabel({ number: node.base_pr, reference: node.prs.find((pr) => pr.number === node.base_pr)?.reference ?? mission.nodes.find((other) => other.pr === node.base_pr)?.pr_reference }) })}</span> : null}
+        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { label: pullLabel({ number: node.base_pr, reference: node.base_reference ?? pullsByNumber(mission.nodes).get(node.base_pr) }) })}</span> : null}
       </span>,
     ]);
   }
@@ -589,7 +589,7 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
         return (
           <button key={other.key} type="button" onClick={() => onSelect(other.key)} title={other.title} aria-label={`${t(which === "before" ? "mission.panel.waitsOn" : "mission.panel.waitedBy")} · ${other.title}`} className="flex min-w-0 max-w-full items-center gap-xxs rounded-xs border border-border px-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" data-panel-link={other.key}>
             <span className="min-w-0 truncate">{other.title}</span>
-            {pr != null ? <MissionPrMark number={pr} reference={pr === other.pr ? other.pr_reference : null} state={other.pr_state} stale={mission.github_stale} /> : null}
+            {pr != null ? <MissionPrMark number={pr} reference={pullsByNumber([other]).get(pr)} state={other.pr_state} stale={mission.github_stale} /> : null}
           </button>
         );
       })}
