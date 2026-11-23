@@ -77,7 +77,7 @@ import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
-import { GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
+import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
@@ -643,14 +643,10 @@ function rowKey(row: ProjectRow): string {
 const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
   if (row.kind === "divider") return <li role="separator" className="my-sm -mx-sm border-t border-border" />;
   if (row.kind === "raised") return <RaisedSection row={row} stack={stack} context={context} />;
-  return (
-    <>
-      <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />
-      {/* Another machine's panes started in this project's folders stand under it, whatever the project has folded (PRD device-connect-iroh B10). */}
-      {row.workspace.remote_target_id ? null : <GuestProjectRows projectId={row.workspace.id} actions={context.actions} />}
-    </>
-  );
+  return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });
+
+const NO_CHECKOUT_ROWS: ReadonlySet<string> = new Set();
 
 /**
  * A raised Needs You or Done section above the project tree
@@ -987,21 +983,29 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const hideAiListed = useShellStore((s) => s.rest?.navigator?.hide_ai_checkouts);
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const expanded = !disclosure || projectExpanded(workspace);
+  // Another machine's panes started in this project's folders stand under the
+  // checkout row that holds them, and at the project's end when no row does,
+  // whatever is folded (PRD device-connect-iroh B10, `guestPlaces`).
+  const guestEnd = (rows: ReadonlySet<string>) => (workspace.remote_target_id ? null : <GuestProjectRows projectId={workspace.id} rows={rows} actions={actions} />);
   const folder = folderCheckout(workspace);
   if (folder) {
-    if (workspace.session_folds?.cleanup.includes(folder.id)) return null;
     return (
-      <FolderRowView
-        workspace={workspace}
-        checkout={folder}
-        agentRows={rowsByCheckout.get(folder.id) ?? NO_BOARD_ROWS}
-        focused={context.workspaceScreen && folder.id === context.focusedCheckoutId}
-        first={first}
-        context={context}
-      />
+      <>
+        {workspace.session_folds?.cleanup.includes(folder.id) ? null : (
+          <FolderRowView
+            workspace={workspace}
+            checkout={folder}
+            agentRows={rowsByCheckout.get(folder.id) ?? NO_BOARD_ROWS}
+            focused={context.workspaceScreen && folder.id === context.focusedCheckoutId}
+            first={first}
+            context={context}
+          />
+        )}
+        {guestEnd(NO_CHECKOUT_ROWS)}
+      </>
     );
   }
-  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return null;
+  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestEnd(NO_CHECKOUT_ROWS);
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1015,6 +1019,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const others = [...activeDrawn, ...emptyFold, ...inactiveDrawn].filter((checkout) => !checkout.is_primary);
   const othersOpen = workspace.inactive_checkouts.expanded;
   const othersMarks = sumMarks(others.map((checkout) => checkout.agent_summary?.marks));
+  const guestRows = !workspace.remote_target_id;
   const checkoutRow = (checkout: Checkout) => (
     <CheckoutRowView
       key={checkout.id}
@@ -1023,10 +1028,13 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
       hideAi={hideAiCheckoutOf(hideAiListed, workspace, checkout)}
       agentRows={rowsByCheckout.get(checkout.id) ?? NO_BOARD_ROWS}
       focused={context.workspaceScreen && checkout.id === context.focusedCheckoutId}
+      guests={guestRows}
       context={context}
     />
   );
+  const rowCheckouts = new Set(expanded ? [...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id) : []);
   return (
+    <>
     <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
@@ -1101,6 +1109,8 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
         </ul>
       ) : null}
     </li>
+    {guestEnd(rowCheckouts)}
+    </>
   );
 }
 
@@ -1186,6 +1196,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
   hideAi,
   agentRows,
   focused,
+  guests = false,
   context,
 }: {
   workspace: Workspace;
@@ -1194,6 +1205,8 @@ const CheckoutRowView = memo(function CheckoutRowView({
   hideAi: HideAiCheckout | null;
   agentRows: BoardRow[];
   focused: boolean;
+  /** Draw another machine's panes started in this checkout's folder after its own rows: set where the project tree draws the row (B10). */
+  guests?: boolean;
   context: ListContext;
 }) {
   const { t } = useInterfaceTranslation();
@@ -1270,6 +1283,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} inset={CHECKOUT_NAME_COLUMN} actions={actions} /> : null}
     </li>
   );
 });

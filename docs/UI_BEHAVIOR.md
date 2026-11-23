@@ -2512,7 +2512,9 @@ A split that did not happen leaves the window as it was, the node of its core, a
 Web owner: `web/src/guestWork.ts`, `web/src/GuestWorkRows.tsx`, `web/src/GuestPaneScreen.tsx`.
 
 A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's sidebar whether or not that machine is connected (PRD device-connect-iroh B10, B68).
-A pane started in a folder one of this computer's projects holds stands right under that project's row, whatever the project has folded; every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`), and the 태스크 list, which draws no projects, lists them all so.
+A pane started in a folder one of this computer's projects holds stands in that project: under the checkout row whose folder holds it (the longest such path), after that checkout's own rows, and at the project's end when that checkout has no row (the project's row stands for its main checkout, the project is folded, or the checkout waits in the 다른 체크아웃 fold), so no fold hides it (`guestPlaces`).
+Every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`).
+In the 태스크 list, 프로젝트별 ends each project's section with that project's panes, and a pane whose project has no section there, like every pane in 상태별, stands in its machine's group at the end.
 The row is the name that machine shows the work by, its agent's label or else the name its tab was given, and follows it when it changes there; with none told it is the folder's own name, or the pane's id on its machine when its node said no folder.
 Beside it stand the machine's letters in the other-device colour (`MB`) with its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
 A name told is kept while that machine is away, and a machine that tells none (a build before names) keeps its rows' folder names.

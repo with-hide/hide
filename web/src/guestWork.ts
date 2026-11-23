@@ -28,6 +28,8 @@ export type GuestPane = {
   label: string;
   /** This computer's project that holds the folder, when one does. */
   projectId: string | null;
+  /** That project's checkout that holds the folder, by its longest path: the row the work stands under. */
+  checkoutId: string | null;
 };
 
 const NO_GUESTS: GuestPanes[] = [];
@@ -58,16 +60,16 @@ export function peerName(rest: SnapshotRest | null | undefined, deviceId: string
 export function guestPanes(rest: SnapshotRest | null | undefined, projects: readonly Workspace[]): GuestPane[] {
   const guests = rest?.navigator?.guest_panes ?? NO_GUESTS;
   if (guests.length === 0) return [];
-  const projectOf = (folder: string | null): string | null => {
-    if (folder === null) return null;
-    let best: { id: string; length: number } | null = null;
+  const placeOf = (folder: string | null): { projectId: string | null; checkoutId: string | null } => {
+    let best: { projectId: string; checkoutId: string; length: number } | null = null;
+    if (folder === null) return { projectId: null, checkoutId: null };
     for (const project of projects) {
       for (const checkout of project.checkouts) {
         if (!within(folder, checkout.path)) continue;
-        if (best === null || checkout.path.length > best.length) best = { id: project.id, length: checkout.path.length };
+        if (best === null || checkout.path.length > best.length) best = { projectId: project.id, checkoutId: checkout.id, length: checkout.path.length };
       }
     }
-    return best?.id ?? null;
+    return { projectId: best?.projectId ?? null, checkoutId: best?.checkoutId ?? null };
   };
   return guests.flatMap((guest) => {
     const machine = peerName(rest, guest.device_id);
@@ -76,9 +78,27 @@ export function guestPanes(rest: SnapshotRest | null | undefined, projects: read
       .map((pane) => {
         const folder = pane.folder ?? null;
         const label = pane.name?.trim() || (folder ? folderName(folder) : pane.pane);
-        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, projectId: projectOf(folder) };
+        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, ...placeOf(folder) };
       });
   });
+}
+
+/**
+ * Where `projectId`'s panes of other machines' work stand in a list that
+ * draws `rows`, the project's checkouts it shows as rows: each under the
+ * checkout that holds its folder, after that checkout's own rows, and the
+ * rest (a checkout folded away, or the project's own row standing for it)
+ * at the project's end, so none is hidden by a fold (B10).
+ */
+export function guestPlaces(panes: readonly GuestPane[], projectId: string, rows: ReadonlySet<string>): { byCheckout: ReadonlyMap<string, GuestPane[]>; atEnd: GuestPane[] } {
+  const byCheckout = new Map<string, GuestPane[]>();
+  const atEnd: GuestPane[] = [];
+  for (const pane of panes) {
+    if (pane.projectId !== projectId) continue;
+    if (pane.checkoutId !== null && rows.has(pane.checkoutId)) byCheckout.set(pane.checkoutId, [...(byCheckout.get(pane.checkoutId) ?? []), pane]);
+    else atEnd.push(pane);
+  }
+  return { byCheckout, atEnd };
 }
 
 /** The panes that stand under no project of this computer, by the machine that asked for them (B10). */
