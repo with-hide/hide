@@ -21,6 +21,7 @@ import type { AgentNotice } from "./generated/hided-ws";
 import { hostBridge } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { SnapshotRest } from "./snapshot";
+import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { useShellStore } from "./store";
 
 /** How hided tags a notice another machine handed over: `peer:<connection id>|<that machine's tag>`. */
@@ -134,7 +135,13 @@ export function useAgentNotifications(actions: Actions) {
       }
       // The tag is `<device id>|<pane id>`; the pane id names the agent wherever it runs.
       const paneId = tag.slice(tag.indexOf("|") + 1);
-      if (paneId) actions.openListedAgent(paneId);
+      if (!paneId) return;
+      // A 볼 것 notice names the View, so it opens that View as the row's chip does; every other notice goes to the agent
+      // (operator decision 2026-11-23). A row's notice is its newest, so the row's mark now says which one was clicked.
+      const state = useShellStore.getState();
+      const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
+      if (agent?.mark === "look" && agent.look) actions.openLook(paneId, agent.look);
+      else actions.openListedAgent(paneId);
     });
   }, [bridge, actions]);
 }

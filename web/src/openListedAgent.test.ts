@@ -76,3 +76,27 @@ it("takes the keyboard when the pane opened is already the focused one on a Work
   actions.openAgent("w1:p1");
   expect(focusTerminal).not.toHaveBeenCalled();
 });
+
+// Operator decision 2026-11-23: a row goes to its agent only, so its View stays to look at; the View's chip opens it in
+// focus mode, the pane's Workspace brought forward, in one event.
+it("opens only the pane for a row with a View to look at, and the View in focus mode from its chip", () => {
+  const look = { group: "done", count: 1, view_id: "v9", label: "notes.md", workspace_id: "ws-1", checkout_id: "c-1" };
+  const { events, actions } = open([{ pane_id: "w1:p1", mark: "look", look }]);
+  actions.openListedAgent("w1:p1");
+  expect(events.map((event) => event.kind)).toEqual(["focus_pane"]);
+  expect(events[0]!.payload).not.toHaveProperty("reveal_unseen");
+  events.length = 0;
+  actions.openLook("w1:p1", look);
+  expect(events).toEqual([{ schema_version: 2, kind: "pair_view", payload: { pane_id: "w1:p1", display_id: "v9", bring_forward: true } }]);
+  expect(useUiStore.getState().pairEntry?.keys).toBe("desk");
+});
+
+// An automation run's View opens in the run's own screen, laid out as focus mode already (operator decision 2026-11-21).
+it("opens an automation run's View in the run's screen", () => {
+  const look = { group: "done", count: 1, view_id: "v9", label: "brief.html", workspace_id: null, checkout_id: null };
+  const { events, actions } = open([{ pane_id: "w1:p1", mark: "look", look, hide_ai: { task: { kind: "automation", target: "a1" } } as never }]);
+  useShellStore.setState({ automations: { items: [{ id: "a1", records: [{ kind: "run", number: 3, pane_id: "w1:p1" }] }] } as never });
+  actions.openLook("w1:p1", look);
+  expect(events.some((event) => event.kind === "pair_view")).toBe(false);
+  expect(useUiStore.getState().screen).toMatchObject({ kind: "automations" });
+});
