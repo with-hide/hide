@@ -3334,9 +3334,10 @@ fn owed_requests(
 /// Whether the stop the engine reads from the agent's screen has records the
 /// agent has not written yet ([`LabelWorker::await_answer`]). At rest, the
 /// operator's message still being the newest event is a turn whose answer
-/// is owed: only an answer or an interruption ends it. Under a dialog, records
-/// that hold no question, plan or call without a result owe the call the
-/// dialog asks about, wherever it falls in the turn.
+/// is owed: only an answer or an interruption ends it. Under a dialog, a turn
+/// whose every call the records mark, holding no question, plan or call
+/// without a result, owes the call the dialog asks about, wherever it falls
+/// in the turn ([`hide_session::turns::TurnTracker::holds_open_call`]).
 fn stop_unwritten(
     status: &str,
     events: &[LabelEvent],

@@ -5671,6 +5671,53 @@ fn a_dialog_over_a_written_call_reads_nothing_again() {
     assert_eq!(source.reads.load(Ordering::SeqCst), reads);
 }
 
+/// Codex marks no call it makes, so a turn of its default mode held by an
+/// approval dialog cannot say it holds no call: its stop reads nothing again,
+/// however long the dialog waits, and logs nothing.
+#[test]
+fn a_dialog_in_a_format_that_marks_no_call_reads_nothing_again() {
+    let harness = Harness::new();
+    let (mut worker, woken, source, _links) = harness.linked_worker();
+    worker.set_summaries(false, Instant::now());
+    let id = "0199a000-0000-7000-8000-0000000000b3";
+    let folder = harness.home.path().join(".codex/sessions/2026/10/07");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join(format!("rollout-2026-10-07T01-00-00-{id}.jsonl"));
+    let records = [
+        json!({"timestamp":"2026-10-07T01:00:00.000Z","type":"session_meta",
+            "payload":{"id":id,"cwd":"/work/app","cli_version":"0.160.1"}}),
+        codex_event(
+            "task_started",
+            "turn-1",
+            json!({"collaboration_mode_kind":"default"}),
+        ),
+        json!({"timestamp":"2026-10-07T01:00:01.000Z","type":"response_item",
+            "payload":{"type":"message","role":"user",
+                "content":[{"type":"input_text","text":"빌드를 돌려줘"}]}}),
+    ];
+    let lines: String = records.iter().map(|record| format!("{record}\n")).collect();
+    std::fs::write(&path, lines).unwrap();
+    let codex = |status: &str, seq: u64| ObservedAgent {
+        agent: Some("codex".to_owned()),
+        ..agent(&path, status, seq)
+    };
+    observe(&mut worker, &codex("working", 4));
+    settle(&mut worker, &woken);
+    observe(&mut worker, &codex("blocked", 5));
+    settle(&mut worker, &woken);
+    let reads = source.reads.load(Ordering::SeqCst);
+
+    let ((), diagnostics) = crate::diagnostics::capture(|| spend_answer_reads(&mut worker, &woken));
+
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads);
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|record| record["kind"] == "turn_end.unwritten"),
+        "{diagnostics:?}"
+    );
+}
+
 /// The read a stop scheduled ends with the stop: the answer found by another
 /// read, the agent working again, or another stop leaves no read behind it.
 #[test]
