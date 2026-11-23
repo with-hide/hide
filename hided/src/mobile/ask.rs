@@ -328,7 +328,11 @@ mod tests {
         // A command of more than one line, or one the card cuts, is answered
         // where the operator sees all of what it allows.
         let long = format!("echo {}", "x".repeat(crate::mobile::calls::COMMAND_CHARS));
-        for unseen in ["cargo test\nrm -r build", "cargo test\nTOKEN=x\nmore", long.as_str()] {
+        for unseen in [
+            "cargo test\nrm -r build",
+            "cargo test\nTOKEN=x\nmore",
+            long.as_str(),
+        ] {
             let command = open("toolu_1", Some(unseen), false);
             let shown = of(agent(&claude), Some(&Pending::One(&command))).unwrap();
             assert_eq!(shown.frame["answerable"], false, "{unseen}");

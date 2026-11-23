@@ -1163,7 +1163,9 @@ mod tests {
         // it to.
         assert!(!claude(
             safe,
-            &format!(" Bash command\n Make the file\n╌╌╌╌╌╌\n {safe}\n Do you want to proceed?\n ❯ 1. Yes")
+            &format!(
+                " Bash command\n Make the file\n╌╌╌╌╌╌\n {safe}\n Do you want to proceed?\n ❯ 1. Yes"
+            )
         ));
         // No dialog to find the command by: the keys are not typed.
         assert!(!claude(
