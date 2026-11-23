@@ -2241,7 +2241,10 @@ fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_f
     };
 
     ask(&mut runtime, false);
-    assert!(!runtime.pair_mode_on(), "a pane of a Workspace not in front");
+    assert!(
+        !runtime.pair_mode_on(),
+        "a pane of a Workspace not in front"
+    );
 
     ask(&mut runtime, true);
     assert_eq!(runtime.snapshot.status.last_error, None);
