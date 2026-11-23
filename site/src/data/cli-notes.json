@@ -310,6 +310,30 @@
     "line": "Shows an agent's plan, with the status of each of its steps.",
     "example": "hide task show"
   },
+  "wait help": {
+    "line": "Prints the guide for waiting on a pull request, its CI, a branch, a mission or a mission's node: the targets, the deadline and the notice that ends a wait.",
+    "example": "hide wait help"
+  },
+  "wait pr": {
+    "line": "Waits until a pull request merges or closes, or with --ci until the checks on its newest commit end; you sleep while you rest and one Hide notice wakes you with the result.",
+    "example": "hide wait pr 1232 --ci"
+  },
+  "wait branch": {
+    "line": "Waits until a branch's own commits are in the project's default branch.",
+    "example": "hide wait branch feat/parser --for 3d"
+  },
+  "wait mission": {
+    "line": "Waits until another mission on this machine closes as done, or with --node until one of its nodes is done.",
+    "example": "hide wait mission mission-91 --node gitlab-write"
+  },
+  "wait list": {
+    "line": "Shows your open waits with their targets and deadlines.",
+    "example": "hide wait list"
+  },
+  "wait cancel": {
+    "line": "Cancels one of your open waits.",
+    "example": "hide wait cancel wait-3"
+  },
   "automation help": {
     "line": "Prints the guide for making an automation from the operator's words: the schedule forms, the task, the folder and the agent.",
     "example": "hide automation help"

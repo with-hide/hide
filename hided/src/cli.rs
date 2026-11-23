@@ -28,6 +28,8 @@ pub enum CommandKind {
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     Plan(crate::plan_cli::PlanCli),
+    /// `hide wait …`: an agent's own wait (PRD core-wait D-21).
+    Wait(crate::wait_cli::WaitCli),
     /// `hide automation …` (PRD automations B9, B10).
     Automation(crate::automation_cli::AutomationCli),
     /// `hide agent profile …` (PRD agent-profiles D-33).
@@ -236,6 +238,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         )),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
+        "wait" => usage(crate::wait_cli::USAGE),
         "automation" => usage(crate::automation_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
         "session" => usage(crate::session_cli::USAGE),
@@ -281,6 +284,7 @@ fn help_text() -> String {
         crate::phone_cli::USAGE,
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::wait_cli::USAGE,
         crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
         "hide workspace info",
@@ -511,6 +515,16 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::plan_cli::parse(iter)
                 .map(CommandKind::Plan)
                 .map_err(|reason| wrong(reason, crate::plan_cli::USAGE))
+        }
+        Some("wait") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
+            crate::wait_cli::parse(args[2..].iter()).map(CommandKind::Wait)
+        }
+        Some("wait") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::wait_cli::USAGE)))?;
+            crate::wait_cli::parse(iter)
+                .map(CommandKind::Wait)
+                .map_err(|reason| wrong(reason, crate::wait_cli::USAGE))
         }
         Some("automation")
             if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) =>
@@ -992,6 +1006,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::plan_cli::HELP);
         return Ok(());
     }
+    if kind == CommandKind::Wait(crate::wait_cli::WaitCli::Help) {
+        print!("{}", crate::wait_cli::HELP);
+        return Ok(());
+    }
     if kind == CommandKind::Automation(crate::automation_cli::AutomationCli::Help) {
         print!("{}", crate::automation_cli::HELP);
         return Ok(());
@@ -1062,6 +1080,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
     match kind {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
+        CommandKind::Wait(command) => crate::wait_cli::run(&env, command),
         CommandKind::Automation(cli) => crate::automation_cli::run(&env, cli),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),

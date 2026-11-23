@@ -32,6 +32,12 @@ const MERGED_OF_BRANCH: &str = include_str!("../../tests/fixtures/gitlab/merged-
 const BASE_CONTAINED: &str = include_str!("../../tests/fixtures/gitlab/merge-base-contained.json");
 const BASE_NOT_CONTAINED: &str =
     include_str!("../../tests/fixtures/gitlab/merge-base-not-contained.json");
+const LISTED_FAILED: &str =
+    include_str!("../../tests/fixtures/gitlab/merge-request-listed-failed.json");
+const LISTED_MERGED: &str =
+    include_str!("../../tests/fixtures/gitlab/merge-request-listed-merged.json");
+const LISTED_MISSING: &str =
+    include_str!("../../tests/fixtures/gitlab/merge-request-listed-missing.json");
 
 type Answer = Result<crate::node_access::LinkAnswer, LinkError>;
 
@@ -566,6 +572,51 @@ fn a_branchs_merged_merge_requests_prove_its_heads_and_their_targets() {
         }
     );
     assert!(host::GITLAB.merged_heads(&node, &place(), "-x").is_err());
+}
+
+/// A merge request the list no longer holds, read by its number with what the
+/// list reads an open one with, is judged as the list judges it (PRD
+/// core-wait D-05): the open one's head pipeline failed on its `fail` job,
+/// the merged one stands merged; a number gitlab.com does not have, or a
+/// node that refuses the line, is no read, which a CI wait shows as unread.
+/// Recorded on the private test project on 2026-11-23 (merge requests 2, 22
+/// and 999).
+#[test]
+fn a_merge_request_read_by_its_number_is_judged_as_the_list_judges_it() {
+    use crate::model::{PullRequestBadge, PullRequestChecks};
+    let unit = &host::GITLAB;
+    let read = |answer: Answer, number: u32| {
+        let node = Scripted::new(vec![answer], vec![]);
+        let read = unit.as_listed(&node, &place(), number);
+        (read, node.asked.borrow().clone())
+    };
+    let (failed, asked) = read(output(LISTED_FAILED), 2);
+    let failed = failed.unwrap();
+    assert_eq!(asked.len(), 1);
+    assert!(
+        asked[0].contains(&"graphql".to_owned()) && asked[0].contains(&"iid=2".to_owned()),
+        "{asked:?}"
+    );
+    assert_eq!(
+        (failed.number, failed.checks, failed.badge),
+        (2, PullRequestChecks::Failed, PullRequestBadge::Open)
+    );
+    let names: Vec<_> = failed
+        .work
+        .failed_checks
+        .iter()
+        .filter_map(|check| check.name.as_deref())
+        .collect();
+    assert_eq!(names, ["fail"]);
+
+    let merged = read(output(LISTED_MERGED), 22).0.unwrap();
+    assert_eq!(
+        (merged.number, merged.badge),
+        (22, PullRequestBadge::Merged)
+    );
+
+    assert!(read(output(LISTED_MISSING), 999).0.is_err());
+    assert!(read(refused(ErrorCode::Unsupported), 2).0.is_err());
 }
 
 /// A merge request read by its number stands open, merged or closed, and

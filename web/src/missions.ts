@@ -14,8 +14,8 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionExternal, MissionOutside, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import { lineNode, nodeKindWord, resultLine, waitCard, waitCardWords } from "./missionLine";
+import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest, MissionExternal, MissionOutside, MissionWaitTarget } from "./snapshot";
 import { pullLabel, pullName } from "./codeHost";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
@@ -498,7 +498,7 @@ export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocke
   if (node.status === "dropped") return "dropped";
   if (node.status === "done") return "done";
   if (mission.status === "cancelled") return "cancelled";
-  if (node.kind === "external") return "external";
+  if (node.kind === "wait") return "external";
   if (node.blocked || node.status === "planned") return "waiting";
   // A worker Hide put to sleep leaves its node in progress (PRD mission-node-simple D-01, B1): its sleep is the panel's and the mark's hover words.
   return "working";
@@ -696,11 +696,10 @@ export function neighbours(edges: readonly { from: string; to: string }[], key: 
 export function cardLine(mission: Mission, node: MissionNode, planLine: string | null, t: TFunction<"translation">): { text: string; attention: boolean } | null {
   const look = nodeLook(mission, node);
   if (look === "cancelled" || look === "dropped") return null;
-  // An outside node says where its pull request or branch is in every state, finished too (B19).
-  if (node.kind === "external") {
-    if (node.attention?.reason === "pr_closed") return { text: t("mission.outside.closed"), attention: true };
-    if (look === "done") return { text: t("mission.look.landed"), attention: false };
-    return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
+  // A waiting node reads as its card does, the condition then its foot, finished too (B19); one that failed says how and whose turn it is (option A, PRD core-wait D-17).
+  if (node.kind === "wait") {
+    const card = waitCard(lineNode(node), look, Date.now());
+    return card ? { text: waitCardWords(card, t), attention: card.state === "failed" } : null;
   }
   if (look === "done") return null;
   if (look === "working") {
@@ -1046,13 +1045,14 @@ export function nodeQuestion(mission: Mission, node: MissionNode): string | null
 /** A mission's pull requests by number, each with the reference its node carries: events and marks name a number only. */
 export type MissionPulls = ReadonlyMap<number, ChangeRequestRef>;
 
-/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds, the one it is stacked on, an outside one and the one a raise or a held cell is about. */
+/** The references a mission's nodes carry, by number: each node's current pull request and the ones it holds, the one it is stacked on, the one a waiting node watches or whose CI it watches, and the one a raise or a held cell is about. */
 export function pullsByNumber(nodes: readonly PulledNode[]): MissionPulls {
   const pulls = new Map<number, ChangeRequestRef>();
   for (const node of nodes) {
     if (node.attention?.pr != null && node.attention.reference) pulls.set(node.attention.pr, node.attention.reference);
     if (node.base_pr != null && node.base_reference) pulls.set(node.base_pr, node.base_reference);
     if (node.external && "pr" in node.external && node.outside?.reference) pulls.set(node.external.pr, node.outside.reference);
+    if (node.wait_target && "ci" in node.wait_target && node.outside?.reference) pulls.set(node.wait_target.ci, node.outside.reference);
     for (const pr of node.prs ?? []) if (pr.reference) pulls.set(pr.number, pr.reference);
     if (node.pr != null && node.pr_reference) pulls.set(node.pr, node.pr_reference);
   }
@@ -1060,7 +1060,7 @@ export function pullsByNumber(nodes: readonly PulledNode[]): MissionPulls {
 }
 
 /** What `pullsByNumber` reads of a node: the desktop's node, or the phone's as `phoneLineNode` reads it. */
-type PulledNode = { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[]; base_pr?: number | null; base_reference?: ChangeRequestRef | null; external?: MissionExternal | null; outside?: MissionOutside | null; attention?: { pr: number | null; reference?: ChangeRequestRef | null } | null };
+type PulledNode = { pr?: number | null; pr_reference?: ChangeRequestRef | null; prs?: readonly MissionNodePr[]; base_pr?: number | null; base_reference?: ChangeRequestRef | null; external?: MissionExternal | null; wait_target?: MissionWaitTarget | null; outside?: MissionOutside | null; attention?: { pr?: number | null; reference?: ChangeRequestRef | null } | null };
 
 /** Pull request `number` of a mission, named by the reference a node carries for it (`!12` on gitlab.com). */
 export function missionPull(number: number, pulls: MissionPulls | undefined): { number: number; reference: ChangeRequestRef | null } {
@@ -1262,7 +1262,7 @@ export function attentionPr(node: MissionNode, attention: MissionAttention, pull
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */
 export function nodeResumable(mission: Mission, node: MissionNode): boolean {
-  return mission.status !== "cancelled" && (node.status === "done" || node.status === "dropped") && node.kind !== "external";
+  return mission.status !== "cancelled" && (node.status === "done" || node.status === "dropped") && node.kind !== "wait";
 }
 
 /**
@@ -1339,7 +1339,7 @@ export function conductorState(mission: Mission, row: AgentRow | null): Conducto
 
 /** The mission's own pull requests with the node that holds each, in order, a node's several in the order it got them (B18, B20): an outside node's pull request is not the mission's. */
 export function missionPulls(mission: Mission): { node: MissionNode; pr: MissionNodePr }[] {
-  return orderedNodes(mission).flatMap((node) => (node.kind !== "external" && node.status !== "dropped" ? node.prs.map((pr) => ({ node, pr })) : []));
+  return orderedNodes(mission).flatMap((node) => (node.kind !== "wait" && node.status !== "dropped" ? node.prs.map((pr) => ({ node, pr })) : []));
 }
 
 /**
@@ -1364,7 +1364,7 @@ export function missionResultCounts(mission: Mission): MissionResultCounts {
   const total = lines.reduce((sum, node) => sum + node.criteria.length, 0);
   const skipped = lines.reduce((sum, node) => sum + node.criteria_skipped, 0);
   const passed = lines.reduce((sum, node) => sum + node.criteria_met, 0) - skipped;
-  const workers = kept.filter((node) => node.kind !== "external" && node.agent_id != null).length;
+  const workers = kept.filter((node) => node.kind !== "wait" && node.agent_id != null).length;
   const checkers = kept.reduce((sum, node) => sum + missionCheckers(node).filter((checker) => checker.agent_id != null).length, 0);
   const changes = kept.filter((node) => node.kind === "change");
   return {

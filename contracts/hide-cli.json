@@ -4292,6 +4292,51 @@
             "title": "StoreList",
             "type": "object"
         },
+        "wait": {
+            "properties": {
+                "id": {
+                    "type": "object"
+                },
+                "target": {
+                    "type": "object"
+                },
+                "until_unix_ms": {
+                    "type": "object"
+                },
+                "words": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "target",
+                "words",
+                "until_unix_ms"
+            ],
+            "type": "object"
+        },
+        "wait_cancelled": {
+            "properties": {
+                "cancelled": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "cancelled"
+            ],
+            "type": "object"
+        },
+        "wait_list": {
+            "properties": {
+                "waits": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "waits"
+            ],
+            "type": "object"
+        },
         "watch": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -8000,7 +8045,7 @@
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
                 "mission_checkers_invalid",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_destination_invalid",
                 "mission_needs_git",
                 "mission_operator_merge_invalid",
@@ -8324,7 +8369,7 @@
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
                 "mission_checker_unknown",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
@@ -8530,7 +8575,7 @@
             "refusals": [
                 "mission_not_conductor",
                 "mission_node_unknown",
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 "mission_defects_too_many"
             ],
             "repeats_at_most": null,
@@ -9359,6 +9404,166 @@
         },
         {
             "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "number",
+                    "value": {
+                        "type": "unsigned"
+                    }
+                }
+            ],
+            "command": "wait pr",
+            "options": [
+                {
+                    "name": "--ci",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait branch",
+            "options": [
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait"
+            ],
+            "arguments": [
+                {
+                    "name": "mission",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait mission",
+            "options": [
+                {
+                    "name": "--node",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "deadline"
+                    }
+                }
+            ],
+            "refusals": [
+                "wait_target_invalid",
+                "wait_deadline_invalid",
+                "wait_agent_full",
+                "wait_full",
+                "wait_unsupported",
+                "wait_self",
+                "wait_mission_unknown",
+                "wait_project_unknown",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait_list"
+            ],
+            "arguments": [],
+            "command": "wait list",
+            "options": [],
+            "refusals": [
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "wait_cancelled"
+            ],
+            "arguments": [
+                {
+                    "name": "wait",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "wait cancel",
+            "options": [],
+            "refusals": [
+                "wait_unknown",
+                "wait_not_yours",
+                "wait_agent_unregistered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -9539,7 +9744,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:226bf7dc26202d4de83c5a458e9d1d42f1425ecfba732b5066e860fd93900cb5",
+    "digest": "sha256:7c0903cf18ee652f1a8607419e6df230685dd2471b4a9123fd68eac175233fea",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9618,6 +9823,7 @@
         "body": "not blank, at most 16384 bytes",
         "change_request": "a change request's number above 0, bare, with its host's label (# or !) or as its address",
         "commit": "7 to 64 hexadecimal digits",
+        "deadline": "whole minutes, hours or days from 1h to 30d, such as 2h or 3d",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",

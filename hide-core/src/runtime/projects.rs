@@ -1882,10 +1882,60 @@ impl Runtime {
         if !current {
             return false;
         }
+        let requested = self.github_request();
+        self.ingest_github_read(github, &requested, &requested)
+    }
+
+    /// Takes the answer to a read of only some of the projects (`asked`),
+    /// which the core makes with no window attached for the projects an open
+    /// wait reads (PRD core-wait D-12): every other project keeps its last
+    /// answer. An answer to projects the request no longer asks the same way
+    /// (one removed, re-placed or asked again since) is dropped.
+    pub(crate) fn ingest_github_part(
+        &mut self,
+        github: crate::model::GithubSnapshot,
+        asked: &crate::code_host::read::GithubRequest,
+    ) -> bool {
+        let requested = self.github_request();
+        if !asked
+            .projects
+            .iter()
+            .all(|project| requested.projects.contains(project))
+        {
+            return false;
+        }
+        self.ingest_github_read(github, asked, &requested)
+    }
+
+    /// The request a read with no window attached asks (PRD core-wait D-12):
+    /// the projects of this machine an open wait reads, each asked again on
+    /// its host's read clock as a window's read would; none when no wait
+    /// reads one. Every other project is left as its last answer.
+    pub(crate) fn github_wait_request(
+        &mut self,
+        now: std::time::Instant,
+    ) -> Option<crate::code_host::read::GithubRequest> {
+        let waited = self.outside_projects(self.node.as_str());
+        if waited.is_empty() {
+            return None;
+        }
+        self.reread_stale_github(now);
+        let mut request = self.github_request();
+        request
+            .projects
+            .retain(|project| waited.contains(project.root.to_string_lossy().as_ref()));
+        (!request.projects.is_empty()).then_some(request)
+    }
+
+    fn ingest_github_read(
+        &mut self,
+        github: crate::model::GithubSnapshot,
+        asked: &crate::code_host::read::GithubRequest,
+        requested: &crate::code_host::read::GithubRequest,
+    ) -> bool {
         // An empty answer to an empty request says nothing: the navigator has
         // not arrived yet, and taking it would erase the answer restored from
         // the last run and the file it was saved in.
-        let requested = self.github_request();
         if requested.projects.is_empty() && github.projects.is_empty() {
             return false;
         }
@@ -1893,7 +1943,7 @@ impl Runtime {
         // it has been read once, including one that returned nothing.
         let mut newly_settled = false;
         let mut answered = Vec::new();
-        for project in &requested.projects {
+        for project in &asked.projects {
             let path = project.root.to_string_lossy().into_owned();
             // The read's own provenance, taken before a failed one is filled
             // in from the previous answer below.
@@ -1928,7 +1978,31 @@ impl Runtime {
             self.note_feature_used(crate::product_analytics::Feature::Gitlab);
         }
         let mut merged = github;
-        keep_previous_reads(&mut merged, &self.github, &requested);
+        keep_previous_reads(&mut merged, &self.github, asked);
+        // A read of some projects keeps every other one's last answer, in
+        // the request's order.
+        if asked.projects.len() < requested.projects.len() {
+            for previous in &self.github.projects {
+                let path = previous.root_path.as_str();
+                let in_asked = asked
+                    .projects
+                    .iter()
+                    .any(|project| project.root.to_string_lossy() == path);
+                if !in_asked && merged.project(path).is_none() {
+                    merged.projects.push(previous.clone());
+                }
+            }
+            let at = |path: &str| {
+                requested
+                    .projects
+                    .iter()
+                    .position(|project| project.root.to_string_lossy() == path)
+                    .unwrap_or(usize::MAX)
+            };
+            merged
+                .projects
+                .sort_by_key(|project| at(&project.root_path));
+        }
         self.read_merges_made_here(&mut merged);
         // A mission's pull request that merged, was asked for changes or got
         // a new commit wakes its Conductor (PRD software-factory-conductor
