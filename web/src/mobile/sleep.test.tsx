@@ -75,6 +75,7 @@ async function openDetail(listed: PhoneAgent) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const replyBarOff = (container: HTMLElement) => {
@@ -154,7 +155,10 @@ it("keeps the reply bar for an agent that is awake, and names a refusal that sti
 // Doop 02 and 09: an awake agent's detail says where it stands under its head from the row the phone already has, and while it
 // works the foot of its conversation says it thinks, counted on the phone from its last word; no new frame field carries either.
 it("draws the state strip from the row and a thinking line while the agent works, which goes once it stops", async () => {
-  const now = Date.now();
+  // The clock is held, so the line counts four seconds however long the runner takes to draw it.
+  const now = Date.parse("2026-11-23T09:00:00Z");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   const working = agent({ group: "working", mark: "going", status_code: "working", changed_at_unix_ms: now - 60_000, line: { text: "Reading holder.log", mode: "kept", tone: "subtle" } });
   const { container, serve, unmount } = await openDetail(working);
   try {
