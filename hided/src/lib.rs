@@ -344,6 +344,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "the core runs on another machine: this state folder starts the node role".to_owned(),
         );
     }
+    // A core a login item runs from a copy of the app's build is the app's,
+    // and answers as the app's installation from its first pane on.
+    always_on::adopt_app(&env.home, &env.state_dir);
     // Stored state from before node ids is converted once, before the core
     // reads it; a store that cannot be converted stops the start and names
     // the file (PRD core-host-node B2).

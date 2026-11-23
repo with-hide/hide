@@ -153,6 +153,69 @@ pub fn agents_for(home: &Path) -> UserAgents {
     UserAgents::of_home(home)
 }
 
+/// The app's package whose core this process is, when it runs from a copy
+/// of a build in the account's install root (`~/.hide/core`, where a paired
+/// machine's login item runs its core) on a state folder the app opened
+/// with its package still there (`hide_kit::app`). That core is the app's
+/// own, run from a copy so the app can be replaced under it: it answers as
+/// the app's installation, so the panes the app's own daemon started keep
+/// reaching it and the ones it starts reach the app's daemon after it, and
+/// it installs the app's kit. Read once, at the core's start
+/// ([`adopt_app`]); `None` for any other program or folder.
+pub fn app_package() -> Option<&'static Path> {
+    APP_PACKAGE.get().and_then(Option::as_deref)
+}
+
+static APP_PACKAGE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Reads [`app_package`] for the core about to start on `state_dir` and, for
+/// the app's, has this process answer as the app's installation
+/// (`hide_host::kit::answer_as`) before anything starts a pane. A note that
+/// cannot be read leaves the core its own installation and is logged.
+pub fn adopt_app(home: &Path, state_dir: &Path) {
+    let package = std::env::current_exe()
+        .ok()
+        .and_then(|program| app_core_package(&program, home, state_dir));
+    if let Some(package) = &package {
+        let cli = package.join(format!("hide{}", std::env::consts::EXE_SUFFIX));
+        hide_host::kit::answer_as(Some(hide_host::kit::PaneInstall {
+            id: hide_agent_hooks::route::APP_INSTALL.to_owned(),
+            cli,
+            path_first: None,
+        }));
+    }
+    let _ = APP_PACKAGE.set(package);
+}
+
+/// The package `program` stands in for: the noted app's, when `program` is
+/// a build in `home`'s install root and the app's note on `state_dir`
+/// names a package that is still there.
+fn app_core_package(program: &Path, home: &Path, state_dir: &Path) -> Option<PathBuf> {
+    let canonical = hide_platform::fs::identity::canonical;
+    let root = canonical(&hide_kit::layout::core_root(home)).ok()?;
+    let program = canonical(program).ok()?;
+    let build = program.parent()?;
+    let in_root = build.parent() == Some(root.as_path())
+        && build
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(hide_kit::is_build_name);
+    if !in_root {
+        return None;
+    }
+    match hide_kit::app::package(state_dir) {
+        Ok(package) => package,
+        Err(message) => {
+            hide_core::diagnostic!(serde_json::json!({
+                "component": "always_on",
+                "kind": "always_on.app_note_unread",
+                "message": message,
+            }));
+            None
+        }
+    }
+}
+
 /// This build, put in a version folder of `root` from the package beside
 /// `program` (`HelperPackages::install_here`), as an update puts its build.
 pub fn install_this_build(program: &Path, root: &Path) -> Result<PathBuf, String> {

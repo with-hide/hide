@@ -2421,12 +2421,14 @@ const UPDATED_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(10);
 /// A core of another build that its starter runs here (a paired machine's,
 /// or one a move before 1.2.0 placed on this machine) is never stopped
 /// for this app's own: its login item would start that build again at the
-/// next login beside this one. This app, when newer, updates it through
-/// the updater a node runs (B10): this build goes into a version folder
-/// beside the core's, and its own `hided core-update` replaces the core
-/// through the starter, or goes back to the build it ran. Each connection
-/// is one attempt (B20). An older app is told to update; a build neither
-/// orders is refused as another build.
+/// next login beside this one. This app replaces it through the updater a
+/// node runs (B10): this build goes into a version folder beside the
+/// core's, and its own `hided core-update` replaces the core through the
+/// starter, or goes back to the build it ran. Each connection is one
+/// attempt (B20). The app the operator put on this machine is the build it
+/// runs, as it is with no login item: a newer core is lowered to it and a
+/// build neither orders is replaced by it, rather than the app being told
+/// to update (operator review 2026-11-23).
 fn update_started_core(
     env: &Env,
     (state, health): Healthy,
@@ -2459,22 +2461,17 @@ fn update_started_core(
         }
         eprintln!("{record}");
     };
-    match crate::build_order::standing((build, &ours), (running, &core)) {
+    let standing = match crate::build_order::standing((build, &ours), (running, &core)) {
         Standing::Same => return Ok((state, health)),
-        Standing::Older => {
-            log("core.newer_refused", serde_json::json!({}));
-            return Err(ConnectError::CoreNewer(builds));
-        }
-        Standing::Unordered => {
-            log("core.other_build_refused", serde_json::json!({}));
-            return Err(ConnectError::OtherBuild(format!(
-                "the core its login item runs here is build {running}, which this app's build {build} neither updates nor replaces"
-            )));
-        }
-        Standing::Newer => {}
-    }
+        Standing::Newer => "newer",
+        Standing::Older => "older",
+        Standing::Unordered => "unordered",
+    };
     let intent = crate::core_update::new_intent();
-    log("core.update_started", serde_json::json!({"intent": intent}));
+    log(
+        "core.update_started",
+        serde_json::json!({"intent": intent, "standing": standing}),
+    );
     let failed = |reason: String| {
         log(
             "core.update_failed",

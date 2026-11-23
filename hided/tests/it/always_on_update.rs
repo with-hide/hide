@@ -115,11 +115,16 @@ impl Machine {
     /// The core the login item starts at login: the old build's `hided
     /// core-login`, with the item's marker in place.
     fn log_in(&mut self) -> Value {
+        self.log_in_as(OLD)
+    }
+
+    /// [`Self::log_in`], with the core's build of `order`.
+    fn log_in_as(&mut self, order: u32) -> Value {
         std::fs::create_dir_all(&self.state).unwrap();
         std::fs::write(hide_kit::layout::keep_alive(&self.state), "").unwrap();
         let log = std::fs::File::create(self.home.join("old-core.log")).unwrap();
         let child = self
-            .command(&self.old_daemon, OLD)
+            .command(&self.old_daemon, order)
             .arg("core-login")
             .arg("--state-dir")
             .arg(&self.state)
@@ -137,6 +142,18 @@ impl Machine {
         let mut connect = self.command(&self.app_cli, NEW);
         connect.arg("connect");
         self.answer(connect)
+    }
+
+    /// What the running core answers the app's `hide workspace info` from a
+    /// pane of `install`, as a pane names its installation: its refusal
+    /// reason, none for an answer.
+    fn workspace_info_as(&self, install: &str) -> Option<String> {
+        let mut info = self.command(&self.app_cli, NEW);
+        info.env(hide_agent_hooks::route::INSTALL_VARIABLE, install)
+            .args(["workspace", "info"])
+            .current_dir(&self.home);
+        let (_, line) = self.answer(info);
+        line["reason"].as_str().map(str::to_owned)
     }
 
     /// The raise a paired machine runs with the build it put here (B23):
@@ -355,6 +372,38 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
     assert!(
         hide_kit::layout::keep_alive(&machine.state).is_file(),
         "the item's marker stays"
+    );
+    // The core the item runs from a copy of the app's build is the app's:
+    // a pane the app's own daemon started reaches it, and none of the
+    // install root's own does (with-hide/hide#2876).
+    assert_ne!(
+        machine.workspace_info_as(hide_agent_hooks::route::APP_INSTALL),
+        Some("other_install".to_owned())
+    );
+    assert_eq!(
+        machine.workspace_info_as(&hide_kit::layout::install_of_root(&machine.core_root)),
+        Some("other_install".to_owned())
+    );
+}
+
+/// The app the operator puts on a machine is the build its login item
+/// runs, as it is with no item: an app older than the core, or one of a
+/// build neither orders, replaces the core with its own build rather than
+/// asking the operator to update the app it just installed.
+#[test]
+fn an_app_older_than_the_core_its_login_item_runs_puts_its_own_build_there() {
+    let mut machine = Machine::new();
+    machine.log_in_as(NEW + 1);
+
+    let (ok, line) = machine.connect();
+
+    assert!(ok, "the older app's connect replaces the core: {line}");
+    let app_build = build_of(&machine.app_daemon);
+    let replaced = machine.health_until(|health| health["build"] == app_build.as_str());
+    assert!(program_of(&replaced).starts_with(&machine.core_root), "{replaced}");
+    assert_ne!(
+        machine.workspace_info_as(hide_agent_hooks::route::APP_INSTALL),
+        Some("other_install".to_owned())
     );
 }
 
