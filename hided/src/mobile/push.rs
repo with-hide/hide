@@ -1251,11 +1251,11 @@ mod tests {
         assert!(notices.is_empty());
     }
 
-    /// needs-you-cleanup B12, B14: a question announces once; read, it stays
-    /// listed in 내 차례 and its notice closes, and neither ☆ nor taking the
-    /// ★ off announces it again.
+    /// needs-you-cleanup B12, B14: a question announces once; read, it rests
+    /// read in its own group (operator decision 2026-11-23) and its notice
+    /// closes, and neither ☆ nor taking the ★ off announces it again.
     #[test]
-    fn a_read_question_listed_in_needs_you_never_announces_again() {
+    fn a_read_question_rests_read_and_never_announces_again() {
         let mut transitions = Transitions::default();
         transitions.observe(&project(
             &rest(json!([row("w1:p1", "working", "none", None)])),
@@ -1273,7 +1273,7 @@ mod tests {
         };
         let listed = read(false);
         let agent = listed.agents().next().unwrap();
-        assert_eq!((agent.group.as_str(), agent.read), ("needs_you", true));
+        assert_eq!((agent.group.as_str(), agent.read), ("seen", true));
         let (notices, cleared) = transitions.observe(&listed);
         assert!(notices.is_empty());
         assert_eq!(cleared.len(), 1, "reading it closes its notice");
