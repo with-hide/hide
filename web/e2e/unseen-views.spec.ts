@@ -80,21 +80,20 @@ test("an agent's open the operator has not looked at waits on its row until its 
     await expect(chip).toHaveCount(0);
     await expect(page.locator(`[data-pane-views="${pane}"]`)).not.toHaveAttribute("data-pane-views-unseen", "true");
     await screenshot(page, "unseen-view-focus-mode");
-    // ⌘. leaves focus mode, the screen as it was before it.
-    await page.keyboard.press(chord("pair_view"));
-    await expect(page.locator("[data-pair-pane]")).toHaveCount(0);
 
-    // B5: an open from the pane the operator is in comes to the front and is seen at once.
+    // B5: an open from the pane the operator is in, here the left of focus mode, comes to the front and is seen at once.
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
     await hide(["file", "open", "notes.md"]);
     await expect(front(page)).toHaveAttribute("aria-label", /\/notes\.md/);
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
 
-    // The pane header's eye is the same press as the row: it brings the View to look at forward.
-    // The documents fold first, since the lane over the panes would take the click meant for the other pane.
+    // ⌘. leaves focus mode, the screen as it was before it: the lane folded, as the row's press left it.
+    await page.keyboard.press(chord("pair_view"));
+    await expect(page.locator("[data-pair-pane]")).toHaveCount(0);
     const documents = page.locator('[data-lane-tool="documents"]');
-    await documents.click();
     await expect(documents).toHaveAttribute("aria-pressed", "false");
+
+    // The pane header's eye brings the View to look at forward, without focus mode.
     await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
     await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
     await hide(["file", "open", "plan.md"]);
