@@ -3046,11 +3046,14 @@ fn handle_client_text(
         // that may type into it ends it, after its confirm (the `Window`
         // class), and hears whether it did.
         Some("guest_pane_close") => {
-            return Ok(ClientAction::Replies(vec![Message::Text(
-                guest_close_result(&event, |pane| state.guests.close_pane(pane))
-                    .to_string()
-                    .into(),
-            )]));
+            let answer = guest_close_answer(&event, |pane| state.guests.close_pane(pane))
+                .map_err(str::to_owned)?;
+            return Ok(ClientAction::Replies(
+                answer
+                    .map(|frame| Message::Text(frame.to_string().into()))
+                    .into_iter()
+                    .collect(),
+            ));
         }
         Some(kind) if kind.starts_with("pairing_") => {
             return Ok(ClientAction::Pairing(event));
@@ -4996,15 +4999,22 @@ pub(crate) fn unix_ms_now() -> u64 {
         })
 }
 
-/// The path a client sent, as written; a field the event omits reads as empty
-/// and is refused like any other empty path.
-/// The `guest_pane_close_result` frame for `event`, the window's call that
-/// `close` ends the pane its `call.pane_id` names, under the call's
-/// `request_id`: `ok`, or the code it was refused with.
-fn guest_close_result(
+/// What hided answers `event`, a window's ask that `close` ends a guest's
+/// pane. The call a window makes now, `{request_id, call: {pane_id}}`, is
+/// answered with the `guest_pane_close_result` frame under its
+/// `request_id`: `ok`, or the code it was refused with. A page loaded
+/// before this machine updated still sends `{pane_id}` alone, and keeps
+/// the answer it was built for: nothing when the pane closed, the error
+/// frame (the `Err`) when it did not.
+fn guest_close_answer(
     event: &Value,
     close: impl FnOnce(&str) -> Result<(), &'static str>,
-) -> Value {
+) -> Result<Option<Value>, &'static str> {
+    if event.pointer("/payload/call").is_none()
+        && let Some(pane) = event.pointer("/payload/pane_id").and_then(Value::as_str)
+    {
+        return close(pane).map(|()| None);
+    }
     let request_id = payload_str(event, "request_id");
     let pane = event
         .pointer("/payload/call/pane_id")
@@ -5019,9 +5029,13 @@ fn guest_close_result(
         Ok(()) => json!({"request_id": request_id, "ok": true}),
         Err(code) => json!({"request_id": request_id, "ok": false, "code": code}),
     };
-    json!({"type": "guest_pane_close_result", "payload": payload})
+    Ok(Some(
+        json!({"type": "guest_pane_close_result", "payload": payload}),
+    ))
 }
 
+/// The path a client sent, as written; a field the event omits reads as empty
+/// and is refused like any other empty path.
 fn payload_str(event: &Value, field: &str) -> String {
     event
         .pointer(&format!("/payload/{field}"))
@@ -5942,6 +5956,50 @@ mod tests {
     }
 
     use super::*;
+
+    /// A window's close of a guest's pane is answered in the shape it was
+    /// asked in: the call a page makes now hears its result frame, and a
+    /// page loaded before the update, sending `{pane_id}` alone, closes the
+    /// pane as it did and hears an error frame only when it did not (B10).
+    #[test]
+    fn a_guest_pane_close_is_answered_in_the_shape_it_was_asked() {
+        let gone = |_: &str| Err("pane_unavailable");
+        let call = json!({"kind": "guest_pane_close", "payload": {"request_id": "c1", "call": {"pane_id": "guest:mb:pane:p1"}}});
+        let mut closed = Vec::new();
+        assert_eq!(
+            guest_close_answer(&call, |pane| {
+                closed.push(pane.to_owned());
+                Ok(())
+            }),
+            Ok(Some(
+                json!({"type": "guest_pane_close_result", "payload": {"request_id": "c1", "ok": true}})
+            ))
+        );
+        assert_eq!(
+            guest_close_answer(&call, gone),
+            Ok(Some(
+                json!({"type": "guest_pane_close_result", "payload": {"request_id": "c1", "ok": false, "code": "pane_unavailable"}})
+            ))
+        );
+        let earlier =
+            json!({"kind": "guest_pane_close", "payload": {"pane_id": "guest:mb:pane:p2"}});
+        assert_eq!(
+            guest_close_answer(&earlier, |pane| {
+                closed.push(pane.to_owned());
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(guest_close_answer(&earlier, gone), Err("pane_unavailable"));
+        assert_eq!(closed, ["guest:mb:pane:p1", "guest:mb:pane:p2"]);
+        let neither = json!({"kind": "guest_pane_close", "payload": {"request_id": "c2"}});
+        assert_eq!(
+            guest_close_answer(&neither, |_| unreachable!("no pane is named")),
+            Ok(Some(
+                json!({"type": "guest_pane_close_result", "payload": {"request_id": "c2", "ok": false, "code": "guest_close_invalid"}})
+            ))
+        );
+    }
 
     /// A pane id a screen sends straight to a node is refused past the
     /// longest a device pane's id can be, so a client cannot fill a node's

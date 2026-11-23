@@ -84,6 +84,8 @@ describe("closing another machine's work from its page (PRD device-connect-iroh 
     const here = { kind: "guest", paneId: "guest:macbook:pane:w1:p1" } as const;
     expect(await close(two, here.paneId, { ok: false, code: "pane_unavailable" })).toEqual({ screen: here, notices: [translate("pairing.work.closeFailed.gone")] });
     expect(await close(two, here.paneId, { ok: false, code: "socket_closed" })).toEqual({ screen: here, notices: [translate("pairing.work.closeFailed.offline")] });
+    // The node that runs the pane did not hear the close: the pane still runs.
+    expect(await close(two, here.paneId, { ok: false, code: "node_unavailable" })).toEqual({ screen: here, notices: [translate("pairing.work.closeFailed.other")] });
     // An older build of that computer refuses the close from another computer's screen.
     expect(await close(two, here.paneId, { refused: "not_here" })).toEqual({ screen: here, notices: [translate("pairing.work.closeFailed.notHere")] });
   });

@@ -1070,7 +1070,7 @@ export interface BotStarter {
   owns: boolean;
 }
 /**
- * Payload of the `guest_pane_close` client event, taken from a window, this machine's or the screen another machine shows of it, and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`), which that window can already type into. The daemon ends it through that machine's node on this computer whether or not the machine is connected and answers that window alone with a guest_pane_close_result frame under the same `request_id`. PRD device-connect-iroh B10, D-74.
+ * Payload of the `guest_pane_close` client event, taken from a window, this machine's or the screen another machine shows of it, and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`), which that window can already type into. The daemon ends it through that machine's node on this computer whether or not the machine is connected and answers that window alone with a guest_pane_close_result frame under the same `request_id`. A page loaded before its machine updated sends `{pane_id}` alone; the daemon still closes that pane and answers it as before, with nothing, or an error frame naming the refusal. PRD device-connect-iroh B10, D-74.
  */
 export interface GuestPaneClosePayload {
   request_id: string;

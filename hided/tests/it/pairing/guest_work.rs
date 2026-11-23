@@ -671,6 +671,19 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         close("c2", &added).await,
         json!({"request_id": "c2", "ok": true})
     );
+    // A page loaded before this machine updated sends the pane alone and
+    // still hears the error frame it was built for.
+    closing
+        .send(
+            "guest_pane_close",
+            json!({"pane_id": "guest:nobody:pane:p9"}),
+        )
+        .await;
+    closing
+        .frame("the earlier page's refusal", |frame| {
+            frame["type"] == "error" && frame["message"] == "pane_unavailable"
+        })
+        .await;
     host.lists("the closed pane gone and the other kept", |listed| {
         (guest_panes(listed) == [pane.clone()]).then_some(())
     });
