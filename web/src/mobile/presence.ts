@@ -1,6 +1,6 @@
 import type { PairedHost } from "./hosts";
-import { asksOf, gatheredOf, type GatheredAsk } from "./gather";
-import { refusalOf, type AgentGroup, type ServerFrame } from "./protocol";
+import { asksOf, gatheredOf, missionAsksOf, type GatheredAsk } from "./gather";
+import { refusalOf, type AgentGroup, type PhoneMission, type ServerFrame } from "./protocol";
 import { RelaySocket } from "./relaySocket";
 
 export type Presence = {
@@ -16,6 +16,8 @@ export type Presence = {
   omitted?: number;
   /** Its automations that stopped for a person, from its last automations frame: more of 내 차례 in the gathered view. */
   asks?: GatheredAsk[];
+  /** Its missions that are their own 내 차례 item, from its last missions frame, as the computer counts them: more of 내 차례 in the gathered view. */
+  missions?: PhoneMission[];
 };
 
 /**
@@ -35,9 +37,11 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
     let denied = false;
     let protocolMismatch: number | undefined;
     let revoked = false;
-    // The list and the automations arrive in separate frames; each keeps the other's last value.
+    // The list, the automations and the missions arrive in separate frames; each keeps the others' last value.
     let listed: Pick<Presence, "needs" | "working" | "gathered" | "omitted"> = {};
     let asks: GatheredAsk[] | undefined;
+    let missions: PhoneMission[] | undefined;
+    const tell = () => changed({ online: true, lastSeen, ...listed, ...(asks ? { asks } : {}), ...(missions ? { missions } : {}) });
     const ws = new RelaySocket(host, (protocol) => { denied = true; protocolMismatch = protocol; }, () => undefined);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ client_kind: "phone", token: host.credential }));
@@ -53,12 +57,16 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
             gathered: gatheredOf(frame.groups),
             omitted: frame.omitted ?? 0,
           };
-          changed({ online: true, lastSeen, ...listed, ...(asks ? { asks } : {}) });
+          tell();
         }
+        // Before its list, a computer is still connecting: its automations' and missions' asks wait for the list rather than stand alone.
         if (frame.type === "automations") {
           asks = asksOf(frame.items, frame.asks ?? []);
-          // Before its list, a computer is still connecting: its asks wait for the list rather than stand alone.
-          if (listed.gathered) changed({ online: true, lastSeen, ...listed, asks });
+          if (listed.gathered) tell();
+        }
+        if (frame.type === "missions") {
+          missions = missionAsksOf(frame.items, frame.asks ?? []);
+          if (listed.gathered) tell();
         }
         if (frame.type === "refused") { denied = frame.reason !== "mobile_off"; revoked = refusalOf(frame.reason) === "revoked"; ws.close(); }
       } catch { ws.close(); }

@@ -120,6 +120,16 @@ export function leftTail(t: TFunction<"translation">, agent: LeftAgent): string 
 /** What a finished turn may have left running, which its line's tail counts. */
 type LeftAgent = { background_left?: number | null; children_left?: number | null; subagents_left?: number | null };
 
+/**
+ * The questions the operator already read that still wait behind an unread
+ * row's own news or block, `외 N건` at its line's end, as an ask counts the
+ * others behind it (docs/status-model.md, A question still waiting); null
+ * when none waits, which the core says for every read row.
+ */
+export function asksBehindTail(t: TFunction<"translation">, agent: { asks_behind?: number | null }): string | null {
+  return agent.asks_behind ? t("agentSessions.moreAsks", { count: agent.asks_behind }) : null;
+}
+
 /** What a waiting row's word reads: what it waits on, how many, and how many of its own subagents it waits on beside its children, as the core counts them. */
 export type WaitAgent = { wait?: AgentWait | null; wait_count?: number | null; wait_subagents?: number | null };
 
@@ -135,7 +145,7 @@ export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "sta
 }
 
 /** What `lineText` reads off a row: a desktop row, or the phone's. */
-export type LineAgent = WaitAgent & LeftAgent & { status_code: AgentStatusCode; look?: { count: number } | null; request?: { pull_requests: readonly { number: number; reference?: ChangeRequestRef | null }[] } | null };
+export type LineAgent = WaitAgent & LeftAgent & { asks_behind?: number | null; status_code: AgentStatusCode; look?: { count: number } | null; request?: { pull_requests: readonly { number: number; reference?: ChangeRequestRef | null }[] } | null };
 
 /** The line's pull request as its host names it (`PR #12`, `MR !12`), by the reference the line or the row's own list carries. */
 function linePull(agent: LineAgent, line: RowLine): string {
@@ -166,7 +176,7 @@ export type LineParts = { lead: string | null; text: string | null; tail: string
 export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: RowLine): LineParts {
   const word = leadWord(t, agent);
   const looks = line.look === undefined ? (agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null) : line.look > 1 ? t("agents.line.lookOthers", { count: line.look - 1 }) : null;
-  const tail = [leftTail(t, agent), looks].filter(Boolean).join(" · ") || null;
+  const tail = [leftTail(t, agent), line.mode === "news" || line.mode === "request" ? asksBehindTail(t, agent) : null, looks].filter(Boolean).join(" · ") || null;
   const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail });
   switch (line.mode) {
     case "vanished":

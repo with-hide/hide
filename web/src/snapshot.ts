@@ -228,6 +228,8 @@ export type AgentRow = {
   subagent_rows?: SubagentRow[];
   /** The subagents still running under a finished turn the operator has not read, which its line ends with; absent when none. */
   subagents_left?: number;
+  /** The open questions the operator already read that wait behind an unread row's own news or ask, `외 N건` at its line's end; absent at none and on every read row (docs/status-model.md, A question still waiting). */
+  asks_behind?: number;
   /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */
   wait_count?: number;
   /** How many of its own subagents its wait waits on too, which a children wait's line adds (`자식 1개 · 서브에이전트 2개 기다림`); absent when none. */

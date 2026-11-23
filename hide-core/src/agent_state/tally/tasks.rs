@@ -21,11 +21,10 @@ pub enum TaskState {
     Working,
     Waiting,
     Done,
-    /// A quiet task the operator starred; a read, unanswered ask stays in
-    /// `NeedsYou` (needs-you-cleanup D-04).
+    /// A quiet task the operator starred, a read ask among them.
     Revisit,
-    /// Nothing to do and nothing to clean, a resolved task included:
-    /// folded under `쉬는 중 N`.
+    /// Nothing to do and nothing to clean, a resolved task and a read,
+    /// unanswered ask included: folded under `쉬는 중 N`.
     Resting,
     /// Resting, every pull request merged and a worktree still on disk:
     /// folded under `정리할 것 N`.
@@ -54,9 +53,10 @@ pub struct Card {
     /// The root agent's pane.
     pub root: String,
     pub state: TaskState,
-    /// In `NeedsYou` for an ask the operator read and has not answered: the
-    /// list draws it dimmed, while the row's own group, and with it every
-    /// notification and badge, stays read (needs-you-cleanup D-10).
+    /// In `Resting` for an ask the operator read and has not answered: the
+    /// list stands it first under 쉬는 중 with a hollow `!`, as every list
+    /// leaves a read ask out of 내 차례 (operator decision 2026-11-23,
+    /// replacing needs-you-cleanup D-04 and D-10).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub read: bool,
     /// `작업 → PR → 검토 → 머지` filled up to here (1 to 4); absent for a
@@ -222,24 +222,17 @@ impl<'a> Forest<'a> {
         result
     }
 
-    /// The order inside each group (B9): Needs You the unread asks before
-    /// the read ones (operator decision 2026-11-08), each newest first
+    /// The order inside each group (B9): Needs You newest ask first
     /// (operator decision 2026-11-14), 다시 볼 것 longest waiting first,
-    /// every other group most recent first; and the totals.
+    /// every other group most recent first; and the totals. The shell orders
+    /// the rows of 쉬는 중 by what each row shows (`web/src/taskList.ts`).
     fn settle(&self, tasks: &mut Tasks) {
         tasks.cards.sort_by(|a, b| {
             a.state.cmp(&b.state).then_with(|| match a.state {
                 TaskState::NeedsYou => {
-                    // A read ask waits since its ask, as an unread one does.
-                    let since = |card: &Card| {
-                        let agent = self.places[card.root.as_str()].agent;
-                        if card.read {
-                            agent.revisit.map(|revisit| revisit.since_unix_ms)
-                        } else {
-                            agent.state.request_since
-                        }
-                    };
-                    a.read.cmp(&b.read).then_with(|| since(b).cmp(&since(a)))
+                    let since =
+                        |card: &Card| self.places[card.root.as_str()].agent.state.request_since;
+                    since(b).cmp(&since(a))
                 }
                 // Longest waiting first (PRD revisit-group D-06).
                 TaskState::Revisit => {
@@ -259,7 +252,7 @@ impl<'a> Forest<'a> {
             .iter()
             .filter(|c| {
                 let agent = self.places[c.root.as_str()].agent;
-                (agent.group == "needs_you" && agent.resolved.is_none()) || c.read
+                agent.group == "needs_you" && agent.resolved.is_none()
             })
             .count();
         tasks.recency = tasks
@@ -306,7 +299,7 @@ impl<'a> Forest<'a> {
         Card {
             root: root.agent.pane_id.clone(),
             state,
-            read: state == TaskState::NeedsYou && read_ask(root.agent),
+            read: state == TaskState::Resting && read_ask(root.agent),
             stage,
             members: members.iter().map(|id| (*id).to_owned()).collect(),
             checkouts,
@@ -404,7 +397,8 @@ fn read_ask(agent: &SidebarAgentSnapshot) -> bool {
 fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState {
     let agent = root.agent;
     if agent.resolved.is_none() {
-        if agent.demand == "error" {
+        // A block the operator read rests with its other read asks.
+        if agent.demand == "error" && agent.group == "needs_you" {
             return TaskState::Blocked;
         }
         match agent.group.as_str() {
@@ -420,11 +414,8 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
     // (operator decision 2026-11-11): the ★ lifts a task into 다시 볼 것 only
     // where it would otherwise fold away, at rest, after an automatic
     // resolution (an operator's 해결 having taken the ★) or with a read ask ☆
-    // put off. A read ask not put off is still the operator's to answer
-    // (needs-you-cleanup D-04).
-    if read_ask(agent) {
-        return TaskState::NeedsYou;
-    }
+    // put off. A read ask not put off rests, first in 쉬는 중, and never
+    // folds into 정리할 것 while it still asks (operator decision 2026-11-23).
     // A person's step the root waits on outside Needs You (a tool's agent in
     // the tool's cell, PRD hide-external-control B29) is a wait too: the
     // work is in progress, not at rest.
@@ -433,6 +424,9 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
     }
     if agent.revisit.is_some_and(|revisit| revisit.starred) {
         return TaskState::Revisit;
+    }
+    if read_ask(agent) {
+        return TaskState::Resting;
     }
     let leftover = rows
         .iter()

@@ -304,7 +304,7 @@ fn note_agents_omitted(phone_id: &str, before: &mut usize, omitted: usize) {
 fn missions_frame(missions: &PhoneMissions) -> Value {
     json!({
         "type": "missions", "items": missions.items, "failed": missions.failed,
-        "omitted": missions.omitted,
+        "omitted": missions.omitted, "asks": missions.asks,
     })
 }
 

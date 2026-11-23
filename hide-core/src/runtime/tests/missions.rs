@@ -8866,77 +8866,150 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
     );
 }
 
-/// The operator's report of 2026-11-09: a Conductor's row carrying a raise
-/// they had read lit up again, and was announced again, each time a worker's
-/// letter woke the Conductor and it rested. The raise they read stays read
-/// through the Conductor's own work and rest; another raise is news, one
-/// notice (docs/status-model.md, A question the core lays stays read).
-#[test]
-fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
-    use crate::agent_state::{phone, push};
-    use crate::missions::AttentionReason;
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    runtime.snapshot.navigator.agents = vec![conductor_row()];
-    running(&mut runtime);
-    let mut transitions = push::Transitions::default();
-    // What the next published snapshot shows of the Conductor's row, and the
-    // notices it sends.
-    let mut shown = |runtime: &mut Runtime| {
-        runtime.snapshot_delta_payload(0);
-        let row = runtime.snapshot.navigator.agents[0].clone();
-        let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
-        let (notices, _) =
-            transitions.observe(&phone::project(&rest, crate::labels::store::LOCAL_TARGET));
-        (row, notices)
-    };
-    // The engine sends the Conductor's row at `seq`, working or finished.
-    let engine = |runtime: &mut Runtime, status: &str, seq: u64| {
-        let mut row = conductor_row();
-        row.activity = if status == "working" {
-            "working"
-        } else {
-            "stopped"
+/// The Conductor's row at `seq`, working or resting (`idle`) or finished
+/// (`done`), as the engine sends it, with the worker it started working
+/// under it when `workers`; laid, its lineage built and read, as a session
+/// arriving is (`Runtime::apply_session`).
+fn conductor_turn(runtime: &mut Runtime, status: &str, seq: u64, workers: bool) {
+    conductor_turn_asking(runtime, status, seq, workers, None);
+}
+
+/// [`conductor_turn`], with Hide AI's reading of a stopped turn as a
+/// question whose reply is `asking`.
+fn conductor_turn_asking(
+    runtime: &mut Runtime,
+    status: &str,
+    seq: u64,
+    workers: bool,
+    asking: Option<&str>,
+) {
+    let mut row = match asking {
+        None => conductor_row(),
+        Some(line) => {
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+                {"pane_id": "sender", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-sender",
+                 "revision": 1, "focused": false, "agent_status": "idle", "agent": "codex",
+                 "name": "sender", "cwd": PROJECT, "state_change_seq": seq,
+                 "label": {"question": true, "expected_reply": line}},
+            ]}))
+            .unwrap();
+            let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+            row.session_id = Some("sender-session".into());
+            row
         }
-        .into();
-        row.completed = status == "done";
-        row.state_change_seq = Some(seq);
-        let mut rows = vec![row];
-        runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
-        runtime.snapshot.navigator.agents = rows;
-        runtime.refresh_pane_read_state();
     };
-    let raise = |runtime: &mut Runtime, node: &str, now: u64| {
-        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-        // A raise only the operator settles is laid on the Conductor's row.
-        let reason = AttentionReason::ConductorFailed;
-        assert!(
-            !crate::runtime::mission_health::raise(mission, node, reason, None, now).is_empty()
-        );
-        runtime.save_missions();
-    };
-    shown(&mut runtime);
-    let now = crate::runtime::unix_milliseconds();
-    raise(&mut runtime, "fix", now);
-    let (asking, notices) = shown(&mut runtime);
+    row.activity = if status == "working" {
+        "working"
+    } else {
+        "stopped"
+    }
+    .into();
+    row.completed = status == "done";
+    row.state_change_seq = Some(seq);
+    // The session its worker declares as its parent's.
+    row.lineage_session = Some("sender-lineage".into());
+    let mut rows = vec![row];
+    if workers {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            {"pane_id": "worker", "workspace_id": "w1", "tab_id": "w1:t2", "terminal_id": "t-worker",
+             "revision": 1, "focused": false, "agent_status": "working", "agent": "codex",
+             "name": "worker", "cwd": PROJECT, "state_change_seq": 1,
+             "spawned_from_pane_id": "sender", "declared_parent_session": "sender-lineage"},
+        ]}))
+        .unwrap();
+        rows.extend(crate::sidebar::project_agents(payload).agents);
+    }
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
+    crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+    runtime.snapshot.navigator.agents = rows;
+    runtime.refresh_pane_read_state();
+}
+
+/// What the next published snapshot shows of the Conductor's row, and the
+/// notices it sends.
+fn conductor_announced(
+    runtime: &mut Runtime,
+    transitions: &mut crate::agent_state::push::Transitions,
+) -> (
+    crate::model::SidebarAgentSnapshot,
+    Vec<crate::agent_state::push::Notice>,
+) {
+    runtime.snapshot_delta_payload(0);
+    let row = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|row| row.pane_id == "sender")
+        .unwrap()
+        .clone();
+    let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+    let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
+        &rest,
+        crate::labels::store::LOCAL_TARGET,
+    ));
+    (row, notices)
+}
+
+/// A raise only the operator settles, laid on the Conductor's row.
+fn raise_on(runtime: &mut Runtime, node: &str, now: u64) {
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let reason = crate::missions::AttentionReason::ConductorFailed;
+    assert!(!crate::runtime::mission_health::raise(mission, node, reason, None, now).is_empty());
+    runtime.save_missions();
+}
+
+/// A running mission whose resting Conductor, with its worker working,
+/// carries a raise the operator read; the raise the read row shows.
+fn conductor_with_a_read_raise(
+    runtime: &mut Runtime,
+    transitions: &mut crate::agent_state::push::Transitions,
+) -> crate::model::SidebarAgentSnapshot {
+    running(runtime);
+    conductor_turn(runtime, "idle", 1, true);
+    conductor_announced(runtime, transitions);
+    raise_on(runtime, "fix", crate::runtime::unix_milliseconds());
+    let (asking, notices) = conductor_announced(runtime, transitions);
     assert_eq!((asking.group.as_str(), asking.unread), ("needs_you", true));
     assert_eq!(notices.len(), 1);
-
     runtime.set_operator_focus(Some("sender".into()));
     runtime.set_operator_focus(None);
-    let (read, notices) = shown(&mut runtime);
+    let (read, notices) = conductor_announced(runtime, transitions);
     assert!(!read.unread);
     assert!(notices.is_empty());
+    // Read, it leaves 내 차례 (operator decision 2026-11-23).
+    assert_eq!(read.group, "seen");
+    read
+}
 
-    // A worker's letter wakes the Conductor; it works, then rests.
-    engine(&mut runtime, "working", 2);
-    let (working, notices) = shown(&mut runtime);
+/// The operator's report of 2026-11-09: a Conductor's row carrying a raise
+/// they had read lit up again, and was announced again, each time a worker's
+/// letter woke the Conductor and it rested on its workers. The raise they
+/// read stays read through the Conductor's work and its rest on the workers
+/// still working, a proven wait that needs no Hide AI; another raise is
+/// news, one notice (docs/status-model.md, A question laid on a row stays
+/// read).
+#[test]
+fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert!(runtime.ai_settings.is_none(), "Hide AI is off: no label");
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let read = conductor_with_a_read_raise(&mut runtime, &mut transitions);
+
+    // A worker's letter wakes the Conductor; it works, then rests on its
+    // worker still working.
+    conductor_turn(&mut runtime, "working", 2, true);
+    let (working, notices) = conductor_announced(&mut runtime, &mut transitions);
     assert_eq!(working.ask_subject, None, "a working row carries no raise");
     assert!(notices.is_empty());
-    engine(&mut runtime, "done", 3);
-    let (rested, notices) = shown(&mut runtime);
+    conductor_turn(&mut runtime, "done", 3, true);
+    let (rested, notices) = conductor_announced(&mut runtime, &mut transitions);
     assert_eq!(rested.ask_subject, read.ask_subject);
-    assert_eq!((rested.demand.as_str(), rested.unread), ("question", false));
+    assert_eq!(
+        (rested.group.as_str(), rested.demand.as_str(), rested.unread),
+        ("seen", "question", false)
+    );
     assert!(notices.is_empty(), "the raise read is not announced again");
     assert!(
         rested.revisit.is_some_and(|revisit| revisit.read_ask),
@@ -8944,10 +9017,97 @@ fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
     );
 
     // Another raise beside it is news, once.
-    raise(&mut runtime, "cause", now + 1);
-    let (more, notices) = shown(&mut runtime);
+    raise_on(
+        &mut runtime,
+        "cause",
+        crate::runtime::unix_milliseconds() + 1,
+    );
+    let (more, notices) = conductor_announced(&mut runtime, &mut transitions);
     assert_eq!((more.group.as_str(), more.unread), ("needs_you", true));
     assert_eq!(notices.len(), 1);
+}
+
+/// A raise the operator read, then a turn Hide AI reads as a new question:
+/// the question stands in 내 차례 with the raise counted behind it (`외 1건`),
+/// announced once; answered at the pane, the Conductor works and rests on
+/// its worker again with the raise still read and nothing announced
+/// (docs/status-model.md, A question laid on a row stays read).
+#[test]
+fn a_read_raise_counts_behind_a_hide_ai_question_and_stays_read_once_it_is_answered() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let read = conductor_with_a_read_raise(&mut runtime, &mut transitions);
+    let raise = read.laid_asks.clone();
+
+    conductor_turn(&mut runtime, "working", 2, true);
+    conductor_turn_asking(&mut runtime, "idle", 3, true, Some("배포 순서 정하기"));
+    let (asking, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (
+            asking.group.as_str(),
+            asking.unread,
+            asking.demand.as_str(),
+            asking.asks_behind
+        ),
+        ("needs_you", true, "question", 1)
+    );
+    assert_eq!(asking.state.ask.as_ref().map(|ask| ask.more), Some(1));
+    assert_eq!(notices.len(), 1, "the question is announced once");
+
+    runtime.set_operator_focus(Some("sender".into()));
+    let kept = runtime.snapshot.ui_state.pane_read_records["sender"]
+        .read_asks
+        .clone()
+        .unwrap();
+    assert!(raise.is_subset(&kept), "{kept:?}");
+    conductor_turn(&mut runtime, "working", 4, true);
+    conductor_turn(&mut runtime, "done", 5, true);
+    runtime.set_operator_focus(None);
+    let (rested, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (rested.group.as_str(), rested.unread, rested.asks_behind),
+        ("seen", false, 0)
+    );
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert!(notices.is_empty(), "the raise read is not announced again");
+}
+
+/// The same Conductor finishing other work with no worker running: its turn
+/// is news in 읽을 것, announced once, with the raise it read counted behind
+/// it (`외 N건`); read, the raise leads the row again (docs/status-model.md,
+/// A question laid on a row stays read).
+#[test]
+fn a_conductor_finishing_other_work_under_a_read_raise_is_news_with_the_raise_behind() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let read = conductor_with_a_read_raise(&mut runtime, &mut transitions);
+
+    conductor_turn(&mut runtime, "working", 2, false);
+    conductor_turn(&mut runtime, "done", 3, false);
+    let (finished, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (
+            finished.group.as_str(),
+            finished.unread,
+            finished.asks_behind
+        ),
+        ("done", true, 1)
+    );
+    assert_eq!(notices.len(), 1, "the finish is announced once");
+    assert_eq!(
+        notices[0].state,
+        crate::agent_state::push::NoticeState::Done
+    );
+
+    runtime.set_operator_focus(Some("sender".into()));
+    runtime.set_operator_focus(None);
+    let (again, notices) = conductor_announced(&mut runtime, &mut transitions);
+    assert_eq!((again.group.as_str(), again.unread), ("seen", false));
+    assert_eq!(again.ask_subject, read.ask_subject);
+    assert_eq!(again.asks_behind, 0);
+    assert!(notices.is_empty());
 }
 
 /// The fix node of `running_criteria_mission`, its pull request 7 merged

@@ -1153,11 +1153,12 @@ fn a_pane_the_move_worker_focuses_as_the_move_ends_is_read_with_no_window() {
 }
 
 /// A question the core laid on a device's row is read as on this machine's
-/// (docs/status-model.md, A question the core lays stays read): the plan the
-/// operator read stays read while the device's agent works and rests under
-/// it, and the plan put up for review again is news.
+/// (docs/status-model.md, A question laid on a row stays read): the plan the
+/// operator read stays read while the device's agent works and rests on its
+/// working child, its turn that ends with nothing in progress is news, and
+/// the plan put up for review again is news.
 #[test]
-fn a_device_rows_read_plan_review_stays_read_through_its_agents_turns() {
+fn a_device_rows_read_plan_review_stays_read_while_its_agent_rests_on_work_and_a_finish_is_news() {
     let t = tree();
     let (mut runtime, _views) = device(origins()[0].clone(), true);
     let put_up = |runtime: &mut Runtime, at: u64| {
@@ -1171,31 +1172,106 @@ fn a_device_rows_read_plan_review_stays_read_through_its_agents_turns() {
         runtime.plans.book.insert(plan.session.clone(), plan);
         runtime.plans.edit += 1;
     };
-    let arrive = |runtime: &mut Runtime, t1: (&str, u64), focused: &str| {
-        runtime.ingest_remote_session(
-            DEVICE,
-            Ok(device_session(
-                &t.main,
-                &[("t1", t1.0, t1.1), ("t2", "working", 1)],
-                focused,
-            )),
-        );
+    // t2 is the child t1 started.
+    let arrive = |runtime: &mut Runtime, t1: (&str, u64), t2: (&str, u64), focused: &str| {
+        let mut session =
+            device_session(&t.main, &[("t1", t1.0, t1.1), ("t2", t2.0, t2.1)], focused);
+        session.agents[0].lineage_session = Some("t1-lineage".into());
+        let child = &mut session.agents[1];
+        child.spawned_from_pane_id = Some(pane_id("t1"));
+        child.declared_parent_pane_id = Some("t1".into());
+        child.declared_parent_session = Some("t1-lineage".into());
+        runtime.ingest_remote_session(DEVICE, Ok(session));
         publish(runtime);
     };
+    // t1's device row as published, and the notices it sends.
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let mut shown = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|remote| remote.target_id == DEVICE)
+            .and_then(|remote| remote.session.as_ref())
+            .and_then(|session| {
+                session
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == pane_id("t1"))
+            })
+            .unwrap()
+            .clone();
+        let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+        let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
+            &rest,
+            crate::labels::store::LOCAL_TARGET,
+        ));
+        (row, notices)
+    };
+    let seen =
+        |row: &crate::model::SidebarAgentSnapshot| (row.group.clone(), row.unread, row.asks_behind);
+    arrive(&mut runtime, ("idle", 1), ("working", 1), "t2");
+    shown(&runtime);
     put_up(&mut runtime, 1);
-    arrive(&mut runtime, ("idle", 1), "t2");
-    assert!(unread(&runtime, "t1"), "the plan waits to be read");
-    arrive(&mut runtime, ("idle", 1), "t1");
-    assert!(!unread(&runtime, "t1"), "the device's keyboard read it");
-
-    arrive(&mut runtime, ("working", 2), "t2");
-    arrive(&mut runtime, ("done", 3), "t2");
-    assert!(
-        !unread(&runtime, "t1"),
-        "the agent's own work and rest under the plan are not news"
+    publish(&mut runtime);
+    let (asking, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&asking),
+        ("needs_you".into(), true, 0),
+        "the plan waits to be read"
     );
+    assert_eq!(notices.len(), 1);
+    arrive(&mut runtime, ("idle", 1), ("working", 1), "t1");
+    let (read, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&read),
+        ("seen".into(), false, 0),
+        "the device's keyboard read it"
+    );
+    assert!(notices.is_empty());
+
+    arrive(&mut runtime, ("working", 2), ("working", 1), "t2");
+    shown(&runtime);
+    arrive(&mut runtime, ("done", 3), ("working", 1), "t2");
+    let (rested, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&rested),
+        ("seen".into(), false, 0),
+        "the agent's work and its rest on its working child are not news"
+    );
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert!(notices.is_empty());
+
+    // The child finishes, which is news; read, the agent then finishes a
+    // turn with nothing in progress under it, which is news too, the plan
+    // behind it.
+    arrive(&mut runtime, ("done", 3), ("idle", 2), "t2");
+    assert!(shown(&runtime).0.unread, "the child's finish is news");
+    arrive(&mut runtime, ("done", 3), ("idle", 2), "t1");
+    assert!(!shown(&runtime).0.unread);
+    arrive(&mut runtime, ("working", 4), ("idle", 2), "t2");
+    shown(&runtime);
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
+    let (finished, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&finished),
+        ("done".into(), true, 1),
+        "a turn that ends with nothing in progress is news"
+    );
+    assert_eq!(notices.len(), 1);
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t1");
+    arrive(&mut runtime, ("done", 5), ("idle", 2), "t2");
+    let (again, _) = shown(&runtime);
+    assert_eq!(seen(&again), ("seen".into(), false, 0));
 
     put_up(&mut runtime, 2);
     publish(&mut runtime);
-    assert!(unread(&runtime, "t1"), "the plan put up again is news");
+    let (put_again, notices) = shown(&runtime);
+    assert_eq!(
+        seen(&put_again),
+        ("needs_you".into(), true, 0),
+        "the plan put up again is news"
+    );
+    assert_eq!(notices.len(), 1);
 }

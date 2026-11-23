@@ -257,3 +257,317 @@ fn a_session_arriving_lays_no_question_of_the_record_on_a_delegated_child() {
         "the parent is not told of a question its child never asked"
     );
 }
+
+/// A read question and the turns a letter wakes its agent for
+/// (operator decision 2026-11-23): a turn that only asks the same open
+/// question again stays read where it rests, and one that does anything else
+/// is news, with the question counted behind it.
+mod letter_woken {
+    use super::*;
+    use crate::agent_state::{phone, push};
+    use crate::labels::analysis::LabelEnd;
+
+    /// The lead's row as the engine sends it at `seq`, with how the label read
+    /// the turn: its end, its line and the open questions it only asked again.
+    fn turn(
+        status: &str,
+        seq: u64,
+        end: LabelEnd,
+        line: &str,
+        again: &[&str],
+    ) -> SidebarAgentSnapshot {
+        let asking = end == LabelEnd::Question;
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": "lead", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-lead",
+                 "revision": 1, "focused": false, "agent_status": status, "agent": "claude",
+                 "name": "lead", "cwd": "/checkouts/fixture", "state_change_seq": seq,
+                 "label": {"question": asking && status != "working",
+                           "blocked": end == LabelEnd::Blocked && status != "working",
+                           "expected_reply": asking.then_some(line),
+                           "progress": (!asking).then_some(line)}},
+            ]}))
+            .unwrap();
+        let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+        row.session_id = Some("lead-session".into());
+        row.row_facts = Some(crate::request_view::RowFacts {
+            end: Some(end),
+            line: Some(line.into()),
+            asks_again: again.iter().map(|id| (*id).to_owned()).collect(),
+            ..Default::default()
+        });
+        crate::agent_state::derive_from_axes(&mut row);
+        row
+    }
+
+    /// The lead's row at `seq` once the label worker read `answer` as the
+    /// last turn of its session and Hide AI answered `provider` for it, raw:
+    /// the worker's checks and the overlay decide end, line and the asks it
+    /// repeated, as on a live pane.
+    fn labeled(seq: u64, answer: &str, provider: serde_json::Value) -> SidebarAgentSnapshot {
+        let mut row = crate::labels::tests::labeled_row(
+            json!({"pane_id": "lead", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-lead",
+                   "revision": 1, "focused": false, "agent_status": "done", "agent": "claude",
+                   "name": "lead", "cwd": "/checkouts/fixture", "state_change_seq": seq}),
+            &[
+                ("user", "[letter] 자식이 판례 조사를 끝냈어요"),
+                ("assistant", answer),
+            ],
+            provider,
+        );
+        row.session_id = Some("lead-session".into());
+        crate::agent_state::derive_from_axes(&mut row);
+        row
+    }
+
+    struct Lead {
+        runtime: Runtime,
+        transitions: push::Transitions,
+    }
+
+    impl Lead {
+        /// The agent asks `m1` at `seq` 2 and Hide AI lists it, the operator
+        /// reads it, then a letter wakes the agent to work at `seq` 3.
+        fn read_and_woken() -> Self {
+            let mut lead = Self {
+                runtime: asking(Vec::new()),
+                transitions: push::Transitions::default(),
+            };
+            lead.engine(turn("idle", 1, LabelEnd::Done, "", &[]));
+            lead.shown();
+            lead.engine(turn(
+                "done",
+                2,
+                LabelEnd::Question,
+                "진정서 승인 순서 정하기",
+                &[],
+            ));
+            lead.runtime
+                .ingest_link_summaries(summaries(vec![ask("m1", QUESTION, ASKED)]));
+            let (asking, notices) = lead.shown();
+            assert_eq!((asking.group.as_str(), notices.len()), ("needs_you", 1));
+            lead.runtime.set_operator_focus(Some("lead".into()));
+            lead.runtime.set_operator_focus(None);
+            let (read, notices) = lead.shown();
+            assert_eq!((read.group.as_str(), read.unread), ("seen", false));
+            assert!(notices.is_empty());
+            lead.engine(turn(
+                "working",
+                3,
+                LabelEnd::Working,
+                "자식 결과 정리 중",
+                &[],
+            ));
+            let (working, notices) = lead.shown();
+            assert_eq!(working.group, "working");
+            assert!(notices.is_empty());
+            lead
+        }
+
+        fn engine(&mut self, row: SidebarAgentSnapshot) {
+            let mut rows = vec![row];
+            self.runtime
+                .lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
+            self.runtime.snapshot.navigator.agents = rows;
+            self.runtime.refresh_pane_read_state();
+        }
+
+        /// What the next published snapshot shows of the lead's row, and the
+        /// notices it sends.
+        fn shown(&mut self) -> (SidebarAgentSnapshot, Vec<push::Notice>) {
+            self.runtime.snapshot_delta_payload(0);
+            let row = self.runtime.snapshot.navigator.agents[0].clone();
+            let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+            let (notices, _) = self
+                .transitions
+                .observe(&phone::project(&rest, crate::labels::store::LOCAL_TARGET));
+            (row, notices)
+        }
+    }
+
+    const QUESTION: &str = "진정서 작성을 승인 뒤로 미룰까요?";
+
+    #[test]
+    fn the_same_question_asked_again_and_nothing_else_stays_read_where_it_rests() {
+        let mut lead = Lead::read_and_woken();
+        lead.engine(turn(
+            "done",
+            4,
+            LabelEnd::Question,
+            "진정서 건 정해 주세요",
+            &["m1"],
+        ));
+        let (again, notices) = lead.shown();
+        assert_eq!(
+            (again.group.as_str(), again.unread, again.mark),
+            ("seen", false, crate::agent_state::RowMark::Turn)
+        );
+        assert!(
+            notices.is_empty(),
+            "the same question is not announced again"
+        );
+        let revisit = again.revisit.expect("a read ask");
+        assert!(revisit.read_ask);
+        assert_eq!(
+            revisit.since_unix_ms, ASKED,
+            "it keeps the place the question had"
+        );
+        assert_eq!(again.asks_behind, 0);
+    }
+
+    #[test]
+    fn a_finish_under_a_read_question_is_news_with_the_question_counted_behind() {
+        for (end, line) in [
+            (LabelEnd::Done, "테스트 다 통과해서 PR #41 올림"),
+            (LabelEnd::Unfinished, "하나 깨져서 멈춤, 이어서 고침"),
+        ] {
+            let mut lead = Lead::read_and_woken();
+            lead.engine(turn("done", 4, end, line, &[]));
+            let (finished, notices) = lead.shown();
+            assert_eq!(
+                (
+                    finished.group.as_str(),
+                    finished.unread,
+                    finished.demand.as_str()
+                ),
+                ("done", true, "question"),
+                "the read question steps behind the turn ({end:?})"
+            );
+            assert_eq!(finished.detail.as_deref(), Some(line));
+            assert_eq!(finished.asks_behind, 1, "the question waits behind it");
+            // The phone's row counts it behind the same line.
+            let phone = crate::agent_state::phone::project(
+                &json!({"navigator": {"agents": [finished]}}),
+                "local",
+            );
+            let listed = phone.agents().next().unwrap();
+            assert_eq!((listed.group.as_str(), listed.asks_behind), ("done", 1));
+            assert_eq!(serde_json::to_value(listed).unwrap()["asks_behind"], 1);
+            assert_eq!(notices.len(), 1, "the finish is announced ({end:?})");
+            assert_eq!(notices[0].state, push::NoticeState::Done);
+
+            // Read, the question leads the row again, at rest.
+            lead.runtime.set_operator_focus(Some("lead".into()));
+            lead.runtime.set_operator_focus(None);
+            let (read, _) = lead.shown();
+            assert_eq!((read.group.as_str(), read.unread), ("seen", false));
+            assert_eq!(
+                read.ask_subject,
+                Some(AskSubject::OpenAsk {
+                    id: "m1".into(),
+                    line: QUESTION.into()
+                })
+            );
+            assert!(read.revisit.is_some_and(|revisit| revisit.read_ask));
+            assert_eq!(read.asks_behind, 0);
+        }
+    }
+
+    #[test]
+    fn a_new_question_or_a_block_under_a_read_question_needs_the_operator_with_it_counted() {
+        let mut lead = Lead::read_and_woken();
+        lead.engine(turn(
+            "done",
+            4,
+            LabelEnd::Question,
+            "버그 2개 같이 고칠지 정하기",
+            &[],
+        ));
+        lead.runtime.ingest_link_summaries(summaries(vec![
+            ask("m1", QUESTION, ASKED),
+            ask("m2", "버그 2개를 이번 PR에서 같이 고칠까요?", ASKED + 5),
+        ]));
+        let (asking, notices) = lead.shown();
+        assert_eq!((asking.group.as_str(), asking.unread), ("needs_you", true));
+        assert_eq!(notices.len(), 1);
+        assert_eq!(asking.state.ask.as_ref().map(|ask| ask.more), Some(1));
+
+        let mut lead = Lead::read_and_woken();
+        lead.engine(turn(
+            "done",
+            4,
+            LabelEnd::Blocked,
+            "권한이 없어 더 못 감",
+            &[],
+        ));
+        let (blocked, notices) = lead.shown();
+        assert_eq!(
+            (blocked.group.as_str(), blocked.demand.as_str()),
+            ("needs_you", "error")
+        );
+        assert_eq!(notices.len(), 1);
+        assert_eq!(blocked.asks_behind, 1);
+    }
+
+    #[test]
+    fn a_question_asked_again_beside_another_one_is_news() {
+        // The label lists an open question asked again only when the turn did
+        // nothing else; a question the operator never read is news however
+        // often it is asked.
+        let mut lead = Lead::read_and_woken();
+        lead.engine(turn(
+            "done",
+            4,
+            LabelEnd::Question,
+            "진정서 건 정해 주세요",
+            &["m9"],
+        ));
+        let (unknown, notices) = lead.shown();
+        assert_eq!((unknown.group.as_str(), notices.len()), ("needs_you", 1));
+    }
+
+    #[test]
+    fn a_raw_answer_that_only_asks_the_read_question_again_rests_and_one_that_also_finishes_is_news()
+     {
+        let again = json!({"kind": "ask", "text": "진정서 승인 뒤로 미룰지 정하기", "same_as": "m1",
+            "quote": QUESTION, "ask_type": "decision", "addressed_to": "operator"});
+        let judged = |line: &str, work: serde_json::Value| {
+            json!({"goal": "진정서 초안 작성", "goal_update": "keep",
+                   "line": line, "end": "question", "work": work})
+        };
+
+        // #13: the answer only asks the read question again, and says so.
+        let mut lead = Lead::read_and_woken();
+        lead.engine(labeled(
+            4,
+            QUESTION,
+            judged(
+                "진정서 승인 뒤로 미룰지 정하기",
+                json!({"missed": [again], "resolved": [], "only_asks_again": true}),
+            ),
+        ));
+        let (rests, notices) = lead.shown();
+        assert_eq!((rests.group.as_str(), rests.unread), ("seen", false));
+        assert_eq!(
+            rests.detail.as_deref(),
+            Some("진정서 승인 뒤로 미룰지 정하기")
+        );
+        assert!(rests.revisit.is_some_and(|revisit| revisit.read_ask));
+        assert!(
+            notices.is_empty(),
+            "the same question is not announced again"
+        );
+
+        // #14: a finish that asks the same question again, which Hide AI
+        // still judged a question with the finish as its line (the eval's
+        // c_done_and_same.2), is news with that line and the question behind.
+        let mut lead = Lead::read_and_woken();
+        lead.engine(labeled(
+            4,
+            &format!("판례 3건 반영해서 PR #41 올렸어요. {QUESTION}"),
+            judged(
+                "판례 3건 반영 PR #41 올림",
+                json!({"missed": [again], "resolved": []}),
+            ),
+        ));
+        let (news, notices) = lead.shown();
+        assert_eq!(
+            (news.group.as_str(), news.unread, news.asks_behind),
+            ("done", true, 1)
+        );
+        assert_eq!(news.detail.as_deref(), Some("판례 3건 반영 PR #41 올림"));
+        assert!(!news.status_word_visible);
+        assert_eq!(notices.len(), 1, "the turn is announced once");
+        assert_eq!(notices[0].state, push::NoticeState::Done);
+    }
+}

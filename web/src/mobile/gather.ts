@@ -4,7 +4,7 @@
 // own rows, order and folds; this joins them and says, per computer, why its
 // rows are not there yet. Pure, so every rule is tested without a socket.
 
-import type { AgentGroup, GroupId, GroupRow, PhoneAutomation } from "./protocol";
+import { missionsOnWire, type AgentGroup, type GroupId, type GroupRow, type PhoneAutomation, type PhoneMission, type PhoneMissionOnWire } from "./protocol";
 import type { Presence } from "./presence";
 
 /** The groups the gathered view carries: what waits on the operator and what a notification announces. */
@@ -99,4 +99,9 @@ export function gatheredOf(groups: readonly AgentGroup[]): AgentGroup[] {
  */
 export function listScopeOf(query: URLSearchParams): "all" | "one" {
   return query.has("one") ? "one" : "all";
+}
+
+/** The missions a computer's `asks` names, in that order, as its own list draws them (`MissionAskRows`); the rest is not kept. */
+export function missionAsksOf(items: readonly PhoneMissionOnWire[], asks: readonly string[]): PhoneMission[] {
+  return missionsOnWire(asks.flatMap((id) => items.filter((mission) => mission.id === id)));
 }

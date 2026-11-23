@@ -130,7 +130,7 @@ struct Laid {
 /// What names each of the core's questions: the event that raised it, never
 /// its words or when it was laid, so the operator's read of a question
 /// holds while it stands and a question raised again or anew is news
-/// (docs/status-model.md, A question the core lays stays read). Each names
+/// (docs/status-model.md, A question laid on a row stays read). Each names
 /// one raise: a plan put up for review again, a mission's next question or
 /// next raise, is another.
 mod ask_id {
@@ -141,10 +141,7 @@ mod ask_id {
     /// A question the session put to the operator, by the session and the
     /// record's id for the line.
     pub(super) fn open_ask(session: &SessionIdentity, id: &str) -> String {
-        format!(
-            "ask:{}/{}/{}#{id}",
-            session.device_id, session.agent, session.session_id
-        )
+        crate::model::open_ask_id(session, id)
     }
 
     /// A plan put up for review, by its session, its instance and when it
@@ -1086,6 +1083,7 @@ impl Runtime {
         let before = agents.to_vec();
         for agent in agents.iter_mut() {
             agent.open_asks = None;
+            agent.held_asks.clear();
             let Some(laid) = self.plans.laid.remove(&agent.pane_id) else {
                 continue;
             };
@@ -1149,10 +1147,13 @@ impl Runtime {
                     items,
                 })
             });
+            // A working row, or one its own demand leads, carries its
+            // questions unlaid, so the read ones stay known to it.
             if agent.user_turn.is_some()
                 || agent.activity == "working"
                 || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None
             {
+                agent.held_asks = mine.iter().map(|(.., id)| id.clone()).collect();
                 continue;
             }
             let Some((asked, since, subject, _)) = mine.first() else {

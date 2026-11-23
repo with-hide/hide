@@ -234,7 +234,11 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
     guard.set_window_focused(false);
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert!(unseen(&guard, &view));
-    assert_eq!(row(&guard, "recipient").group, "needs_you");
+    // The operator is at its pane, so the row is read and the View waits as
+    // its chip, calling no one (operator decision 2026-11-23).
+    let recipient = row(&guard, "recipient");
+    assert_eq!(recipient.group, "working");
+    assert_eq!(recipient.look.as_ref().unwrap().view_id, view);
     // B7: the lane shows no documents.
     {
         let store = guard.workspace_views.as_mut().unwrap();
@@ -410,6 +414,54 @@ fn a_question_takes_the_mark_and_the_view_keeps_the_row_in_needs_you_after_it() 
     let recipient = row(&guard, "recipient");
     assert_eq!(recipient.group, "needs_you");
     assert_eq!(recipient.mark, RowMark::Look);
+}
+
+#[test]
+fn a_read_row_leaves_needs_you_with_its_view_kept_and_a_later_open_calls_again() {
+    // Operator decision 2026-11-23: a View holds the row in Needs You only
+    // while the row is unread; read, the row stands where its own axes put
+    // it, the View still unseen as its chip, and the notice is taken back.
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let rows = |runtime: &Runtime| json!({"navigator": {"agents": serde_json::to_value(&runtime.snapshot.navigator.agents).unwrap()}});
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    let mut judge = |runtime: &Runtime| {
+        transitions.observe(&crate::agent_state::phone::project(
+            &rows(runtime),
+            crate::node::TEST_NODE,
+        ))
+    };
+    judge(&guard);
+    let view = open(&mut guard, "recipient", "src/login.ts");
+    assert_eq!(row(&guard, "recipient").group, "needs_you");
+    assert_eq!(judge(&guard).0.len(), 1);
+    // The operator goes to the pane and away again, without the View.
+    keyboard(&mut guard, Some("recipient"));
+    keyboard(&mut guard, Some("sender"));
+    assert!(unseen(&guard, &view));
+    let recipient = row(&guard, "recipient");
+    assert_eq!(
+        (recipient.group.as_str(), recipient.mark),
+        ("working", RowMark::Going)
+    );
+    assert_eq!(recipient.look.as_ref().unwrap().view_id, view);
+    let mut counts = crate::model::MarkCountsSnapshot::default();
+    recipient.mark.count_into(&mut counts);
+    assert_eq!(counts.turn, 0);
+    let (notices, cleared) = judge(&guard);
+    assert!(notices.is_empty());
+    assert_eq!(cleared.len(), 1);
+    // Another open is news again, the first View counted under its chip.
+    let report = open(&mut guard, "recipient", "src/report.md");
+    let recipient = row(&guard, "recipient");
+    assert_eq!(
+        (recipient.group.as_str(), recipient.mark),
+        ("needs_you", RowMark::Look)
+    );
+    let look = recipient.look.as_ref().unwrap();
+    assert_eq!((look.view_id.as_str(), look.count), (report.as_str(), 2));
+    assert_eq!(judge(&guard).0.len(), 1);
 }
 
 #[test]
@@ -741,10 +793,12 @@ fn a_restart_keeps_an_unseen_view_unseen_and_a_seen_one_seen() {
     guard.sync_workspace_view();
 
     assert!(unseen(&guard, &unread) && !unseen(&guard, &read));
+    // The operator read the row with `unread` open, so it keeps its chip
+    // where its own axes put it (operator decision 2026-11-23).
     let recipient = row(&guard, "recipient");
     assert_eq!(
         (recipient.group.as_str(), recipient.mark),
-        ("needs_you", RowMark::Look)
+        ("working", RowMark::Going)
     );
     assert_eq!(recipient.look.as_ref().unwrap().view_id, unread);
 }

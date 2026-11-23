@@ -1429,6 +1429,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                 ),
+                views_opened: Some(1_788_871_000_000),
             },
         );
         state.pane_completions.insert(

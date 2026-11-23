@@ -44,23 +44,25 @@ function cut(text: string, limit: number): string {
 }
 
 /**
- * The agents the app icon counts: the sidebar's enabled notification groups of every
- * device the window shows, the root agents the notifications announce.
- * Each device's scope carries those groups as its `raised` entries
- * (unresolved, not delegated, in a pane the device draws), so adding the
- * devices up counts the whole desktop whichever device the sidebar shows;
- * the navigator's own scope has no such groups. Reading a Done row removes it.
+ * What the app icon counts: 내 차례 alone, the root agents of every device the
+ * window shows that are Needs You and the missions and automations that are
+ * their own Needs You item, while the Needs You notifications are on; unread
+ * Done is never counted, whatever its own switch says, so the icon says the
+ * number 내 차례 says (operator decisions 2026-11-23, replacing 2026-10-18's
+ * Done in the icon). Each device's scope carries those rows as its
+ * `needs_you` `raised` entry (unresolved, not delegated, in a pane the device
+ * draws), so adding the devices up counts the whole desktop whichever device
+ * the sidebar shows; the navigator's own scope has none.
  */
-function notificationBadgeCount(rest: SnapshotRest | null): number {
-  const needsYou = rest?.ui_state?.desktop_notifications === true;
-  const done = (rest?.ui_state?.desktop_notifications_done ?? rest?.ui_state?.desktop_notifications) === true;
+export function notificationBadgeCount(rest: SnapshotRest | null): number {
+  if (rest?.ui_state?.desktop_notifications !== true) return 0;
   let count = 0;
-  for (const device of rest?.navigator?.devices ?? []) {
-    for (const group of device.agent_scope.raised) {
-      if (group.group === "needs_you" ? needsYou : group.group === "done" && done) {
-        count += group.shown.length + group.more.length;
-      }
+  for (const device of rest.navigator?.devices ?? []) {
+    const scope = device.agent_scope;
+    for (const group of scope.raised) {
+      if (group.group === "needs_you") count += group.shown.length + group.more.length;
     }
+    count += (scope.mission_asks?.length ?? 0) + (scope.automation_asks?.length ?? 0);
   }
   return count;
 }

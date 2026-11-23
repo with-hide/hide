@@ -18,7 +18,7 @@ import { gatesAhead, missionCells } from "../missions";
 import { cn } from "../lib/utils";
 import { OfflineText } from "./OfflineText";
 import { DeviceTag } from "./parts";
-import { openCount, progress, useMissionEntries } from "./missionModel";
+import { missionEntries, openCount, progress, useMissionEntries } from "./missionModel";
 import type { PhoneMission } from "./protocol";
 import { TabBar } from "./TabBar";
 import { ScreenHead, TwoLineRow } from "./layout";
@@ -94,11 +94,38 @@ function Group({ group, entries }: { group: MissionGroup; entries: MissionEntry<
 }
 
 /**
+ * The missions that are their own 내 차례 item (`missionAsks`, oldest first), each drawn as its row on the missions tab, so the agent
+ * list's 내 차례 holds and counts them as the desktop's does; `computer` is the gathered view's mark of the computer they run on.
+ */
+export function MissionAskRows({ computer }: { computer?: string } = {}) {
+  const entries = useMissionEntries();
+  const asks = usePhone((s) => s.missionAsks);
+  const asking = asks.flatMap((id) => entries?.filter((entry) => entry.mission.id === id) ?? []);
+  if (asking.length === 0) return null;
+  return (
+    <ul data-phone-mission-asks={asking.length}>
+      {asking.map((entry) => (
+        <li key={entry.mission.id}>
+          <OpenRow entry={entry} computer={computer} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Another computer's mission that is its own 내 차례 item, in the gathered view with that computer's mark; `onOpen` opens it there. */
+export function OtherMissionAskRow({ mission, computer, onOpen }: { mission: PhoneMission; computer: string; onOpen: () => void }) {
+  const [entry] = missionEntries([mission]);
+  return entry ? <OpenRow entry={entry} computer={computer} onOpen={onOpen} /> : null;
+}
+
+/**
  * An open mission's row (B31): its state, title, one line of what waits, works
  * or merges, a cell per step with `n/m`, and its time; a mission whose device
- * does not answer keeps its last values dimmed and counts no time.
+ * does not answer keeps its last values dimmed and counts no time. It opens the
+ * mission's page here unless `onOpen` says otherwise.
  */
-function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
+function OpenRow({ entry, computer, onOpen }: { entry: MissionEntry<PhoneMission>; computer?: string; onOpen?: () => void }) {
   const { t } = useInterfaceTranslation();
   const { mission, group, turn } = entry;
   const { done, total } = progress(mission);
@@ -113,7 +140,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
       data-phone-mission={mission.id}
       data-phone-mission-state={group}
       className={cn("min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent", mission.stale && "opacity-(--opacity-dimmed)")}
-      onClick={() => openMission(mission.id)}
+      onClick={onOpen ?? (() => openMission(mission.id))}
     >
       <TwoLineRow
         head={
@@ -132,7 +159,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
           <span className="flex min-w-0 flex-1 flex-col gap-xs">
             {/* A question wraps in full; the other lines keep to two. */}
             {text ? <span className={cn("break-keep text-subtle-foreground wrap-anywhere", line?.kind !== "decision" && "line-clamp-2")} data-phone-mission-line={line?.kind}>{text}</span> : null}
-            {mission.nodes.length > 0 || mission.device_label ? (
+            {mission.nodes.length > 0 || mission.device_label || computer ? (
               <span className="flex min-w-0 flex-wrap items-center gap-sm text-muted-foreground">
                 {mission.nodes.length > 0 ? (
                   <>
@@ -142,6 +169,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
                   </>
                 ) : null}
                 {mission.device_label ? <DeviceTag label={mission.device_label} /> : null}
+                {computer ? <DeviceTag label={computer} computer /> : null}
               </span>
             ) : null}
           </span>

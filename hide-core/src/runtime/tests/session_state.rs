@@ -632,8 +632,10 @@ fn a_star_holds_a_quiet_task_survives_restart_and_done_takes_it() {
 }
 
 #[test]
-fn a_read_block_and_an_unread_question_never_wait_in_revisit() {
-    // B3, B4: the current state wins.
+fn an_unread_question_never_waits_read_and_a_read_block_waits_as_a_read_question() {
+    // B3, B4: the current state wins. Operator decision 2026-11-23: a block
+    // the operator read leaves Needs You as every ask does, so it waits read
+    // with them; a pane blocked on its own prompt holds Needs You instead.
     let mut runtime = with_read_question();
     runtime.snapshot.navigator.agents[0].unread = true;
     runtime.sync_session_state();
@@ -643,7 +645,15 @@ fn a_read_block_and_an_unread_question_never_wait_in_revisit() {
     row.demand = "error".into();
     row.unread = false;
     runtime.sync_session_state();
-    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert_eq!(row.group, "seen");
+    assert!(row.revisit.is_some_and(|r| r.read_ask && !r.starred));
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.blocked = true;
+    runtime.sync_session_state();
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert_eq!(row.group, "needs_you");
+    assert!(row.revisit.is_none());
 }
 
 #[test]
@@ -700,15 +710,16 @@ fn a_new_conversation_in_the_pane_drops_its_mark() {
 }
 
 #[test]
-fn the_phone_lists_a_read_question_in_needs_you_read_and_a_starred_one_in_revisit() {
-    // needs-you-cleanup B11, B13: a read, unanswered question stays in 내
-    // 차례, read; ☆ puts it off to 다시 볼 것.
+fn the_phone_rests_a_read_question_read_and_lists_a_starred_one_in_revisit() {
+    // needs-you-cleanup B13: ☆ puts a read question off to 다시 볼 것; read
+    // and not put off, it rests read, out of 내 차례 as on the desktop
+    // (operator decision 2026-11-23, replacing B11).
     let mut runtime = with_read_question();
     let row = &runtime.snapshot.navigator.agents[0];
     let phone =
         crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
     let listed = phone.agents().next().unwrap();
-    assert_eq!((listed.group.as_str(), listed.read), ("needs_you", true));
+    assert_eq!((listed.group.as_str(), listed.read), ("seen", true));
     // Only the operator's ★ draws a star on the phone, and a row without one says nothing of it.
     assert!(!listed.starred);
     assert!(

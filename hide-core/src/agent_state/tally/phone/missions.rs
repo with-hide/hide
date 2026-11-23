@@ -34,6 +34,13 @@ pub struct PhoneMissions {
     /// Missions past the caps, which no frame carries.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted: usize,
+    /// The listed missions that are their own 내 차례 item, no Conductor's or
+    /// worker's row carrying it (a merge due, a safety net, a raise), oldest
+    /// first as the core counts them in Needs You
+    /// (`navigator.agent_scope.mission_asks`): the phone's 내 차례 draws and
+    /// counts them as the desktop's does, so the two show one number.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<String>,
 }
 
 impl PhoneMissions {
@@ -672,10 +679,20 @@ impl PhoneMissions {
         let mut closed: Vec<PhoneMission> = closed.into_iter().map(project).collect();
         omitted += fit(&mut open, &mut closed, LIST_BUDGET);
         open.append(&mut closed);
+        let asks = rest
+            .pointer("/navigator/agent_scope/mission_asks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|id| open.iter().any(|mission| mission.id == *id))
+            .map(str::to_owned)
+            .collect();
         Self {
             items: open,
             failed,
             omitted,
+            asks,
         }
     }
 
@@ -1018,6 +1035,33 @@ mod tests {
 
     fn projected(rest: &Value) -> PhoneMissions {
         PhoneMissions::project(rest, "local", &project(rest, "local"))
+    }
+
+    /// A mission that is its own 내 차례 item reaches the phone named, in the
+    /// core's order, so the phone counts it where the desktop does; one the
+    /// frame does not list is not named.
+    #[test]
+    fn the_missions_the_core_counts_in_needs_you_reach_the_phone_named() {
+        let mut rest = rest(
+            vec![
+                mission("m1", 10, "running", vec![node("a", json!({}))]),
+                mission("m2", 11, "running", vec![node("a", json!({}))]),
+            ],
+            json!({}),
+        );
+        assert!(projected(&rest).asks.is_empty());
+        assert!(
+            !serde_json::to_string(&projected(&rest))
+                .unwrap()
+                .contains("asks")
+        );
+        rest["navigator"]["agent_scope"] = json!({"mission_asks": ["m2", "gone", "m1"]});
+        let missions = projected(&rest);
+        assert_eq!(missions.asks, ["m2", "m1"]);
+        assert_eq!(
+            serde_json::to_value(&missions).unwrap()["asks"],
+            json!(["m2", "m1"])
+        );
     }
 
     #[test]

@@ -83,10 +83,12 @@ impl RowMark {
         }
         // A View to look at is the turn only when nothing else is asked:
         // a block, a question, an approval or a raise outranks it and takes
-        // the mark (D-18).
+        // the mark (D-18). Once the operator read the row it is no turn of
+        // theirs: the row draws its own mark and keeps the View's chip.
         if agent.look.is_some()
             && (tool
-                || (demand == AgentDemand::None
+                || (super::axes::look_calls(agent)
+                    && demand == AgentDemand::None
                     && !agent.blocked
                     && agent.raised.is_empty()
                     && agent.escalation.is_none()
@@ -193,9 +195,10 @@ fn rank_within(agent: &SidebarAgentSnapshot, ownership: Ownership) -> (u8, u8) {
         agent.blocked,
         ownership,
         agent.wait.is_some(),
-        // Only an operator row's View is the operator's to look at; a
-        // delegated child's ranks among its siblings by its own axes (D-10).
-        agent.look.is_some(),
+        // Only an operator row's View is the operator's to look at, while
+        // it calls; a delegated child's ranks among its siblings by its own
+        // axes (D-10).
+        agent.look.is_some() && look_calls(agent),
     );
     (group.rank(), demand_rank)
 }
@@ -420,9 +423,9 @@ pub mod phone {
         /// Used only by notice transport.
         #[serde(skip)]
         pub look: Option<String>,
-        /// In `needs_you` for an ask the operator read and has not answered:
-        /// listed there, drawn read, and never announced (needs-you-cleanup
-        /// D-10).
+        /// An ask the operator read and has not answered: listed in the
+        /// row's own group, drawn read, and never announced (needs-you-cleanup
+        /// D-10; operator decision 2026-11-23).
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         pub read: bool,
         /// The operator's ★ to revisit the task (PRD revisit-group D-03),
@@ -457,6 +460,12 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub subagents_left: u64,
+        /// The open questions the operator read that wait behind the row's
+        /// own news or ask, which its line ends with as `외 N건`
+        /// (`SidebarAgentSnapshot::asks_behind`); 0 otherwise, so a phone
+        /// that predates it reads nothing new.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub asks_behind: u64,
         /// How many subagents its agent runs inside its own session
         /// (`SidebarAgentSnapshot::subagents`), which its children toggle
         /// counts beside its children; 0 for none and for a count Hide cannot
@@ -1089,9 +1098,9 @@ pub mod phone {
             // A resting row the operator starred stands in 다시 볼 것 (PRD
             // revisit-group D-10), one that works or waits keeps its group
             // (operator decision 2026-11-11); an ask read and left unanswered
-            // stays in 내 차례, read (needs-you-cleanup B11).
+            // rests with its group like every list's, drawn read (operator
+            // decision 2026-11-23, replacing needs-you-cleanup B11).
             let listed = |group: &str| match group {
-                "seen" | "working" if read_ask => "needs_you".to_owned(),
                 "seen" if starred => "revisit".to_owned(),
                 group => group.to_owned(),
             };
@@ -1143,6 +1152,10 @@ pub mod phone {
                     .unwrap_or(0),
                 subagents_left: agent
                     .get("subagents_left")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                asks_behind: agent
+                    .get("asks_behind")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
                 subagents: agent.get("subagents").and_then(Value::as_u64).unwrap_or(0),

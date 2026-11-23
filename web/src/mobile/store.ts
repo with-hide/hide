@@ -252,6 +252,8 @@ type PhoneState = {
   automationsZone: string | undefined;
   /** The automations paused for a person to fix, oldest pause first: each is a line of 내 차례 on the agents tab (PRD automations D-12, B23). */
   automationAsks: string[];
+  /** The missions that are their own 내 차례 item (a merge due, a safety net, a raise no row carries), oldest first: each is a row of 내 차례 on the agents tab, counted where the desktop counts it. */
+  missionAsks: string[];
   /** The computer could not read its automation list and set it aside: one line above the list. */
   automationsUnreadable: boolean;
   /** The automation whose page is open on the automations tab. */
@@ -337,6 +339,7 @@ const initial: PhoneState = {
   automationsOmitted: 0,
   automationsZone: undefined,
   automationAsks: [],
+  missionAsks: [],
   automationsUnreadable: false,
   automationOpen: null,
   automationPending: null,
@@ -418,6 +421,7 @@ export function applyFrame(frame: ServerFrame): void {
         missions: missionsOnWire(frame.items),
         missionsFailed: frame.failed,
         missionsOmitted: frame.omitted ?? 0,
+        missionAsks: frame.asks ?? [],
         // A mission that left the record takes its page and its draft with it.
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),

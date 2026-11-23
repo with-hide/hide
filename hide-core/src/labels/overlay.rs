@@ -72,6 +72,8 @@ struct Summary {
     goal: Option<String>,
     line: String,
     end: Option<LabelEnd>,
+    /// The open questions the turn only asked again (`PaneRecord::asks_again`).
+    asks_again: Vec<String>,
     recent_turns: Vec<store::RecentTurn>,
 }
 
@@ -93,6 +95,7 @@ impl LabelOverlay {
                         goal: record.goal.clone(),
                         line: record.line.clone(),
                         end: record.end,
+                        asks_again: record.asks_again.clone(),
                         recent_turns: record.recent_turns.clone(),
                     }),
                     facts: row_facts(&record.facts),
@@ -325,6 +328,10 @@ impl LabelOverlay {
                 });
                 facts.end = summary.end.map(as_pane);
                 facts.line = line;
+                // Said of the question the turn ended on, so only while it does.
+                if asking && !working {
+                    facts.asks_again.clone_from(&summary.asks_again);
+                }
                 facts.recent_turns.clone_from(&summary.recent_turns);
                 for turn in &mut facts.recent_turns {
                     turn.end = turn.end.map(as_pane);
@@ -375,6 +382,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         wake_vanished: false,
         turn_ended: None,
         answered_calls: Vec::new(),
+        asks_again: Vec::new(),
     }
 }
 

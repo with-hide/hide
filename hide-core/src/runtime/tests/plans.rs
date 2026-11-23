@@ -151,6 +151,112 @@ fn the_rows_already_shown_ask_and_stop_asking_as_the_review_moves_without_the_en
     assert_eq!(shown(&mut runtime).user_turn, Some(own));
 }
 
+/// The sender's row at `seq`, resting (`idle`), working or held by a native
+/// approval (`blocked`), laid, its lineage built and read, as a session
+/// arriving is (`Runtime::apply_session`).
+fn engine(runtime: &mut Runtime, status: &str, seq: u64) {
+    let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+        {"pane_id": "sender", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-sender",
+         "revision": 1, "focused": false, "agent_status": status, "agent": "codex",
+         "name": "sender", "cwd": "/checkouts/fixture", "state_change_seq": seq},
+    ]}))
+    .unwrap();
+    let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+    row.session_id = Some("sender-session".into());
+    let mut rows = vec![row];
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
+    crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+    runtime.snapshot.navigator.agents = rows;
+    runtime.refresh_pane_read_state();
+}
+
+/// The sender's row as the next published snapshot shows it, and the
+/// notices that snapshot sends.
+fn announced(
+    runtime: &mut Runtime,
+    transitions: &mut crate::agent_state::push::Transitions,
+) -> (
+    crate::model::SidebarAgentSnapshot,
+    Vec<crate::agent_state::push::Notice>,
+) {
+    let row = shown(runtime);
+    let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+    let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
+        &rest,
+        crate::labels::store::LOCAL_TARGET,
+    ));
+    (row, notices)
+}
+
+/// A plan review the operator read, then a native approval: the approval
+/// stands in 내 차례 with the review counted behind it (`외 1건`), on the row
+/// and on the phone, announced once; answered at the pane, the row rests
+/// again with the review still read and nothing announced
+/// (docs/status-model.md, A question laid on a row stays read).
+#[test]
+fn a_read_plan_review_counts_behind_a_native_approval_and_stays_read_once_it_is_answered() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, sender, _worker) = start(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    let mut transitions = crate::agent_state::push::Transitions::default();
+    engine(&mut runtime, "idle", 1);
+    announced(&mut runtime, &mut transitions);
+    command(&mut runtime, &sender, plan(true)).unwrap();
+    let (asking, notices) = announced(&mut runtime, &mut transitions);
+    assert_eq!((asking.group.as_str(), asking.unread), ("needs_you", true));
+    assert_eq!(notices.len(), 1);
+    runtime.set_operator_focus(Some("sender".into()));
+    runtime.set_operator_focus(None);
+    let (read, notices) = announced(&mut runtime, &mut transitions);
+    assert_eq!((read.group.as_str(), read.unread), ("seen", false));
+    assert!(notices.is_empty());
+    let review = read.laid_asks.clone();
+    assert_eq!(review.len(), 1);
+
+    engine(&mut runtime, "blocked", 2);
+    let (approval, notices) = announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (
+            approval.group.as_str(),
+            approval.unread,
+            approval.demand.as_str(),
+            approval.asks_behind
+        ),
+        ("needs_you", true, "approval", 1)
+    );
+    // The approval's own line counts it behind (`외 1건`).
+    assert_eq!(approval.state.ask.as_ref().map(|ask| ask.more), Some(1));
+    let phone = crate::agent_state::phone::project(
+        &json!({"navigator": {"agents": [approval]}}),
+        crate::labels::store::LOCAL_TARGET,
+    );
+    let listed = phone.agents().next().unwrap();
+    assert_eq!(
+        (listed.group.as_str(), listed.asks_behind),
+        ("needs_you", 1)
+    );
+    assert_eq!(notices.len(), 1, "the approval is announced once");
+
+    // The operator answers it at the pane; the read keeps the review read.
+    runtime.set_operator_focus(Some("sender".into()));
+    let kept = runtime.snapshot.ui_state.pane_read_records["sender"]
+        .read_asks
+        .clone()
+        .unwrap();
+    assert!(review.is_subset(&kept), "{kept:?}");
+    engine(&mut runtime, "working", 3);
+    engine(&mut runtime, "idle", 4);
+    runtime.set_operator_focus(None);
+    let (rested, notices) = announced(&mut runtime, &mut transitions);
+    assert_eq!(
+        (rested.group.as_str(), rested.unread, rested.asks_behind),
+        ("seen", false, 0)
+    );
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert!(rested.revisit.is_some_and(|revisit| revisit.read_ask));
+    assert!(notices.is_empty(), "the review read is not announced again");
+}
+
 #[test]
 fn a_plan_put_up_for_review_waits_on_the_operator_until_the_agent_approves_it() {
     let root = tempfile::tempdir().unwrap();

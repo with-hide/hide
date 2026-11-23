@@ -230,6 +230,11 @@ export function hostLink(host: Pick<PairedHost, "room">, tag?: string, one = fal
   return `/?${query}`;
 }
 
+/** The start page that opens `host` on its mission `id`'s page, for a mission that is its own 내 차례 item (`gather.ts`). */
+export function missionLink(host: Pick<PairedHost, "room">, id: string): string {
+  return `/?${new URLSearchParams({ host: host.room, mission: id })}`;
+}
+
 /** The start page that opens `host` on its automation `id`'s page, for an automation that stopped for a person (`gather.ts`). */
 export function automationLink(host: Pick<PairedHost, "room">, id: string): string {
   return `/?${new URLSearchParams({ host: host.room, automation: id })}`;

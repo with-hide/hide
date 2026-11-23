@@ -8,7 +8,7 @@ import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, withoutLook, type LineParts } from "./agentRow";
+import { agentWithProfile, leftTail, asksBehindTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, withoutLook, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
@@ -525,13 +525,14 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
-  // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
-  // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
+  // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask waits first in
+  // 쉬는 중 with a hollow `!` and a resting row's grey line; the mark says it was read, so no word repeats it
+  // (operator decision 2026-11-23, replacing needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
   const starMark = card.state === "revisit";
-  const read = card.state === "needs_you" && card.read === true;
+  const read = card.read === true;
   const revisitWords = starMark || starred(agent) ? t("taskLens.revisit.starred") : read ? t("taskLens.revisit.readAsk") : null;
-  const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
+  const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
   const names = useShellStore((s) => automationNames(s.automations));
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
@@ -550,7 +551,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationRun(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} bot={botStarter(agent)} profile={agent.profile} />
-            <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
+            <AgentRecordTitle agent={agent} className="text-caption font-medium" />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
@@ -559,7 +560,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
           <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
+        <SecondLine entry={entry} showProject={showProject} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -661,8 +662,8 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
       { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
       { id: "pane", icon: "terminal", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
     ];
-    // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
-    // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
+    // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask also offers 치우기, which
+    // puts it away until the agent asks something new, the row then resting like any other (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
     if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
@@ -688,7 +689,7 @@ function revisitOn(agent: AgentRow): boolean {
   return agent.revisit?.starred === true;
 }
 
-/** An ask the operator read and has not answered, not put off with ☆: it stands read in 내 차례 (needs-you-cleanup B10). */
+/** An ask the operator read and has not answered, not put off with ☆: it waits first in 쉬는 중 (operator decision 2026-11-23). */
 function readAsk(agent: AgentRow): boolean {
   return agent.revisit?.read_ask === true && !agent.revisit.starred;
 }
@@ -700,9 +701,9 @@ function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translat
 
 /**
  * The ☆/★ beside the record button (PRD revisit-group D-08, B8): ☆ stars the
- * task and ★, drawn only on a starred one, is 다시 볼 것에서 빼기. On an ask in
- * 내 차례, ☆ reads it and puts it off to 다시 볼 것 (needs-you-cleanup B13);
- * the ⋯ menu's 치우기 puts a read ask away.
+ * task and ★, drawn only on a starred one, is 다시 볼 것에서 빼기. On an ask,
+ * ☆ reads it and puts it off to 다시 볼 것 (needs-you-cleanup B13); the ⋯
+ * menu's 치우기 puts a read ask away.
  */
 function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -729,13 +730,15 @@ const revealed = (open: boolean) => (open ? "flex" : "hidden group-hover/task:fl
 const resting = (open: boolean) => (open ? "hidden" : "group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden");
 
 /**
- * The time a row shows: in 내 차례 how long its ask has waited, the time the
- * core orders the asks by, so the times read in order down the list
- * (operator decision 2026-11-14); elsewhere its latest actual prompt.
+ * The time a row shows: in 내 차례 how long its ask has waited and on a read
+ * ask in 쉬는 중 since when it asks, the times the asks are ordered by, so the
+ * times read in order down the list (operator decisions 2026-11-14,
+ * 2026-11-23); elsewhere its latest actual prompt.
  */
 function waitedSince({ agent, card }: TaskEntry): number | null | undefined {
+  if (card.read) return agent.revisit?.since_unix_ms ?? agent.last_prompt_at_unix_ms;
   if (card.state !== "needs_you") return agent.last_prompt_at_unix_ms;
-  return (card.read ? agent.revisit?.since_unix_ms : agent.state.request_since) ?? agent.last_prompt_at_unix_ms;
+  return agent.state.request_since ?? agent.last_prompt_at_unix_ms;
 }
 
 /**
@@ -771,8 +774,9 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
 /**
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
+ * A read ask resting says its question in a resting row's grey.
  */
-function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
+function SecondLine({ entry, showProject, actions }: { entry: TaskEntry; showProject: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || (Boolean(entry.agent.hide_ai) && !automationRun(entry.agent)));
   const toolList = useContext(InToolCell);
@@ -782,7 +786,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
   const origin = agent.hide_ai?.task?.kind === "automation" ? taskLine(t, agent.hide_ai.task, names) : null;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
-  const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn, agent.request?.pull_requests), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
+  const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn, agent.request?.pull_requests), tail: null } : card.state === "resting" && !agent.state.session.unfinished && !card.read ? null : agentLineParts(t, agent);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
   // What it opened rides its own chip, which opens it in focus mode, under whatever the line says: an ask, a run's result
@@ -796,7 +800,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
         <ToolLabel tool={tool} />
         {origin ? <span className="shrink-0 text-muted-foreground" data-task-origin="automation">{origin}</span> : showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
@@ -823,8 +827,9 @@ function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agen
   if (!own && agent.mark === "look" && row?.mode === "request") return null;
   if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, withoutLook(agent), row!);
   const text = agent.state.session.line;
-  if (!text) return null;
-  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: leftTail(t, agent) };
+  // With no sentence (Hide AI off, or its answer not in yet), the read questions still waiting behind the news are the line.
+  if (!text && !agent.asks_behind) return null;
+  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text: text || null, tail: [leftTail(t, agent), asksBehindTail(t, agent)].filter(Boolean).join(" · ") || null };
 }
 
 const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].filter(Boolean).join(" · ");
