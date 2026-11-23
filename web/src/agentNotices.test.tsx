@@ -134,6 +134,16 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
 
   await act(async () => open?.("agent:node|w1:p1"));
   expect(events.some((event) => event.kind === "focus_pane" && event.payload.pane_id === "w1:p1")).toBe(true);
+  expect(events.some((event) => event.kind === "pair_view")).toBe(false);
+
+  // A row whose call is a View: its notice names the View, so a click opens it in focus mode as the row's chip does,
+  // in one event and with no pane focus of its own (operator decision 2026-11-23).
+  const look = { group: "done", count: 1, view_id: "v3", label: "report.html", workspace_id: null, checkout_id: null };
+  await act(async () => useShellStore.setState({ agents: [{ pane_id: "w1:p1", mark: "look", look, state: { asking: false } }] } as never));
+  const beforeLook = events.length;
+  await act(async () => open?.("agent:node|w1:p1"));
+  expect(events.slice(beforeLook)).toEqual([{ schema_version: 2, kind: "pair_view", payload: { pane_id: "w1:p1", display_id: "v3", bring_forward: true } }]);
+  await act(async () => useShellStore.setState({ agents: [] }));
 
   // A notice another machine handed over is worded like this machine's own, and a click selects that machine's tile (PRD device-connect-iroh D-50, D-60).
   await act(async () => {

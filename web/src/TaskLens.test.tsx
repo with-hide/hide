@@ -158,19 +158,45 @@ it("ends a mission decision's line with an eye and how many Views it links to lo
   expect(line("bare").querySelector("[data-ask-views]")).toBeNull();
 });
 
-it("says a View to look at as its line, ahead of a question the row's own mark does not lead with, and names the tool (PRD hide-external-control B29, D-15)", async () => {
+it("draws a View to look at as its chip, never the line, ahead of a question the row's own mark does not lead with, and names the tool (PRD hide-external-control B29, D-15)", async () => {
   // An external tool's agent opened a View for the operator while its Conductor's decision waits on the tool:
-  // the core draws the eye, and the line is the View's, not the tool's question.
+  // the core draws the eye, the View rides its chip (operator decision 2026-11-23), and the line is not the tool's question.
   const look = { group: "seen", count: 1, view_id: "v1", label: "tool-report.md", workspace_id: "hide", checkout_id: "hide-main" };
   const agent = row("tool", { mark: "look", group: "needs_you", demand: "question", look, tool: { connection: "c0ffee00c0ffee00", name: "nightly", owns: true } } as Partial<AgentRow>, { group: "needs_you", line: "Which order?" });
   const withLine = { ...agent, state: { ...agent.state, asking: true, line: { text: "Which order?", mode: "request" } } } as AgentRow;
   const { container } = await render(snapshot([withLine], [card("tool", "needs_you", "hide-main")]), [withLine]);
   // The row names the tool, as the agent's pane head does (D-15).
   expect(container.querySelector('[data-task-row="tool"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
+  expect(container.querySelector('[data-task-row="tool"] [data-look-chip="v1"]')?.textContent).toContain("tool-report.md");
   const line = container.querySelector('[data-task-row="tool"] [data-task-line]')!;
-  expect(line.textContent).toContain("볼 것");
-  expect(line.textContent).toContain("tool-report.md");
+  expect(line.textContent).not.toContain("볼 것");
   expect(line.textContent).not.toContain("Which order?");
+});
+
+// Operator decision 2026-11-23: every row with a View to look at carries its chip, the row whose only call is the View
+// included; its line is the agent's own, and the eye stays. The row goes to the agent only; the chip opens the View in
+// focus mode, in one event.
+it("draws a View-only row's chip under the agent's own line, sends the row to the pane only and the chip into focus mode", async () => {
+  const look = { group: "done", count: 2, view_id: "v7", label: "daily.html", workspace_id: "hide", checkout_id: "hide-main" };
+  const agent = row("report", { mark: "look", group: "needs_you", status_code: "done", activity: "stopped", look } as Partial<AgentRow>, { group: "done", line: "오늘 지표와 이슈 4건 정리" });
+  const { container, sent } = await render(snapshot([agent], [card("report", "needs_you", "hide-main")]), [agent]);
+  const task = container.querySelector('[data-task-row="report"]')!;
+  expect(task.querySelector('[data-task-focus="row"] [data-mark]')?.getAttribute("data-mark")).toBe("look");
+  expect(task.querySelector("[data-task-line]")?.textContent).toContain("오늘 지표와 이슈 4건 정리");
+  expect(task.querySelector("[data-task-line]")?.textContent).not.toContain("daily.html");
+  const chip = task.querySelector<HTMLButtonElement>('[data-look-chip="v7"]')!;
+  expect(chip.textContent).toContain("daily.html");
+  expect(chip.textContent).toContain("외 1개");
+
+  await act(async () => task.querySelector<HTMLButtonElement>('[data-task-focus="row"]')!.click());
+  expect(sent.map((event) => event.kind)).toEqual(["focus_pane"]);
+  expect(sent[0]!.payload).not.toHaveProperty("reveal_unseen");
+
+  sent.length = 0;
+  await act(async () => chip.click());
+  expect(sent).toEqual([{ schema_version: 2, kind: "pair_view", payload: { pane_id: "report", display_id: "v7", bring_forward: true } }]);
+  expect(useUiStore.getState().viewFocusRequest).toEqual({ workspace: expect.any(String), displayId: "v7", from: null });
+  expect(useUiStore.getState().pairEntry?.keys).toBe("desk");
 });
 
 it("in 상태별 draws 내 차례 and 읽을 것 as the first sections of the one list, arrows crossing them, and only 상태별 does", async () => {

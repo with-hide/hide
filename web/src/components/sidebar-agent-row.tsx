@@ -6,7 +6,7 @@ import { agentClosing, treeCloseProgress } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, projectTreeLine } from "../agentRow";
-import { agentWithProfile, recordWords } from "../agentRow";
+import { agentWithProfile, recordWords, withoutLook } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
 import { automationNames, automationRun, homeTurnLine, originLine } from "../hideAiOrigin";
@@ -27,6 +27,7 @@ import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
 import { ToolLed } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
+import { LookChip } from "./linked-view";
 import type { Actions } from "../actions";
 import { PairMark } from "./pair-mark";
 import { markedPairs } from "../pairView";
@@ -150,8 +151,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   pulls?: SessionPull[];
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
-  /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
-  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
+  /** Done on the person's turn the row carries (PRD ask-human B19), and the chip of a View to look at on a raised row (operator decision 2026-11-23); without it the row draws neither. */
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText" | "openLook"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
@@ -168,15 +169,19 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     if (!pull) throw new Error("PR card names a pull request outside its row");
     onOpenPullRequest(pull, external);
   };
-  const line = tree ? projectTreeLine(agent) : sidebarLine(agent);
+  const unreachable = remote !== null && !remote.reachable;
+  // A raised row draws what its agent opened as a chip under its line, which then says the agent's own (operator decision
+  // 2026-11-23); a tree row keeps to one line and draws none, its eye saying there is something to look at.
+  const look = !tree && !unreachable && actions ? agent.look ?? null : null;
+  const line = tree ? projectTreeLine(agent) : sidebarLine(agent, { lookChip: look !== null });
   const branch = branchShown ? branchChip(agent) : null;
   const attention = agent.state.attention;
-  const unreachable = remote !== null && !remote.reachable;
   // A row on a device that is not connected shows what Hide last knew of it,
   // which may be long over: it draws no mark, and its line says why (status-marks B16).
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
   // Copy stands beside a person's turn's place wherever Done does (operator decision 2026-11-08).
   const humanActions = agent.human_turn && actions && !offline ? actions : null;
+  const lookActions = look ? actions : null;
   const copy = humanActions?.copyText;
   const names = useShellStore((s) => automationNames(s.automations));
   // An automation run's row says which automation started it wherever it stands, its Needs You row too (PRD automations B15).
@@ -215,7 +220,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       {homeTurnLine(t, agent.hide_ai.turn, agent.request?.pull_requests)}
     </span>
   ) : line ? (
-    <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
+    <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, look ? withoutLook(agent) : agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
   ) : null;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -320,6 +325,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
         {agent.human_turn && humanActions ? <HumanTurnDone turn={agent.human_turn} actions={humanActions} className="mt-xxs" /> : null}
+        {look && lookActions ? <span className="flex min-w-0 pt-xxs"><LookChip look={look} onOpen={() => lookActions.openLook(agent.pane_id, look)} /></span> : null}
         {place && !placeInHead ? (
           <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}
