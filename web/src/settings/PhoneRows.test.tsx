@@ -173,7 +173,6 @@ it("offers a fresh code once the shown one expired, a press away", async () => {
   await expired.press('[data-mobile-show-code="true"]');
   expect(kinds(expired.events).filter((kind) => kind === "mobile_show_code")).toHaveLength(2);
   await expired.unmount();
-
 });
 
 it("opens Add device on a computer's two ways when the way in adds a computer, and the phone group when it opens a phone's settings", async () => {
@@ -192,6 +191,8 @@ it("renames a phone, keeping the name it paired with, and an empty field gives t
   await press('[data-mobile-rename="p1"]');
   const input = q('[data-device-rename-input="p1"]') as HTMLInputElement;
   expect(input.value).toBe("Work phone");
+  // The window says what a phone's name changes, never the computer's words.
+  expect(q('[data-device-rename-dialog="p1"]')?.textContent).toContain("The name this computer shows the phone under, here and in hide phone list. The phone keeps its own name.");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, " ");
     input.dispatchEvent(new Event("input", { bubbles: true }));

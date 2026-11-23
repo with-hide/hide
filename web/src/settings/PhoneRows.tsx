@@ -101,6 +101,7 @@ export function PhoneGroup({ actions, own, pairing, onPairingClose }: { actions:
           id={renamed.id}
           current={renamed.name}
           chosen={renamed.own_name != null}
+          description={t("mobileSetup.renameDescription")}
           onSave={(name) => actions.renamePhone(renamed.id, name)}
           onClose={() => setRenaming(null)}
         />

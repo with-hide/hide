@@ -200,6 +200,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         <RenameDevice
           id={renaming.id}
           current={machineName(devices, renaming.id, t)}
+          description={t("devices.renameDescription")}
           onSave={(name) => {
             setActedAt(Date.now());
             actions.renameDevice(renaming.id, name);
