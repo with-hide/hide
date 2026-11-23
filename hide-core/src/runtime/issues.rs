@@ -767,7 +767,7 @@ impl Runtime {
     /// repository the operator connected it to; for a node's project, the
     /// name the node read from its `origin` (D-16), never a folder of this
     /// machine at the node's path; else this machine's checkout, placed by
-    /// the remotes its node read ([`crate::code_host::CodeHosts::place_of_checkout`]).
+    /// the remotes its node read ([`crate::code_host::CodeHosts::placement_of_checkout`]).
     /// Reads and writes take the same place, so a project read on one host
     /// is never written on another.
     pub(super) fn github_place(
@@ -775,14 +775,8 @@ impl Runtime {
         node: Option<&str>,
         root: &str,
     ) -> Result<crate::code_host::Place, String> {
-        if let Some(crate::project_settings::RepositoryConnection::Repository { repository }) =
-            crate::project_settings::get(
-                &self.snapshot.ui_state.project_settings,
-                node.unwrap_or(self.node.as_str()),
-                root,
-            )
-            .and_then(|record| record.repository.as_ref())
-        {
+        use crate::code_host::Placement;
+        if let Some(repository) = self.connected_repository(node, root) {
             return self.code_hosts.place_of(repository).ok_or_else(|| {
                 format!(
                     "No code host reads the repository {repository:?} the project is connected to"
@@ -790,10 +784,18 @@ impl Runtime {
             });
         }
         let Some(node) = node else {
-            return self
+            return match self
                 .code_hosts
-                .place_of_checkout(Path::new(root), self.catalog_paths.remotes(root))
-                .ok_or_else(|| "The project has no remote a code host reads".to_owned());
+                .placement_of_checkout(Path::new(root), self.catalog_paths.remotes(root))
+            {
+                Placement::At(place) => Ok(place),
+                Placement::NoRemote => {
+                    Err("The project has no remote a code host reads".to_owned())
+                }
+                Placement::RemotesNotKnown => {
+                    Err("The node has not said which remotes the project has".to_owned())
+                }
+            };
         };
         let repository = self
             .device_worktrees
@@ -806,6 +808,42 @@ impl Runtime {
         self.code_hosts.place_of(&repository).ok_or_else(|| {
             format!("No code host reads the repository {repository:?} the node named")
         })
+    }
+
+    /// [`Runtime::github_place`] as the code host reader takes it: a project
+    /// of this machine with no repository connected keeps the registry's
+    /// three answers, so remotes its node did not say are not no remote;
+    /// any other project the reader cannot place has no remote it reads.
+    pub(super) fn github_placement(
+        &self,
+        node: Option<&str>,
+        root: &str,
+    ) -> crate::code_host::Placement {
+        use crate::code_host::Placement;
+        if node.is_none() && self.connected_repository(node, root).is_none() {
+            return self
+                .code_hosts
+                .placement_of_checkout(Path::new(root), self.catalog_paths.remotes(root));
+        }
+        self.github_place(node, root)
+            .map_or(Placement::NoRemote, Placement::At)
+    }
+
+    /// The repository the operator connected the project at `root` to.
+    fn connected_repository(&self, node: Option<&str>, root: &str) -> Option<&String> {
+        match crate::project_settings::get(
+            &self.snapshot.ui_state.project_settings,
+            node.unwrap_or(self.node.as_str()),
+            root,
+        )?
+        .repository
+        .as_ref()?
+        {
+            crate::project_settings::RepositoryConnection::Repository { repository } => {
+                Some(repository)
+            }
+            _ => None,
+        }
     }
 
     /// Shows a change to a project's issues made here: this machine's

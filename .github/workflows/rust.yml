@@ -147,6 +147,16 @@ jobs:
         run: |
           gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
           HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
+      - name: Every glab command line on the oldest glab Hide supports
+        # hide-host/src/glab.rs: each command line the node runs `glab` with
+        # parses on `MINIMUM_VERSION` (hide-node-link/src/glab.rs), which
+        # scripts/fetch-glab.sh downloads against its pinned digest; a proxy
+        # that refuses every connection keeps every line off gitlab.com.
+        if: ${{ !cancelled() && steps.archive.outcome == 'success' && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
+        timeout-minutes: 10
+        run: |
+          glab_bin=$(bash scripts/fetch-glab.sh "$RUNNER_TEMP/glab-minimum")
+          HIDE_TEST_GLAB_BIN=$glab_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=glab::tests::every_command_line_parses_on_the_oldest_glab_hide_supports)' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in this repository (docs/TESTING.md,
         # Flaky tests); the App's token reads this run and files them. A run

@@ -1049,3 +1049,42 @@ fn an_unreachable_remote_fails_without_prompting() {
     };
     assert_eq!(failure, FetchFailure::Offline);
 }
+
+/// A checkout's origin leaves the node without the user and password a
+/// `scheme://` address carries, in the checkout header and in the
+/// repository's worktree facts alike; an scp-like address keeps its user.
+#[test]
+fn an_origin_leaves_the_node_without_its_credentials() {
+    let repository = repository();
+    let root = repository.path();
+    let origin = |address: &str| {
+        // The first address finds no origin to remove.
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["remote", "remove", "origin"])
+            .output();
+        git(root, &["remote", "add", "origin", address]);
+        let header = hide_host::worktrees::checkout_git(root).unwrap().origin_url;
+        let facts = hide_host::worktrees::read(
+            root,
+            &Default::default(),
+            None,
+            None,
+            &hide_host::worktrees::Measured::default(),
+            false,
+        )
+        .unwrap()
+        .origin_url;
+        assert_eq!(header, facts, "{address}");
+        header
+    };
+    assert_eq!(
+        origin("https://oauth2:glpat-secret@gitlab.com/group/sub/project.git").as_deref(),
+        Some("https://gitlab.com/group/sub/project.git")
+    );
+    assert_eq!(
+        origin("git@gitlab.com:group/sub/project.git").as_deref(),
+        Some("git@gitlab.com:group/sub/project.git")
+    );
+}

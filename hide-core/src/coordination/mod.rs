@@ -130,7 +130,8 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             if crate::worktree_command::DETAILED.contains(&code)
                 || crate::agent_profiles::DETAILED.contains(&code)
                 || crate::links::session_command::DETAILED.contains(&code)
-                || crate::store_command::DETAILED.contains(&code) =>
+                || crate::store_command::DETAILED.contains(&code)
+                || crate::code_host::PLACE_REFUSALS.contains(&code) =>
         {
             (code, Some(detail))
         }

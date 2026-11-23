@@ -562,8 +562,20 @@ impl Runtime {
                 status,
                 line,
                 pr,
+                pr_place,
                 file,
             } => {
+                // A pull request written with its host's label or address is
+                // the session's project's, or nothing is claimed.
+                if let Some(place) = &pr_place {
+                    let repository = self
+                        .catalog_project_of(&context.device_id, &context.checkout_path)
+                        .and_then(|project| {
+                            self.github_project_on(&context.device_id, &project.root_path)
+                        })
+                        .and_then(|project| project.repository.as_ref()?.repository.as_ref());
+                    self.code_hosts.admit_place(place, repository)?;
+                }
                 let claim = match (pr, file) {
                     (Some(number), _) => Some(Evidence::Pr {
                         repo: String::new(),

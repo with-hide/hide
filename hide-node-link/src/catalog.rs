@@ -17,6 +17,27 @@ pub const PATH_FACTS_LIMIT: usize = 4096;
 /// build an answer that grows with every repository's config.
 pub const PATH_FACTS_ANSWER_LIMIT: usize = 16 * 1024 * 1024;
 
+/// `url` without the user and password a `scheme://` address carries; an
+/// scp-like `user@host:path` keeps its user, which names an account, never
+/// a secret. The node applies it to every remote address it sends (the
+/// catalog's addresses and a checkout's origin), and the core again where an
+/// address from a node enters it, since an older node sends it raw.
+pub fn without_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let (authority, path) = rest
+        .split_once('/')
+        .map_or((rest, None), |(authority, path)| (authority, Some(path)));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    match path {
+        Some(path) => format!("{scheme}://{host}/{path}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
 /// The node's answer for the paths the core asked about.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PathFacts {

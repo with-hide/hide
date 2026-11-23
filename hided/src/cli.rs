@@ -165,7 +165,7 @@ pub enum CommandKind {
     Memory(hide_core::memory_command::MemoryCommand),
 }
 
-const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]";
+const LINKS_USAGE: &str = "usage: hide links pr <number | #number | !number | address> | issue <number> | branch <name> | session <id> [--all-projects]";
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
@@ -700,7 +700,11 @@ fn parse_links<'a>(iter: impl Iterator<Item = &'a String>) -> Result<CommandKind
             .filter(|number| *number > 0)
     };
     let target = match words.as_slice() {
-        ["pr", value] => number(value).map(|number| QueryTarget::Pr { number }),
+        ["pr", value] => hide_core::written_change_request(value).map(|written| QueryTarget::Pr {
+            number: written.number,
+            host: written.host,
+            repository: written.repository,
+        }),
         ["issue", value] => number(value).map(|number| QueryTarget::Issue { number }),
         ["branch", name] => Some(QueryTarget::Branch {
             name: (*name).to_owned(),
@@ -4652,13 +4656,48 @@ mod tests {
         let parse = |line: &[&str]| {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };
-        assert_eq!(
-            parse(&["hide", "links", "pr", "#317"]),
+        // `#317` is GitHub's label, so a gitlab.com project, where `#317`
+        // is an issue, holds no pull request by it; a bare number is any
+        // host's, `!12` gitlab.com's, and an address names its repository.
+        let pr = |number, host: Option<&str>, repository: Option<&str>| {
             Ok(CommandKind::Links(LinksQuery {
-                target: QueryTarget::Pr { number: 317 },
+                target: QueryTarget::Pr {
+                    number,
+                    host: host.map(str::to_owned),
+                    repository: repository.map(str::to_owned),
+                },
                 all_projects: false,
             }))
+        };
+        assert_eq!(
+            parse(&["hide", "links", "pr", "#317"]),
+            pr(317, Some("github"), None)
         );
+        assert_eq!(parse(&["hide", "links", "pr", "317"]), pr(317, None, None));
+        assert_eq!(
+            parse(&["hide", "links", "pr", "!12"]),
+            pr(12, Some("gitlab"), None)
+        );
+        assert_eq!(
+            parse(&[
+                "hide",
+                "links",
+                "pr",
+                "https://gitlab.com/Acme/Sub/App/-/merge_requests/12"
+            ]),
+            pr(12, Some("gitlab"), Some("gitlab.com/acme/sub/app"))
+        );
+        assert_eq!(
+            parse(&["hide", "links", "pr", "https://github.com/Acme/App/pull/5"]),
+            pr(5, Some("github"), Some("github.com/acme/app"))
+        );
+        for refused in ["%12", "!0", "!x", "https://gitlab.com/acme/app/-/issues/3"] {
+            assert_eq!(
+                parse(&["hide", "links", "pr", refused]),
+                Err(LINKS_USAGE.to_owned()),
+                "{refused}"
+            );
+        }
         assert_eq!(
             parse(&["hide", "links", "--all-projects", "branch", "feat/x"]),
             Ok(CommandKind::Links(LinksQuery {

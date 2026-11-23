@@ -74,6 +74,20 @@ class CodeHostSeam(unittest.TestCase):
             'the key in matches!': 'fn pick(key: &str) -> bool { matches!(key, "github") }\n',
             'the key as the component of a log no file list names':
                 'fn log() { diagnostic!(json!({"component": "github", "kind": "x"})); }\n',
+            "the key as a common reader's component, once the reader takes the host's":
+                'fn log() { diagnostic!(json!({"component":"github","kind":"y"})); }\n',
+            "gitlab.com's node call": 'fn ask() { let _ = Call::Glab { args: Vec::new() }; }\n',
+            "gitlab.com's node call by its variant": 'use hide_node_link::protocol::Call::{Git, Glab};\n',
+            "gitlab.com's program": 'const PROGRAM: &str = "glab";\n',
+            "gitlab.com's module": 'use hide_node_link::glab;\n',
+            "an item of gitlab.com's module": 'const ASK: [&str; 1] = hide_node_link::glab::VERSION;\n',
+            "gitlab.com's module in a use group": 'use hide_node_link::{NodeLink, glab};\n',
+            "gitlab.com's answer type": 'fn read(answer: GlabAnswer) {}\n',
+            "a gitlab.com address": 'fn page(n: u32) -> String { format!("https://gitlab.com/a/b/-/merge_requests/{n}") }\n',
+            "a merge request's page": 'fn page(base: &str, n: u32) -> String { format!("{base}/-/merge_requests/{n}") }\n',
+            "gitlab.com's key compared": 'fn pick(key: &str) -> bool { key == "gitlab" }\n',
+            "gitlab.com's key in matches!": 'fn pick(key: &str) -> bool { matches!(key, "gitlab") }\n',
+            "gitlab.com's key as a log's component": 'fn log() { diagnostic!(json!({"component": "gitlab"})); }\n',
         }
         for what, text in probes.items():
             with self.subTest(what):
@@ -90,9 +104,19 @@ class CodeHostSeam(unittest.TestCase):
             'hide-core/src/words.rs': 'const WORDS: &[&str] = &["pr", "list", "--state", "all", "--json", "number,url"];\n',
             'hide-core/src/categories.rs': 'pub use hide_node_link::gh::GithubFailureCategory;\n'
                                            'fn commit(sha: &str) -> bool { hide_node_link::gh::is_commit(sha) }\n',
-            'hide-core/src/runtime/projects.rs': 'fn log() { diagnostic!(json!({"component": "github", "kind": "x"})); }\n'
-                                                 'fn tight() { diagnostic!(json!({"component":"github","kind":"y"})); }\n',
+            'hide-core/src/github_store.rs': 'fn log() { diagnostic!(json!({"component": "github", "kind": "x"})); }\n'
+                                             'fn tight() { diagnostic!(json!({"component":"github","kind":"y"})); }\n',
             'hide-core/src/tasks.rs': 'pub const GITHUB: &str = "github";\n',
+        })
+        self.assertEqual(self.found(check), [])
+        self.assertEqual(self.exit_code(check), 0)
+
+    def test_gitlab_coms_unit_and_its_node_side_may_spell_it(self):
+        check = self.tree({
+            'hide-core/src/gitlab.rs': 'fn ask() { let _ = Call::Glab { args: hide_node_link::glab::VERSION.map(Into::into).into() }; }\n',
+            'hide-core/src/gitlab/host.rs': 'const KEY: &str = "gitlab";\nconst PROGRAM: &str = "glab";\n',
+            'hide-node-link/src/glab.rs': 'pub const HOST: &str = "gitlab.com";\n',
+            'hide-host/src/glab.rs': 'fn run() { command("glab"); }\n',
         })
         self.assertEqual(self.found(check), [])
         self.assertEqual(self.exit_code(check), 0)
