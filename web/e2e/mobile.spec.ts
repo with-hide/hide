@@ -19,7 +19,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { checkoutAt, closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
+import { checkoutAt, closePane, coreLog, focusTab, openProject, sendKeys, withControl } from "./daemon-actions";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
@@ -332,7 +332,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await stale.locator('[data-phone-pair="true"]').tap();
     await expect(stale.locator('[data-phone-guidance="code_expired"]')).toHaveText("코드가 만료됐어요. Mac에서 QR을 다시 여세요.", { timeout: 20_000 });
 
-    // Agent states before the phone opens: one asks, two works.
+    // Agent states before the phone opens: one asks, two works, while another tab is shown, so the ask is not read
+    // on look; a read ask leaves Needs You (operator decision 2026-11-23).
+    await withControl(daemon, (control) => focusTab(control, fixture, elsewhere));
     await ask(fixture, daemon!, one, "배포 전에 테스트를 다시 돌릴까요?");
     await work(daemon!, two);
 
@@ -510,13 +512,14 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     expect(JSON.stringify(asked.payload)).not.toContain("fixture %");
     expect(asked.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
-    // B33: while the phone views one, its ask is read as under the desktop's focus (listed read, never announced).
+    // B33: while the phone views one, its ask is read as under the desktop's focus: listed read, never announced, and
+    // resting with the other read rows rather than in Needs You (operator decision 2026-11-23).
     await oneRow.tap();
     await expect(detail).toBeVisible();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "정말 배포할까요?");
-    await expect.poll(() => groupOf(frames, one)).toBe("needs_you");
+    await expect.poll(() => groupOf(frames, one)).toBe("seen");
     // The ask is listed read, so the daemon raises no notice and logs no decision: the read row is the state to wait for.
     await expect.poll(() => readOf(frames, one)).toBe(true);
     noPushBeyond(push.received, 1);
@@ -533,7 +536,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
-    await expect.poll(() => readOf(frames, two), { timeout: 20_000 }).toBe(true); // a read ask stays in Needs You (B11)
+    await expect.poll(() => readOf(frames, two), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => groupOf(frames, two)).toBe("seen"); // a read ask leaves Needs You (operator decision 2026-11-23)
     await page.close();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
