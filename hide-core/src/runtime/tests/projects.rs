@@ -4901,11 +4901,11 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
             .collect()
     };
     let mut projects = vec![
-        workspace("a", "hide", "/Users/grab/projects/hide", vec![]),
-        workspace("b", "hide", "/Users/grab/hide", vec![]),
+        workspace("a", "hide", "/Users/example/projects/hide", vec![]),
+        workspace("b", "hide", "/Users/example/hide", vec![]),
         workspace("c", "web", "/work/one/app/web", vec![]),
         workspace("d", "web", "/work/two/app/web", vec![]),
-        workspace("e", "hide", "/Users/hoyeon/hide", vec![]),
+        workspace("e", "hide", "/home/example/hide", vec![]),
         workspace("f", "shop", "/srv/shop", vec![]),
     ];
     projects[4].device_id = "macbook".to_owned();
@@ -4915,7 +4915,7 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
         labels(&projects),
         [
             "projects/hide",
-            "grab/hide",
+            "example/hide",
             "one/app/web",
             "two/app/web",
             "hide",
@@ -4923,7 +4923,7 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
         ]
     );
     crate::project_settings::apply_names(&none, &mut projects);
-    assert_eq!(labels(&projects)[..2], ["projects/hide", "grab/hide"]);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "example/hide"]);
 
     // The operator names the first `shop`: the folder `shop` beside it is
     // told apart, and the operator's name is kept as given.
@@ -4936,7 +4936,7 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
     // the other is its folder's name alone.
     projects[0].label = "hide".to_owned();
     crate::project_settings::apply_names(&none, &mut projects);
-    assert_eq!(labels(&projects)[..2], ["projects/hide", "grab/hide"]);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "example/hide"]);
     projects.remove(0);
     crate::project_settings::apply_names(&none, &mut projects);
     assert_eq!(labels(&projects)[0], "hide");

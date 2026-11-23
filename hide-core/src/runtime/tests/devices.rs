@@ -2562,11 +2562,11 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     assert!(told(&runtime).is_empty(), "no session of the machine yet");
 
     let at = |pane: &str| format!("remote:mac-mini:pane:{pane}");
-    let mut labelled = pane(&at("w1:p1"), "/Users/grab/hide");
+    let mut labelled = pane(&at("w1:p1"), "/Users/example/hide");
     labelled.identity_label = Some("로그인 고치기".to_owned());
-    let mut checkout = checkout("hide", "hide", "/Users/grab/hide", Some(labelled));
+    let mut checkout = checkout("hide", "hide", "/Users/example/hide", Some(labelled));
     for (pane_id, tab_name) in [("w1:p2", "배포 확인"), ("w1:p3", "Tab 3")] {
-        let mut tab = tab("hide", "hide", Some(pane(&at(pane_id), "/Users/grab/hide")));
+        let mut tab = tab("hide", "hide", Some(pane(&at(pane_id), "/Users/example/hide")));
         tab.naming.raw = tab_name.to_owned();
         checkout.tabs.push(tab);
     }
@@ -2579,7 +2579,7 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
             workspaces: vec![workspace(
                 "hide",
                 "hide",
-                "/Users/grab/hide",
+                "/Users/example/hide",
                 vec![checkout],
             )],
             agents: vec![],

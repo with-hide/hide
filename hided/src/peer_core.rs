@@ -1341,13 +1341,23 @@ mod tests {
         pc_key: String,
     }
 
-    /// What one side kept of the names a guest told it, in order.
-    #[derive(Default)]
-    struct Kept(Mutex<Vec<(String, HashMap<String, String>)>>);
+    /// What one side kept of the names a guest told it, in order, and how
+    /// many lists it has kept, for a test to wait on.
+    struct Kept(
+        Mutex<Vec<(String, HashMap<String, String>)>>,
+        watch::Sender<usize>,
+    );
+
+    impl Default for Kept {
+        fn default() -> Self {
+            Self(Mutex::default(), watch::channel(0).0)
+        }
+    }
 
     impl WorkNamed for Kept {
         fn named(&self, guest: &PeerKey, names: &HashMap<String, String>) {
             lock(&self.0).push((guest.to_hex(), names.clone()));
+            self.1.send_modify(|count| *count += 1);
         }
     }
 
@@ -1627,12 +1637,12 @@ mod tests {
 
         let kept = |pair: &Pair| lock(&pair.pc_kept.0).clone();
         let until = |pair: &Pair, count: usize| {
-            let pc_kept = Arc::clone(&pair.pc_kept);
-            within("the names on the PC", async move {
-                while lock(&pc_kept.0).len() < count {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
+            let mut kept = pair.pc_kept.1.subscribe();
+            async move {
+                within("the names on the PC", kept.wait_for(|told| *told >= count))
+                    .await
+                    .unwrap();
+            }
         };
         let mut told = std::collections::BTreeMap::new();
         told.insert(pair.pc_key.clone(), named(&[("w1:p1", "로그인 고치기")]));
