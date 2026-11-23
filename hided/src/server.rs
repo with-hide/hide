@@ -3042,15 +3042,15 @@ fn handle_client_text(
         Some("view_comment" | "view_feedback_send") => return Ok(ClientAction::Feedback(event)),
         Some("browser_comment") => return Ok(ClientAction::BrowserComment(event)),
         // The one thing a window asks of a guest's pane beside reading,
-        // typing and its size (PRD device-connect-iroh D-74, B10): the
-        // operator of this machine ends it, after the window's confirm (the
-        // `OwnWindow` class).
+        // typing and its size (PRD device-connect-iroh D-74, B10): a window
+        // that may type into it ends it, after its confirm (the `Window`
+        // class), and hears whether it did.
         Some("guest_pane_close") => {
-            state
-                .guests
-                .close_pane(&payload_str(&event, "pane_id"))
-                .map_err(str::to_owned)?;
-            return Ok(ClientAction::Replies(Vec::new()));
+            return Ok(ClientAction::Replies(vec![Message::Text(
+                guest_close_result(&event, |pane| state.guests.close_pane(pane))
+                    .to_string()
+                    .into(),
+            )]));
         }
         Some(kind) if kind.starts_with("pairing_") => {
             return Ok(ClientAction::Pairing(event));
@@ -4998,6 +4998,30 @@ pub(crate) fn unix_ms_now() -> u64 {
 
 /// The path a client sent, as written; a field the event omits reads as empty
 /// and is refused like any other empty path.
+/// The `guest_pane_close_result` frame for `event`, the window's call that
+/// `close` ends the pane its `call.pane_id` names, under the call's
+/// `request_id`: `ok`, or the code it was refused with.
+fn guest_close_result(
+    event: &Value,
+    close: impl FnOnce(&str) -> Result<(), &'static str>,
+) -> Value {
+    let request_id = payload_str(event, "request_id");
+    let pane = event
+        .pointer("/payload/call/pane_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let answer = if request_id.is_empty() || pane.is_empty() {
+        Err("guest_close_invalid")
+    } else {
+        close(pane)
+    };
+    let payload = match answer {
+        Ok(()) => json!({"request_id": request_id, "ok": true}),
+        Err(code) => json!({"request_id": request_id, "ok": false, "code": code}),
+    };
+    json!({"type": "guest_pane_close_result", "payload": payload})
+}
+
 fn payload_str(event: &Value, field: &str) -> String {
     event
         .pointer(&format!("/payload/{field}"))

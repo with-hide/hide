@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, GuestPaneClosePayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -43,7 +43,8 @@ import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, recentPanes, type Surface } from "./recent";
 import { frontTool, keptBy, toolKeeps } from "./toolCells";
-import { guestPanes } from "./guestWork";
+import { callGuestClose, guestCloseFailure } from "./guestCloseCall";
+import { afterGuestClose, guestPanes } from "./guestWork";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
@@ -1311,6 +1312,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     openSettings(tab: SettingsTab = "general") {
       ui().openSettings(tab);
+    },
+
+    /**
+     * The gear beside the rail, which is this window's: while a paired
+     * machine's screen stands in front it opens that screen's Settings, as ⌘,
+     * does (PRD device-connect-iroh B20), else this window's own.
+     */
+    openSettingsInFront() {
+      const settings = hostBridge()?.remoteScreens?.settings;
+      if (ui().remoteScreen !== null && settings) return settings();
+      this.openSettings();
     },
 
     /** 확인하기 on an install an agent asked for: its confirm in Settings › 스킬·MCP. */
@@ -3326,14 +3338,32 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setGuestClose(paneId);
     },
 
-    /** The operator confirmed: the pane's node ends it and tells the machine that asked for the work. */
-    closeGuestPane() {
+    /**
+     * The operator confirmed: the pane's node ends it and tells the machine
+     * that asked for the work. Once hided says it ended, a page that showed
+     * it shows what stands in its place (`afterGuestClose`); a close that did
+     * not go keeps the page and says why in one line.
+     */
+    async closeGuestPane() {
       const paneId = ui().guestClose;
       if (paneId === null) return;
       ui().setGuestClose(null);
-      dispatch({ schema_version: 2, kind: "guest_pane_close", payload: { pane_id: paneId } satisfies GuestPaneClosePayload });
+      const panes = guestPanes(rest(), catalogWorkspaces(rest()).filter((project) => !project.remote_target_id));
+      const pane = panes.find((row) => row.id === paneId);
+      const after = pane ? afterGuestClose(panes, pane) : ({ kind: "workspace" } as const);
+      const answer = await callGuestClose(paneId);
+      if (!answer.ok) {
+        ui().showNotice({ level: "important", text: translate(guestCloseFailure(answer.code)), refreshable: false, key: "guest_pane_close" });
+        return;
+      }
       const screen = ui().screen;
-      if (screen?.kind === "guest" && screen.paneId === paneId) ui().setScreen({ kind: "main" });
+      if (screen?.kind !== "guest" || screen.paneId !== paneId) return;
+      if (after.kind === "pane") ui().setScreen({ kind: "guest", paneId: after.paneId });
+      else {
+        // Its project's row, or this computer's Workspace as it stands: the page leaves at once, so the open never waits on a core that need not move.
+        if (after.kind === "checkout") this.openWorkspace(localDeviceId(rest()), after.projectId, after.checkoutId);
+        ui().setScreen({ kind: "workspace" });
+      }
     },
 
     cancelGuestPaneClose() {

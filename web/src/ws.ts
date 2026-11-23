@@ -5,6 +5,7 @@ import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./con
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
 import { receiveAccessResult, refuseWaitingAccessCalls } from "./accessCall";
 import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
+import { receiveGuestCloseResult, refuseWaitingGuestCloses } from "./guestCloseCall";
 import { movesOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
@@ -14,6 +15,7 @@ import { hostBridge, hostKind } from "./host";
 import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
 import { BridgeSocket, HIDDEN_CLOSE, remoteBridge } from "./remoteView";
+import { refuseCallsOf } from "./windowCall";
 
 export type DispatchFn = (event: {
   schema_version: number;
@@ -136,6 +138,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     clearPending("socket_closed");
     refuseWaitingAutomationCalls();
     refuseWaitingAccessCalls();
+    refuseWaitingGuestCloses();
     resetBrowserComments();
   };
 
@@ -196,6 +199,11 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "daemon") {
         announcedCore = (frame.payload as { core_instance?: string } | undefined)?.core_instance ?? null;
       }
+      // A refused kind a window waits on answers that wait; the store notes it either way.
+      if (frame.type === "refused") {
+        const refused = frame.payload as { kind?: string; reason?: string } | undefined;
+        if (refused?.kind) refuseCallsOf(refused.kind, refused.reason ?? "refused");
+      }
       if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link" || frame.type === "refused") {
         useShellStore.getState().applyFrame(frame);
         return;
@@ -221,6 +229,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       }
       if (frame.type === "access_result") {
         receiveAccessResult(frame.payload as unknown as { request_id: string; ok: boolean; value?: unknown; code?: string });
+        return;
+      }
+      if (frame.type === "guest_pane_close_result") {
+        receiveGuestCloseResult(frame.payload as unknown as { request_id: string; ok: boolean; code?: string });
         return;
       }
       if (frame.type === "file_bytes_error") {
