@@ -1,13 +1,14 @@
 // One pull request's page on the phone (PRD mobile-companion-ui B39-B45, D-12,
 // D-13, doop final board F10): its state, title and branch, the agent that
 // holds it, the checks, the review, the changed files with their +/- lines, a
-// link to GitHub, and the two buttons: `머지`, which asks once and goes out on
+// link to the pull request's page on its host, and the two buttons: `머지`, which asks once and goes out on
 // the head the page showed, and `에이전트에게 맡기기`, which opens the hand-over
 // sheet. Why Merge is off, what a confirmation holds and which method it uses
 // are the desktop card's own rules (`prCardModel.ts`, through `prModel.ts`);
-// this draws them. The "머지 순서" line of the board is left out on purpose
+// this draws them. A button the host does not offer is not drawn. The "머지 순서" line of the board is left out on purpose
 // (D-12): there is no merge order on the phone.
 
+import { pullHost, pullLabel, pullWords } from "../codeHost";
 import { ArrowLeftIcon, ChevronRightIcon, ExternalLinkIcon, GitMergeIcon, Loader2Icon, UserRoundCheckIcon } from "lucide-react";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
@@ -22,8 +23,8 @@ import { agentProductName } from "../agentAdapters";
 import { askMerge, cancelMerge, confirmMerge, lookAgainPr, openDelegate, openDetail } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { PrDelegateSheet } from "./PrDelegateSheet";
-import { prActions, prGroupOf, prOf, settled } from "./prModel";
-import { noticeText, type AgentKey, type PhonePr } from "./protocol";
+import { prActions, prGroupOf, prHostOf, prOf, settled } from "./prModel";
+import { noticeText, type AgentKey, type PhonePr, type PhonePrProject } from "./protocol";
 import { agentOf, closePr, usePhone } from "./store";
 
 export function PrDetail() {
@@ -53,17 +54,17 @@ function Page({ pr }: { pr: PhonePr }) {
             href={pr.url}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={t("work.card.github")}
+            aria-label={t("work.card.github", pullWords(pr))}
             data-phone-pr-github="true"
             className="inline-flex min-h-(--size-touch-target) items-center gap-xs text-body text-muted-foreground"
           >
-            GitHub
+            {pullHost(pr).name}
             <ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" />
           </a>
         </div>
         <StatePill pr={pr} />
         <h1 className="mt-sm break-keep text-headline font-semibold text-foreground wrap-anywhere" data-phone-pr-title="true">
-          <span className="font-mono text-subtle-foreground">#{pr.number}</span> {pr.title}
+          <span className="font-mono text-subtle-foreground">{pullLabel(pr)}</span> {pr.title}
         </h1>
         <p className="mt-xs flex min-w-0 flex-wrap items-center gap-xs break-all font-mono text-body text-muted-foreground" data-phone-pr-branch="true">
           <span>{pr.head_branch ?? ""}</span>
@@ -85,7 +86,7 @@ function Page({ pr }: { pr: PhonePr }) {
         <Review pr={pr} />
         <Files pr={pr} />
       </div>
-      <Buttons pr={pr} connected={connected} />
+      <Buttons pr={pr} projects={projects} connected={connected} />
       <MergeSheet />
       <PrDelegateSheet />
     </main>
@@ -231,7 +232,7 @@ function Files({ pr }: { pr: PhonePr }) {
         ))}
       </ul>
       {generated > 0 ? <p className="pt-sm text-body text-subtle-foreground">{t("work.card.generated", { count: generated })}</p> : null}
-      {!complete ? <p className="pt-sm text-body text-subtle-foreground" data-phone-pr-files-more="true">{t("work.card.filesMore", { total: card.files_total, shown: card.files.length })}</p> : null}
+      {!complete ? <p className="pt-sm text-body text-subtle-foreground" data-phone-pr-files-more="true">{t("work.card.filesMore", { total: card.files_total, shown: card.files.length, host: pullHost(pr).name })}</p> : null}
     </section>
   );
 }
@@ -250,13 +251,13 @@ function Lines({ additions, deletions }: { additions: number; deletions: number 
  * the desktop card would not allow it, and while the phone cannot reach the
  * Mac; what the last merge did stands under the buttons.
  */
-function Buttons({ pr, connected }: { pr: PhonePr; connected: boolean }) {
+function Buttons({ pr, projects, connected }: { pr: PhonePr; projects: readonly PhonePrProject[]; connected: boolean }) {
   const { t } = useInterfaceTranslation();
   const pending = usePhone((s) => s.prPending?.key === pr.key);
   const notice = usePhone((s) => (s.prNotice?.key === pr.key ? s.prNotice.notice : null));
   const delegated = usePhone((s) => s.prDelegated === pr.key);
-  const view = prActions(pr);
-  if (!view.open) return null;
+  const view = prActions(pr, prHostOf(pr, projects));
+  if (!view.open || (!view.mergeShown && !view.handover)) return null;
   const why = view.why;
   const canAsk = connected && view.head !== null && !view.working && !view.repeats && !pending;
   const showWhy = why !== null && !(why.key === "ci" && pr.work?.check_counts);
@@ -264,10 +265,10 @@ function Buttons({ pr, connected }: { pr: PhonePr; connected: boolean }) {
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-md pb-md">
       <div className="flex flex-col gap-sm">
         {showWhy ? (
-          <p className="text-body text-muted-foreground" data-phone-pr-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base })}</p>
+          <p className="text-body text-muted-foreground" data-phone-pr-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base, host: pullHost(pr).name })}</p>
         ) : null}
         <WriteLine pr={pr} connected={connected} />
-        {notice ? <p role="alert" className="text-body text-warning" data-phone-pr-notice="true">{noticeText(t, notice)}</p> : null}
+        {notice ? <p role="alert" className="text-body text-warning" data-phone-pr-notice="true">{noticeText(t, notice, { noun: t(pullHost(pr).noun) })}</p> : null}
         {delegated ? <p role="status" className="text-body text-pr-mergeable" data-phone-pr-delegated="true">{t("mobile.prs.delegated")}</p> : null}
         <div className="flex gap-sm">
           {view.mergeShown ? (
@@ -281,15 +282,17 @@ function Buttons({ pr, connected }: { pr: PhonePr; connected: boolean }) {
               {view.queue ? t("work.card.mergeQueue") : t("work.card.merge")}
             </Button>
           ) : null}
-          <Button
-            variant="secondary"
-            disabled={!connected}
-            onClick={() => openDelegate(pr.key)}
-            className="h-(--size-touch-target) flex-1 rounded-lg text-title"
-            data-phone-pr-delegate="true"
-          >
-            {t("work.card.assign")}
-          </Button>
+          {view.handover ? (
+            <Button
+              variant="secondary"
+              disabled={!connected}
+              onClick={() => openDelegate(pr.key)}
+              className="h-(--size-touch-target) flex-1 rounded-lg text-title"
+              data-phone-pr-delegate="true"
+            >
+              {t("work.card.assign")}
+            </Button>
+          ) : null}
         </div>
       </div>
     </footer>
@@ -309,7 +312,7 @@ function WriteLine({ pr, connected }: { pr: PhonePr; connected: boolean }) {
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-body text-warning" data-phone-pr-write="failed" data-phone-pr-write-reason={reason}>
-      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "" })}</span>
+      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "", host: pullHost(pr).name })}</span>
       <Button size="sm" variant="secondary" className="min-h-(--size-touch-target)" disabled={!connected || pr.card?.reading === true} onClick={lookAgainPr} data-phone-pr-look-again="true">
         {t("work.card.lookAgain")}
       </Button>
@@ -329,7 +332,7 @@ function MergeSheet() {
   const connected = usePhone((s) => s.connected);
   const open = confirm !== null && pr !== null;
   const base = pr?.base_branch ?? "";
-  const number = String(pr?.number ?? 0);
+  const words = pullWords(pr ?? { number: 0 });
   const detail = confirm ? [confirm.queue || !confirm.method ? null : t(`work.card.method.${confirm.method}`), confirm.head.slice(0, 7)].filter(Boolean).join(" · ") : "";
   return (
     <Sheet open={open} onOpenChange={(next) => !next && cancelMerge()}>
@@ -339,11 +342,11 @@ function MergeSheet() {
         data-phone-pr-confirm={confirm?.queue ? "queue" : "merge"}
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <SheetTitle className="break-keep text-headline wrap-anywhere">{t(confirm?.queue ? "mobile.prs.confirm.queue" : "mobile.prs.confirm.merge", { number, base })}</SheetTitle>
+        <SheetTitle className="break-keep text-headline wrap-anywhere">{t(confirm?.queue ? "mobile.prs.confirm.queue" : "mobile.prs.confirm.merge", { ...words, base })}</SheetTitle>
         <SheetDescription className="font-mono text-body text-muted-foreground">{detail}</SheetDescription>
         <div className="flex flex-col gap-sm">
           <Button disabled={!connected} onClick={confirmMerge} className="h-(--size-touch-target) w-full rounded-lg text-title font-semibold" data-phone-pr-confirm-yes="true">
-            {t(confirm?.queue ? "work.card.confirm.doQueue" : "work.card.confirm.doMerge", { number })}
+            {t(confirm?.queue ? "work.card.confirm.doQueue" : "work.card.confirm.doMerge", words)}
           </Button>
           <Button variant="secondary" onClick={cancelMerge} className="h-(--size-touch-target) w-full rounded-lg text-title" data-phone-pr-confirm-no="true">
             {t("common.cancel")}

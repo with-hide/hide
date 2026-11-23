@@ -661,7 +661,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(missionEntry(due, none).group).toBe("turn");
     const [ask] = missionAsks([due], ["m"]);
     expect(ask && ask.kind === "merge" ? [ask.node.key, ask.since_unix_ms, ask.more] : ask).toEqual(["db", 50, 0]);
-    expect(ko("mission.merge.due", { pr: 33 })).toBe("머지할 차례 PR #33");
+    expect(ko("mission.merge.due", { pull: "PR #33" })).toBe("머지할 차례 PR #33");
     // Merged on GitHub: it asks nothing more.
     const merged = mission("m", { scope: "merge", nodes: [db("merged", { landing: { state: "landed", proof: { by: "merged" } } }), api], landing_order: [] });
     expect(turnItems(merged, none)).toEqual([]);

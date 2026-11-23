@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { GITLAB } from "./gallery/PrCardScene";
 import { HideAiTool } from "./HideAiTool";
 import { clientI18n } from "./i18n/translator";
 import type { ProjectSuggestions, SnapshotRest } from "./snapshot";
@@ -393,13 +394,16 @@ describe("the Hide AI tool", () => {
       suggestionRow("s1", { group: "applied", state: "watching", watch: { sessions_seen: 2, sessions_needed: 5 } }),
       suggestionRow("s2", { group: "applied", state: "effective" }),
       suggestionRow("s3", { group: "applied", state: "applied" }),
-      suggestionRow("s4", { escalated: { level: 1, previous_pr_url: "https://github.com/acme/one/pull/1720" } }),
+      suggestionRow("s4", { escalated: { level: 1, previous_pr_url: "https://github.com/acme/one/pull/1720", previous_pr_reference: { repository: { host: "github", authority: "github.com", path: "acme/one" }, number: 1720, key: `github:github.com/acme/one${"#"}1720`, label: `${"#"}1720`, url: "https://github.com/acme/one/pull/1720", checks_url: "", files_url: "" } } }),
+      suggestionRow("s5", { escalated: { level: 1, previous_pr_url: "https://gitlab.com/acme/shop/-/merge_requests/7", previous_pr_reference: { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/shop" }, number: 7, key: "gitlab:gitlab.com/acme/shop!7", label: "!7", url: "https://gitlab.com/acme/shop/-/merge_requests/7", checks_url: "", files_url: "" } } }),
     ] }));
     expect(q("[data-suggestions-fold]")?.textContent).toBe("Applied 3· worked 1");
     expect(q('[data-suggestion="s1"]')).toBeNull();
     // It came back after its fix merged: back in 고를 것 with the last PR.
     expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain("The doc didn't do it");
     expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain(`Last PR ${"#"}1720`);
+    // A gitlab.com reference is named by its host: the item word and the number form both come from it.
+    expect(q('[data-suggestion="s5"] [data-suggestion-escalated]')?.textContent).toContain("Last MR !7");
     await click("[data-suggestions-fold]");
     expect(q('[data-suggestion="s1"] [data-suggestion-watch]')?.textContent).toBe("Watching · sessions 2/5");
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')).toBeNull();
@@ -457,6 +461,20 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestions-global]")?.textContent).toContain("Too large, so sessions aren't given it");
     expect(q('[data-suggestion="s1"] [data-suggestion-local]')?.textContent).toContain("Can't confirm the evidence");
     expect(q('[data-suggestion-apply="local_held"]')?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("draws no GitHub hold and no GitHub signals for a gitlab.com project, whose host files no issues (docs/UI_BEHAVIOR.md, Code hosts)", async () => {
+    const project = suggestionsProject({ rows: [suggestionRow("s3", { outcome: "issue", hold: "github_needed" })] });
+    project.settings.signals = project.settings.signals.map((row) => (row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const } : row));
+    await render(project);
+    const onGitlab = structuredClone(rest);
+    onGitlab.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: 1, host: GITLAB };
+    await act(async () => useShellStore.setState({ rest: onGitlab }));
+    expect(q('[data-suggestion="s3"] [data-suggestion-github-needed]')).toBeNull();
+    expect(q('[data-suggestion="s3"] [data-suggestion-dismiss]')?.textContent).toBe("Skip");
+    await press("[data-hide-ai-settings-open]");
+    expect([...q("[data-hide-ai-settings]")!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session"]);
+    expect(q("[data-hide-ai-settings]")?.textContent).not.toContain("GitHub");
   });
 
   it("opens on the row a Needs You row named, in 제안 (B11)", async () => {

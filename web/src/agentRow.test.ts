@@ -324,6 +324,19 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(ended("checks_failed")).toEqual(["CI 실패 · PR #1846", "text-warning"]);
   });
 
+  // docs/UI_BEHAVIOR.md, Code hosts: a gitlab.com merge request is named by the reference the row's own list carries,
+  // or the phone's line carries; a number neither carries keeps GitHub's form.
+  it("names a gitlab.com merge request whose checks ended by its host's word and number", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const reference = { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/shop" }, number: 12, key: "gitlab.com/acme/shop!12", label: "!12", url: "https://gitlab.com/acme/shop/-/merge_requests/12", checks_url: "https://gitlab.com/acme/shop/-/merge_requests/12/pipelines", files_url: "https://gitlab.com/acme/shop/-/merge_requests/12/diffs" };
+    const agent = row("c", { activity: "stopped", mark: "unread", status_code: "stopped", group: "done", unread: true });
+    agent.state = { ...agent.state, line: { text: "", mode: "checks_passed", tone: { kind: "news", read: false }, pull_request: 12 } };
+    const line = sidebarLine(agent)!;
+    expect(lineText(t, { ...agent, request: { pull_requests: [{ number: 12, reference }] } } as never, line)).toBe("CI 통과 · MR !12");
+    expect(lineText(t, agent, { ...line, pull_reference: reference })).toBe("CI 통과 · MR !12");
+    expect(lineText(t, agent, line)).toBe("CI 통과 · PR #12");
+  });
+
   it("says in words that the work a stopped row waited for is gone, only on the sidebar (B16)", async () => {
     const { t } = await createInterfaceI18n("ko");
     const gone = row("g", { activity: "stopped", mark: "unread", status_code: "stopped", detail: "CI 끝나기를 기다림" });

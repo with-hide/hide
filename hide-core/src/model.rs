@@ -7312,6 +7312,23 @@ pub struct GithubStatusSnapshot {
     /// saved file from before hosts were declared, which was GitHub's.
     #[serde(default)]
     pub host: Option<crate::code_host::HostDeclaration>,
+    /// The repository the read named, for the screen: the name its host
+    /// stores it by and its own page, both made by the host's unit. Absent
+    /// while no read named it or its server is not known. Only a copy of
+    /// [`GithubProjectSnapshot::repository`], made again by
+    /// [`GithubProjectSnapshot::show_repository`] wherever that is set; the
+    /// store does not save it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositoryOnScreen>,
+}
+
+/// A repository as the screen names and opens it ([`GithubStatusSnapshot::repository`]).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RepositoryOnScreen {
+    /// The name its host stores it by (`OWNER/NAME`, `gitlab.com/GROUP/PROJECT`).
+    pub name: String,
+    /// Its own page.
+    pub url: String,
 }
 
 impl GithubStatusSnapshot {
@@ -7522,6 +7539,20 @@ impl GithubProjectSnapshot {
     /// while its server is not known ([`RepositoryIdentity::as_key`]).
     pub(crate) fn repository_id(&self) -> Option<&str> {
         self.repository.as_ref()?.as_key()?.id.as_deref()
+    }
+
+    /// Puts the repository the read named on the status the screen reads,
+    /// as its host's unit names it; called wherever the identity is set (a
+    /// read's answer, a kept identity, a restore), so the two never differ.
+    pub(crate) fn show_repository(&mut self) {
+        self.status.repository = self.repository.as_ref().and_then(|identity| {
+            let repository = identity.repository.as_ref()?;
+            let host = crate::code_host::CodeHosts::STANDARD.of(repository)?;
+            Some(RepositoryOnScreen {
+                name: host.unit().stored_name(repository),
+                url: host.unit().repository_url(repository),
+            })
+        });
     }
 
     /// The branch the repository's host names as its default.

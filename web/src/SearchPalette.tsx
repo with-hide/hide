@@ -322,7 +322,7 @@ function SearchRow({ entry, read, onSelect }: { entry: SearchEntry; read: Projec
             {t("search.here")}
           </span>
         ) : null}
-        {read?.state === "reading" ? <LoaderCircleIcon aria-label={t("search.readingGitHub")} className="size-(--size-icon-sm) shrink-0 animate-spin text-muted-foreground" data-palette-read="reading" /> : null}
+        {read?.state === "reading" ? <LoaderCircleIcon aria-label={read.label} className="size-(--size-icon-sm) shrink-0 animate-spin text-muted-foreground" data-palette-read="reading" /> : null}
         {read?.state === "failed" ? (
           <span title={read.tooltip} aria-label={read.tooltip} className="shrink-0 text-warning" data-palette-read="failed">
             <TriangleAlertIcon className="size-(--size-icon-sm)" />

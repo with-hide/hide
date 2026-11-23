@@ -1694,6 +1694,26 @@ A 태스크 row in 내 차례 whose line says something else, a question or a ru
 The 태스크 list's 내 차례 draws the missions that are their own Needs You item with the same row and choices as the 프로젝트 list's Needs You, counted in its head with the tasks; with-hide/hide-private `docs/tasks-and-pr-list.md`, 내 차례, says where they stand.
 Its 내 차례 lists every connected device's as the 프로젝트 list's Needs You does, by the same operator decision of 2026-11-08 ([Sidebar hierarchy](#sidebar-hierarchy) for the rule; `elsewhereTasks` in `web/src/taskList.ts`); the same private document says where they stand in each view.
 
+## Code hosts
+
+A project is read from the code host its remote names, GitHub or gitlab.com; `docs/ARCHITECTURE.md`, Code hosts, owns how the core picks the host and what each one declares.
+Every screen that names a project's pull requests takes the host's look from `web/src/codeHost.ts`: its mark, its name, its word for an item (`PR`, `MR`) and its number form (`#12`, `!12`).
+A number is drawn from the reference the core carried for it, never parsed from or built into an address on the screen; a place that has no reference and no host keeps `#12`.
+The words Hide gives its own lists stay Hide's: the sidebar's `PR` tab and its counts read `PR` for a gitlab.com project too.
+An action the host does not offer is not drawn, not drawn disabled: on gitlab.com today a card has no hand-over, merge queue, branch update, linked issue or new issue, and its Merge appears only once the host declares the merge.
+Hide AI follows the same rule: for a host that files no issues, such as gitlab.com today, a suggestion that would leave an issue shows no `GitHub 연결 필요` hold, and Settings › Hide AI draws no GitHub signals row.
+A line about a read names the host and its program (`glab 로그인 필요`, `GitLab 읽기 실패`), and a line about one pull request calls it what its host does (`MR`), except two rare notices that keep main's words on both hosts: the card or phone page of one no longer listed, and a merge that met a moved head.
+The host mark among a project row's buttons in the sidebar opens the repository its last read named, on that host; a project no read named yet has no mark there.
+With GitHub as the only host, every screen reads as it did before hosts.
+
+### Settings › Remote repositories
+
+The tab lists one row per host: GitHub always, and GitLab only while a gitlab.com project exists.
+There is no switch to turn a host on or off.
+Each row says whether its program (`gh`, `glab`) can read the host now, and a row that needs a sign-in shows the program's sign-in command to copy.
+Check again reads every project again.
+When a host cannot be read, the PR list keeps the other host's items and marks its head with that host's reason, and the phone's PR tab says the same line under its head.
+
 ## Explorer file management
 
 The home folder, when it is a project (PRD home-folder-project B8-B11), lists its top level without names starting with `.` and without `Library` (macOS) or `AppData` (Windows), and every other folder lists as in any project; opening a hidden path by typing it or from a link still works, and Removing the project removes only its registration.
@@ -2812,6 +2832,11 @@ The learner opens Settings (`settings`) and its 봇 page, presses 봇 만들기,
 A practice screen cannot run an outside AI, so its world stages the join: a few seconds after the learner starts waiting (a `wait` step that tells the world it began), the bot leaves 연결 기다리는 봇 and is listed in the mode picked, beside `hermes`, already connected as 전체 with the person in its owl's corner.
 Settings closed, the rail shows `nightly` in its own space and no tile for `hermes`, and a few seconds after the join (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing, disconnecting and a mode change are not answered, so the chapter keeps both bots.
 Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
+
+Flow 10 (GitLab, `chapters/gitlab.ts`, since 1.3.0) shows a gitlab.com project read beside a GitHub one.
+Its world lists `shop-api`, read by gitlab.com, and `web`, read by GitHub, each checkout carrying the host that read it and each pull request the reference its host made, so the screens draw them as they draw a real read (Code hosts).
+The learner opens the PR list (`open_sidebar_prs` or the list switch's PR), reads `!12` with GitLab's mark beside `#41` with GitHub's, and opens `!12`; the world answers `pr_open` as the core does, and the card names GitLab, its failed pipeline and `GitLab에서 보기`, with no merge or 맡기기 because gitlab.com does not declare them.
+Settings (`settings`) then opens on 원격 저장소, whose GitLab row stands below GitHub's because a gitlab.com project exists; every address in the world is an example.
 
 Flow 7 (집중 모드, `chapters/focus.ts`, new in 1.2.11 and the chapter the What's new window's focus mode feature opens with `체험하기`) is five steps on a project with two agents side by side in one tab, one of them building a small page and having opened it as a View on its desk: `집중 모드 켜기` (the ◧ on that agent's pane head, which only an agent with a View wears, or ⌘., the `pair_view` command) draws its terminal on the left under the band and the page beside it; a look at the band, which says the mode is on and that the page the agent opened comes up beside it by itself; a step that waits about three seconds after the mode was first entered, in which the agent changes the page's heading and the page beside the terminal changes with it (`PracticeWorld.later`, whether or not the learner is still in the mode); `옆 화면 숨기기`, the desk's `✕` or ⌘E, which folds the desk so the terminal takes the width, ⌘E again standing it; and `집중 모드 나가기` (the band's `원래 화면으로` or ⌘. again), which puts both agents back side by side.
 Its world (`worlds/focus.ts`) answers `pair_view`, `pair_view_desk` and a pane chosen while the mode is on as the core does and publishes what it publishes (`pair_mode`, `tray.pair` with `alone`, `shown` and `folded`, `panes_with_views`): the other agent has no View, so it is drawn alone, and a page closed from the desk leaves the pane alone with the mode on.

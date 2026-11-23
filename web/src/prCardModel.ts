@@ -109,17 +109,18 @@ export function defaultMethod(card: Pick<PrCard, "merge"> | null): PrMergeMethod
 /**
  * Where a changed file opens (D-27): the Hide diff when the Workspace in
  * front is a checkout of the pull request's branch and its committed changes
- * hold the file, else GitHub's files page of the pull request.
+ * hold the file, else the files page its host's unit made for the pull
+ * request; null for a pull request no registered host named.
  */
-export type FileOpen = { kind: "diff"; path: string } | { kind: "github"; url: string };
+export type FileOpen = { kind: "diff"; path: string } | { kind: "page"; url: string };
 
-export function fileOpen(input: { pr: Pick<PullRequest, "url" | "head_branch">; front: { branch: string | null; path: string } | null; committed: readonly { path: string }[] | null; file: string }): FileOpen {
+export function fileOpen(input: { pr: Pick<PullRequest, "reference" | "head_branch">; front: { branch: string | null; path: string } | null; committed: readonly { path: string }[] | null; file: string }): FileOpen | null {
   const { pr, front, committed, file } = input;
   if (front && front.branch !== null && front.branch === pr.head_branch && committed) {
     const absolute = `${front.path}/${file}`;
     if (committed.some((entry) => entry.path === absolute)) return { kind: "diff", path: absolute };
   }
-  return { kind: "github", url: `${pr.url}/files` };
+  return pr.reference ? { kind: "page", url: pr.reference.files_url } : null;
 }
 
 /** The files the card draws and the generated ones folded into one line (B28). */

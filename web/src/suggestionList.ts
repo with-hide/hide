@@ -3,6 +3,7 @@
 // module only sorts what it sent into the three groups and names each row's
 // mark and line, so the components draw them without deciding anything.
 import type { TFunction } from "i18next";
+import { pullName } from "./codeHost";
 import type { MessageKey } from "./i18n/catalogs";
 import type { GlobalInstructionUnusable, ProjectSuggestions, SuggestionBranch, SuggestionLocalFailure, SuggestionRow, SuggestionState } from "./snapshot";
 
@@ -108,7 +109,7 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
     }
     case "merging": return { text: t("suggestions.attempt.merging"), tone: "muted", retry: false };
     case "syncing": return { text: t("suggestions.attempt.syncing", { base }), tone: "muted", retry: false };
-    case "pr_open": return { text: attempt.pr_number === null ? t("suggestions.attempt.writingPr") : t("suggestions.attempt.prReview", { number: String(attempt.pr_number) }), tone: "warning", retry: false };
+    case "pr_open": return { text: attempt.pr_number === null ? t("suggestions.attempt.writingPr") : t("suggestions.attempt.prReview", { pull: pullName({ number: attempt.pr_number, reference: attempt.reference }) }), tone: "warning", retry: false };
     case "ci_failed": return { text: t("suggestions.attempt.ciFailed"), tone: "destructive", retry: true };
     case "failed": {
       // A start Memory refused reads why in these words; the core's sentence under it is for a code this build has no words for.

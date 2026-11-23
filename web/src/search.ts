@@ -17,6 +17,7 @@ import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMach
 import { listedWorkspaces, type AgentRow, type Checkout, type Device, type GithubSearchResult, type PrState, type PullRequest, type SessionWorkSearch, type SnapshotRest, type Task, type WorkSession, type Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
 import { askSubjectText } from "./askSubject";
+import { pullLabel } from "./codeHost";
 
 /** The header an entry is drawn under: one per kind of thing; `label` is the catalog key the palette translates where it draws the header. */
 export type SearchGroup = { id: string; label: MessageKey };
@@ -298,7 +299,7 @@ export function pullRequestEntry(scope: SearchDevice, workspace: Workspace, pr: 
   const state = t(PR_LOOK[pr.state].word);
   return {
     id: `pr:${workspace.id}:${pr.number}`,
-    title: `#${pr.number} ${pr.title}`,
+    title: `${pullLabel(pr)} ${pr.title}`,
     subtitle: pr.head_branch ? t("search.prBranchSubtitle", { state, branch: pr.head_branch }) : t("search.prSubtitle", { state }),
     kind: "pr",
     group: PULL_REQUESTS_GROUP,
@@ -419,7 +420,8 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
 
 /** The digits of `273` or a hash-prefixed `273`, which name an issue or a pull request, else null. */
 export function numberQuery(query: string): number | null {
-  const match = /^#?(\d{1,9})$/.exec(query.trim());
+  // `#12` on GitHub, `!12` on GitLab.
+  const match = /^[#!]?(\d{1,9})$/.exec(query.trim());
   return match ? Number(match[1]) : null;
 }
 

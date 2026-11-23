@@ -1,4 +1,4 @@
-// Settings' list and its General, GitHub and About pages on an isolated
+// Settings' list and its General, Remote repositories and About pages on an isolated
 // engine and hided (PRD settings-cleanup B1-B6, B23, B24;
 // settings-left-nav B2-B5, B8, B9, B12, B13): the list in its groups, General's
 // Appearance, separate Privacy, the GitHub row, About with its closed Details, and the
@@ -27,8 +27,8 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(sheet.locator('[data-settings-nav-group="app"]')).toHaveText(/^App/);
     await expect(sheet.locator('[data-settings-nav-group="app"] [data-settings-tab]')).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts"]);
     await expect(sheet.locator('[data-settings-nav-group="machine"]')).toHaveText(/^This (Mac|PC|computer)/);
-    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "GitHub", "Labs"]);
-    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "GitHub", "Labs", "About", "Privacy"]);
+    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "Remote repositories", "Labs"]);
+    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "Remote repositories", "Labs", "About", "Privacy"]);
     const tabs = sheet.locator("[data-settings-tab]");
     const githubBox = (await sheet.locator('[data-settings-tab="github"]').boundingBox())!;
     const aboutBox = (await sheet.locator('[data-settings-tab="about"]').boundingBox())!;
@@ -87,7 +87,7 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(sheet).not.toContainText("Authentication");
     await expect(sheet.locator("[data-settings-device]")).toHaveCount(0);
 
-    // B8: the GitHub row has a page of its own, with no Local row.
+    // B8: the GitHub row has a page of its own (Remote repositories, one row per host), with no Local row.
     await sheet.locator('[data-settings-tab="github"]').click();
     const github = sheet.locator('[data-settings-group="github"]');
     await expect(github).toContainText("GitHub");

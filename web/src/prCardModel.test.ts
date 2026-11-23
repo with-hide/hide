@@ -86,18 +86,21 @@ describe("confirmHolds", () => {
 
 describe("fileOpen", () => {
   const committed = [{ path: "/work/repo/src/app.ts" }];
-  const input = { pr: { url: "https://github.com/acme/repo/pull/7", head_branch: "feat/x" }, committed, file: "src/app.ts" };
+  const url = "https://github.com/acme/repo/pull/7";
+  const reference = { repository: { host: "github", authority: "github.com", path: "acme/repo" }, number: 7, key: "github.com/acme/repo#7", label: "#7", url, checks_url: `${url}/checks`, files_url: `${url}/files` };
+  const input = { pr: { reference, head_branch: "feat/x" }, committed, file: "src/app.ts" };
 
   it("opens the Hide diff only in a checkout of the branch whose committed changes hold the file", () => {
     expect(fileOpen({ ...input, front: { branch: "feat/x", path: "/work/repo" } })).toEqual({ kind: "diff", path: "/work/repo/src/app.ts" });
   });
 
-  it("goes to GitHub's files page otherwise", () => {
-    const github = { kind: "github", url: "https://github.com/acme/repo/pull/7/files" };
+  it("goes to the files page its host made otherwise, and nowhere for a pull request no host named", () => {
+    const github = { kind: "page", url: "https://github.com/acme/repo/pull/7/files" };
     expect(fileOpen({ ...input, front: { branch: "main", path: "/work/repo" } })).toEqual(github);
     expect(fileOpen({ ...input, front: null })).toEqual(github);
     expect(fileOpen({ ...input, front: { branch: "feat/x", path: "/work/repo" }, committed: null })).toEqual(github);
     expect(fileOpen({ ...input, front: { branch: "feat/x", path: "/work/repo" }, file: "src/other.ts" })).toEqual(github);
+    expect(fileOpen({ ...input, pr: { reference: null, head_branch: "feat/x" }, front: null })).toBeNull();
   });
 });
 

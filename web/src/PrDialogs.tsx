@@ -5,6 +5,7 @@
 // confirmation, and reads the core's own answer for it (`pr_work`,
 // `task_operation`); a dialog never decides that its request succeeded.
 
+import { pullWords } from "./codeHost";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { rememberedSelection, modelToSend, type AgentSelection } from "./agentPicker";
@@ -237,13 +238,13 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   const [agent, setAgent] = useState<AgentSelection>(() => rememberedSelection(useShellStore.getState().rest?.ui_state?.agent_start));
   // A review asks the agent to read the pull request and report to the operator, never to post to GitHub (B35).
   const reviewing = intent === "review";
-  const [prompt, setPrompt] = useState(() => (reviewing ? t("work.card.reviewPrompt", { number: pr.number, branch, title: pr.title }) : ""));
+  const [prompt, setPrompt] = useState(() => (reviewing ? t("work.card.reviewPrompt", { ...pullWords(pr), branch, title: pr.title }) : ""));
   const promptEdited = useRef(reviewing);
   const [readId, setReadId] = useState(() => requestId("pr-feedback", pr.number));
   const read = useFeedbackRead(actions, readId, workspace.id, pr.number);
   useEffect(() => {
     if (read?.phase !== "ready" || promptEdited.current) return;
-    setPrompt(delegatePrompt({ number: pr.number, title: pr.title, branch }, read, t));
+    setPrompt(delegatePrompt({ number: pr.number, reference: pr.reference, title: pr.title, branch }, read, t));
   }, [read, pr.number, pr.title, branch, t]);
   // Whether the start makes the branch's worktree is fixed when it is asked
   // for: the worktree it makes joins the checkouts while its agent is still
@@ -275,7 +276,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
       <DialogContent data-pr-delegate={pr.number}>
         <form className="flex min-h-0 flex-1 flex-col" onKeyDown={submitOnCommandEnter} onSubmit={(event) => { event.preventDefault(); submit(); }}>
           <DialogHeader>
-            <DialogTitle>{t("prWork.delegateTitle", { number: String(pr.number) })}</DialogTitle>
+            <DialogTitle>{t("prWork.delegateTitle", pullWords(pr))}</DialogTitle>
             <DialogDescription className="line-clamp-2 break-words">{pr.title}</DialogDescription>
           </DialogHeader>
           <DialogBody className="space-y-sm">
