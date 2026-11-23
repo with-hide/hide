@@ -100,4 +100,6 @@ line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']
 [answer]
 marker = ">"
 question = { down = "down", pick = "enter", row = "{n}." }
-permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"], row = "{n}.", command = { title = "Requesting permission for:" } }
+# No row: agy marks no end under the command it asks for, so a command of more lines could not be
+# told from one, and its permission is answered in the terminal.
+permission = { allow = ["enter"], deny = ["down", "down", "down", "enter"] }

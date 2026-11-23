@@ -295,5 +295,5 @@ marker = "❯"
 question = { down = "down", pick = "enter", row = "{n}." }
 # Approve picks the row that keeps the permission mode: the first switches Claude Code to auto mode.
 plan_approval = { approve = ["down", "enter"], keep_planning = ["esc"], row = "{n}.", approve_label = "Yes, manually approve edits" }
-# The Bash dialog: its title, a note, then the command between two separators.
-permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", command = { title = "Bash command", opens = "╌" } }
+# The Bash dialog: its title, a note, then a one-line command between two same separator lines.
+permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", command = { title = "Bash command", separator = "╌" } }
