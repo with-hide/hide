@@ -25,6 +25,7 @@ use hide_core::guest_panes::{MAX_PANES, pane_is_listed};
 use hide_node::terminal::OutputSink;
 use hide_node_link::address::guest_pane_id;
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
+use hide_peer::protocol::core::Work;
 use hide_peer::protocol::panes::{self, Pane, Panes};
 use hide_peer::protocol::tap::{self, PaneSize, ToHost, ToNode};
 use hide_platform::fs::{Access, atomic, private};
@@ -69,14 +70,22 @@ struct State {
     /// The connection the reader of that number serves; a later attach
     /// takes its place.
     connection: u64,
-    /// The names the guest's core last told, by the node's pane ids, so a
-    /// pane the node lists after the names came is named as it joins;
+    /// What the guest's core last told of its panes, by the node's pane
+    /// ids, so a pane the node lists after it came is named as it joins;
     /// `None` until the core tells any after this daemon started, and the
-    /// names `panes.json` kept stand until it does.
-    told: Option<HashMap<String, String>>,
+    /// names and branches `panes.json` kept stand until it does. Each
+    /// pane's mark is read from here and nowhere else: it is where the work
+    /// stands now, which only a connected guest can say, so it is never
+    /// written to the file.
+    told: Option<HashMap<String, Work>>,
 }
 
 impl State {
+    /// The mark the guest's core last told for `pane`, while it tells one.
+    fn mark(&self, pane: &str) -> Option<String> {
+        self.told.as_ref()?.get(pane)?.mark.clone()
+    }
+
     /// Lists `pane` at the grid the node said, keeping when it was first
     /// seen. False for a pane the list has no room or no name for.
     fn list(&mut self, pane: PaneSize, now: u64) -> bool {
@@ -88,6 +97,7 @@ impl State {
         if self.panes.len() >= MAX_PANES || !pane_is_listed(&pane.pane) {
             return false;
         }
+        let told = self.told.as_ref().and_then(|told| told.get(&pane.pane));
         self.panes.insert(
             pane.pane.clone(),
             Pane {
@@ -95,10 +105,8 @@ impl State {
                 cols: pane.cols,
                 since_unix_ms: now,
                 folder: None,
-                name: self
-                    .told
-                    .as_ref()
-                    .and_then(|told| told.get(&pane.pane).cloned()),
+                name: told.and_then(|told| told.name.clone()),
+                branch: told.and_then(|told| told.branch.clone()),
                 pane: pane.pane,
             },
         );
@@ -171,27 +179,63 @@ impl GuestTap {
         lock(&self.state).panes.values().cloned().collect()
     }
 
-    /// Names the guest's panes as its core told them, whole (B10): a pane
-    /// the list leaves out has no name, and a pane the node lists later
-    /// takes its name as it joins. Kept in `panes.json`, so the names stand
-    /// while the guest is away.
-    pub fn name(&self, names: &HashMap<String, String>) {
+    /// The guest's panes with the mark its core last told each, while it
+    /// tells them (B10).
+    pub fn marked(&self) -> Vec<(Pane, Option<String>)> {
+        let state = lock(&self.state);
+        state
+            .panes
+            .values()
+            .map(|pane| (pane.clone(), state.mark(&pane.pane)))
+            .collect()
+    }
+
+    /// Names and marks the guest's panes as its core told them, whole
+    /// (B10): a pane the list leaves out has no name, branch or mark, and a
+    /// pane the node lists later takes them as it joins. Names and branches
+    /// are kept in `panes.json`, so they stand while the guest is away; a
+    /// mark is not, and a mark alone moving writes nothing.
+    pub fn name(&self, work: &HashMap<String, Work>) {
         let mut state = lock(&self.state);
-        state.told = Some(names.clone());
-        let mut changed = false;
+        let marked = state.panes.keys().any(|pane| {
+            state.mark(pane).as_ref() != work.get(pane).and_then(|told| told.mark.as_ref())
+        });
+        state.told = Some(work.clone());
+        let mut kept = false;
         for (pane, known) in &mut state.panes {
-            let name = names.get(pane);
-            if known.name.as_ref() != name {
+            let told = work.get(pane);
+            let name = told.and_then(|told| told.name.as_ref());
+            let branch = told.and_then(|told| told.branch.as_ref());
+            if known.name.as_ref() != name || known.branch.as_ref() != branch {
                 known.name = name.cloned();
-                changed = true;
+                known.branch = branch.cloned();
+                kept = true;
             }
         }
-        if !changed {
-            return;
+        if kept {
+            self.save(&state);
         }
-        self.save(&state);
         drop(state);
-        (self.changed)();
+        if kept || marked {
+            (self.changed)();
+        }
+    }
+
+    /// The guest's core is away: where its panes stand is no longer known
+    /// here, so each loses its mark, and keeps its name and branch until
+    /// the core tells again (B10).
+    pub fn away(&self) {
+        let mut state = lock(&self.state);
+        let marked = state.panes.keys().any(|pane| state.mark(pane).is_some());
+        if let Some(told) = &mut state.told {
+            for work in told.values_mut() {
+                work.mark = None;
+            }
+        }
+        drop(state);
+        if marked {
+            (self.changed)();
+        }
     }
 
     fn record(&self, kind: &str, extra: serde_json::Value) {
@@ -305,6 +349,7 @@ impl GuestTap {
                         known.folder.clone_from(&earlier.folder);
                         if !told {
                             known.name.clone_from(&earlier.name);
+                            known.branch.clone_from(&earlier.branch);
                         }
                     }
                 }
@@ -313,11 +358,12 @@ impl GuestTap {
                     .filter(|pane| !state.panes.contains_key(*pane))
                     .cloned()
                     .collect();
-                // A pane that joined, or one whose name moved with it.
+                // A pane that joined, or one whose name or branch moved
+                // with it.
                 let joined = state.panes.iter().any(|(pane, known)| {
-                    earlier
-                        .get(pane)
-                        .is_none_or(|earlier| earlier.name != known.name)
+                    earlier.get(pane).is_none_or(|earlier| {
+                        (&earlier.name, &earlier.branch) != (&known.name, &known.branch)
+                    })
                 });
                 self.save(&state);
                 drop(state);
@@ -795,11 +841,91 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn told(names: &[(&str, &str)]) -> HashMap<String, String> {
+    fn told(names: &[(&str, &str)]) -> HashMap<String, Work> {
         names
             .iter()
-            .map(|(pane, name)| ((*pane).to_owned(), (*name).to_owned()))
+            .map(|(pane, name)| {
+                let work = Work {
+                    pane: (*pane).to_owned(),
+                    name: Some((*name).to_owned()),
+                    branch: None,
+                    mark: None,
+                };
+                ((*pane).to_owned(), work)
+            })
             .collect()
+    }
+
+    fn standing(tap: &GuestTap) -> Vec<(String, Option<String>, Option<String>)> {
+        tap.marked()
+            .into_iter()
+            .map(|(pane, mark)| (pane.pane, pane.branch, mark))
+            .collect()
+    }
+
+    /// B10: a pane's branch and mark come with its name; the branch is
+    /// kept through a restart with the guest away, the mark is not, and
+    /// the guest's core going away takes the marks and leaves the rest.
+    #[test]
+    fn a_guests_panes_take_the_branch_and_mark_its_core_told_and_lose_the_mark_when_it_is_away() {
+        let root = short_root();
+        let file = root.path().join("h").join(panes::FILE);
+        let endpoint = root.path().join("tap.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        let (tap, _drawn, changed) = tap(&file);
+        tap.attach(&endpoint);
+        let mut node = listener.accept().unwrap();
+        heard(&mut node);
+        say(
+            &mut node,
+            &ToHost::Welcome {
+                version: tap::NEWEST_TAP,
+                panes: vec![size("w1:p1", 24, 80)],
+            },
+        );
+        changed.recv_timeout(WITHIN).expect("the list changed");
+        let work = |mark: &str| -> HashMap<String, Work> {
+            HashMap::from([(
+                "w1:p1".to_owned(),
+                Work {
+                    pane: "w1:p1".to_owned(),
+                    name: None,
+                    branch: Some("m75-relay".to_owned()),
+                    mark: Some(mark.to_owned()),
+                },
+            )])
+        };
+        tap.name(&work("going"));
+        changed
+            .recv_timeout(WITHIN)
+            .expect("the branch and mark were told");
+        let going = [(
+            "w1:p1".to_owned(),
+            Some("m75-relay".to_owned()),
+            Some("going".to_owned()),
+        )];
+        assert_eq!(standing(&tap), going);
+        tap.name(&work("going"));
+        assert!(changed.try_recv().is_err(), "the same work is no change");
+        // The mark alone moves: the rows change.
+        tap.name(&work("turn"));
+        changed.recv_timeout(WITHIN).expect("a mark moved");
+        assert_eq!(standing(&tap)[0].2.as_deref(), Some("turn"));
+
+        // The guest's core goes away: the mark goes, the branch stays.
+        tap.away();
+        changed.recv_timeout(WITHIN).expect("the mark went");
+        let away = [("w1:p1".to_owned(), Some("m75-relay".to_owned()), None)];
+        assert_eq!(standing(&tap), away);
+        tap.away();
+        assert!(changed.try_recv().is_err(), "nothing more to take");
+
+        // The file keeps the branch and no mark.
+        tap.name(&work("going"));
+        changed.recv_timeout(WITHIN).expect("told again");
+        tap.detach();
+        let (read, _drawn, _changed) = self::tap(&file);
+        assert_eq!(standing(&read), away);
     }
 
     /// B10: a pane reads by the name the guest's core told, whether the

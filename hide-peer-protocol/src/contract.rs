@@ -309,6 +309,7 @@ fn core_messages() -> Vec<CoreMessage> {
         CoreMessage::PhonePaired { phone: text() },
         CoreMessage::WorkNames {
             names: vec![sample_work_name()],
+            work: vec![sample_work()],
         },
     ]
 }
@@ -317,6 +318,15 @@ fn sample_work_name() -> crate::core::WorkName {
     crate::core::WorkName {
         pane: String::new(),
         name: String::new(),
+    }
+}
+
+fn sample_work() -> crate::core::Work {
+    crate::core::Work {
+        pane: String::new(),
+        name: Some(String::new()),
+        branch: Some(String::new()),
+        mark: Some(String::new()),
     }
 }
 
@@ -472,6 +482,7 @@ pub fn shape() -> Value {
         since_unix_ms: 0,
         folder: Some(String::new()),
         name: Some(String::new()),
+        branch: Some(String::new()),
     };
     let streams: Vec<Value> = StreamKind::ALL
         .into_iter()
@@ -543,6 +554,9 @@ pub fn shape() -> Value {
             "work_name_fields": fields(&sample_work_name()),
             "max_work_names": crate::core::MAX_WORK_NAMES,
             "max_work_name_chars": crate::core::MAX_WORK_NAME_CHARS,
+            "work_fields": fields(&sample_work()),
+            "max_work_branch_bytes": crate::core::MAX_WORK_BRANCH_BYTES,
+            "max_work_mark_bytes": crate::core::MAX_WORK_MARK_BYTES,
             "items": names!(Item: Agent, Pane),
             "asks": names!(Ask: Delivery, Pane),
         },

@@ -40,7 +40,7 @@ use hide_core::agent_state::phone::Projection;
 use hide_core::core_calls::{self, Agent, Asked, CoreItem, CoreLink, Letter, Outcome, Party};
 use hide_core::notice_place::Seat;
 use hide_peer::PeerEvent;
-use hide_peer::protocol::core::{Ask, CoreMessage, Item};
+use hide_peer::protocol::core::{Ask, CoreMessage, Item, Work};
 use hide_peer::protocol::hello::GrantState;
 use hide_peer::protocol::stream::Status;
 use hide_peer::protocol::{PeerKey, StreamKind, frame};
@@ -188,15 +188,21 @@ impl Cores for CoreHandle {
     }
 }
 
-/// Where the names a machine that may open this one told of its work here
-/// are kept: that guest's panes (`Guests::name_panes`). Blocking.
+/// Where what a machine that may open this one told of its work here is
+/// kept: that guest's panes (`Guests::name_panes`). Blocking.
 pub trait WorkNamed: Send + Sync + 'static {
-    fn named(&self, guest: &PeerKey, names: &HashMap<String, String>);
+    fn named(&self, guest: &PeerKey, work: &HashMap<String, Work>);
+    /// The guest's core tells no more: where its work stands is not known.
+    fn away(&self, guest: &PeerKey);
 }
 
 impl WorkNamed for crate::guests::Guests {
-    fn named(&self, guest: &PeerKey, names: &HashMap<String, String>) {
-        self.name_panes(guest, names);
+    fn named(&self, guest: &PeerKey, work: &HashMap<String, Work>) {
+        self.name_panes(guest, work);
+    }
+
+    fn away(&self, guest: &PeerKey) {
+        self.guest_away(guest);
     }
 }
 
@@ -214,13 +220,31 @@ pub struct Names {
     pub kept: Option<Arc<dyn WorkNamed>>,
 }
 
+/// This core's work on one machine as the `core` stream tells it: every
+/// pane in `work`, and the named ones in `names` too, for a build of the
+/// machine before `work` (B10).
 fn names_out(names: &[hide_core::work_names::WorkName]) -> CoreMessage {
     CoreMessage::WorkNames {
         names: names
             .iter()
-            .map(|named| hide_peer::protocol::core::WorkName {
-                pane: named.pane.clone(),
-                name: named.name.clone(),
+            .filter_map(|told| {
+                told.name
+                    .as_ref()
+                    .map(|name| hide_peer::protocol::core::WorkName {
+                        pane: told.pane.clone(),
+                        name: name.clone(),
+                    })
+            })
+            .collect(),
+        work: names
+            .iter()
+            .map(|told| Work {
+                pane: told.pane.clone(),
+                name: told.name.clone(),
+                branch: told.branch.clone(),
+                mark: serde_json::to_value(told.mark)
+                    .ok()
+                    .and_then(|mark| mark.as_str().map(str::to_owned)),
             })
             .collect(),
     }
@@ -728,9 +752,22 @@ impl PeerCore {
             };
             (gone, opens_here, tells_no_more)
         };
-        // A machine that may open this one no longer has no seat here.
+        // A machine that may open this one no longer has no seat here, and
+        // no longer tells where its work here stands.
         if !opens_here {
             self.desktop.peer_gone(&key.to_hex());
+            if let Some(kept) = &self.names.kept {
+                let (kept, key) = (Arc::clone(kept), *key);
+                tokio::spawn(async move {
+                    if let Err(error) = tokio::task::spawn_blocking(move || kept.away(&key)).await {
+                        record(
+                            "peer_core.work_marks_not_dropped",
+                            &key,
+                            json!({"reason": error.to_string()}),
+                        );
+                    }
+                });
+            }
         }
         if tells_no_more {
             self.heard_moved.notify_one();
@@ -1011,10 +1048,14 @@ impl PeerCore {
             }
             // The names of a machine's work here, from a machine that may
             // open this one (B10): only its own panes take them.
-            CoreMessage::WorkNames { names } => {
+            // A build before `work` tells `names` alone, and its panes
+            // are named without a branch or a mark.
+            CoreMessage::WorkNames { names, work } => {
                 let refused = if !self.has(&key, false) {
                     Some("not_opened_by_it")
-                } else if !hide_peer::protocol::core::valid_work_names(&names) {
+                } else if !hide_peer::protocol::core::valid_work_names(&names)
+                    || !hide_peer::protocol::core::valid_work(&work)
+                {
                     Some("out_of_bounds")
                 } else {
                     None
@@ -1023,18 +1064,32 @@ impl PeerCore {
                     record(
                         "peer_core.work_names_refused",
                         &key,
-                        json!({"reason": reason, "names": names.len()}),
+                        json!({"reason": reason, "names": names.len(), "work": work.len()}),
                     );
                     return None;
                 }
                 if let Some(kept) = &self.names.kept {
                     let kept = Arc::clone(kept);
-                    let names: HashMap<String, String> = names
-                        .into_iter()
-                        .map(|named| (named.pane, named.name))
-                        .collect();
+                    let work: HashMap<String, Work> = if work.is_empty() {
+                        names
+                            .into_iter()
+                            .map(|named| {
+                                let told = Work {
+                                    pane: named.pane.clone(),
+                                    name: Some(named.name),
+                                    branch: None,
+                                    mark: None,
+                                };
+                                (named.pane, told)
+                            })
+                            .collect()
+                    } else {
+                        work.into_iter()
+                            .map(|told| (told.pane.clone(), told))
+                            .collect()
+                    };
                     if let Err(error) =
-                        tokio::task::spawn_blocking(move || kept.named(&key, &names)).await
+                        tokio::task::spawn_blocking(move || kept.named(&key, &work)).await
                     {
                         record(
                             "peer_core.work_names_not_kept",
@@ -1352,23 +1407,33 @@ mod tests {
         pc_key: String,
     }
 
-    /// What one side kept of the names a guest told it, in order, and how
-    /// many lists it has kept, for a test to wait on.
+    /// What one side kept of the work a guest told it, in order, how many
+    /// lists it has kept, for a test to wait on, and which guests went
+    /// away.
     struct Kept(
-        Mutex<Vec<(String, HashMap<String, String>)>>,
+        Mutex<Vec<(String, HashMap<String, Work>)>>,
         watch::Sender<usize>,
+        watch::Sender<Vec<String>>,
     );
 
     impl Default for Kept {
         fn default() -> Self {
-            Self(Mutex::default(), watch::channel(0).0)
+            Self(
+                Mutex::default(),
+                watch::channel(0).0,
+                watch::channel(Vec::new()).0,
+            )
         }
     }
 
     impl WorkNamed for Kept {
-        fn named(&self, guest: &PeerKey, names: &HashMap<String, String>) {
-            lock(&self.0).push((guest.to_hex(), names.clone()));
+        fn named(&self, guest: &PeerKey, work: &HashMap<String, Work>) {
+            lock(&self.0).push((guest.to_hex(), work.clone()));
             self.1.send_modify(|count| *count += 1);
+        }
+
+        fn away(&self, guest: &PeerKey) {
+            self.2.send_modify(|away| away.push(guest.to_hex()));
         }
     }
 
@@ -1633,7 +1698,9 @@ mod tests {
                 .iter()
                 .map(|(pane, name)| hide_core::work_names::WorkName {
                     pane: (*pane).to_owned(),
-                    name: (*name).to_owned(),
+                    name: Some((*name).to_owned()),
+                    branch: None,
+                    mark: hide_core::agent_state::RowMark::Quiet,
                 })
                 .collect()
         };
@@ -1664,7 +1731,15 @@ mod tests {
         assert_eq!(from, pair.mac_key);
         assert_eq!(
             names,
-            HashMap::from([("w1:p1".to_owned(), "로그인 고치기".to_owned())])
+            HashMap::from([(
+                "w1:p1".to_owned(),
+                Work {
+                    pane: "w1:p1".to_owned(),
+                    name: Some("로그인 고치기".to_owned()),
+                    branch: None,
+                    mark: Some("quiet".to_owned()),
+                }
+            )])
         );
 
         // Another machine's names moving tells the PC nothing; its own do.
@@ -1697,6 +1772,142 @@ mod tests {
         within(
             "the Mac stops reading",
             pair.mac_wants.wait_for(|wants| !*wants),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// B10: every mark a row is drawn with crosses as a word both the peer
+    /// link and the receiving core carry, so a new mark never has the whole
+    /// list refused there. The match names every mark: a new one does not
+    /// build until it is listed here too.
+    #[test]
+    fn every_row_mark_crosses_as_a_word_both_sides_carry() {
+        use hide_core::agent_state::RowMark;
+        fn listed(mark: RowMark) -> RowMark {
+            match mark {
+                RowMark::Turn
+                | RowMark::Going
+                | RowMark::Waiting
+                | RowMark::Done
+                | RowMark::Unread
+                | RowMark::Quiet
+                | RowMark::Unknown
+                | RowMark::Asleep
+                | RowMark::Look => mark,
+            }
+        }
+        let every = [
+            RowMark::Turn,
+            RowMark::Going,
+            RowMark::Waiting,
+            RowMark::Done,
+            RowMark::Unread,
+            RowMark::Quiet,
+            RowMark::Unknown,
+            RowMark::Asleep,
+            RowMark::Look,
+        ];
+        let told: Vec<_> = every
+            .into_iter()
+            .enumerate()
+            .map(|(n, mark)| hide_core::work_names::WorkName {
+                pane: format!("w1:p{n}"),
+                name: None,
+                branch: None,
+                mark: listed(mark),
+            })
+            .collect();
+        let CoreMessage::WorkNames { work, .. } = names_out(&told) else {
+            panic!("work names");
+        };
+        assert_eq!(work.len(), every.len());
+        assert!(hide_peer::protocol::core::valid_work(&work), "{work:?}");
+        for told in &work {
+            let mark = told.mark.as_deref().expect("every pane is told a mark");
+            assert!(hide_core::guest_panes::mark_is_carried(mark), "{mark}");
+        }
+    }
+
+    /// B10: an earlier build tells `names` alone; the machine its work runs
+    /// on keeps each name, with no branch or mark.
+    #[tokio::test]
+    async fn an_earlier_builds_names_are_kept_without_a_branch_or_mark() {
+        let mut pair = Pair::new(Duration::from_secs(30)).await;
+        within(
+            "the Mac's stream to the PC",
+            pair.mac_wants.wait_for(|wants| *wants),
+        )
+        .await
+        .unwrap();
+        let mut kept = pair.pc_kept.1.subscribe();
+        let earlier = CoreMessage::WorkNames {
+            names: vec![hide_peer::protocol::core::WorkName {
+                pane: "w1:p1".to_owned(),
+                name: "로그인 고치기".to_owned(),
+            }],
+            work: Vec::new(),
+        };
+        assert!(pair.mac_service.tell(&pair.pc_key, earlier));
+        within("the names on the PC", kept.wait_for(|told| *told >= 1))
+            .await
+            .unwrap();
+        let (from, work) = lock(&pair.pc_kept.0).last().cloned().expect("kept");
+        assert_eq!(from, pair.mac_key);
+        assert_eq!(
+            work,
+            HashMap::from([(
+                "w1:p1".to_owned(),
+                Work {
+                    pane: "w1:p1".to_owned(),
+                    name: Some("로그인 고치기".to_owned()),
+                    branch: None,
+                    mark: None,
+                }
+            )])
+        );
+    }
+
+    /// B10: a plain terminal crosses by its branch and mark, with no name
+    /// for a build before `work` to show; when the machine that started the
+    /// work is gone, the machine it runs on drops where it stands.
+    #[tokio::test]
+    async fn a_terminal_crosses_by_its_branch_and_mark_and_its_mark_goes_with_its_machine() {
+        let pair = Pair::new(Duration::from_secs(30)).await;
+        let terminal = hide_core::work_names::WorkName {
+            pane: "w1:p2".to_owned(),
+            name: None,
+            branch: Some("main".to_owned()),
+            mark: hide_core::agent_state::RowMark::Going,
+        };
+        let out = names_out(std::slice::from_ref(&terminal));
+        let CoreMessage::WorkNames { names, work } = &out else {
+            panic!("{out:?}");
+        };
+        assert!(names.is_empty(), "a build before `work` is told no name");
+        assert_eq!(
+            work,
+            &[Work {
+                pane: "w1:p2".to_owned(),
+                name: None,
+                branch: Some("main".to_owned()),
+                mark: Some("going".to_owned()),
+            }]
+        );
+        let mut told = std::collections::BTreeMap::new();
+        told.insert(pair.pc_key.clone(), vec![terminal]);
+        pair.mac_names.send_replace(Arc::new(told));
+        let mut count = pair.pc_kept.1.subscribe();
+        within("the work on the PC", count.wait_for(|told| *told >= 1))
+            .await
+            .unwrap();
+        assert_eq!(lock(&pair.pc_kept.0)[0].1["w1:p2"], work[0]);
+
+        let mut away = pair.pc_kept.2.subscribe();
+        pair.mac.shutdown.end();
+        within(
+            "the Mac away on the PC",
+            away.wait_for(|away| away.contains(&pair.mac_key)),
         )
         .await
         .unwrap();

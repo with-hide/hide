@@ -3,36 +3,56 @@ import { guestGroups, guestPaneRefuses, guestPanes, guestPlaces, guestTabs, isGu
 import type { SnapshotRest, Workspace } from "./snapshot";
 
 const KEY = "cd".repeat(32);
+const TERMINAL = (branch: string) => `터미널 · ${branch}`;
 
 function project(id: string, path: string): Workspace {
   return { id, label: id, path, device_id: "local", checkouts: [{ id: `${id}-main`, path }] } as unknown as Workspace;
 }
 
-function rest(panes: { pane: string; folder?: string; name?: string; since?: number }[]): SnapshotRest {
+function rest(panes: { pane: string; folder?: string; name?: string; branch?: string; mark?: string; since?: number }[]): SnapshotRest {
   return {
     navigator: {
       peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: false }],
-      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder, name: pane.name })) }],
+      guest_panes: [{ device_id: "macbook", key: KEY, panes: panes.map((pane) => ({ id: `guest:macbook:pane:${pane.pane}`, pane: pane.pane, since_unix_ms: pane.since ?? 1, folder: pane.folder, name: pane.name, branch: pane.branch, mark: pane.mark })) }],
     },
   } as SnapshotRest;
 }
 
 describe("another machine's work on this computer (PRD device-connect-iroh B10, B68)", () => {
   it("names a pane by its folder and its machine's letters, whether or not that machine is connected", () => {
-    const [pane] = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api" }]), []);
+    const [pane] = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api" }]), [], TERMINAL);
     expect(pane).toMatchObject({ id: "guest:macbook:pane:w1:p1", machine: "MacBook Air", mark: "MA", label: "shop-api", folder: "/work/shop-api", projectId: null });
     // A pane whose node said no folder goes by its own id there.
-    expect(guestPanes(rest([{ pane: "w1:p2" }]), [])[0]).toMatchObject({ label: "w1:p2", folder: null });
+    expect(guestPanes(rest([{ pane: "w1:p2" }]), [], TERMINAL)[0]).toMatchObject({ label: "w1:p2", folder: null });
   });
 
   it("names a pane by the name its machine told, its folder only when it told none (B10)", () => {
-    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api", name: "로그인 고치기" }, { pane: "w1:p2", folder: "/work/shop-api" }]), []);
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api", name: "로그인 고치기" }, { pane: "w1:p2", folder: "/work/shop-api" }]), [], TERMINAL);
     expect(panes.map((pane) => [pane.label, pane.folder])).toEqual([["로그인 고치기", "/work/shop-api"], ["shop-api", "/work/shop-api"]]);
+  });
+
+  it("names a plain terminal by its branch, and marks each row as its machine draws it (B10)", () => {
+    const panes = guestPanes(rest([
+      { pane: "w1:p1", folder: "/work/hide", name: "hide 배치 PR 처리", branch: "main", mark: "going" },
+      { pane: "w1:p2", folder: "/work/hide", branch: "m75-relay", mark: "quiet" },
+      // A mark a later build draws is none here; a blank branch is no branch.
+      { pane: "w1:p3", folder: "/work/hide", branch: " ", mark: "sparkle" },
+    ]), [project("hide", "/work/hide")], TERMINAL);
+    expect(panes.map((pane) => [pane.label, pane.status, pane.project])).toEqual([
+      ["hide 배치 PR 처리", "going", "hide"],
+      ["터미널 · m75-relay", "quiet", "hide"],
+      ["hide", null, "hide"],
+    ]);
+  });
+
+  it("shows an earlier build's list, which tells no branch or mark, by its names and folders without a mark", () => {
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/hide", name: "로그인 고치기" }, { pane: "w1:p2", folder: "/work/hide" }]), [], TERMINAL);
+    expect(panes.map((pane) => [pane.label, pane.status])).toEqual([["로그인 고치기", null], ["hide", null]]);
   });
 
   it("stands a pane under this computer's project that holds its folder, and under its machine's name otherwise", () => {
     const projects = [project("shop", "/work/shop-api"), project("shop-web", "/work/shop-api/web"), project("other", "/work/shop")];
-    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api/web/src" }, { pane: "w1:p2", folder: "/work/shop-api" }, { pane: "w1:p3", folder: "/scratch/try", since: 0 }, { pane: "w1:p4", folder: "/work/shop-api-2" }]), projects);
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/shop-api/web/src" }, { pane: "w1:p2", folder: "/work/shop-api" }, { pane: "w1:p3", folder: "/scratch/try", since: 0 }, { pane: "w1:p4", folder: "/work/shop-api-2" }]), projects, TERMINAL);
     const placed = Object.fromEntries(panes.map((pane) => [pane.label, pane.projectId]));
     // The longest checkout that holds the folder is its project; a folder beside one is in none.
     expect(placed).toEqual({ src: "shop-web", "shop-api": "shop", try: null, "shop-api-2": null });
@@ -49,7 +69,7 @@ describe("another machine's work on this computer (PRD device-connect-iroh B10, 
       { pane: "w1:p2", folder: "/work/modakbul/.worktrees/login", name: "로그인 시험" },
       { pane: "w1:p3", folder: "/work/modakbul", name: "리마인드 확인" },
       { pane: "w1:p4", folder: "/scratch", name: "정리" },
-    ]), [modakbul]);
+    ]), [modakbul], TERMINAL);
     const names = (list: readonly { label: string }[] | undefined) => (list ?? []).map((pane) => pane.label);
     // Both checkouts drawn as rows: each pane under the deepest checkout that holds its folder, in the order they came.
     const open = guestPlaces(panes, "modakbul", new Set(["main", "login"]));

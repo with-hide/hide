@@ -53,6 +53,8 @@
     ],
     "max_clear_tags": 64,
     "max_phone_name_chars": 64,
+    "max_work_branch_bytes": 255,
+    "max_work_mark_bytes": 16,
     "max_work_name_chars": 160,
     "max_work_names": 128,
     "messages": {
@@ -142,7 +144,8 @@
       },
       "work_names": {
         "fields": [
-          "names"
+          "names",
+          "work"
         ],
         "since": 1
       }
@@ -165,6 +168,12 @@
       "id",
       "item",
       "name"
+    ],
+    "work_fields": [
+      "branch",
+      "mark",
+      "name",
+      "pane"
     ],
     "work_name_fields": [
       "name",
@@ -547,6 +556,7 @@
       "version"
     ],
     "pane_fields": [
+      "branch",
       "cols",
       "folder",
       "name",

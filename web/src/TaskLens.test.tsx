@@ -508,15 +508,21 @@ it("draws the first step when the device has no project, and New agent when it h
   expect(idle.container.querySelector("[data-tasks-empty]")?.textContent).toContain("진행 중인 태스크 없음");
 });
 
-// PRD device-connect-iroh B10, B49: a computer with no project of its own still lists the work another machine runs on it and a connected machine's own Needs You, in place of the first step.
-it("lists another machine's panes and its own Needs You on a computer that has no project", async () => {
+// PRD device-connect-iroh B49: a computer with no project of its own still lists a connected machine's own Needs You, in place of the first step.
+// B10 (operator review 2026-11-23): the work another machine started here is that machine's, so neither view of the 태스크 list draws it, and it does not stand for a list of this computer's own.
+it("lists a connected machine's own Needs You on a computer that has no project, and never the work another machine started here", async () => {
   const KEY = "ab".repeat(32);
-  const bare = snapshot([], []);
-  const hosting = (extra: Record<string, unknown>) => ({ ...bare, navigator: { ...bare.navigator, workspaces: [], peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: true }], ...extra } }) as unknown as SnapshotRest;
-  const guests = await render(hosting({ guest_panes: [{ device_id: "macbook", key: KEY, panes: [{ id: "guest:macbook:pane:w1:p1", pane: "w1:p1", since_unix_ms: 1, folder: "/work/web-app" }] }] }), []);
-  expect(guests.container.querySelector("[data-tasks-no-project]")).toBeNull();
-  expect(guests.container.querySelector("[data-guest-group='macbook'] [data-guest-row]")?.textContent).toContain("web-app");
-  await cleanup?.();
+  const hosting = (extra: Record<string, unknown>, view: TaskView = "status") => {
+    const bare = snapshot([], [], view);
+    return { ...bare, navigator: { ...bare.navigator, workspaces: [], peers: [{ key: KEY, device_id: "macbook", name: "MacBook Air", connected: true }], ...extra } } as unknown as SnapshotRest;
+  };
+  const guestPanes = { guest_panes: [{ device_id: "macbook", key: KEY, panes: [{ id: "guest:macbook:pane:w1:p1", pane: "w1:p1", since_unix_ms: 1, folder: "/work/web-app", name: "로그인 고치기", mark: "going" }] }] };
+  for (const view of ["status", "project"] as const) {
+    const guests = await render(hosting(guestPanes, view), []);
+    expect(guests.container.querySelector("[data-tasks-no-project]"), view).not.toBeNull();
+    expect(guests.container.querySelector("[data-guest-row], [data-guest-group]"), view).toBeNull();
+    await cleanup?.();
+  }
   const asks = await render(hosting({ peer_work: [{ device_id: "macbook", key: KEY, needs_you: 1, done: 0, rows: [{ id: "w1:p1", group: "needs_you", title: "Fix login", agent_kind: "claude", mark: "turn", status_code: "question" }] }] }), []);
   expect(asks.container.querySelector("[data-tasks-no-project]")).toBeNull();
   expect(asks.container.querySelector("[data-peer-section='needs_you'] [data-peer-row='macbook:w1:p1']")?.textContent).toContain("Fix login");

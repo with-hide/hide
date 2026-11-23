@@ -7,28 +7,21 @@ import { AgentRowMark } from "./AgentRowMark";
 import { Elapsed } from "./components/elapsed";
 import { SessionRowBody } from "./components/session-row";
 import { GuestMark, useGuestPanes } from "./GuestPaneScreen";
-import { guestGroups, guestPlaces, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { guestGroups, guestPlaces, markOf, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
 import { ownWindow } from "./pairing";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import type { RowMark } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
-const MARKS: readonly string[] = ["turn", "look", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep"] satisfies RowMark[];
-
-/** The mark another machine drew its row with, when this build knows it. */
-function markOf(mark: string): RowMark | null {
-  return MARKS.includes(mark) ? (mark as RowMark) : null;
-}
-
 /**
  * One pane of another machine's work on this computer (PRD
- * device-connect-iroh B10): its folder's name and the machine's letters. It
- * opens the pane in the center; the work's state is the other machine's to
- * show, so the row carries none.
+ * device-connect-iroh B10), drawn as this computer's own rows are: the mark
+ * its machine draws it with, the name its machine calls it by, and that
+ * machine's letters at its end. It opens the pane in the center. A machine
+ * that told no mark leaves the mark's slot empty, so names line up.
  */
-function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; /** Where the name starts, to line up under a checkout's own rows. */ inset?: string }) {
+function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; /** Where the row's mark starts, to line up under a checkout's own rows. */ inset?: string }) {
   const { t } = useInterfaceTranslation();
   const selected = useUiStore((s) => s.screen?.kind === "guest" && s.screen.paneId === pane.id);
   return (
@@ -42,6 +35,7 @@ function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Acti
         style={inset ? { paddingLeft: inset } : undefined}
         onClick={() => actions.openGuestPane(pane.id)}
       >
+        <StatusMark mark={pane.status} data-guest-row-status={pane.status ?? undefined} />
         <span className="min-w-0 flex-1 truncate">{pane.label}</span>
         <GuestMark pane={pane} />
       </RowButton>
@@ -87,13 +81,12 @@ export function GuestCheckoutRows({ projectId, checkoutId, inset, actions }: { p
 /**
  * The panes of other machines' work that stand under no project of this
  * computer, grouped by the machine that asked for them (B10). `projects`
- * are the projects whose rows draw their own; with none given every pane is
- * listed here, for a list that draws no projects.
+ * are the projects whose rows draw their own.
  */
-export function GuestMachineGroups({ actions, projects = null }: { actions: Actions; projects?: ReadonlySet<string> | null }) {
+export function GuestMachineGroups({ actions, projects }: { actions: Actions; projects: ReadonlySet<string> }) {
   const { t } = useInterfaceTranslation();
   const panes = useGuestPanes();
-  const groups = useMemo(() => guestGroups(panes.map((pane) => (pane.projectId !== null && projects?.has(pane.projectId) ? pane : { ...pane, projectId: null }))), [panes, projects]);
+  const groups = useMemo(() => guestGroups(panes.map((pane) => (pane.projectId !== null && projects.has(pane.projectId) ? pane : { ...pane, projectId: null }))), [panes, projects]);
   if (groups.length === 0) return null;
   return (
     <>

@@ -2,8 +2,8 @@
 //! after the host restarts with the guest away (PRD D-31).
 //!
 //! The host build alone writes it, whole, from the tap's `welcome`, `pane`,
-//! `gone` and `folder` frames, and each pane's name from what the guest's
-//! core told on the `core` stream (`work_names`).
+//! `gone` and `folder` frames, and each pane's name and branch from what
+//! the guest's core told on the `core` stream (`work_names`).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,4 +31,8 @@ pub struct Pane {
     /// (`core::CoreMessage::WorkNames`, B10): kept while the guest is away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The branch the guest's core told the pane stands on (B10): kept
+    /// while the guest is away, as the name is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }

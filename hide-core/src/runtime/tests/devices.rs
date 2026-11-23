@@ -2645,11 +2645,13 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
     }
 }
 
-/// B10: the names this core shows its work on a machine it opens by, read
-/// for that machine by its connection key, each pane by the id the
-/// machine's node lists it under: the agent's label, else the name its tab
-/// was given. A tab known only by its number tells nothing, and nor does a
-/// machine whose session this core does not hold now.
+/// B10: what this core shows its work on a machine it opens by, read for
+/// that machine by its connection key, each pane by the id the machine's
+/// node lists it under: the agent's label, else the name its tab was given,
+/// the branch of its checkout and the mark its row is drawn with. A tab
+/// known only by its number has no name and is still told, by its branch
+/// and a quiet mark; a machine whose session this core does not hold now
+/// tells nothing.
 #[test]
 fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     let mut runtime = runtime();
@@ -2676,6 +2678,7 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     let mut labelled = pane(&at("w1:p1"), "/Users/example/hide");
     labelled.identity_label = Some("로그인 고치기".to_owned());
     let mut checkout = checkout("hide", "hide", "/Users/example/hide", Some(labelled));
+    checkout.branch = Some("m75-relay".to_owned());
     for (pane_id, tab_name) in [("w1:p2", "배포 확인"), ("w1:p3", "Tab 3")] {
         let mut tab = tab(
             "hide",
@@ -2685,6 +2688,16 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         tab.naming.raw = tab_name.to_owned();
         checkout.tabs.push(tab);
     }
+    // The first pane's agent works: its row's mark is told with it.
+    let mut working = crate::sidebar::project_agents(
+        serde_json::from_value(serde_json::json!({"agents": [
+            {"pane_id": at("w1:p1"), "agent": "codex", "agent_status": "working", "state_change_seq": 1}
+        ]}))
+        .unwrap(),
+    )
+    .agents
+    .remove(0);
+    working.mark = crate::agent_state::RowMark::Going;
     // The first tab is named too: the agent's label wins over it.
     runtime.snapshot.status.remote = vec![crate::model::RemoteStatusSnapshot {
         target_id: "mac-mini".into(),
@@ -2697,7 +2710,7 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
                 "/Users/example/hide",
                 vec![checkout],
             )],
-            agents: vec![],
+            agents: vec![working],
             active_tab_ids: Default::default(),
             focused_workspace_id: None,
             focused_checkout_id: None,
@@ -2712,17 +2725,34 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     }];
-    let names: Vec<(String, String)> = told(&runtime)
+    let names: Vec<_> = told(&runtime)
         .remove(&key)
         .expect("the machine is told")
         .into_iter()
-        .map(|named| (named.pane, named.name))
+        .map(|named| (named.pane, named.name, named.branch, named.mark))
         .collect();
+    let branch = || Some("m75-relay".to_owned());
     assert_eq!(
         names,
         [
-            ("w1:p1".to_owned(), "로그인 고치기".to_owned()),
-            ("w1:p2".to_owned(), "배포 확인".to_owned()),
+            (
+                "w1:p1".to_owned(),
+                Some("로그인 고치기".to_owned()),
+                branch(),
+                crate::agent_state::RowMark::Going
+            ),
+            (
+                "w1:p2".to_owned(),
+                Some("배포 확인".to_owned()),
+                branch(),
+                crate::agent_state::RowMark::Quiet
+            ),
+            (
+                "w1:p3".to_owned(),
+                None,
+                branch(),
+                crate::agent_state::RowMark::Quiet
+            ),
         ]
     );
 }
