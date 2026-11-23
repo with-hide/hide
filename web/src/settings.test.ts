@@ -7,7 +7,7 @@ import { initializeInterfaceI18n } from "./i18n/instance";
 import {
   ACCENT_CHOICES,
   canRetryDevice,
-  deviceSubtitle as deviceSubtitleIn,
+  deviceReason as deviceReasonIn,
   deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
   retryCanHelp,
@@ -38,7 +38,7 @@ import type { Device, DeviceHost, DeviceProblem, Kit, KitComponent, RemoteStatus
 // The English strings are what the sheet shipped with; the rules read the same under them.
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
-const deviceSubtitle = (device: Device) => deviceSubtitleIn(device, t);
+const deviceReason = (device: Device, remote?: RemoteStatus) => deviceReasonIn(device, remote, t);
 const deviceAwayLine = (patch: Partial<Device>, name = "Mac mini") => deviceAwayLineIn(device(patch), name, t);
 const deviceProblemLine = (problem: DeviceProblem | null | undefined, alias: string | null, platform?: string) => deviceProblemLineIn(problem, alias, t, platform);
 const deviceRemovalLines = (deviceId: string, registrations: Parameters<typeof deviceRemovalLinesIn>[1], tabs: Parameters<typeof deviceRemovalLinesIn>[2], drafts: Parameters<typeof deviceRemovalLinesIn>[3], onlyExported: (tabId: string) => boolean = () => false) =>
@@ -64,15 +64,22 @@ const device = (patch: Partial<Device>): Device => ({ agent_scope: emptyScope(),
 });
 
 describe("where settings live and what a device reported", () => {
-  it("names a device by its alias and its platform, and only as far as the device reported them", () => {
-    expect(deviceSubtitle(device({}))).toBe("studio");
-    const host = { state: "ready", platform: "macos aarch64" } as DeviceHost;
-    expect(deviceSubtitle(device({ host }))).toBe("studio · macos aarch64");
-    expect(deviceSubtitle(device({ host: { ...host, state: "connecting" } }))).toBe("studio");
-    expect(deviceSubtitle(device({ kind: "local", host }))).toBe("local, no SSH alias");
-    // PRD wsl-device B5: a WSL distribution is named where it is, the core's PC, in place of its Linux platform.
-    const wsl = device({ id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", ssh_alias: null, wsl_distro: "Ubuntu", host: { ...host, platform: "linux x86_64" } });
-    expect(deviceSubtitleIn(wsl, t, "This PC")).toBe("WSL Ubuntu · This PC");
+  it("says one state at a time, and one plain reason only while the device is not connected (operator review 2026-11-23)", () => {
+    const connecting: RemoteStatus = { target_id: "studio", state: "connecting", message: null };
+    // An attempt that stopped on a reason reads as not connected, though the link still says it is trying.
+    const stopped = device({ problem: "unsupported", message: "This Hide build has no helper for this device's system." });
+    expect(deviceLine(stopped, connecting).text).toBe("not connected");
+    expect(deviceReason(stopped, connecting)).toBe(deviceProblemLine("unsupported", "studio")?.note);
+    // ssh's own line is Connection details', not the row's.
+    expect(deviceReason(device({ problem: "cannot_connect", message: "ssh: connect to host studio port 22: Connection refused" }))).toBe("Couldn't connect");
+    const host = { state: "unavailable", consent: "granted", message: "spawn failed", platform: null } as unknown as DeviceHost;
+    expect(deviceReason(device({ host }))).toBe(hostLine(host).text);
+    expect(deviceReason(device({ state: "ready", host: { ...host, state: "ready" } as DeviceHost }))).toBeNull();
+    // A connected device whose helper failed says so, beside its Retry helper.
+    expect(deviceReason(device({ state: "ready", host }))).toBe(hostLine(host).text);
+    expect(deviceReason(device({ problem: null }), connecting)).toBeNull();
+    // A sign-in waiting on the operator is its own line on the row, not a reason.
+    expect(deviceReason(device({ problem: "sign_in_needed", sign_in: { question: 1 } as never }))).toBeNull();
   });
 
   it("draws every ssh failure as one of three states: sign in, the server key, or cannot connect (operator decision 2026-10-30)", () => {

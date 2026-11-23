@@ -19,12 +19,14 @@ import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
 import type { ChangeRequestRef, MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, MissionWaitOutcome, MissionWaitTarget, PrState } from "./snapshot";
 import type { NodeLook } from "./missions";
-import { pullLabel } from "./codeHost";
+import { pullHost, pullLabel } from "./codeHost";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
 export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_reference" | "pr_state" | "landing" | "merge"> & {
   delivery: MissionDelivery | null;
   base_pr: number | null;
+  /** The pull request it is stacked on as its host's unit names it; absent from a core before it, which reads as `#n`. */
+  base_reference?: ChangeRequestRef | null;
   /** How the pull request it is stacked on stands, as the mission's own nodes know it; absent or null when no node holds it. */
   base_state?: PrState | null;
   /** The worker's branch; absent where the frame carries none. */
@@ -40,18 +42,17 @@ export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr
   line?: string | null;
   verdict?: MissionVerdict | null;
   checks?: { passed: number; total: number } | null;
-  /** A waiting node's target, its deadline, the progress of a mission it waits on, the code host's label of its pull request and how it failed (PRD core-wait D-15-D-17); absent from a core before waits. */
+  /** A waiting node's target, its deadline, the progress of a mission it waits on and how it failed (PRD core-wait D-15-D-17); absent from a core before waits. Its pull request is named by `outside.reference`. */
   wait_target?: MissionWaitTarget | null;
   wait_until_unix_ms?: number | null;
   wait_progress?: { done: number; total: number } | null;
-  wait_label?: string | null;
   wait_outcome?: MissionWaitOutcome | null;
   /** The checks a failed CI wait named; absent where the frame carries none. */
   wait_checks?: readonly string[] | null;
   /** A waiting node Hide could not read this time (`확인 못 함`); absent where the frame carries none. */
   unread?: boolean;
-  /** Whom a raised reason waits on; absent where the frame carries none. */
-  attention?: { to: "operator" | "conductor" } | null;
+  /** Whom a raised reason waits on and the pull request it is about, with its reference; absent where the frame carries none. */
+  attention?: { to: "operator" | "conductor"; pr?: number | null; reference?: ChangeRequestRef | null } | null;
 };
 
 const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
@@ -80,7 +81,7 @@ export function nodeKindWord(node: Pick<MissionNode, "kind" | "preset">): Messag
 export function lineNode(node: MissionNode, nodes: readonly Pick<MissionNode, "prs">[] = []): LineNode {
   const current = node.prs.at(-1);
   const base = node.base_pr == null ? null : nodes.flatMap((one) => one.prs).find((pr) => pr.number === node.base_pr);
-  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0), base_state: base?.state ?? null, wait_label: node.wait_reference?.label ?? null };
+  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0), base_state: base?.state ?? null };
 }
 
 /** Whether a node's result goes into a branch, so it ends in a branch line (D-51): a change node; a waiting node draws what it waits on instead. */
@@ -97,7 +98,7 @@ export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
 export type LineMark = PrState | "pull" | "branch" | "plan_pr" | "plan_direct";
 
 /** Where the result lands: a branch (bold when it is not the mission's destination) or the pull request it is stacked on, drawn as that pull request's mark by its state (grey when unknown) and a grey number (D-57). */
-export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number; state: PrState | null };
+export type LineTo = { kind: "branch"; name: string; elsewhere: boolean } | { kind: "stack"; pr: number; reference: ChangeRequestRef | null; state: PrState | null };
 
 export type BranchLine = {
   mark: LineMark;
@@ -127,7 +128,7 @@ export function branchLine(node: LineNode, destination: string | null): BranchLi
 function ownLine(node: LineNode, destination: string | null): BranchLine {
   const byPr = node.delivery !== "direct" || node.pr != null;
   const person = node.merge?.by === "operator" ? node.merge.state : null;
-  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
+  const to = node.base_pr != null ? { kind: "stack" as const, pr: node.base_pr, reference: node.base_reference ?? null, state: node.base_state ?? null } : branchTo(byPr ? (node.pr_base ?? destination) : destination, destination);
   // A node only planned says how it will go; one replanned after it opened a pull request keeps the pull request it has.
   if (node.status === "planned" && node.pr == null) {
     return { mark: byPr ? "plan_pr" : "plan_direct", pr: null, branch: null, plan: byPr ? "pr" : "direct", direct: false, to, person };
@@ -203,7 +204,7 @@ export function waitCard(node: LineNode, look: NodeLook, now: number): WaitCard 
 function waitAim(node: LineNode): WaitAim | null {
   const target = node.wait_target ?? node.external ?? null;
   if (!target) return null;
-  const pr = (number: number) => node.wait_label ?? `#${number}`;
+  const pr = (number: number) => pullLabel({ number, reference: node.outside?.reference ?? null });
   const mark: LineMark = node.status === "done" ? "merged" : (node.outside?.state ?? "pull");
   if ("pr" in target) return { kind: "pr", pr: pr(target.pr), mark };
   if ("ci" in target) return { kind: "ci", pr: pr(target.ci), mark };
@@ -300,9 +301,9 @@ export function lineToLabel(to: LineTo): string {
   return to.kind === "stack" ? String(to.pr) : to.name;
 }
 
-/** The destination in words, for the card's name and the hover: the branch, or `PR n` for a stack (D-57). */
+/** The destination in words, for the card's name and the hover: the branch, or `PR n` (`MR n` on gitlab.com) for a stack (D-57). */
 export function lineToWords(to: LineTo, t: TFunction<"translation">): string {
-  return to.kind === "stack" ? t("mission.foot.stackPr", { number: String(to.pr) }) : to.name;
+  return to.kind === "stack" ? t("mission.foot.stackPr", { item: pullHost({ number: to.pr, reference: to.reference }).item, number: String(to.pr) }) : to.name;
 }
 
 /** The pull request's words as the line draws them: `#n`, `+N`. */

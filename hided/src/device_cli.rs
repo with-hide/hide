@@ -21,7 +21,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 /// Every verb a person types, which `hide --help` and the agent guide list.
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -104,6 +104,11 @@ pub enum Verb {
     /// A paired machine dialed again, or an SSH device's attempt.
     Retry {
         device: String,
+    },
+    /// The name this machine shows a paired machine or a device under.
+    Rename {
+        device: String,
+        name: String,
     },
     /// An SSH device switched to the connection of the Hide on its machine
     /// (D-49). `install` starts a Hide on a machine that runs none of its
@@ -277,6 +282,16 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         }
         (Some("retry"), [device]) => Verb::Retry {
             device: named(device)?,
+        },
+        // An empty name takes a paired machine back to the one it gives itself.
+        (Some("rename"), [device, name]) => Verb::Rename {
+            device: named(device)?,
+            name: match name.trim() {
+                "" => String::new(),
+                _ => hide_core::device_command::device_name(name)
+                    .ok_or_else(|| USAGE.to_owned())?
+                    .to_owned(),
+            },
         },
         (Some("switch"), [device]) => Verb::Switch {
             device: named(device)?,
@@ -456,6 +471,28 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 value,
                 format!("{device} is tried at {address} first.\n"),
             ))
+        }
+        Verb::Rename { device, name } => {
+            let paired = pairing(env, json!({"verb":"rename","device":device,"name":name}));
+            match paired {
+                Ok(value) => {
+                    let shown = value["name"].as_str().unwrap_or(name).to_owned();
+                    Ok(Printed::Value(
+                        value,
+                        format!("{device} is shown as {shown} on this machine.\n"),
+                    ))
+                }
+                // No paired machine of that name: an SSH or WSL device.
+                Err(refused) if refused.unknown() => core(
+                    env,
+                    &DeviceCommand::Rename {
+                        device_id: device.clone(),
+                        name: name.clone(),
+                    },
+                    false,
+                ),
+                Err(refused) => Err(refused),
+            }
         }
         Verb::Retry { device } => match pairing(env, json!({"verb":"retry","device":device})) {
             Ok(value) => Ok(Printed::Value(
@@ -1151,6 +1188,9 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
         DeviceCommand::Remove { device_id } => format!(
             "Removed {device_id}. Its panes, agents and files on the device keep running.\n"
         ),
+        DeviceCommand::Rename { device_id, name } => {
+            format!("{device_id} is shown as {} on this machine.\n", name.trim())
+        }
         DeviceCommand::Retry { .. } => format!(
             "{}{}",
             if value["started"] == true {
@@ -1376,6 +1416,28 @@ mod tests {
         // Answered: the holder ended with the question and holds no more.
         while holds.try_recv().is_ok() {}
         assert_eq!(holds.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn rename_takes_a_machine_and_one_trimmed_name() {
+        assert_eq!(
+            parse_words(&["rename", "win", " 회사 PC "]),
+            Ok(DeviceCli {
+                verb: Verb::Rename {
+                    device: "win".into(),
+                    name: "회사 PC".into(),
+                },
+                json: false,
+                wait: false,
+            })
+        );
+        assert!(parse_words(&["rename", "win"]).is_err());
+        // An empty name asks for the machine's own name back.
+        assert!(matches!(
+            parse_words(&["rename", "win", "  "]),
+            Ok(DeviceCli { verb: Verb::Rename { name, .. }, .. }) if name.is_empty()
+        ));
+        assert!(parse_words(&["rename", "win", "a", "b"]).is_err());
     }
 
     #[test]

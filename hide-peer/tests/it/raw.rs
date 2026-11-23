@@ -289,6 +289,7 @@ async fn an_update_request_is_said_once_to_a_host_this_machine_is_an_active_gues
                 key: host.key(),
                 device: "by-hand".to_owned(),
                 name: "By hand".to_owned(),
+                chosen_name: None,
                 grant: "g1".to_owned(),
                 state: KnownState::Active,
                 candidates: Vec::new(),

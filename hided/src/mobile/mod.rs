@@ -29,6 +29,7 @@ pub mod relay;
 pub mod start;
 pub mod store;
 pub mod tailscale;
+pub mod uploads;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -452,6 +453,9 @@ pub struct Config {
     /// The desktop windows' gateways, which a page View's screenshot goes
     /// through (`page_shot.rs`).
     pub browser_control: Arc<crate::browser_control::BrowserControl>,
+    /// The store a phone's attached files are uploaded into: the desktop's
+    /// uploads' own, with its caps, eviction and release (`uploads.rs`).
+    pub attachments: Arc<crate::attachments::Attachments>,
 }
 
 pub struct Mobile {
@@ -2110,6 +2114,9 @@ impl Mobile {
 
     pub fn unregister(&self, connection: u64) {
         self.set_start_sheet(connection, false);
+        // The files a phone uploaded that no reply committed go with its
+        // connection, as a desktop window's do.
+        self.config.attachments.release(connection);
         let removed = self.live().remove(&connection);
         if removed
             .as_ref()
@@ -2751,6 +2758,25 @@ impl Mobile {
         }
     }
 
+    pub fn attachments(&self) -> &crate::attachments::Attachments {
+        &self.config.attachments
+    }
+
+    /// Where the files a reply attaches go before its words are typed into a
+    /// pane of `device_id` (`hide_core::operator_input::Attach`). Blocks on
+    /// the core's owner thread.
+    pub fn input_attach(
+        &self,
+        device_id: &str,
+    ) -> Result<hide_core::operator_input::Attach, &'static str> {
+        self.config.core.input_attach(device_id).map_err(|message| {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "input.attach_unavailable", "message": message,
+            }));
+            "unavailable"
+        })
+    }
+
     pub fn terminals(&self) -> &dyn hide_node_link::terminal::TerminalNode {
         self.config.core.terminals.as_ref()
     }
@@ -3307,6 +3333,9 @@ pub(super) fn test_mobile_from(
             Arc::new(crate::index::IndexService::new()),
         )),
         browser_control: Arc::default(),
+        attachments: Arc::new(crate::attachments::Attachments::new(
+            &directory.join("state"),
+        )),
     })
 }
 

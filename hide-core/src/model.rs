@@ -1940,6 +1940,9 @@ pub enum DeviceProblem {
     OpenSshOld,
     Unsupported,
     HideUpdated,
+    /// Hide's program was started on a Windows device and never answered,
+    /// which Smart App Control's block looks like from here (issue #2855).
+    WindowsNotStarted,
 }
 
 impl DeviceProblem {
@@ -1967,6 +1970,7 @@ impl DeviceProblem {
             Self::OpenSshOld => "openssh_old",
             Self::Unsupported => "unsupported",
             Self::HideUpdated => "hide_updated",
+            Self::WindowsNotStarted => "windows_not_started",
         }
     }
 }
@@ -11742,6 +11746,7 @@ mod wire_enum_tests {
             DeviceProblem::OpenSshOld,
             DeviceProblem::Unsupported,
             DeviceProblem::HideUpdated,
+            DeviceProblem::WindowsNotStarted,
         ];
         for variant in problems {
             match variant {
@@ -11752,7 +11757,8 @@ mod wire_enum_tests {
                 | DeviceProblem::SshMissing
                 | DeviceProblem::OpenSshOld
                 | DeviceProblem::Unsupported
-                | DeviceProblem::HideUpdated => {}
+                | DeviceProblem::HideUpdated
+                | DeviceProblem::WindowsNotStarted => {}
             }
         }
         assert_wire(

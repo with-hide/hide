@@ -22,12 +22,12 @@ it("draws a change by pull request as its PR list mark, number, branch and desti
 });
 
 it("ends in another base, or in the pull request it is stacked on with that pull request's state as the mission's nodes know it (B55, D-57)", () => {
-  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
+  expect(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: null });
   // The desktop reads the base's state from whichever node of the mission holds that pull request; none holds it, none is named.
   const held = (number: number, state: MissionNode["prs"][number]["state"]) => ({ prs: [{ number, state, url: null }] });
   const stacked = { kind: "change", status: "working", pr: 3106, pr_state: "pending", landing: null, merge: null, delivery: "pr", base_pr: 3105, branch: "feat/screen", prs: [{ number: 3106, state: "pending", url: null }] } as unknown as MissionNode;
-  expect(branchLine(lineNode(stacked, [held(3104, "merged"), held(3105, "mergeable")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: "mergeable" });
-  expect(branchLine(lineNode(stacked, [held(3104, "merged")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, state: null });
+  expect(branchLine(lineNode(stacked, [held(3104, "merged"), held(3105, "mergeable")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: "mergeable" });
+  expect(branchLine(lineNode(stacked, [held(3104, "merged")]), "main")?.to).toEqual({ kind: "stack", pr: 3105, reference: null, state: null });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "release/1.2" }), "main")?.to).toEqual({ kind: "branch", name: "release/1.2", elsewhere: true });
   expect(branchLine(node({ pr: 3106, pr_state: "pending", pr_base: "main" }), "main")?.to).toEqual({ kind: "branch", name: "main", elsewhere: false });
 });
@@ -111,8 +111,9 @@ it("says what a waiting node waits for in one sentence, whatever it waits on and
   const words = t();
   const said = (extra: Partial<LineNode>) => waitConditionWords(waitCard(waiting(extra), "external", NOW)!.aim, words);
   expect(said({ wait_target: { pr: 2528 }, external: { pr: 2528 } })).toBe(`#${2528} 머지되면`);
-  // A pull request is named as its code host writes it, the core's reference.
-  expect(said({ wait_target: { ci: 1232 }, wait_label: "!1232" })).toBe("!1232 CI 통과하면");
+  // A pull request is named as its code host writes it, from the reference the core carries beside its number.
+  const gitlab = { repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number: 1232, key: "gitlab.com/acme/app#1232", label: "!1232", url: "", checks_url: "", files_url: "" };
+  expect(said({ wait_target: { ci: 1232 }, outside: { reference: gitlab } })).toBe("!1232 CI 통과하면");
   expect(said({ wait_target: { branch: "release/1.3" }, outside: { base: "main" } })).toBe("main에 release/1.3 들어오면");
   expect(said({ wait_target: { branch: "release/1.3" } })).toBe("기본 브랜치에 release/1.3 들어오면");
   expect(said(mission91)).toBe("mission-91 끝나면");

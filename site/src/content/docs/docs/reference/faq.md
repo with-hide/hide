@@ -65,7 +65,7 @@ Your agents, the core and Hide AI still run on your own machines, using the CLIs
 
 Apple Silicon Macs with macOS 14 or later, Windows x64 and Linux x64 (`.deb` and `.rpm` packages).
 An Intel Mac and a Windows ARM PC are not supported.
-Windows 11 with Smart App Control turned on blocks unsigned programs, so hide does not run there.
+On Windows 11, turn Smart App Control off first: it blocks programs that are not signed, and hide is not signed yet ([how to turn it off](/docs/reference/troubleshooting/#smart-app-control-blocks-hide-on-windows-11)).
 You can also use a Mac, Windows PC or Linux machine as a device: connect it from Settings > Devices over SSH.
 
 ## Why do Windows and Linux warn me when I install?

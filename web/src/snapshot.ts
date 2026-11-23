@@ -1509,7 +1509,7 @@ export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
 /** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; /** `pr` as its host's unit names it; absent with none and from an older core, which reads as `#n`. */ reference?: ChangeRequestRef | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -1619,7 +1619,7 @@ export type MissionWaitOutcome = "closed_unmerged" | "ci_failed" | "mission_canc
 export type MissionWaitReference = { label: string; url: string };
 
 /** Where an outside node's work goes (`OutsideView`, PRD mission-destination D-14): its pull request's base and state as GitHub last answered, or the default branch its branch is judged against; each absent until read. */
-export type MissionOutside = { base?: string; state?: PrState };
+export type MissionOutside = { base?: string; state?: PrState; /** An outside pull request as its host's unit names it; absent for a branch and from an older core, which reads as `↗#n`. */ reference?: ChangeRequestRef };
 
 /** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
 export type MissionQuestion = {
@@ -1736,12 +1736,14 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** `base_pr` as its host's unit names it (`!12` on gitlab.com); absent with none and from an older core, which reads as `#n`. */
+  base_reference?: ChangeRequestRef | null;
   /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
   stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
-  /** `pr_url` as its host's unit names it; absent while no read named it. */
+  /** The current pull request as its host's unit names it; absent while the project's repository is not read and from an older core, which reads as `#n`. */
   pr_reference?: ChangeRequestRef | null;
   /** The node's step of four (D-42, D-48); none for a node without a pull request or branch (D-53). */
   stage: number | null;
@@ -1768,8 +1770,6 @@ export type MissionNode = {
   wait_until_unix_ms?: number;
   /** The progress of the mission it waits on, `끝 2/7` (D-16). */
   wait_progress?: { done: number; total: number };
-  /** How the code host writes the change request a pull request or CI target names. */
-  wait_reference?: MissionWaitReference;
   wait_outcome?: MissionWaitOutcome;
   /** The checks a failed CI wait named (at most eight), for `CI 실패 · build 외 1`; absent for any other outcome. */
   wait_checks?: string[];
@@ -1855,7 +1855,7 @@ export type MissionWarningKind = "review_fails" | "stopped";
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
 /** One node the safety net holds (`HeldNodeView`): its unresolved cell (a raise's reason or a standing cell's fact) and since when it stands. */
-export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; since_unix_ms: number };
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; /** `pr` as its host's unit names it; absent with none and from an older core, which reads as `#n`. */ reference?: ChangeRequestRef | null; since_unix_ms: number };
 /** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
 export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
 /** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
@@ -2321,7 +2321,7 @@ export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "
  * A retry over ssh's last line, in `message`, is `cannot_connect`; the
  * retries ssh says nothing useful for carry their own value, for a sentence.
  */
-export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated";
+export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated" | "windows_not_started";
 
 /**
  * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:

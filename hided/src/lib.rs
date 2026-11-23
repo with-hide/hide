@@ -587,6 +587,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         boundary: Arc::clone(&boundary),
         roots: Arc::clone(&roots),
         browser_control: Arc::clone(&browser_control),
+        attachments: Arc::clone(&attachments),
     });
     seat.starting("core.peers");
     // How another account's `hide` is reached, over SSH or `wsl.exe`.

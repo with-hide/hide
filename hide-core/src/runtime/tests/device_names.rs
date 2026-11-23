@@ -550,3 +550,42 @@ fn an_agents_machine_given_as_an_alias_is_the_device() {
         Err("machine_unknown".to_owned())
     );
 }
+
+/// Hide started on a Windows device and never answering is the one failure
+/// the row words as that (`windows_not_started`, issue 2855): the same
+/// start failure on another system, any other failure and a connection
+/// that came up say nothing of it.
+#[test]
+fn only_a_windows_device_whose_hide_did_not_start_says_so_on_its_row() {
+    use hide_node_link::device::EstablishError;
+    let mut runtime = runtime();
+    stored(&mut runtime, MACHINE, DeviceNaming::Named, Some(MACHINE));
+    let failed = |runtime: &mut Runtime, error: EstablishError| {
+        runtime.start_device_host(MACHINE, hosts::HostAttempt::Background);
+        let generation = runtime.device_host_generation(MACHINE);
+        runtime.ingest_host_established(MACHINE, generation, Err(error));
+        row(runtime, MACHINE).problem
+    };
+    let not_started = |windows| EstablishError::NotStarted {
+        windows,
+        reason: "The device helper did not start: no answer".to_owned(),
+    };
+
+    assert_eq!(
+        failed(&mut runtime, not_started(true)).as_deref(),
+        Some("windows_not_started")
+    );
+    assert_eq!(failed(&mut runtime, not_started(false)), None);
+    assert_eq!(
+        failed(&mut runtime, not_started(true)).as_deref(),
+        Some("windows_not_started")
+    );
+    assert_eq!(
+        failed(&mut runtime, EstablishError::Helper("no helper".to_owned())),
+        None,
+        "another failure replaces it"
+    );
+    failed(&mut runtime, not_started(true));
+    assert!(connected(&mut runtime, MACHINE, Some(MACHINE), Ok(MACHINE)));
+    assert_eq!(row(&mut runtime, MACHINE).problem, None);
+}

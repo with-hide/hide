@@ -91,6 +91,73 @@ pub fn problem(text: &str, files: usize) -> Option<&'static str> {
     None
 }
 
+/// Where the files an input attaches are before its words are typed: the
+/// files a screen staged on the core's machine, and, for a pane of another
+/// machine, the link they are staged on there (`Call::StageAttachment`), so
+/// the desktop conversation's input and a phone's reply attach files one way.
+/// Taken under the runtime lock and used off it: [`Attach::words`] calls the
+/// nodes.
+pub struct Attach {
+    on_device: bool,
+    own_node: Arc<dyn crate::node_access::NodeLink>,
+    staging: Option<Result<Arc<dyn crate::node_access::NodeLink>, String>>,
+}
+
+impl Attach {
+    pub(crate) fn new(
+        on_device: bool,
+        own_node: Arc<dyn crate::node_access::NodeLink>,
+        staging: Option<Result<Arc<dyn crate::node_access::NodeLink>, String>>,
+    ) -> Self {
+        Self {
+            on_device,
+            own_node,
+            staging,
+        }
+    }
+
+    /// The words that type `paths`, files staged on the core's machine, in
+    /// front of `text`: each path quoted for the shell, in the order given,
+    /// as the machine that holds the pane spells it. For a pane of another
+    /// machine the files are read here and staged there first, under
+    /// `request_id`. Blocks on the nodes, so a caller runs it off the
+    /// runtime lock.
+    pub fn words(
+        &self,
+        text: &str,
+        paths: &[String],
+        request_id: &str,
+    ) -> Result<String, &'static str> {
+        if paths.is_empty() {
+            return Ok(text.to_owned());
+        }
+        let destinations = if self.on_device {
+            let link = self
+                .staging
+                .as_ref()
+                .ok_or("device_unreachable")?
+                .as_ref()
+                .map_err(|_| "device_unreachable")?;
+            let cancelled = std::sync::atomic::AtomicBool::new(false);
+            let files = crate::terminal_attachments::read_sources(
+                self.own_node.as_ref(),
+                paths,
+                &cancelled,
+            )
+            .map_err(|_| "attachment_failed")?;
+            crate::terminal_attachments::stage(link.as_ref(), request_id, &files, &cancelled)
+                .map_err(|_| "attachment_failed")?
+        } else {
+            paths.to_vec()
+        };
+        let quoted = crate::terminal_attachments::paste_bytes(&destinations, false, self.on_device)
+            .map_err(|_| "attachment_failed")?;
+        let mut words = String::from_utf8(quoted).map_err(|_| "attachment_failed")?;
+        words.push_str(text);
+        Ok(words)
+    }
+}
+
 /// What one write types.
 pub enum Typed<'a> {
     /// The operator's words, submitted with Enter.

@@ -1406,4 +1406,68 @@ mod tests {
         let refused = draw(&value, NOW).unwrap_err();
         assert!(refused.contains("node ci waiting_on"), "{refused}");
     }
+
+    /// A gitlab.com project's change requests read as gitlab.com writes
+    /// them from the references the daemon carries, and a GitHub project's
+    /// as before: a node's own in its line and its detail, and the one a
+    /// stacked node waits on in the daemon's own words. An outside node's
+    /// number is never printed, only its title.
+    #[test]
+    fn a_projects_change_requests_read_as_its_host_writes_them() {
+        let reference = |host: &str, number: u32| {
+            let (authority, label) = if host == "gitlab" {
+                ("gitlab.com", format!("!{number}"))
+            } else {
+                ("github.com", format!("#{number}"))
+            };
+            json!({"repository": {"host": host, "authority": authority, "path": "acme/app"},
+                   "number": number, "key": format!("{authority}/acme/app#{number}"), "label": label,
+                   "url": "", "checks_url": "", "files_url": ""})
+        };
+        for (host, line, detail, stack) in [
+            (
+                "gitlab",
+                " · !45 대기 · ",
+                "\nMR !45 대기\n",
+                "쌓기 guard 위 · MR !45 · ",
+            ),
+            (
+                "github",
+                " · #45 대기 · ",
+                "\nPR #45 대기\n",
+                "쌓기 guard 위 · PR #45 · ",
+            ),
+        ] {
+            let guard = json!({"key": "guard", "title": "Guard", "kind": "change", "delivery": "pr",
+                "status": "working", "pr": 45, "pr_state": "pending", "pr_reference": reference(host, 45),
+                "prs": [{"number": 45, "state": "pending", "reference": reference(host, 45)}],
+                "waiting_on": {"kind": "worker"}, "warnings": [], "criteria": []});
+            let moved = json!({"key": "moved", "title": "Moved", "kind": "external", "status": "working",
+                "external": {"pr": 44}, "outside": {"base": "main", "state": "pending", "reference": reference(host, 44)},
+                "prs": [], "waiting_on": {"kind": "worker"}, "warnings": [], "criteria": []});
+            let mut value = mission();
+            value["mission"]["nodes"] = json!([guard.clone(), moved.clone()]);
+            let overview = draw(&value, NOW).unwrap();
+            assert!(
+                overview.contains(&format!("  guard · 작업 중{line}")),
+                "{host}: {overview}"
+            );
+            assert!(!overview.contains("44"), "{host}: {overview}");
+            let alone = |node: &Value| {
+                draw(
+                    &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                    NOW,
+                )
+                .unwrap()
+            };
+            assert!(alone(&guard).contains(detail), "{host}");
+            assert!(!alone(&moved).contains("44"), "{host}: {}", alone(&moved));
+            let mut stacked = guard.clone();
+            stacked["key"] = json!("top");
+            stacked["stack"] = json!({"on": "guard", "branch": "m91/guard", "pr": 45});
+            let words = if host == "gitlab" { "MR !45" } else { "PR #45" };
+            let answer = json!({"mission_id": "mission-33", "node": stacked, "letters": [], "stack_pr": words});
+            assert!(draw(&answer, NOW).unwrap().contains(stack), "{host}");
+        }
+    }
 }

@@ -4087,9 +4087,9 @@ mod tests {
             )
         );
         assert!(
-            parse(&["hide", "device", "rename"])
+            parse(&["hide", "device", "rename-all"])
                 .unwrap_err()
-                .starts_with("unknown command: hide device rename\nusage:\n  hide device list")
+                .starts_with("unknown command: hide device rename-all\nusage:\n  hide device list")
         );
         assert_eq!(
             parse(&["hide", "--foo"]).unwrap_err(),

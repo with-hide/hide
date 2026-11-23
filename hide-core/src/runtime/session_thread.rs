@@ -32,7 +32,6 @@ use hide_session::thread::{
     spawned_agent,
 };
 use serde_json::Value;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 /// Whole pages a thread keeps besides its live one. A forward read that
@@ -492,9 +491,7 @@ impl Runtime {
             };
             return self.settle_thread_input(&payload.request_id, Err(reason));
         };
-        let on_device = device != self.node.as_str();
-        let staging = (on_device && !payload.paths.is_empty()).then(|| self.staging_link(&device));
-        let own_node = self.own_node();
+        let attach = self.input_attach(&device);
         let terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes> =
             Arc::clone(&self.terminals);
         let gate = Arc::clone(&self.input_gate);
@@ -515,14 +512,7 @@ impl Runtime {
         let core_pane = payload.pane_id.clone();
         let write =
             move |still: &dyn Fn() -> Result<(), &'static str>| -> Result<(), &'static str> {
-                let text = input_text(
-                    &payload.text,
-                    &payload.paths,
-                    on_device,
-                    own_node.as_ref(),
-                    staging,
-                    &payload.request_id,
-                )?;
+                let text = attach.words(&payload.text, &payload.paths, &payload.request_id)?;
                 // The pane may have moved on while the words waited for
                 // staging, their permit or the pane's admission: the write
                 // asks once more, last.
@@ -951,38 +941,6 @@ fn apply_in(context: &RuntimeWorkerContext, change: impl FnOnce(&mut Runtime) ->
     }
 }
 
-/// The words typed into the pane: the attached files' paths on the pane's
-/// machine, quoted as a terminal attachment pastes them, then the text. A
-/// device's pane gets its files staged there first.
-fn input_text(
-    text: &str,
-    paths: &[String],
-    on_device: bool,
-    own_node: &dyn crate::node_access::NodeLink,
-    staging: Option<Result<Arc<dyn crate::node_access::NodeLink>, String>>,
-    request_id: &str,
-) -> Result<String, &'static str> {
-    if paths.is_empty() {
-        return Ok(text.to_owned());
-    }
-    let destinations = match staging {
-        Some(link) => {
-            let link = link.map_err(|_| "device_unreachable")?;
-            let cancelled = AtomicBool::new(false);
-            let files = ingress::read_sources(own_node, paths, &cancelled)
-                .map_err(|_| "attachment_failed")?;
-            ingress::stage(link.as_ref(), request_id, &files, &cancelled)
-                .map_err(|_| "attachment_failed")?
-        }
-        None => paths.to_vec(),
-    };
-    let quoted =
-        ingress::paste_bytes(&destinations, false, on_device).map_err(|_| "attachment_failed")?;
-    let mut words = String::from_utf8(quoted).map_err(|_| "attachment_failed")?;
-    words.push_str(text);
-    Ok(words)
-}
-
 /// A page as its read answered it: where it sits in the record, and the
 /// screen's copy of it, made on the read's worker and never under the
 /// runtime lock.
@@ -1128,6 +1086,7 @@ mod tests {
     use hide_node_link::sessions::ReaderFeatures;
     use serde_json::json;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
     const SESSION: &str = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
     const INPUT: &str = "4f1c2b3a-5d6e-4f70-8a9b-0c1d2e3f4a5b";

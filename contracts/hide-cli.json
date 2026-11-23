@@ -6916,6 +6916,44 @@
         },
         {
             "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "device rename",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted",
+                "device_unknown",
+                "device_ambiguous",
+                "name_invalid",
+                "device_name_invalid",
+                "device_paired"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "device_changed",
                 "device_retried"
             ],
@@ -9704,7 +9742,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:97cd99ecb846e1e2c99b7fbbc0f3340058e162024aebe9bff664a5e3b1bbb082",
+    "digest": "sha256:ce50e5f6626b96e5017b96c3290a8a13b41dd06d5a53e8e97e1d764f80e9ad79",
     "envelopes": {
         "access": {
             "answer": "value",

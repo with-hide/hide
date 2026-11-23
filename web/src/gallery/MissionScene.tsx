@@ -199,8 +199,8 @@ function waits(fixture: ReturnType<typeof missionFixture>, now: number) {
   const waiting = (key: string, title: string, extra: Partial<MissionNode>) => node(key, title, { kind: "wait", delivery: null, status: "working", started_at_unix_ms: now - 50 * MINUTE, wait_until_unix_ms: now + 6 * 24 * 60 * MINUTE, ...extra });
   const met = { status: "done" as const, finished_at_unix_ms: now - 12 * MINUTE };
   const soon = { wait_until_unix_ms: now + 5 * 60 * MINUTE - MINUTE };
-  const pr = (number: number, state: "pending" | "merged" | "closed") => ({ wait_target: { pr: number }, external: { pr: number }, outside: { base: "main", state }, wait_reference: { label: `#${number}`, url: `https://github.com/with-hide/hide/pull/${number}` } });
-  const ci = (number: number) => ({ wait_target: { ci: number }, wait_reference: { label: `#${number}`, url: `https://github.com/with-hide/hide/pull/${number}` } });
+  const pr = (number: number, state: "pending" | "merged" | "closed") => ({ wait_target: { pr: number }, external: { pr: number }, outside: { base: "main", state } });
+  const ci = (number: number) => ({ wait_target: { ci: number } });
   const branch = { wait_target: { branch: "release/1.3" }, external: { branch: "release/1.3" }, outside: { base: "main" } };
   const mission = { wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } };
   const gitlab = { wait_target: { node: { mission: "mission-91", node: "gitlab-write" } } };

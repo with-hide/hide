@@ -110,15 +110,18 @@ pub enum Feature {
     /// An agent's own question, plan or tool permission answered with one
     /// of its choices from a phone.
     PhoneAnswer,
+    /// A reply sent from a phone with files attached to it.
+    PhoneAttachments,
 }
 
 impl Feature {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Focus,
         Self::SkillsMcp,
         Self::HidesPaired,
         Self::Gitlab,
         Self::PhoneAnswer,
+        Self::PhoneAttachments,
     ];
 
     fn name(self) -> &'static str {
@@ -128,6 +131,7 @@ impl Feature {
             Self::HidesPaired => "hides_paired",
             Self::Gitlab => "gitlab",
             Self::PhoneAnswer => "phone_answer",
+            Self::PhoneAttachments => "phone_attachments",
         }
     }
 }
@@ -195,6 +199,8 @@ pub struct ActiveDays {
     gitlab: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     phone_answer: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_attachments: Option<u64>,
 }
 
 impl ActiveDays {
@@ -211,6 +217,7 @@ impl ActiveDays {
             Daily::Feature(Feature::HidesPaired) => &mut self.hides_paired,
             Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
             Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
+            Daily::Feature(Feature::PhoneAttachments) => &mut self.phone_attachments,
         };
         if *recorded == Some(day) {
             return false;
@@ -273,6 +280,7 @@ pub enum PracticeChapter {
     Connect,
     Gitlab,
     Answer,
+    Attachments,
 }
 
 impl PracticeChapter {
@@ -289,6 +297,7 @@ impl PracticeChapter {
             "connect" => Self::Connect,
             "gitlab" => Self::Gitlab,
             "answer" => Self::Answer,
+            "attachments" => Self::Attachments,
             _ => return None,
         })
     }
@@ -469,6 +478,7 @@ impl Event {
                         PracticeChapter::Connect => "connect",
                         PracticeChapter::Gitlab => "gitlab",
                         PracticeChapter::Answer => "answer",
+                        PracticeChapter::Attachments => "attachments",
                     },
                 ),
                 (

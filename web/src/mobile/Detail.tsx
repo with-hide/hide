@@ -27,6 +27,10 @@ import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage,
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import { AskCardView, AskStrip } from "./AskCard";
 import { MessageItem } from "./messages";
+import { AttachButton, ComposerFiles, FileNoticeLine } from "./Attachments";
+import { attachPicked, pickFiles } from "./pickFiles";
+import { shownFiles, type NamedFile } from "./sentReplies";
+import { removeFile, retryFile, type SentFile } from "./uploads";
 import {
   MAX_MESSAGES,
   askIdentity,
@@ -36,6 +40,7 @@ import {
   noticeText,
   rowsProblem,
   type Conversation,
+  type ConversationMessage,
   type PhoneAsk,
   type Running,
   sleepTarget,
@@ -423,6 +428,18 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   const answered = usePhone((s) => (key && ask ? s.answers[askIdentity(key, ask)] : undefined)) ?? null;
   const content = useMemo(() => ({ messages, thinking, ask, answered }), [messages, thinking, ask, answered]);
   const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
+  const sent = usePhone((s) => s.sent);
+  // The operator's messages that attached files: the files over the bubble, with this phone's thumbnails where it sent them (Doop 09).
+  // A message of images alone that this phone did not send, or whose photos it no longer holds, draws nothing.
+  const shown = useMemo(
+    () =>
+      messages.flatMap((message): { message: ConversationMessage; files?: (SentFile | NamedFile)[] }[] => {
+        const attached = key && message.who === "you" ? shownFiles(sent, key, message) : null;
+        if (attached && attached.files.length > 0) return [{ message: { ...message, text: attached.words }, files: attached.files }];
+        return message.who === "you" && message.text.trim().length === 0 ? [] : [{ message }];
+      }),
+    [messages, key, sent],
+  );
   const capped = before !== null && messages.length >= MAX_MESSAGES;
   return (
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-conversation={messages.length} onScroll={onScroll}>
@@ -433,9 +450,9 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
       ) : null}
       {messages.length === 0 ? <p className="text-body text-muted-foreground">{t("mobile.noConversation")}</p> : null}
       <ol aria-label={t("mobile.tab.conversation")} className="flex flex-col gap-md">
-        {messages.map((message, index) => (
+        {shown.map(({ message, files }, index) => (
           // The time closes each turn: after the operator's message and after the agent's last one.
-          <MessageItem key={message.id} message={message} timed={messages[index + 1]?.who !== message.who} />
+          <MessageItem key={message.id} message={message} files={files} timed={shown[index + 1]?.message.who !== message.who} />
         ))}
       </ol>
       {commandSince ? <ActivityLine word={t("mobile.runningCommand")} since={commandSince} clock /> : null}
@@ -485,6 +502,11 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
   };
   const pending = usePhone((s) => s.pendingInput);
   const error = usePhone((s) => s.inputError);
+  // A computer that takes files offers the `+`; its files go up as soon as they are picked (Doop 08).
+  const takesFiles = usePhone((s) => s.takesFiles);
+  const files = usePhone((s) => s.files);
+  const fileNotice = usePhone((s) => s.fileNotice);
+  const filesReady = files.every((file) => file.state === "ready");
   // A computer that answers from the phone takes a reply of several lines, as long as one phone message holds.
   const lines = usePhone((s) => s.answer);
   const agentKey = usePhone((s) => s.detail?.key ?? null);
@@ -496,7 +518,7 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
     [],
   );
   const reply = about ? replyAbout(about, text) : text;
-  const tooLong = useMemo(() => (agentKey ? replyProblem(reply, lines, agentKey) === "too_long" : false), [reply, lines, agentKey]);
+  const tooLong = useMemo(() => (agentKey ? replyProblem(reply, lines, agentKey, files.length) === "too_long" : false), [reply, lines, agentKey, files.length]);
   const blocked = disabled || pending !== null;
   const shown = tooLong ? inputFailure("too_long", lines) : error;
   return (
@@ -520,6 +542,12 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
       </div>
       ) : null}
       <div className={`${keys ? "mt-sm" : "mt-xs"} pb-md`}>
+        {takesFiles && !about ? (
+          <>
+            <ComposerFiles files={files} onRemove={removeFile} onRetry={retryFile} />
+            <FileNoticeLine notice={fileNotice} />
+          </>
+        ) : null}
         <Composer
           value={text}
           onChange={setText}
@@ -529,7 +557,8 @@ function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boole
             about ? t("mobile.look.replyAbout", { name: about }) : keys ? t("mobile.replyToTerminal") : ask?.kind === "question" ? t("mobile.ask.replyInstead") : t("mobile.replyPlaceholder")
           }
           disabled={disabled}
-          sendDisabled={blocked || text.trim().length === 0 || tooLong}
+          lead={takesFiles && !about ? <AttachButton disabled={disabled} onPick={() => void pickFiles().then(attachPicked)} /> : undefined}
+          sendDisabled={blocked || (text.trim().length === 0 && files.length === 0) || !filesReady || tooLong}
           input={{
             "aria-label": t("mobile.reply"),
             "aria-invalid": tooLong || undefined,

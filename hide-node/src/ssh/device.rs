@@ -433,7 +433,10 @@ impl DialedTransport for SshDevice {
         )?;
         // Until the helper starts, every way out ends and reaps the `ssh`
         // child before the attempt returns (B8, B26).
-        let started = (|pipe: &mut session::SigningIn| -> Result<(HostIdentity, bootstrap::Installed), EstablishError> {
+        let started = (|pipe: &mut session::SigningIn| -> Result<
+            (HostIdentity, bootstrap::Installed, String),
+            EstablishError,
+        > {
             let identity = HostIdentity {
                 user: resolved.user.clone(),
                 hostname: resolved.hostname.clone(),
@@ -452,8 +455,9 @@ impl DialedTransport for SshDevice {
             let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             let home = match &self.device_home {
                 Some(configured) => Some(
-                    resolve_device_home(configured, &facts.home, &facts.os)
-                        .map_err(|reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason))?,
+                    resolve_device_home(configured, &facts.home, &facts.os).map_err(|reason| {
+                        EstablishError::install(hide_node_link::device::InstallStop::Local, reason)
+                    })?,
                 ),
                 None => None,
             };
@@ -467,9 +471,9 @@ impl DialedTransport for SshDevice {
             )?;
             stage("start");
             bootstrap::start(&mut *pipe, &installed.helper_relative, home.as_deref())?;
-            Ok((identity, installed))
+            Ok((identity, installed, facts.os.clone()))
         })(&mut pipe);
-        let (identity, installed) = match started {
+        let (identity, installed, os) = match started {
             Ok(started) => started,
             Err(error) => {
                 pipe.link.kill();
@@ -487,7 +491,10 @@ impl DialedTransport for SshDevice {
         let hello: Hello = call_as(&host, Call::Hello, host::hello_timeout(installed.fresh))
             .map_err(|error| {
                 host.close("the helper did not answer Hello");
-                EstablishError::Helper(format!("The device helper did not start: {error}"))
+                EstablishError::NotStarted {
+                    windows: os == "windows",
+                    reason: format!("The device helper did not start: {error}"),
+                }
             })?;
         if let Some(reason) = host::helper_protocol_refusal(&hello) {
             host.close("helper protocol mismatch");

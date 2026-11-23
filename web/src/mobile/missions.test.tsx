@@ -780,6 +780,27 @@ it("draws the desktop's v4 rows from the Mac's fields, without the branch name t
   } finally { await unmount(); }
 });
 
+// D1: a gitlab.com step names each merge request as its host does, from the references the Mac carries: its own, the one it is stacked
+// on and the one a waiting step waits on or whose CI it waits on; a GitHub step's words are the card test's above, and a Mac before
+// references reads `#n` (the test below).
+it("writes a gitlab.com step's merge requests `!n` from the references the Mac carries", async () => {
+  const ref = (number: number) => ({ repository: { host: "gitlab", authority: "gitlab.com", path: "acme/app" }, number, key: `gitlab.com/acme/app#${number}`, label: `!${number}`, url: `https://gitlab.com/acme/app/-/merge_requests/${number}`, checks_url: "", files_url: "" });
+  const { container, click, unmount } = await connect([mission("m-gl", { destination: "main", nodes: [
+    node("guard", "working", { pr: 45, pr_state: "pending", pr_reference: ref(45), base_pr: 40, base_reference: ref(40) }),
+    node("moved", "working", { kind: "wait", delivery: null, worker_agent: null, wait_target: { pr: 44 }, external_pr: 44, external_reference: ref(44), external_base: "main", external_state: "pending" }),
+    node("checks", "working", { kind: "wait", delivery: null, worker_agent: null, wait_target: { ci: 46 }, external_reference: ref(46) }),
+  ] })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-gl"]');
+    await click("[data-phone-mission-map-toggle]");
+    expect(cardOf(container, "guard")).toMatchObject({ text: "!45→40" });
+    expect(cardOf(container, "guard").name).toContain("Where it goes: !45 → MR 40");
+    expect(waitOf(container, "moved")?.condition).toBe("if !44 merges");
+    expect(waitOf(container, "checks")?.condition).toBe("if !46 CI passes");
+  } finally { await unmount(); }
+});
+
 // B17, B60: a Mac before destinations sends none of the new fields, so the card draws the same rows with no branch, base or destination
 // it was not sent, the line stopping before `→`; the head names nothing, nor for a mission whose steps land nowhere.
 it("names no branch or destination it was not sent, and tags no mission whose steps land nowhere", async () => {

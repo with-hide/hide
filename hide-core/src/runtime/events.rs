@@ -359,6 +359,12 @@ pub(super) struct RemoveDevicePayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct RenameDevicePayload {
+    pub(super) device_id: String,
+    pub(super) name: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct TestDevicePayload {
     pub(super) device_id: String,
 }
@@ -1764,6 +1770,7 @@ pub(super) enum Event {
     FirstRunSignInWithdraw(FirstRunSignInWithdrawPayload),
     DeviceHostRetry(DeviceHostRetryPayload),
     RemoveDevice(RemoveDevicePayload),
+    RenameDevice(RenameDevicePayload),
     TestDevice(TestDevicePayload),
     CreatePane(CreatePanePayload),
     ResizePane(ResizePanePayload),
@@ -2079,6 +2086,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             decode!(FirstRunSignInWithdrawPayload, FirstRunSignInWithdraw)
         }
         "remove_device" => decode!(RemoveDevicePayload, RemoveDevice),
+        "rename_device" => decode!(RenameDevicePayload, RenameDevice),
         "test_device" => decode!(TestDevicePayload, TestDevice),
         "create_pane" => decode!(CreatePanePayload, CreatePane),
         "resize_pane" => decode!(ResizePanePayload, ResizePane),
@@ -3369,6 +3377,15 @@ impl Runtime {
                     self.set_error(refusal.code, refusal.message, false);
                 }
                 true
+            }
+            Event::RenameDevice(payload) => {
+                match self.rename_device(&payload.device_id, &payload.name) {
+                    Ok(changed) => changed,
+                    Err(refusal) => {
+                        self.set_error(refusal.code, refusal.message, false);
+                        true
+                    }
+                }
             }
             Event::TestDevice(payload) => {
                 let known = self
