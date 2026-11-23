@@ -1012,8 +1012,19 @@ impl PeerCore {
             // The names of a machine's work here, from a machine that may
             // open this one (B10): only its own panes take them.
             CoreMessage::WorkNames { names } => {
-                if !self.has(&key, false) || !hide_peer::protocol::core::valid_work_names(&names) {
-                    record("peer_core.work_names_refused", &key, Value::Null);
+                let refused = if !self.has(&key, false) {
+                    Some("not_opened_by_it")
+                } else if !hide_peer::protocol::core::valid_work_names(&names) {
+                    Some("out_of_bounds")
+                } else {
+                    None
+                };
+                if let Some(reason) = refused {
+                    record(
+                        "peer_core.work_names_refused",
+                        &key,
+                        json!({"reason": reason, "names": names.len()}),
+                    );
                     return None;
                 }
                 if let Some(kept) = &self.names.kept {

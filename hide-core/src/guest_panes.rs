@@ -205,6 +205,17 @@ mod tests {
         let mut key = guest("macbook", &[]);
         key.key = "AB".repeat(32);
         assert!(!valid(&[key]));
+        // A told name is one line a row draws, bounded as the core tells it.
+        let named = |name: String| {
+            let mut named = guest("macbook", &["w1:p1"]);
+            named.panes[0].name = Some(name);
+            valid(&[named])
+        };
+        assert!(named("로그인 고치기".to_owned()));
+        assert!(named("가".repeat(crate::work_names::MAX_NAME_CHARS)));
+        assert!(!named("가".repeat(crate::work_names::MAX_NAME_CHARS + 1)));
+        assert!(!named("  ".to_owned()));
+        assert!(!named("one\ntwo".to_owned()));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

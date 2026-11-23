@@ -879,18 +879,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Grants::open(dir.path().join("grants.json")).unwrap();
         let pending = store
-            .grant_pending(key(1), "dev", "hoyeonui-MacBookPro.local", Via::Ssh, 0)
+            .grant_pending(key(1), "dev", "work-macbook-pro.local", Via::Ssh, 0)
             .unwrap();
         store.confirm(&key(1), &pending.id, 1).unwrap();
         let before = store.state_of(&key(1), 1);
-        assert!(store.take_name(&key(1), "hoyeon의 MacBook Pro").unwrap());
-        assert!(!store.take_name(&key(1), "hoyeon의 MacBook Pro").unwrap());
+        assert!(store.take_name(&key(1), "작업용 MacBook Pro").unwrap());
+        assert!(!store.take_name(&key(1), "작업용 MacBook Pro").unwrap());
         assert!(!store.take_name(&key(2), "nobody").unwrap());
         assert_eq!(store.state_of(&key(1), 1), before);
         let reopened = Grants::open(dir.path().join("grants.json")).unwrap();
         assert_eq!(
             reopened.current(&key(1)).unwrap().name,
-            "hoyeon의 MacBook Pro"
+            "작업용 MacBook Pro"
         );
 
         let mut known = Known::open(dir.path().join("known.json")).unwrap();
@@ -907,10 +907,10 @@ mod tests {
         known
             .put(host(key(8), Some(Login::Ssh("mini".into()))))
             .unwrap();
-        assert!(known.take_name(&key(7), "grab의 Mac mini").unwrap());
-        assert!(!known.take_name(&key(8), "grab의 Mac mini").unwrap());
+        assert!(known.take_name(&key(7), "studio의 Mac mini").unwrap());
+        assert!(!known.take_name(&key(8), "studio의 Mac mini").unwrap());
         let reopened = Known::open(dir.path().join("known.json")).unwrap();
-        assert_eq!(reopened.of(&key(7)).unwrap().name, "grab의 Mac mini");
+        assert_eq!(reopened.of(&key(7)).unwrap().name, "studio의 Mac mini");
         assert_eq!(reopened.of(&key(8)).unwrap().name, "mini");
     }
 }

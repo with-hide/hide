@@ -19,6 +19,14 @@ use tokio::sync::{broadcast, watch};
 use crate::core::CoreHandle;
 use crate::ending::Ending;
 
+// The core bounds what it reads by the bounds the peer link carries: a list
+// past the link's would be refused whole by the machine it goes to, and one
+// past the core's `guest_panes` would drop every row of that machine there.
+const _: () = assert!(
+    hide_core::work_names::MAX_NAMES == hide_peer::protocol::core::MAX_WORK_NAMES
+        && hide_core::work_names::MAX_NAME_CHARS == hide_peer::protocol::core::MAX_WORK_NAME_CHARS
+);
+
 /// Each machine's names by its connection key, as the core last read.
 pub type Told = Arc<BTreeMap<String, Vec<WorkName>>>;
 

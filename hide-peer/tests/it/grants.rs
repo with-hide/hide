@@ -223,7 +223,7 @@ async fn one_kind_at_its_cap_is_refused_and_frees_its_place_when_a_stream_ends()
 async fn a_paired_machine_is_named_by_what_it_calls_itself_from_its_next_connection() {
     let net = Net::new();
     let mut mini = Machine::calling_itself(&net, "mini", "Mac mini");
-    let mut mac = Machine::calling_itself(&net, "macbook", "hoyeon의 MacBook Pro");
+    let mut mac = Machine::calling_itself(&net, "macbook", "작업용 MacBook Pro");
     let plain = Machine::new(&net, "plain");
     pair(&mini, &mac);
     pair(&mini, &plain);
@@ -241,7 +241,7 @@ async fn a_paired_machine_is_named_by_what_it_calls_itself_from_its_next_connect
     };
     assert_eq!(
         name_of(&mini, mac.key()).as_deref(),
-        Some("hoyeon의 MacBook Pro")
+        Some("작업용 MacBook Pro")
     );
     assert_eq!(
         mac.peers.host(&mini.key()).map(|host| host.name).as_deref(),

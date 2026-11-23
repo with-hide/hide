@@ -302,7 +302,7 @@ mod tests {
         assert!(!String::from_utf8_lossy(&bytes).contains("update"));
         assert_eq!(read.name, None, "a hello from before names says none");
         let named = Hello {
-            name: Some("hoyeon의 MacBook Pro".to_owned()),
+            name: Some("작업용 MacBook Pro".to_owned()),
             ..ours.clone()
         };
         let bytes = named.encode().unwrap();

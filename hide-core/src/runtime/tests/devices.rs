@@ -2566,7 +2566,11 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     labelled.identity_label = Some("로그인 고치기".to_owned());
     let mut checkout = checkout("hide", "hide", "/Users/example/hide", Some(labelled));
     for (pane_id, tab_name) in [("w1:p2", "배포 확인"), ("w1:p3", "Tab 3")] {
-        let mut tab = tab("hide", "hide", Some(pane(&at(pane_id), "/Users/example/hide")));
+        let mut tab = tab(
+            "hide",
+            "hide",
+            Some(pane(&at(pane_id), "/Users/example/hide")),
+        );
         tab.naming.raw = tab_name.to_owned();
         checkout.tabs.push(tab);
     }

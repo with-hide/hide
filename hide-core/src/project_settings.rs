@@ -266,16 +266,25 @@ pub(crate) fn apply_names(
     records: &BTreeMap<String, ProjectSettings>,
     projects: &mut [crate::model::WorkspaceSnapshot],
 ) {
-    if records.values().any(|record| record.name.is_some()) {
-        for project in projects.iter_mut() {
-            if let Some(name) = get(records, &project.device_id, &project.path)
-                .and_then(|record| record.name.as_deref())
-            {
-                project.label = name.to_owned();
-            }
-        }
-    }
-    tell_apart(projects);
+    let named = |project: &crate::model::WorkspaceSnapshot| {
+        get(records, &project.device_id, &project.path).and_then(|record| record.name.as_deref())
+    };
+    let given: Vec<bool> = if records.values().any(|record| record.name.is_some()) {
+        projects
+            .iter_mut()
+            .map(|project| {
+                let name = named(project).map(str::to_owned);
+                let given = name.is_some();
+                if let Some(name) = name {
+                    project.label = name;
+                }
+                given
+            })
+            .collect()
+    } else {
+        vec![false; projects.len()]
+    };
+    tell_apart(projects, &given);
 }
 
 /// The names of `path` from its last back, `/` between names on every
@@ -297,12 +306,17 @@ fn last_names(names: &[&str], count: usize) -> String {
 /// Tells apart the projects of one machine that go by their folder's name
 /// when another project there reads the same: each takes the fewest parent
 /// folders that make it differ from the others (`projects/hide` and
-/// `grab/hide`), on every screen, since every screen reads the project by
+/// `example/hide`), on every screen, since every screen reads the project by
 /// this label (docs/UI_BEHAVIOR.md, Project settings). A name the operator
-/// gave is theirs and kept; it still counts as taken, so a folder of that
-/// name beside it is told apart. A label that is already its folder's with
-/// parents is read as its folder's, so telling apart again changes nothing.
-fn tell_apart(projects: &mut [crate::model::WorkspaceSnapshot]) {
+/// gave (`given`, by the same index) is theirs and kept as given; it still
+/// counts as taken, so a folder of that name beside it is told apart. Any
+/// other label that is its folder's, alone or with parents, is read as its
+/// folder's, so telling apart labels it told apart before changes nothing.
+///
+/// Every publish of the project list runs this under the runtime's lock:
+/// for `n` projects, `n²` comparisons of a few path names, small next to
+/// building the catalog it labels.
+fn tell_apart(projects: &mut [crate::model::WorkspaceSnapshot], given: &[bool]) {
     // Each project's names, and whether its label is its folder's: its
     // last name, or its last names with their parents.
     let names: Vec<Vec<&str>> = projects
@@ -312,8 +326,11 @@ fn tell_apart(projects: &mut [crate::model::WorkspaceSnapshot]) {
     let folders: Vec<Option<usize>> = projects
         .iter()
         .zip(&names)
-        .map(|(project, names)| {
-            (1..=names.len()).find(|count| last_names(names, *count) == project.label)
+        .zip(given)
+        .map(|((project, names), given)| {
+            (!given)
+                .then(|| (1..=names.len()).find(|count| last_names(names, *count) == project.label))
+                .flatten()
         })
         .collect();
     let mut labels: Vec<Option<String>> = vec![None; projects.len()];

@@ -2334,7 +2334,7 @@ mod tests {
                     cols: 80,
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
-                    name: None,
+                    name: Some("로그인 고치기".to_owned()),
                 }],
             })
             .unwrap(),
@@ -2556,7 +2556,7 @@ mod tests {
                     pane: "w1:p1".to_owned(),
                     since_unix_ms: 5,
                     folder: Some("/work/shop-api".to_owned()),
-                    name: None,
+                    name: Some("로그인 고치기".to_owned()),
                 }],
             }],
             "the panes show before the node is back"

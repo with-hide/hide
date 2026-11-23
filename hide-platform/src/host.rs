@@ -419,7 +419,7 @@ pub fn name() -> io::Result<String> {
 
 /// What a person calls the machine, for another machine to show: on macOS
 /// the computer name set in System Settings (`ComputerName`, such as
-/// `hoyeon의 MacBook Pro`), and only when it has none its host name without
+/// `작업용 MacBook Pro`), and only when it has none its host name without
 /// the `.local` the local network gives it. Windows and Linux name
 /// themselves by their host name, which is the name set there.
 pub fn computer_name() -> io::Result<String> {
@@ -1084,8 +1084,8 @@ mod tests {
     #[test]
     fn a_host_name_loses_only_the_local_networks_suffix() {
         assert_eq!(
-            super::without_local("hoyeonui-MacBookPro.local"),
-            "hoyeonui-MacBookPro"
+            super::without_local("Work-MacBookPro.local"),
+            "Work-MacBookPro"
         );
         assert_eq!(super::without_local("Mac-mini.LOCAL"), "Mac-mini");
         assert_eq!(super::without_local("build-box"), "build-box");

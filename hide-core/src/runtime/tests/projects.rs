@@ -4927,13 +4927,28 @@ fn projects_whose_folders_share_a_name_are_told_apart_by_their_parent_folders() 
 
     // The operator names the first `shop`: the folder `shop` beside it is
     // told apart, and the operator's name is kept as given.
-    projects[0].label = "shop".to_owned();
-    crate::project_settings::apply_names(&none, &mut projects);
+    let given = |name: &str| {
+        let path = "/Users/example/projects/hide";
+        let mut record =
+            crate::project_settings::ProjectSettings::new(crate::node::TEST_NODE, path);
+        record.name = Some(name.to_owned());
+        std::collections::BTreeMap::from([(
+            crate::project_settings::key(crate::node::TEST_NODE, path),
+            record,
+        )])
+    };
+    crate::project_settings::apply_names(&given("shop"), &mut projects);
     assert_eq!(labels(&projects)[..2], ["shop", "hide"]);
     assert_eq!(labels(&projects)[5], "srv/shop");
+    // A name that reads as a folder's is the operator's all the same: kept
+    // beside the folder of that name, and kept whole when alone.
+    crate::project_settings::apply_names(&given("hide"), &mut projects);
+    assert_eq!(labels(&projects)[..2], ["hide", "example/hide"]);
+    crate::project_settings::apply_names(&given("projects/hide"), &mut projects);
+    assert_eq!(labels(&projects)[..2], ["projects/hide", "hide"]);
 
-    // The name given back, the two are told apart again; with one gone,
-    // the other is its folder's name alone.
+    // The name taken back, the catalog's folder name is told apart again;
+    // with one gone, the other is its folder's name alone.
     projects[0].label = "hide".to_owned();
     crate::project_settings::apply_names(&none, &mut projects);
     assert_eq!(labels(&projects)[..2], ["projects/hide", "example/hide"]);
