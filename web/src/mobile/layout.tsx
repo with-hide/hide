@@ -4,11 +4,12 @@
 // conversation that says what the agent does now, and the field a reply is
 // written in. Each screen composes these; none draws its own copy.
 
-import { ArrowUpIcon, ChevronLeftIcon } from "lucide-react";
-import type { ComponentProps, ReactNode } from "react";
-import { Elapsed } from "../components/elapsed";
+import { ArrowUpIcon, ChevronLeftIcon, TerminalIcon } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Elapsed, useRunningClock } from "../components/elapsed";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 
@@ -88,49 +89,103 @@ export function StatusStrip({ word, tone, line, since }: { word: string; tone: s
   );
 }
 
-/** What the agent does now, at the foot of its conversation, its time counted on the phone (Doop 09): `생각 중 · 4초`. */
-export function ActivityLine({ word, since }: { word: string; since: number }) {
+/**
+ * What the agent does now, at the foot of its conversation, its time counted on the phone: `생각 중 · 4초` (Doop 09), or with
+ * `clock` a command's line, the terminal mark and a running clock, `>_ 명령 실행 중 · 0:42` (Doop 02).
+ */
+export function ActivityLine({ word, since, clock = false, time }: { word: string; since: number; clock?: boolean; time?: string }) {
   return (
     <p className="flex items-center gap-xs pt-xs text-body" data-phone-activity={word}>
+      {clock ? <TerminalIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-agent-working opacity-(--opacity-secondary)" /> : null}
       <span className="text-agent-working opacity-(--opacity-secondary)">{word}</span>
       <span aria-hidden="true" className="text-muted-foreground">·</span>
-      <Elapsed since={since} className="font-mono text-muted-foreground" />
+      {/* `time` is the time a drawing plays (a What's new scene), in place of the clock. */}
+      {time !== undefined ? <span className="text-muted-foreground tabular-nums">{time}</span> : clock ? <RunningClock since={since} /> : <Elapsed since={since} className="font-mono text-muted-foreground" />}
     </p>
   );
 }
 
+function RunningClock({ since }: { since: number }) {
+  const text = useRunningClock(since);
+  return text === null ? null : <span className="text-muted-foreground tabular-nums">{text}</span>;
+}
+
+/** The most lines a reply field grows to before it scrolls (Doop 06). */
+const COMPOSER_LINES = 4;
+
 /**
- * The field a reply is written in (Doop 02, 11, 14): one rounded line with the round send at its end. `input` and `send` carry
- * each screen's own name, limit and test marks.
+ * The field a reply is written in (Doop 02, 06, 11, 14): one rounded line with the round send at its end. With `lines` it takes new
+ * lines (the keyboard's return key writes one; only the send sends) and grows to four lines, its corners then those of a box.
+ * `input` and `send` carry each screen's own name, limit and test marks.
  */
-export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, input, send }: {
+export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, lines = false, input, send }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
   placeholder: string;
   disabled: boolean;
   sendDisabled: boolean;
+  lines?: boolean;
   input?: Omit<ComponentProps<typeof Input>, "value" | "onChange" | "placeholder" | "disabled"> & DataProps;
   send?: DataProps;
 }) {
   const { t } = useInterfaceTranslation();
+  const tall = useGrowingField(lines ? value : null);
+  const field = "min-w-0 flex-1 rounded-none border-none bg-transparent px-none text-title text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 disabled:opacity-100";
   return (
     // The rounded frame is the field: it takes the field's focus ring and its over-limit mark, as `Input` draws them on its own border.
-    <form className={cn("flex min-w-0 items-center gap-xs rounded-full border border-border bg-input py-xxs pl-lg pr-xxs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring has-[[aria-invalid=true]]:border-destructive has-[[aria-invalid=true]]:ring-destructive", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
-      <Input
-        {...input}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        enterKeyHint="send"
-        autoComplete="off"
-        autoCorrect="off"
-        className="h-(--size-touch-target) min-w-0 flex-1 rounded-none border-none bg-transparent px-none text-title text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 disabled:opacity-100"
-      />
+    <form className={cn("flex min-w-0 items-center gap-xs border border-border bg-input py-xxs pl-lg pr-xxs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring has-[[aria-invalid=true]]:border-destructive has-[[aria-invalid=true]]:ring-destructive", tall.grown ? "items-end rounded-xl" : "rounded-full", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+      {lines ? (
+        <Textarea
+          {...(input as ComponentProps<typeof Textarea>)}
+          ref={tall.ref}
+          bare
+          rows={1}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          enterKeyHint="enter"
+          autoComplete="off"
+          className={cn(field, "py-sm leading-normal")}
+        />
+      ) : (
+        <Input
+          {...input}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          enterKeyHint="send"
+          autoComplete="off"
+          autoCorrect="off"
+          className={cn(field, "h-(--size-touch-target)")}
+        />
+      )}
       <Button {...send} variant="secondary" size="icon" type="submit" aria-label={t("mobile.send")} disabled={sendDisabled} className="size-(--size-touch-target) shrink-0 rounded-full">
         <ArrowUpIcon aria-hidden="true" className="size-(--size-icon-lg)" />
       </Button>
     </form>
   );
+}
+
+/**
+ * Grows a text area with what is written in it, up to `COMPOSER_LINES` lines, and says whether it is past one line; `value` null
+ * leaves the field alone.
+ */
+function useGrowingField(value: string | null) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [grown, setGrown] = useState(false);
+  useLayoutEffect(() => {
+    const field = ref.current;
+    if (!field || value === null) return;
+    const style = getComputedStyle(field);
+    const line = Number.parseFloat(style.lineHeight) || 0;
+    const padding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+    field.style.height = "auto";
+    const content = field.scrollHeight - padding;
+    field.style.height = `${Math.min(content, line * COMPOSER_LINES) + padding}px`;
+    setGrown(line > 0 && content > line * 1.5);
+  }, [value]);
+  return { ref, grown };
 }

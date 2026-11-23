@@ -39,7 +39,6 @@ state = "{GROK_HOME}"
 usage = false
 mcp = "{GROK_HOME}/config.toml"
 mcp_format = "grok"
-
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 3
@@ -175,3 +174,14 @@ not = [
   { contains = ["esc:cancel"] },
   { contains = ["ctrl+c:cancel"] },
 ]
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, checked in a real pane of Grok Build 1.0.92 (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+# A plan's letters act wherever the highlight is. `s` (request changes) leaves
+# the plan open with the prompt focused, so the reply the phone sends next is
+# the change; `q` would quit plan mode and drop the plan. A question takes down
+# and enter, but its highlighted row is shown by colour alone, so it is answered
+# in the terminal.
+[answer]
+plan_approval = { approve = ["a"], keep_planning = ["s"] }

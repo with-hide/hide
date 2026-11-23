@@ -6,6 +6,7 @@ import type { Catalog, Catalogs } from "../schema";
 // never show them.
 
 export const practiceEnglish = {
+  "practice.phone": "Your phone",
   "practice.mode": "Practice · Flow {{number}} {{title}}",
   "practice.exit": "Exit",
   "practice.choice.choose": "What next?",
@@ -65,6 +66,7 @@ export const practiceEnglish = {
 };
 
 const ko = {
+  "practice.phone": "내 폰",
   "practice.mode": "연습 모드 · 흐름 {{number}} {{title}}",
   "practice.exit": "나가기",
   "practice.choice.choose": "어떻게 할까요?",
@@ -124,6 +126,7 @@ const ko = {
 } satisfies Catalog<typeof practiceEnglish>;
 
 const zhCN = {
+  "practice.phone": "我的手机",
   "practice.mode": "练习模式 · 流程 {{number}} {{title}}",
   "practice.exit": "退出",
   "practice.choice.choose": "接下来做什么？",
@@ -183,6 +186,7 @@ const zhCN = {
 } satisfies Catalog<typeof practiceEnglish>;
 
 const ja = {
+  "practice.phone": "自分のスマホ",
   "practice.mode": "練習モード · フロー{{number}} {{title}}",
   "practice.exit": "やめる",
   "practice.choice.choose": "次はどうしますか？",

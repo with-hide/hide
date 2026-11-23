@@ -12,7 +12,7 @@
 pub(crate) mod content;
 pub(crate) mod native;
 pub(crate) mod wake;
-pub use content::{UserTurnContent, UserTurnFact, UserTurnKind};
+pub use content::{CHOICE_LIMIT, UserTurnContent, UserTurnFact, UserTurnKind};
 
 use serde::{Deserialize, Serialize};
 

@@ -4793,7 +4793,7 @@ fn native_question_snapshot_is_current_without_ai_and_clears_after_answer() {
     assert_eq!(
         shown["user_turn"],
         json!({"kind":"question","content":{
-        "text":"어디에 배포할까요?","choices":["미리보기","운영"],"truncated":false}})
+        "text":"어디에 배포할까요?","choices":["미리보기","운영"],"pick_one":true,"truncated":false}})
     );
     assert_eq!(
         (shown["group"].as_str(), shown["demand"].as_str()),

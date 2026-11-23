@@ -3,6 +3,7 @@
 
 use serde_json::Value;
 
+use super::content::Asked;
 use super::{
     NATIVE_ID_LIMIT_BYTES, QUESTION_CALL_LIMIT, ToolTurnMark, TurnMark, TurnMode, UserTurnContent,
 };
@@ -55,13 +56,20 @@ pub(crate) fn question_content(input: &Value) -> Option<UserTurnContent> {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|choice| choice.get("label").and_then(Value::as_str));
-            (
-                question["question"]
+                .filter_map(|choice| {
+                    let label = choice.get("label").and_then(Value::as_str)?;
+                    Some((label, choice.get("description").and_then(Value::as_str)))
+                });
+            Asked {
+                text: question["question"]
                     .as_str()
                     .expect("question texts checked"),
                 choices,
-            )
+                // Claude Code's `multiSelect`, OpenCode's `multiple`.
+                several: ["multiSelect", "multiple"]
+                    .iter()
+                    .any(|key| question.get(key).and_then(Value::as_bool) == Some(true)),
+            }
         },
     )))
 }
@@ -87,10 +95,14 @@ fn async_question_content(questions: &[Value]) -> Option<UserTurnContent> {
         if options.iter().any(|option| option.as_str().is_none()) {
             return None;
         }
-        asked.push((
-            question.get("title")?.as_str()?,
-            options.iter().filter_map(Value::as_str),
-        ));
+        asked.push(Asked {
+            text: question.get("title")?.as_str()?,
+            choices: options
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|label| (label, None)),
+            several: false,
+        });
     }
     Some(UserTurnContent::questions(asked))
 }

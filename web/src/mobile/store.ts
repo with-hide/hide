@@ -5,8 +5,8 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
-import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
+import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneAsk, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, Running, ServerFrame, StartCatalog } from "./protocol";
+import { askOf, keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prHostOf, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
@@ -95,6 +95,10 @@ export type Detail = {
   olderAskedAt: number | null;
   looks: Looks | null;
   look: Viewing | null;
+  /** What the agent asks on its own screen, from a computer that answers; null otherwise. */
+  ask: PhoneAsk | null;
+  /** What the agent runs now, from a computer that answers; null otherwise. */
+  running: Running | null;
 };
 
 /**
@@ -112,7 +116,57 @@ export type StartSheet = {
 
 export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOICE, pending: null, error: null };
 
-export type PendingInput = { requestId: string; kind: "text" | "key" };
+export type PendingInput = { requestId: string; kind: "text" | "key" | "choice" };
+
+/**
+ * A choice picked on an agent's ask (`askIdentity`): sending, sent, or refused with why. `inTerminal` says nothing more is sent
+ * from the phone for that ask: the computer could not say whether the keys landed, or the terminal's highlight moved.
+ */
+export type ChoiceState = { choice: string; state: "sending" | "sent" } | { choice: string; state: "failed"; notice: Notice; inTerminal: boolean };
+
+/**
+ * The asks answered from this phone that it remembers, newest last: enough for days of answers whose asks the phone never sees
+ * end, since an answer that may still hold its ask is never dropped for room.
+ */
+export const ANSWERS_KEPT = 256;
+
+/** Whether an answer still keeps its ask from being answered again from here: sending, sent, or possibly landed. */
+function blocks(answer: ChoiceState): boolean {
+  return answer.state !== "failed" || answer.inTerminal;
+}
+
+/**
+ * `answers` with `identity`'s state set, newest last, or null when it cannot be kept: past `ANSWERS_KEPT` the oldest answer that
+ * no longer blocks goes first, and one that still blocks is never dropped for room, since its choice may have landed and its ask
+ * may still stand; it goes only once its ask has certainly ended (`withoutEnded`).
+ */
+export function withAnswer(answers: Record<string, ChoiceState>, identity: string, state: ChoiceState): Record<string, ChoiceState> | null {
+  const rest = Object.entries(answers).filter(([kept]) => kept !== identity);
+  while (rest.length >= ANSWERS_KEPT) {
+    const at = rest.findIndex(([, answer]) => !blocks(answer));
+    if (at < 0) return null;
+    rest.splice(at, 1);
+  }
+  return Object.fromEntries([...rest, [identity, state]]);
+}
+
+/**
+ * `answers` without `key`'s answers whose ask has certainly ended, read from what the agent shows now, the same object when none
+ * has: an ask tied to a call ends once the agent asks on another call, since an ask names its call only while that call is the
+ * only one open, and one known by its turn once the agent's turn is later, since no ask it shows can carry that turn again. An
+ * agent that asks nothing, or whose list row says it asks nothing, ends no ask: the same call's approval can show again. An answer
+ * on its way stays whatever the agent shows.
+ */
+export function withoutEnded(answers: Record<string, ChoiceState>, key: AgentKey, now: { call?: string; turn: number }): Record<string, ChoiceState> {
+  const ended = Object.entries(answers).filter(([identity, answer]) => {
+    const on = answer.state === "sending" ? null : askOf(identity, key);
+    if (!on) return false;
+    return "call" in on ? now.call !== undefined && now.call !== on.call : on.turn < now.turn;
+  });
+  if (ended.length === 0) return answers;
+  const gone = new Set(ended.map(([identity]) => identity));
+  return Object.fromEntries(Object.entries(answers).filter(([identity]) => !gone.has(identity)));
+}
 
 type PhoneState = {
   /** The sample host is open (demoSocket.ts): every host name is marked as sample data and nothing is stored. */
@@ -158,6 +212,11 @@ type PhoneState = {
    * its saved answer stands (`PairedHost.deviceConnect`). Only then does the agents tab offer the gathered view.
    */
   deviceConnect: boolean | null;
+  /**
+   * Whether the open computer answers from the phone (`answer` in its hello on this page): a reply of several lines, the open detail's
+   * question card and running line, a pick of a choice. False until it says so, so a computer before it keeps the one-line reply.
+   */
+  answer: boolean;
   /** The other machines the open computer opens that run work of their own, as its last meta frame named them (B56). */
   otherMachines: readonly OtherMachine[];
   missionOpen: string | null;
@@ -208,6 +267,10 @@ type PhoneState = {
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
   inputError: Notice | null;
+  /** The choices picked on agents' asks, by the ask each was picked on (`askIdentity`), kept across the detail closing and the link dropping. */
+  answers: Record<string, ChoiceState>;
+  /** The choices on their way, by request id, each with the ask it was picked on, kept across the detail closing. */
+  answering: Record<string, string>;
   /** Done on a person's turn hided has not answered, or refused (PRD ask-human B19); one at a time, keyed by its declaration. */
   humanTurn: { declaration: string; requestId: string | null; failed: boolean } | null;
   /** One request or failure at a time, keyed by the stable conversation intent. */
@@ -245,6 +308,7 @@ const initial: PhoneState = {
   tab: "agents",
   listScope: typeof location === "undefined" ? "all" : listScopeOf(new URLSearchParams(location.search)),
   deviceConnect: null,
+  answer: false,
   otherMachines: [],
   missionOpen: null,
   missions: null,
@@ -273,6 +337,8 @@ const initial: PhoneState = {
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
+  answers: {},
+  answering: {},
   humanTurn: null,
   sleepAction: null,
   installHint: false,
@@ -313,6 +379,7 @@ export function applyFrame(frame: ServerFrame): void {
         vapidKey: frame.vapid_public_key,
         notifications: frame.notifications,
         deviceConnect: frame.device_connect === true,
+        answer: frame.answer === true,
       });
       return;
     case "meta":
@@ -321,6 +388,8 @@ export function applyFrame(frame: ServerFrame): void {
     case "agents":
       patch({
         groups: frame.groups,
+        // A listed agent's turn tells only that an ask known by an earlier turn ended; a call's ask waits for its own detail.
+        answers: listedAgents(frame.groups).reduce((answers, agent) => (agent.changed_at_unix_ms === null ? answers : withoutEnded(answers, agent, { turn: agent.changed_at_unix_ms })), state.answers),
         devices: frame.devices,
         agentsOmitted: frame.omitted ?? 0,
         ...keptChoices(state, frame.groups),
@@ -389,7 +458,19 @@ export function applyFrame(frame: ServerFrame): void {
       if (!detail || !sameKey(detail.key, frame)) return;
       const current = detail.conversation === "none" ? null : detail.conversation;
       const conversation = frame.state === "ok" ? mergeConversation(current, frame) : "none";
-      patch({ detail: { ...detail, conversation } });
+      const running = frame.state !== "ok" ? null : frame.running === undefined ? detail.running : frame.running;
+      patch({ detail: { ...detail, conversation, running } });
+      return;
+    }
+    case "ask": {
+      const detail = state.detail;
+      if (!detail || !sameKey(detail.key, frame)) return;
+      // A choice belongs to the ask it was picked on (`askIdentity`, read by the card), so a new ask starts fresh and an answered
+      // one that stays open under a new turn, as a permission does until its command ends, keeps its mark; an ask this one shows
+      // has certainly ended lets its answer go.
+      const ask = frame.ask;
+      const answers = ask ? withoutEnded(state.answers, detail.key, { call: ask.call, turn: Number(ask.turn) }) : state.answers;
+      patch({ detail: { ...detail, ask }, answers });
       return;
     }
     case "looks": {

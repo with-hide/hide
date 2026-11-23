@@ -12,33 +12,35 @@ import { OfflineText } from "./OfflineText";
 import { pullLabel } from "../codeHost";
 import { AnsiUp } from "ansi_up";
 import { CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
-import { Elapsed } from "../components/elapsed";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { Elapsed, useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
-import { renderMarkdown } from "./markdown";
 import { AgentLead, PhoneHumanTurn, PlaceParts } from "./parts";
 import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
 import { lineParts } from "../agentRow";
 import { statusText } from "../agentStatus";
-import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendChoice, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
+import { AskCardView, AskStrip } from "./AskCard";
+import { MessageItem } from "./messages";
 import {
   MAX_MESSAGES,
-  MAX_REPLY_CHARS,
+  askIdentity,
   QUICK_KEYS,
   boxDrawingRow,
   inputFailure,
-  messageTime,
   noticeText,
   rowsProblem,
   type Conversation,
-  type ConversationMessage,
+  type PhoneAsk,
+  type Running,
   sleepTarget,
   replyAbout,
+  replyProblem,
   type AgentKey,
   type DetailTab,
   type LookKind,
@@ -78,6 +80,8 @@ function shownTab(detail: NonNullable<ReturnType<typeof usePhone.getState>["deta
 
 export function Detail({ onBack }: { onBack: () => void }) {
   const { t } = useInterfaceTranslation();
+  // Whether a reply is being written: the ask folds to one line above it then (Doop 06).
+  const [composing, setComposing] = useState(false);
   const detail = usePhone((s) => s.detail);
   const groups = usePhone((s) => s.groups);
   const connected = usePhone((s) => s.connected);
@@ -160,13 +164,19 @@ export function Detail({ onBack }: { onBack: () => void }) {
       ) : !showsConversation ? (
         <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} alternateScreen={rows?.alternateScreen ?? false} conversation={hasConversation} />
       ) : conversation ? (
-        <ConversationLog conversation={conversation} agent={agent ?? null} />
+        <ConversationLog conversation={conversation} agent={agent ?? null} ask={composing ? null : (detail?.ask ?? null)} running={detail?.running ?? null} disabled={gone || !connected || sleep !== null} />
       ) : (
         <div className="min-h-0 flex-1 bg-background px-lg py-md">
           <p className="text-body text-muted-foreground">{t("mobile.loading")}</p>
         </div>
       )}
-      <ReplyBar disabled={gone || !connected || sleep !== null} about={viewing?.row.name ?? null} keys={tab !== "looks"} />
+      <ReplyBar
+        disabled={gone || !connected || sleep !== null}
+        about={viewing?.row.name ?? null}
+        keys={!showsConversation && tab !== "looks"}
+        ask={showsConversation ? (detail?.ask ?? null) : null}
+        onComposing={setComposing}
+      />
     </main>
   );
 }
@@ -396,15 +406,22 @@ function Scrollback({ text, more, lines, loading, alternateScreen, conversation 
   );
 }
 
-function ConversationLog({ conversation, agent }: { conversation: Conversation; agent: PhoneAgent | null }) {
+function ConversationLog({ conversation, agent, ask, running, disabled }: { conversation: Conversation; agent: PhoneAgent | null; ask: PhoneAsk | null; running: Running | null; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
   const { messages, before } = conversation;
-  // While the agent works, the foot of its conversation says it thinks, counted from its last word or its last change (Doop 09).
+  // While the agent works, the foot of its conversation says it runs a command, by the clock from when it started (Doop 02), or
+  // that it thinks, counted from its last word or its last change (Doop 09).
   const lastAt = messages.at(-1)?.at_ms ?? 0;
-  const thinkingSince = agent?.status_code === "working" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
-  // The thinking line is content too: one that appears with no new word still pulls a reader at the bottom down to it.
-  const thinking = thinkingSince !== null;
-  const content = useMemo(() => ({ messages, thinking }), [messages, thinking]);
+  const working = agent?.status_code === "working";
+  const commandSince = working && running?.kind === "command" ? running.since_ms : null;
+  // An unknown running line claims neither: a command may run among the calls the computer did not keep.
+  const thinkingSince = working && commandSince === null && running?.kind !== "unknown" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
+  // The activity line, the ask and its answer are content too: one that appears or grows with no new word, such as a refusal
+  // under the card, still pulls a reader at the bottom down to it.
+  const thinking = thinkingSince !== null || commandSince !== null;
+  const key = usePhone((s) => s.detail?.key ?? null);
+  const answered = usePhone((s) => (key && ask ? s.answers[askIdentity(key, ask)] : undefined)) ?? null;
+  const content = useMemo(() => ({ messages, thinking, ask, answered }), [messages, thinking, ask, answered]);
   const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
   const capped = before !== null && messages.length >= MAX_MESSAGES;
   return (
@@ -421,61 +438,56 @@ function ConversationLog({ conversation, agent }: { conversation: Conversation; 
           <MessageItem key={message.id} message={message} timed={messages[index + 1]?.who !== message.who} />
         ))}
       </ol>
+      {commandSince ? <ActivityLine word={t("mobile.runningCommand")} since={commandSince} clock /> : null}
       {thinkingSince ? <ActivityLine word={t("mobile.thinking")} since={thinkingSince} /> : null}
+      {ask ? <AskCard ask={ask} disabled={disabled} /> : null}
     </div>
   );
 }
 
-/** Memoized: a message never changes once it arrived, so its Markdown is parsed once. */
-const MessageItem = memo(function MessageItem({ message, timed }: { message: ConversationMessage; timed: boolean }) {
+/** The card on the phone: the choice marked here is kept for its turn, and 답하기 sends it to the computer (`sendChoice`). */
+export function AskCard({ ask, disabled }: { ask: PhoneAsk; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
-  const time = timed && message.at_ms > 0 ? (
-    <time dateTime={new Date(message.at_ms).toISOString()} className={cn("block pt-xs font-mono text-body text-muted-foreground", message.who === "you" && "text-right")}>
-      {messageTime(message.at_ms)}
-    </time>
-  ) : null;
-  if (message.who === "stopped") {
-    return (
-      <li data-phone-message="stopped" className="text-body text-muted-foreground">
-        {t("mobile.stopped")}
-      </li>
-    );
-  }
-  if (message.who === "you") {
-    return (
-      <li data-phone-message="you" className="flex flex-col items-end">
-        {/* The operator's words stand right, in a rounded bubble, as Doop 02 draws them. */}
-        <p className="max-w-5/6 whitespace-pre-wrap break-keep rounded-xl bg-secondary px-lg py-sm text-body leading-normal text-foreground wrap-anywhere">{message.text}</p>
-        {time}
-      </li>
-    );
-  }
-  return <AgentMessage message={message} time={time} />;
-});
-
-function AgentMessage({ message, time }: { message: ConversationMessage; time: React.ReactNode }) {
-  const { t } = useInterfaceTranslation();
-  const body = useMemo(() => renderMarkdown(message.text), [message.text]);
+  const key = usePhone((s) => s.detail?.key ?? null);
+  const identity = key ? askIdentity(key, ask) : null;
+  const answered = usePhone((s) => (identity ? s.answers[identity] : undefined)) ?? null;
+  const [marked, setMarked] = useState<{ identity: string; id: string } | null>(null);
+  const waited = useElapsed(ask.since_ms);
+  // The answer sent for this ask stands for the mark too, so a card drawn again (the strip unfolded, the detail opened again)
+  // still shows what was sent.
   return (
-    <li data-phone-message="agent">
-      <div className="space-y-sm break-keep wrap-anywhere text-body leading-normal text-foreground">
-        {body}
-        {message.truncated ? <p className="text-muted-foreground">{t("mobile.truncated")}</p> : null}
-      </div>
-      {time}
-    </li>
+    <AskCardView
+      ask={ask}
+      disabled={disabled}
+      waited={waited}
+      picked={marked && marked.identity === identity ? marked.id : (answered?.choice ?? null)}
+      answer={answered?.state ?? null}
+      error={answered?.state === "failed" ? noticeText(t, answered.notice) : null}
+      inTerminal={answered?.state === "failed" && answered.inTerminal}
+      onPick={(id) => identity && setMarked({ identity, id })}
+      onAnswer={sendChoice}
+      onTerminal={() => setTab("terminal")}
+    />
   );
 }
 
 /**
- * `about` is the name of the View on screen: the reply leaves with it in front, in brackets (B30). `keys` is false on 볼 것, where
- * the quick keys answer nothing the operator is looking at.
+ * `about` is the name of the View on screen: the reply leaves with it in front, in brackets (B30). `keys` is true on the terminal
+ * alone (Doop 05), where the operator sees what a key does; the conversation answers an ask with its card, and 볼 것 with words.
  */
-function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string | null; keys: boolean }) {
+function ReplyBar({ disabled, about, keys, ask, onComposing }: { disabled: boolean; about: string | null; keys: boolean; ask: PhoneAsk | null; onComposing: (composing: boolean) => void }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
+  const [composing, setComposingHere] = useState(false);
+  const setComposing = (next: boolean) => {
+    setComposingHere(next);
+    onComposing(next);
+  };
   const pending = usePhone((s) => s.pendingInput);
   const error = usePhone((s) => s.inputError);
+  // A computer that answers from the phone takes a reply of several lines, as long as one phone message holds.
+  const lines = usePhone((s) => s.answer);
+  const agentKey = usePhone((s) => s.detail?.key ?? null);
   useEffect(
     () =>
       onReplyResult((ok) => {
@@ -483,21 +495,23 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
       }),
     [],
   );
-  const tooLong = [...text].length > MAX_REPLY_CHARS;
+  const reply = about ? replyAbout(about, text) : text;
+  const tooLong = useMemo(() => (agentKey ? replyProblem(reply, lines, agentKey) === "too_long" : false), [reply, lines, agentKey]);
   const blocked = disabled || pending !== null;
-  const shown = tooLong ? inputFailure("too_long") : error;
+  const shown = tooLong ? inputFailure("too_long", lines) : error;
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
+      {ask && composing ? <div className="-mx-lg -mt-xs mb-xs"><AskStrip ask={ask} /></div> : null}
       {keys ? (
       <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
         {QUICK_KEYS.map((quick) => (
           <Button
             key={quick.key}
-            variant="ghost"
+            variant="secondary"
             aria-label={t(quick.name)}
             disabled={blocked}
             data-phone-key={quick.key}
-            className="h-(--size-touch-target) rounded-md font-mono text-body"
+            className="h-(--size-touch-target) min-w-0 rounded-md px-xs font-mono text-body"
             onClick={() => sendKey(quick.key)}
           >
             {quick.label}
@@ -509,11 +523,20 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
         <Composer
           value={text}
           onChange={setText}
-          onSubmit={() => sendReply(about ? replyAbout(about, text) : text)}
-          placeholder={about ? t("mobile.look.replyAbout", { name: about }) : t("mobile.replyPlaceholder")}
+          onSubmit={() => sendReply(reply)}
+          lines={lines}
+          placeholder={
+            about ? t("mobile.look.replyAbout", { name: about }) : keys ? t("mobile.replyToTerminal") : ask?.kind === "question" ? t("mobile.ask.replyInstead") : t("mobile.replyPlaceholder")
+          }
           disabled={disabled}
           sendDisabled={blocked || text.trim().length === 0 || tooLong}
-          input={{ "aria-label": t("mobile.reply"), "aria-invalid": tooLong || undefined, "data-phone-reply": "true" }}
+          input={{
+            "aria-label": t("mobile.reply"),
+            "aria-invalid": tooLong || undefined,
+            "data-phone-reply": "true",
+            onFocus: () => setComposing(true),
+            onBlur: () => setComposing(false),
+          }}
           send={{ "data-phone-send": "true" }}
         />
       </div>

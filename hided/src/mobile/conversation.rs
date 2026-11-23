@@ -16,7 +16,9 @@
 //! is read the same way down to where the last read ended, so a transcript
 //! line of any size is passed over rather than stopping the reader. Only the
 //! operator's messages, the agent's text and an interruption leave hided:
-//! tool calls, tool output and injected context never do. OpenCode keeps
+//! tool calls, tool output and injected context never do, but for the kind
+//! and start of a running command and the cut command a permission waits on
+//! (`super::calls`). OpenCode keeps
 //! its sessions in a database rather than a transcript file; its pages are
 //! read by message ([`opencode`]).
 
@@ -108,6 +110,25 @@ pub struct Source {
     agent: Agent,
     identity: SessionIdentity,
     cwd: Option<String>,
+}
+
+impl Source {
+    /// The thread of the same session, read in `account`, for following the
+    /// calls it has open (`super::calls`).
+    pub fn thread_request(&self, account: AccountKey) -> hide_session::thread::ThreadRequest {
+        let (reference_kind, reference_value) = match &self.identity {
+            SessionIdentity::Id(id) => ("id", id.clone()),
+            SessionIdentity::Path(path) => ("path", path.to_string_lossy().into_owned()),
+        };
+        hide_session::thread::ThreadRequest {
+            agent: self.agent,
+            reference_kind: reference_kind.to_owned(),
+            reference_value,
+            cwd: self.cwd.clone(),
+            account,
+            read: hide_session::thread::ThreadRead::Newest,
+        }
+    }
 }
 
 /// The pane's transcript source; `None` when its agent has no conversation

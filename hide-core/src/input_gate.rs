@@ -13,6 +13,11 @@
 //!
 //! The runtime only flips a flag here (never under an admission's wait), and
 //! the worker that ends the agent waits off the runtime's lock.
+//!
+//! Keys that answer an agent's own screen count rows from its highlight, so
+//! two such writes to one pane must not interleave: a key write holds its
+//! pane ([`PaneInputGate::hold_keys`]) for its whole sequence, and a second
+//! one is refused while it runs.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -26,6 +31,8 @@ pub struct Closed;
 struct State {
     closed: HashSet<String>,
     writing: HashMap<String, usize>,
+    /// Panes a key write holds.
+    keys: HashSet<String>,
     /// Waiters inside `wait_drained`, per pane; a test reads it to know the
     /// waiter reached its boundary before it releases the write.
     waiting: HashMap<String, usize>,
@@ -69,6 +76,19 @@ impl Drop for Admission {
     }
 }
 
+/// A pane held for one key write; released when it drops.
+#[derive(Debug)]
+pub struct KeysHeld {
+    gate: Arc<PaneInputGate>,
+    pane: String,
+}
+
+impl Drop for KeysHeld {
+    fn drop(&mut self) {
+        self.gate.lock().keys.remove(&self.pane);
+    }
+}
+
 impl PaneInputGate {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state
@@ -85,6 +105,14 @@ impl PaneInputGate {
         }
         *state.writing.entry(pane.to_owned()).or_default() += 1;
         Ok(Admission {
+            gate: Arc::clone(self),
+            pane: pane.to_owned(),
+        })
+    }
+
+    /// Holds `pane` for one key write, or `None` while another holds it.
+    pub fn hold_keys(self: &Arc<Self>, pane: &str) -> Option<KeysHeld> {
+        self.lock().keys.insert(pane.to_owned()).then(|| KeysHeld {
             gate: Arc::clone(self),
             pane: pane.to_owned(),
         })

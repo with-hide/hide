@@ -32,3 +32,17 @@ mcp_format = "claude"
 
 [account.forbid]
 vars = ["PI_CODING_AGENT_DIR", "PI_PROFILE", "PI_CONFIG_DIR"]
+
+# The keys that answer this agent's own question and approval screens from
+# the phone, each checked in a real pane of oh-my-pi (docs/ARCHITECTURE.md,
+# The mobile companion); a kind not named here is answered in the terminal.
+# The keys other than esc and a letter count from the highlighted row, so each
+# is typed only while the screen draws `marker` before the row `row` names there.
+# Its rows are not numbered: a question's rows are its choices, so a question is
+# answered from the phone; a plan's and a permission's rows are fixed words with
+# no place to count by, so those are answered in the terminal.
+[answer]
+marker = "❯"
+question = { down = "down", pick = "enter", row = "○ {label}" }
+plan_approval = { approve = ["enter"], keep_planning = ["down", "down", "down", "enter"] }
+permission = { allow = ["enter"], deny = ["esc"] }

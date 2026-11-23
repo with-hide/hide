@@ -107,14 +107,18 @@ pub enum Feature {
     HidesPaired,
     /// A gitlab.com project's merge requests read on this machine.
     Gitlab,
+    /// An agent's own question, plan or tool permission answered with one
+    /// of its choices from a phone.
+    PhoneAnswer,
 }
 
 impl Feature {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Focus,
         Self::SkillsMcp,
         Self::HidesPaired,
         Self::Gitlab,
+        Self::PhoneAnswer,
     ];
 
     fn name(self) -> &'static str {
@@ -123,6 +127,7 @@ impl Feature {
             Self::SkillsMcp => "skills_mcp",
             Self::HidesPaired => "hides_paired",
             Self::Gitlab => "gitlab",
+            Self::PhoneAnswer => "phone_answer",
         }
     }
 }
@@ -188,6 +193,8 @@ pub struct ActiveDays {
     hides_paired: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gitlab: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone_answer: Option<u64>,
 }
 
 impl ActiveDays {
@@ -203,6 +210,7 @@ impl ActiveDays {
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
             Daily::Feature(Feature::HidesPaired) => &mut self.hides_paired,
             Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
+            Daily::Feature(Feature::PhoneAnswer) => &mut self.phone_answer,
         };
         if *recorded == Some(day) {
             return false;
@@ -264,6 +272,7 @@ pub enum PracticeChapter {
     Bots,
     Connect,
     Gitlab,
+    Answer,
 }
 
 impl PracticeChapter {
@@ -279,6 +288,7 @@ impl PracticeChapter {
             "bots" => Self::Bots,
             "connect" => Self::Connect,
             "gitlab" => Self::Gitlab,
+            "answer" => Self::Answer,
             _ => return None,
         })
     }
@@ -458,6 +468,7 @@ impl Event {
                         PracticeChapter::Bots => "bots",
                         PracticeChapter::Connect => "connect",
                         PracticeChapter::Gitlab => "gitlab",
+                        PracticeChapter::Answer => "answer",
                     },
                 ),
                 (

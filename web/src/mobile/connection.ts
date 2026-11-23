@@ -20,6 +20,7 @@ import {
   parseFragment,
   prFailure,
   refusalOf,
+  askIdentity, choiceMessage, replyMessage,
   replyProblem,
   sameKey,
   sleepTarget,
@@ -38,7 +39,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prHostOf, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openAutomation, openPr, patch, usePhone, withAnswer, type ChoiceState, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
@@ -303,7 +304,7 @@ function connect(): void {
       return;
     }
     if (frame.type === "input_result") {
-      onInputResult(frame.ok, frame.reason);
+      onInputResult(frame.request_id, frame.ok, frame.reason);
       return;
     }
     if (frame.type === "human_turn_result") {
@@ -368,7 +369,10 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
-  if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
+  // A choice on its way may have landed: each is answered in the terminal from now on.
+  for (const requestId of Object.keys(state.answering)) settleChoice(requestId, false, "uncertain");
+  if (state.pendingInput && state.pendingInput.kind !== "choice") patch({ pendingInput: null, inputError: inputFailure("offline") });
+  else if (state.pendingInput) patch({ pendingInput: null });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
   if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
@@ -424,7 +428,7 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   }
   const view: DetailView = "conversation";
   dropTransfer();
-  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null }, inputError: null, pendingInput: null });
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
@@ -717,14 +721,14 @@ export function sendReply(text: string): boolean {
   const state = usePhone.getState();
   const detail = state.detail;
   if (!detail || state.pendingInput) return false;
-  const problem = replyProblem(text);
+  const problem = replyProblem(text, state.answer, detail.key);
   if (problem) {
-    patch({ inputError: inputFailure(problem) });
+    patch({ inputError: inputFailure(problem, state.answer) });
     return false;
   }
   const requestId = lastReply?.text === text ? lastReply.requestId : newRequestId();
   lastReply = { text, requestId };
-  const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, text });
+  const sent = send(replyMessage(detail.key, text, requestId));
   patch(sent ? { pendingInput: { requestId, kind: "text" }, inputError: null } : { inputError: inputFailure("offline") });
   return sent;
 }
@@ -736,6 +740,58 @@ export function sendKey(key: QuickKey): void {
   const requestId = newRequestId();
   const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, key });
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });
+}
+
+/**
+ * Answers the agent's own ask with one of its choices (Doop 03, 04): the computer types the keys the agent's screen takes for it,
+ * only while the agent still asks what the phone showed (`turn`). The choice says sending, then sent until the ask moves on, or
+ * why it did not land.
+ */
+export function sendChoice(choice: string): void {
+  const state = usePhone.getState();
+  const detail = state.detail;
+  const ask = detail?.ask;
+  if (!detail || !ask || !ask.answerable || state.pendingInput) return;
+  const identity = askIdentity(detail.key, ask);
+  // An ask answered, or one whose answer may have landed, is never sent again from here: a second send would be a second press.
+  const answered = state.answers[identity];
+  if (answered && (answered.state !== "failed" || answered.inTerminal)) return;
+  // Room for it first: with every remembered answer still holding an ask that may stand, nothing is sent.
+  const sending = withAnswer(state.answers, identity, { choice, state: "sending" });
+  if (!sending) {
+    patch({ inputError: inputFailure("answers_full") });
+    return;
+  }
+  const requestId = newRequestId();
+  const sent = send(choiceMessage(detail.key, ask, choice, requestId));
+  patch(
+    sent
+      ? { pendingInput: { requestId, kind: "choice" }, answering: { ...state.answering, [requestId]: identity }, answers: sending }
+      : { answers: withAnswer(state.answers, identity, { choice, state: "failed", notice: inputFailure("offline"), inTerminal: false }) ?? state.answers },
+  );
+}
+
+/**
+ * Settles the choice sent as `requestId` on the ask it was picked on, never on another: sent, or refused with why. One that may
+ * have landed (`uncertain`), or that the terminal no longer showed, is answered in the terminal from then on, whatever the phone
+ * does next.
+ */
+function settleChoice(requestId: string, ok: boolean, reason: string | null): void {
+  const state = usePhone.getState();
+  const identity = state.answering[requestId];
+  if (identity === undefined) return;
+  const answering = Object.fromEntries(Object.entries(state.answering).filter(([waiting]) => waiting !== requestId));
+  const pendingInput = state.pendingInput?.requestId === requestId ? null : state.pendingInput;
+  const picked = state.answers[identity];
+  if (!picked) {
+    patch({ pendingInput, answering });
+    return;
+  }
+  const settled: ChoiceState = ok
+    ? { choice: picked.choice, state: "sent" }
+    : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown" };
+  // The answer is already kept, so setting it again takes no room.
+  patch({ pendingInput, answering, answers: withAnswer(state.answers, identity, settled) ?? state.answers });
 }
 
 /**
@@ -768,9 +824,15 @@ export function onReplyResult(listener: ReplyListener): () => void {
   return () => replyListeners.delete(listener);
 }
 
-function onInputResult(ok: boolean, reason: string | null): void {
-  const pending = usePhone.getState().pendingInput;
-  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason) });
+function onInputResult(requestId: string | undefined, ok: boolean, reason: string | null): void {
+  if (requestId !== undefined && requestId in usePhone.getState().answering) {
+    settleChoice(requestId, ok, reason);
+    return;
+  }
+  const { pendingInput: pending } = usePhone.getState();
+  // A result for a reply or key no longer waited on (its detail closed) is not this one's.
+  if (!pending || pending.kind === "choice" || (requestId !== undefined && pending.requestId !== requestId)) return;
+  patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     if (ok) lastReply = null;
     for (const listener of replyListeners) listener(ok);
