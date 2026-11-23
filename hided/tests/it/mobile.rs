@@ -1,4 +1,4 @@
-//! Settings > Mobile and the phone socket against a real daemon and a fake
+//! Settings › Devices and the phone socket against a real daemon and a fake
 //! `tailscale` CLI (PRD mobile-companion B1-B10, B13-B18, B36, B37). The fake
 //! keeps its whole state in files in the test's own folder, so nothing here
 //! reaches the machine's Tailscale.
@@ -368,7 +368,7 @@ async fn the_checklist_advances_and_the_qr_follows_a_confirmed_serve_entry() {
     let port = running.port;
     assert_eq!(fake.proxy(), Some(format!("http://127.0.0.1:{port}")));
     assert_eq!(exposed["url"], format!("https://{DNS}"));
-    // Opening Settings > Mobile and exposing issue no code (B58).
+    // Opening Settings › Devices and exposing issue no code (B58).
     assert!(exposed["qr"].is_null());
     assert!(exposed["code_expires_at_ms"].is_null());
     event(&mut shell, "mobile_show_code", json!({})).await;
@@ -497,7 +497,7 @@ async fn a_restart_on_a_new_port_replaces_hides_entry_and_phones_stay_paired() {
         .unwrap();
     let first_port = running.port;
     let mut shell = renderer(&running).await;
-    // Settings > Mobile is open, as it is whenever the switch is used.
+    // Settings › Devices is open, as it is whenever the switch is used.
     event(&mut shell, "mobile_observe", json!({"observing": true})).await;
     event(&mut shell, "mobile_enable", json!({"enabled": true})).await;
     mobile_frame(&mut shell, |frame| frame["exposure"] == "exposed").await;
@@ -643,7 +643,7 @@ async fn the_last_mobile_page_closing_takes_the_shown_code_with_it() {
     mobile_frame(&mut page, |frame| frame["exposure"] == "exposed").await;
     event(&mut page, "mobile_show_code", json!({})).await;
     mobile_frame(&mut page, |frame| frame["qr"].is_string()).await;
-    // Another window that never opened Settings > Mobile is not an observer.
+    // Another window that never opened Settings › Devices is not an observer.
     let mut other = renderer(&running).await;
     mobile_frame(&mut other, |frame| frame["qr"].is_string()).await;
     drop(page);

@@ -10,8 +10,7 @@
 // nothing here is state.
 
 import type { TFunction } from "i18next";
-import { thisMachineKey } from "./devices";
-import { machineName } from "./screenMachine";
+import { machineName, ownMachineName } from "./screenMachine";
 import { remoteContext } from "./remote";
 import type { Checkout, Device, SnapshotRest, Workspace } from "./snapshot";
 import { frontCheckout, listedWorkspaces, localDeviceId } from "./snapshot";
@@ -162,7 +161,7 @@ export function startTargets(rest: SnapshotRest | null, screen: Screen | null, t
   const frontId = named && devices.some((device) => device.id === named) ? named : (remoteContext(rest)?.device.id ?? localDeviceId(rest));
   const ordered = [...devices.filter((device) => device.id === frontId), ...devices.filter((device) => device.id !== frontId)];
   // Each device as this window names it; before the snapshot lists any, the one machine is this window's.
-  const name = (id: string) => (listed ? machineName(listed, id, t) : t(thisMachineKey(null)));
+  const name = (id: string) => (listed ? machineName(listed, id, t) : ownMachineName(null, t));
   const frontDevice = ordered[0];
   const frontWorkspaces = frontDevice ? deviceWorkspaces(rest, frontDevice).workspaces : [];
   const inFront = frontDevice ? frontKey(rest, screen, settings, frontDevice.id, frontWorkspaces, projectId) : null;

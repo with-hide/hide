@@ -202,7 +202,7 @@ impl Phones {
         self.code = None;
         let credential = hex::encode(random_bytes::<32>());
         let base = name_from_user_agent(user_agent);
-        let taken = |name: &str| self.current().any(|phone| phone.name == name);
+        let taken = |name: &str| self.current().any(|phone| phone.shown_name() == name);
         let name = if taken(base) {
             (2..)
                 .map(|n| format!("{base} {n}"))
@@ -214,6 +214,7 @@ impl Phones {
         let record = PhoneRecord {
             id: hex::encode(random_bytes::<8>()),
             name,
+            chosen_name: None,
             credential_sha256: credential_hash(&credential),
             paired_at_ms: now_ms,
             last_seen_ms: now_ms,
@@ -261,6 +262,29 @@ impl Phones {
         let removed = self.file.phones.remove(index);
         self.save();
         Some(removed)
+    }
+
+    /// Gives a phone paired here the name this computer's operator chose,
+    /// or with `None` takes it back to the name it was paired under. The
+    /// name is on disk before it is held here, so a list never shows one a
+    /// restart would lose. `Ok(false)` when no phone here has that id.
+    pub fn rename(&mut self, id: &str, chosen: Option<&str>) -> std::io::Result<bool> {
+        let Some(index) = self
+            .file
+            .phones
+            .iter()
+            .position(|phone| phone.id == id && self.here(phone))
+        else {
+            return Ok(false);
+        };
+        if self.file.phones[index].chosen_name.as_deref() == chosen {
+            return Ok(true);
+        }
+        let mut next = self.file.clone();
+        next.phones[index].chosen_name = chosen.map(str::to_owned);
+        store::write(&self.path, &next)?;
+        self.file = next;
+        Ok(true)
     }
 
     /// Revokes every phone not seen for seven days, except the ones in
@@ -601,6 +625,41 @@ mod tests {
             phones.pair(&code, UA, 2).is_ok(),
             "the code survives the refusal"
         );
+    }
+
+    #[test]
+    fn a_chosen_name_is_kept_beside_the_phones_own_and_saved_first() {
+        let (_dir, mut phones) = phones();
+        let (code, _) = phones.new_code(0);
+        let (record, _) = phones.pair(&code, UA, 1).unwrap();
+        assert!(phones.rename(&record.id, Some("회사 폰")).unwrap());
+        assert!(!phones.rename("nobody", Some("x")).unwrap());
+        let reopened = Phones::load(phones.path.clone(), Some(MAC));
+        let kept = reopened.get(&record.id).unwrap();
+        assert_eq!(
+            (kept.name.as_str(), kept.shown_name()),
+            ("iPhone", "회사 폰")
+        );
+        // A new phone of the same kind is named apart from the shown names.
+        let (code, _) = phones.new_code(0);
+        let (second, _) = phones.pair(&code, UA, 2).unwrap();
+        assert_eq!(second.name, "iPhone");
+        // Taken back, it shows the name it was paired under.
+        assert!(phones.rename(&record.id, None).unwrap());
+        assert_eq!(phones.get(&record.id).unwrap().shown_name(), "iPhone");
+    }
+
+    #[test]
+    fn a_rename_that_cannot_be_saved_changes_nothing() {
+        let (dir, mut phones) = phones();
+        let (code, _) = phones.new_code(0);
+        let (record, _) = phones.pair(&code, UA, 1).unwrap();
+        // A folder where the file goes makes the write fail.
+        phones.path = dir.path().join("blocked");
+        std::fs::create_dir_all(phones.path.join("phones.json")).unwrap();
+        phones.path = phones.path.join("phones.json");
+        assert!(phones.rename(&record.id, Some("회사 폰")).is_err());
+        assert_eq!(phones.get(&record.id).unwrap().shown_name(), "iPhone");
     }
 
     #[test]

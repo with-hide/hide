@@ -5,15 +5,14 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, FolderGit2Icon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, FolderGit2Icon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, BirdIcon, ShieldIcon, SlidersHorizontalIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { useState, useSyncExternalStore } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { MobileTab } from "./MobileTab";
 import { ExternalToolsTab } from "./settings/ExternalToolsTab";
 import { SkillsTab } from "./settings/SkillsTab";
 import { awayDevice, coreMachineName, machineName, windowDeviceId } from "./screenMachine";
@@ -33,6 +32,7 @@ import { PrivacyTab } from "./settings/PrivacyTab";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ProjectSettingsSheet } from "./ProjectSettingsSheet";
+import { readViewer, subscribeViewer } from "./remoteView";
 
 export function SettingsGate({ actions }: { actions: Actions }) {
   const overlay = useUiStore((s) => s.overlay);
@@ -50,7 +50,6 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   skills: BlocksIcon,
   hideAi: SparklesIcon,
   conductor: ListTreeIcon,
-  mobile: SmartphoneIcon,
   externalTools: BirdIcon,
   github: FolderGit2Icon,
   labs: FlaskConicalIcon,
@@ -62,11 +61,13 @@ function SettingsSheet({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const close = () => useUiStore.getState().closeOverlay("settings");
   const [tab, setTab] = useState<SettingsTab>(() => useUiStore.getState().settingsTab);
+  // On a screen another machine shows of this one, the names below are what that window calls this machine (`ownMachineName`), which can arrive while the sheet is open.
+  useSyncExternalStore(subscribeViewer, readViewer, () => null);
   // The device in front when this window does not run on it, the core's machine included on a node's window.
   const selectedId = useShellStore((s) => awayDevice(s.rest)?.id ?? null);
   const selectedName = useShellStore((s) => (selectedId ? machineName(s.rest?.navigator?.devices, selectedId, t) : ""));
   const selected = selectedId ? { id: selectedId, name: selectedName } : null;
-  // The computer this window runs on, named as its system does: This Mac, This PC.
+  // The computer this window runs on, named as its system does (This Mac, This PC), or as the window showing it does.
   const ownName = useShellStore((s) => machineName(s.rest?.navigator?.devices, windowDeviceId(s.rest?.navigator?.devices), t));
   // Hide AI, Mobile and GitHub are the core's machine's, which a window on another machine names by its name.
   const machineGroup = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
@@ -136,7 +137,6 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "skills" ? <SkillsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
-              {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "externalTools" ? <ExternalToolsTab actions={actions} /> : null}
               {tab === "github" ? <RemoteRepositoriesTab actions={actions} /> : null}
               {tab === "labs" ? <LabsTab actions={actions} /> : null}

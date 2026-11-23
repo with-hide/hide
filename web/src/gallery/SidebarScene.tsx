@@ -40,7 +40,7 @@ export type SceneParams = {
   lens?: "projects" | "tasks" | "tasks-project";
   /** `shown` seeds the core's `ui_state.agent_logo_mode`, so the rows draw their logos. */
   logos?: "hidden" | "shown";
-  /** `on`: a paired Mac-mini tells two Needs You rows of its own, under its head after this computer's (operator review 2026-11-22). */
+  /** `on`: a paired Mac-mini and a Windows PC tell rows of their own, after this computer's, each ending in its machine's chip (operator review 2026-11-23). */
   peers?: "off" | "on";
   /** The interface language, seeded as the core's `ui_state.interface_language`. */
   lang?: "en" | "ko";
@@ -126,20 +126,34 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
   );
 }
 
-/** A paired Mac-mini and the two rows of its own Needs You it tells. */
+/**
+ * Two paired computers and the rows they tell: a Mac-mini's two Needs You,
+ * and a Windows PC's one Needs You and one Done, the only row of 읽을 것.
+ */
 function withPeerWork(rest: SnapshotRest, now: number): SnapshotRest {
-  const key = "m".repeat(64);
-  const rows = [
+  const mini = "m".repeat(64);
+  const pc = "w".repeat(64);
+  const miniRows = [
     { id: "w1:p1", group: "needs_you", title: "Claude", agent_kind: "claude", place: "docs · main", mark: "turn", status_code: "approval", changed_at_unix_ms: now - 3 * 60_000 },
     { id: "w2:p1", group: "needs_you", title: "Claude", agent_kind: "claude", place: "shop-api · main", mark: "turn", status_code: "approval", changed_at_unix_ms: now - 3 * 60_000 },
+  ];
+  const pcRows = [
+    { id: "w1:p1", group: "needs_you", title: "로그인 오류 재현", agent_kind: "codex", place: "web-app · fix/login-redirect-after-session-expiry", mark: "turn", status_code: "question", changed_at_unix_ms: now - 9 * 60_000 },
+    { id: "w1:p2", group: "done", title: "Claude", agent_kind: "claude", place: "test · master", mark: "unread", status_code: "done", changed_at_unix_ms: now - 2 * 60_000 },
   ];
   const navigator = rest.navigator!;
   return {
     ...rest,
     navigator: {
       ...navigator,
-      peers: [{ key, device_id: "mac-mini", name: "Mac-mini", opens: "active", opened_by: "active", connected: true, path: "direct" }],
-      peer_work: [{ device_id: "mac-mini", key, needs_you: rows.length, done: 0, rows }],
+      peers: [
+        { key: mini, device_id: "mac-mini", name: "Mac-mini", opens: "active", opened_by: "active", connected: true, path: "direct" },
+        { key: pc, device_id: "windows-pc", name: "window", opens: "active", opened_by: null, connected: true, path: "direct" },
+      ],
+      peer_work: [
+        { device_id: "mac-mini", key: mini, needs_you: miniRows.length, done: 0, rows: miniRows },
+        { device_id: "windows-pc", key: pc, needs_you: 1, done: 1, rows: pcRows },
+      ],
     },
   } as SnapshotRest;
 }

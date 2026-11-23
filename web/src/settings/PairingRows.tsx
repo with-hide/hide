@@ -414,6 +414,7 @@ export function PeerRows({ actions }: { actions: Actions }) {
           id={renaming.device_id}
           current={renaming.name}
           chosen={renaming.named === true}
+          description={t("devices.renameDescription")}
           onSave={(name) => actions.pairing("rename", { device: renaming.key, name })}
           onClose={() => setRenaming(null)}
         />

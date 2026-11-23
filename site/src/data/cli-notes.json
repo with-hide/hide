@@ -609,12 +609,16 @@
     "example": "hide device switch mini --install"
   },
   "phone pair": {
-    "line": "Draws the pairing QR in this terminal, turning Mobile on when it is off, and waits until a phone scans it; for a computer with no window. Run it in a terminal outside Hide's panes.",
+    "line": "Draws the pairing QR in this terminal, turning Open hide from your phone on when it is off, and waits until a phone scans it; for a computer with no window. Run it in a terminal outside Hide's panes.",
     "example": "hide phone pair"
   },
   "phone list": {
     "line": "Lists the phones paired with this computer, with each one's name and id.",
     "example": "hide phone list"
+  },
+  "phone rename": {
+    "line": "Changes the name this computer shows a paired phone under, by its name or id; an empty name gives back the one it paired with.",
+    "example": "hide phone rename iPhone 'Work phone'"
   },
   "phone remove": {
     "line": "Disconnects a paired phone, by its name or the id hide phone list shows.",

@@ -27,10 +27,8 @@ const browserCanvas = vi.hoisted(() => {
 });
 
 const NOW = Date.UTC(2026, 9, 23, 12);
-/** How many events deep a step's state is looked for from the step before it. */
-const DEPTH = 3;
-/** The states one step's search may visit, so a world with many states stays bounded. */
-const STATES = 400;
+/** How many times a step's own command is pressed in a row when its state is looked for. */
+const PRESSES = 3;
 
 /** The app menu's command listener the shell installs: a command run by id, as a chord or the menu would. */
 let menu: ((id: string) => void) | null = null;
@@ -122,31 +120,23 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
       };
       let current = initial;
       for (const step of chapter.steps) {
-        // A step's state is looked for among what the shell can send; a step
-        // only a palette, a drag or typing reaches keeps the state before it.
+        // A step's state is looked for one input away, then along the step's
+        // own command pressed again (a lens toggled through each of its views).
+        // A step only typing, a wait, a palette, a drag or a click on something
+        // other than a pane reaches keeps the state before it: searching every
+        // input three deep for one spent its whole bound for nothing, most of
+        // the agents chapter's time and past vitest's 5 s on a Windows runner
+        // (#2841), and found no step this search does not.
         if (step.done && !step.done(current)) {
-          const seen = new Set([key(current)]);
-          let found = false;
-          let frontier: { model: unknown; path: string }[] = [{ model: current, path: step.id }];
-          search: for (let depth = 0; depth < DEPTH && frontier.length; depth += 1) {
-            const next: typeof frontier = [];
-            for (const { model, path } of frontier) {
-              for (const reached of everyInput(model, path)) {
-                if (seen.has(key(reached.model)) || seen.size >= STATES) continue;
-                seen.add(key(reached.model));
-                const there = { model: reached.model, path: `${path} > ${reached.name}` };
-                if (step.done(reached.model)) {
-                  current = reached.model;
-                  found = true;
-                  break search;
-                }
-                next.push(there);
-              }
-            }
-            frontier = next;
+          let reached = everyInput(current, step.id).find((result) => step.done!(result.model))?.model;
+          for (let model = current, presses = 1; reached === undefined && step.command && presses < PRESSES; presses += 1) {
+            const pressed = everyInput(model, `${step.id} > ${step.command} x${presses}`).find((result) => result.name === step.command);
+            if (!pressed) break;
+            model = pressed.model;
+            const again = everyInput(model, `${step.id} > ${step.command} x${presses + 1}`).find((result) => result.name === step.command);
+            if (again && step.done(again.model)) reached = again.model;
           }
-          // Not found within the bound is not the same as unreachable by the shell: say so, as the step is checked from the state before it.
-          if (!found && seen.size >= STATES) console.warn(`practice chapter ${chapter.id}: ${step.id} was not reached within ${STATES} states; checked from the state before it`);
+          if (reached !== undefined) current = reached;
         }
         everyInput(current, `at ${step.id}`);
       }

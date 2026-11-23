@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
 import { hostBridge } from "./host";
+import { isRemoteView, readViewer } from "./remoteView";
 import { localDeviceId, type Device, type SnapshotRest } from "./snapshot";
 
 /** The longest node id a hash may name. */
@@ -52,23 +53,41 @@ export function systemMachineKey(platform: string): MachineKey {
 
 /**
  * The same for a machine this window can see: with no `platform`, the system
- * the shell runs on, which is this window's machine.
+ * the shell runs on, which is this window's machine. Another machine's
+ * screen runs in the window that shows it, whose system is not this
+ * machine's, so there it is This computer.
  */
-export function thisMachineKey(platform: string | null | undefined): MachineKey {
-  return systemMachineKey(platform ?? hostBridge()?.platform ?? (typeof navigator === "undefined" ? "" : navigator.platform));
+function thisMachineKey(platform: string | null | undefined): MachineKey {
+  if (platform) return systemMachineKey(platform);
+  if (isRemoteView()) return "common.thisComputer";
+  return systemMachineKey(hostBridge()?.platform ?? (typeof navigator === "undefined" ? "" : navigator.platform));
+}
+
+/**
+ * What this window calls the machine it runs on, `platform` being that
+ * machine's row's system when the core told it: This Mac, This PC or This
+ * computer, as its system names itself; on a screen another machine shows of
+ * it, the name that window calls it by, since This Mac there would name the
+ * viewer's machine (UI_BEHAVIOR.md, Settings and the Device rail). A caller
+ * that draws it follows `subscribeViewer`, as the name can arrive after the
+ * first paint.
+ */
+export function ownMachineName(platform: string | null | undefined, t: TFunction<"translation">): string {
+  return readViewer()?.name ?? t(thisMachineKey(platform));
 }
 
 /**
  * What this window calls a machine (PRD core-host-node-move B2, N1), the one
  * name every surface gives it: its own machine is This Mac, This PC or This
- * computer, as its system names itself, wherever the core runs; any other
- * machine goes by the name the operator registered it under, which the core's
- * own row keeps after the core moved to it, else by the name that machine
- * gives itself.
+ * computer, as its system names itself, wherever the core runs, or the name
+ * the showing window gives it on another machine's screen (`ownMachineName`);
+ * any other machine goes by the name the operator registered it under, which
+ * the core's own row keeps after the core moved to it, else by the name that
+ * machine gives itself.
  */
 export function machineName(devices: readonly Device[] | undefined, deviceId: string, t: TFunction<"translation">): string {
   const device = devices?.find((row) => row.id === deviceId);
-  if (deviceId === windowDeviceId(devices)) return t(thisMachineKey(device?.host?.platform));
+  if (deviceId === windowDeviceId(devices)) return ownMachineName(device?.host?.platform, t);
   return device ? (device.label ?? device.machine_name ?? device.id) : deviceId;
 }
 

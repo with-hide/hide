@@ -169,7 +169,7 @@
             <li>A SHA-256 hash of its credential. The credential itself is never stored.</li>
             <li>Your notification choice, and, if you turned notifications on, what is needed to deliver them, as the next section says.</li>
           </ul>
-          <p>Each computer allows four paired phones. A phone that is not used for seven days is disconnected automatically, and you can disconnect one at any time from Settings › Mobile on the computer.</p>
+          <p>Each computer allows four paired phones. A phone that is not used for seven days is disconnected automatically, and you can disconnect one at any time from Settings › Devices on the computer.</p>
           <h4>4.3 Push notifications</h4>
           <p>Notifications are off until you turn them on in the app, and the app works without them. A notification says that an agent needs you or has finished. It carries the task's title, the project's name, the state, the agent row's short status sentence, and identifiers hide uses to find the agent. The title and the sentence come from your computer and can contain text you or your agent wrote. A notification never carries terminal content, code or a conversation.</p>
           <ul>
@@ -181,7 +181,7 @@
           <h4>4.4 The Android app and Google</h4>
           <p>The Android app uses Google's services in two places, and in neither can Google read anything that comes from your computer. It needs a phone with Google Play services.</p>
           <ul>
-            <li><strong>Notifications.</strong> When you turn notifications on, the app registers with Google's Firebase Cloud Messaging (FCM), which gives the phone a registration token, and Google's library keeps a Firebase installation ID for the app. Your computer sends the encrypted notification and that token to hide's relay. The relay passes both to Google with its own Google service account, while the request is in flight, and does not store the token or the notification or write them to its logs. The token is kept with the phone's record on your computer until you turn notifications off in the app or disconnect the phone in Settings › Mobile on the computer, and also when Google reports the token as no longer valid.</li>
+            <li><strong>Notifications.</strong> When you turn notifications on, the app registers with Google's Firebase Cloud Messaging (FCM), which gives the phone a registration token, and Google's library keeps a Firebase installation ID for the app. Your computer sends the encrypted notification and that token to hide's relay. The relay passes both to Google with its own Google service account, while the request is in flight, and does not store the token or the notification or write them to its logs. The token is kept with the phone's record on your computer until you turn notifications off in the app or disconnect the phone in Settings › Devices on the computer, and also when Google reports the token as no longer valid.</li>
             <li><strong>What Google sees.</strong> The FCM token and the Firebase installation ID, the app's package name and the Firebase project a notification was sent to, and when each notification arrived and how large it was. When the app registers, Google's library also sends the app's version. It also sends general device details (system version, model, brand and the store that installed the app), which Google says it does not link to an identifier. The message holds nothing but the ciphertext: no title, no text and not even a fixed general line, so Google cannot read it, and the app decrypts it on the phone with the key it gave your computer.</li>
             <li><strong>The code scanner.</strong> The app scans a pairing QR code with Google's code scanner, which is part of Google Play services and runs there, so the app asks for no camera permission and receives only the scanned text. As Google's ML Kit disclosure states, the scanner sends Google, for Google's own diagnostics and usage analytics, device information (maker, model, system version), the app's package name and version, a device identifier and a per-installation identifier, performance figures, and event types and error codes, under Google's own privacy policy. hide receives none of it.</li>
           </ul>
@@ -206,7 +206,7 @@
           <h3>8. Your choices and requests</h3>
           <ul>
             <li>Turn usage statistics off in Settings › Privacy on the computer.</li>
-            <li>Disconnect a phone in Settings › Mobile on the computer, or remove a paired computer in the phone app's device list.</li>
+            <li>Disconnect a phone in Settings › Devices on the computer, or remove a paired computer in the phone app's device list.</li>
             <li>Delete the desktop app's data by removing the two folders in section 1.2, <code>~/.hide</code> and the app's <code>hide-desktop</code> folder, and the phone's data by deleting the app.</li>
             <li>To ask what records may concern you, or to have them deleted, write to the address below. The installation identifier is random and tied to no person, so we may not be able to find records that belong to you; we will say so rather than guess.</li>
           </ul>
@@ -330,7 +330,7 @@
             <li>자격 증명의 SHA-256 해시. 자격 증명 자체는 저장하지 않습니다.</li>
             <li>알림 설정, 그리고 알림을 켠 경우 전달에 필요한 정보. 다음 절에 적었습니다.</li>
           </ul>
-          <p>컴퓨터 한 대에는 폰을 4대까지 연결할 수 있습니다. 7일 동안 쓰지 않은 폰은 자동으로 연결이 끊기고, 컴퓨터의 설정 › 모바일에서 언제든 연결을 끊을 수 있습니다.</p>
+          <p>컴퓨터 한 대에는 폰을 4대까지 연결할 수 있습니다. 7일 동안 쓰지 않은 폰은 자동으로 연결이 끊기고, 컴퓨터의 설정 › 기기에서 언제든 연결을 끊을 수 있습니다.</p>
           <h4>4.3 푸시 알림</h4>
           <p>알림은 앱에서 직접 켜기 전까지 꺼져 있고, 알림이 없어도 앱은 동작합니다. 알림은 에이전트가 사용자를 기다리거나 일을 마쳤다는 것을 알리며, 작업 제목, 프로젝트 이름, 상태, 에이전트 행의 짧은 상태 문장, hide가 에이전트를 찾는 데 쓰는 식별자를 담습니다. 제목과 문장은 사용자의 컴퓨터에서 오며 사용자나 에이전트가 쓴 글이 들어 있을 수 있습니다. 터미널 내용, 코드, 대화는 담지 않습니다.</p>
           <ul>
@@ -342,7 +342,7 @@
           <h4>4.4 Android 앱과 구글</h4>
           <p>Android 앱은 두 곳에서 구글의 서비스를 씁니다. 어느 쪽에서도 구글은 사용자의 컴퓨터에서 온 내용을 읽을 수 없습니다. Google Play 서비스가 있는 폰이 필요합니다.</p>
           <ul>
-            <li><strong>알림.</strong> 알림을 켜면 앱이 구글의 Firebase Cloud Messaging(FCM)에 등록해 폰의 등록 토큰을 받고, 구글의 라이브러리는 앱의 Firebase 설치 ID를 보관합니다. 컴퓨터가 암호화한 알림과 그 토큰을 hide의 중계 서버로 보내면, 중계 서버는 요청이 처리되는 동안 자신의 Google 서비스 계정으로 둘을 구글에 전달하고, 토큰도 알림도 저장하거나 로그에 남기지 않습니다. 토큰은 사용자가 앱에서 알림을 끄거나 컴퓨터의 설정 › 모바일에서 그 폰의 연결을 끊을 때까지 사용자의 컴퓨터에 있는 그 폰의 기록에 보관하며, 구글이 토큰을 더 이상 쓸 수 없다고 알려 줄 때도 등록이 끝납니다.</li>
+            <li><strong>알림.</strong> 알림을 켜면 앱이 구글의 Firebase Cloud Messaging(FCM)에 등록해 폰의 등록 토큰을 받고, 구글의 라이브러리는 앱의 Firebase 설치 ID를 보관합니다. 컴퓨터가 암호화한 알림과 그 토큰을 hide의 중계 서버로 보내면, 중계 서버는 요청이 처리되는 동안 자신의 Google 서비스 계정으로 둘을 구글에 전달하고, 토큰도 알림도 저장하거나 로그에 남기지 않습니다. 토큰은 사용자가 앱에서 알림을 끄거나 컴퓨터의 설정 › 기기에서 그 폰의 연결을 끊을 때까지 사용자의 컴퓨터에 있는 그 폰의 기록에 보관하며, 구글이 토큰을 더 이상 쓸 수 없다고 알려 줄 때도 등록이 끝납니다.</li>
             <li><strong>구글이 보는 것.</strong> FCM 토큰과 Firebase 설치 ID, 앱의 패키지 이름과 알림을 보낸 Firebase 프로젝트, 알림이 도착한 시각과 크기. 앱이 등록할 때 구글의 라이브러리는 앱 버전도 보냅니다. 또 일반적인 기기 정보(시스템 버전, 모델, 브랜드, 앱을 설치한 스토어)도 보내며, 구글은 이 기기 정보를 식별자와 연결하지 않는다고 밝힙니다. 메시지에는 암호문만 있고 제목도 문장도, 고정된 일반 문구도 없으므로 구글은 읽을 수 없으며, 앱이 폰에서 폰이 컴퓨터에 건넨 키로 풉니다.</li>
             <li><strong>코드 스캐너.</strong> 앱은 페어링 QR 코드를 구글의 코드 스캐너로 읽습니다. 이 스캐너는 Google Play 서비스의 일부로 그 안에서 실행되므로 앱은 카메라 권한을 요청하지 않고 읽은 글자만 받습니다. 구글의 ML Kit 공개 내용에 적힌 대로 이 스캐너는 구글 자체의 진단과 사용 분석을 위해 기기 정보(제조사, 모델, 시스템 버전), 앱의 패키지 이름과 버전, 기기 식별자와 설치별 식별자, 성능 수치, 이벤트 종류와 오류 코드를 구글의 개인정보처리방침에 따라 구글로 보냅니다. hide는 그것을 받지 않습니다.</li>
           </ul>
@@ -367,7 +367,7 @@
           <h3>8. 사용자의 선택과 요청</h3>
           <ul>
             <li>컴퓨터의 설정 › 개인정보에서 사용 통계를 끕니다.</li>
-            <li>컴퓨터의 설정 › 모바일에서 폰 연결을 끊거나, 폰 앱의 기기 목록에서 연결한 컴퓨터를 지웁니다.</li>
+            <li>컴퓨터의 설정 › 기기에서 폰 연결을 끊거나, 폰 앱의 기기 목록에서 연결한 컴퓨터를 지웁니다.</li>
             <li>데스크톱 앱의 데이터는 1.2절의 두 폴더, <code>~/.hide</code>와 앱의 <code>hide-desktop</code> 폴더를 지워 없애고, 폰의 데이터는 앱을 지워 없앱니다.</li>
             <li>사용자와 관련될 수 있는 기록의 열람이나 삭제를 원하면 아래 주소로 알려 주세요. 설치 식별자는 무작위이고 어느 사람과도 이어져 있지 않아, 사용자의 기록을 찾지 못할 수 있습니다. 그럴 때는 짐작하지 않고 찾지 못했다고 알려 드립니다.</li>
           </ul>

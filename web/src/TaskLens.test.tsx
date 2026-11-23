@@ -509,10 +509,38 @@ it("counts a connected machine's Needs You rows in the group's head and says why
   expect(container.querySelector("[data-peer-row='mini:w1:p1'] [data-peer-elapsed]")).not.toBeNull();
   expect(container.querySelector("[data-peer-row='mini:w1:p1']")?.textContent).toContain("권한 요청에서 멈춤");
   expect(container.querySelector("[data-peer-row='mini:w1:p2']")?.textContent).toContain("답을 기다림");
-  // This computer's own row keeps no head; the other machine's rows stand under its letters, name and count.
-  expect(container.querySelector('[data-task-group="needs_you"] [data-task-row="ask"]')?.closest("[data-peer-machine]")).toBeNull();
-  expect(container.querySelector("[data-task-group='needs_you'] [data-peer-machine-head='mini']")?.textContent).toBe("MmMac-mini2");
-  expect([...container.querySelectorAll("[data-task-group='needs_you'] [data-peer-machine='mini'] [data-peer-row]")].map((element) => element.getAttribute("data-peer-row"))).toEqual(["mini:w1:p1", "mini:w1:p2"]);
+  // No machine stands as a head over its rows (operator review 2026-11-23): each row after this computer's ends its second line with the machine's chip, after the reason, and its name says the machine.
+  expect(container.querySelector("[data-peer-machine-head]")).toBeNull();
+  expect([...container.querySelectorAll("[data-task-group='needs_you'] [data-peer-row]")].map((element) => element.getAttribute("data-peer-row"))).toEqual(["mini:w1:p1", "mini:w1:p2"]);
+  const first = container.querySelector("[data-peer-row='mini:w1:p1']");
+  const chip = first?.querySelector("[data-device-chip]");
+  expect(chip?.textContent).toBe("Mac-mini");
+  // The chip ends the line, after why the row waits.
+  const reason = first!.querySelector("[data-peer-reason]")!;
+  expect(reason.textContent).toBe("권한 요청에서 멈춤");
+  expect(reason.compareDocumentPosition(chip!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(chip?.closest("span[aria-hidden]")?.lastElementChild?.contains(chip!)).toBe(true);
+  expect(first?.getAttribute("aria-label")).toContain("Mac-mini");
+  const own = container.querySelector('[data-task-group="needs_you"] [data-task-row="ask"]');
+  expect(own?.querySelector("[data-device-chip]")).toBeNull();
+  expect(own!.compareDocumentPosition(first!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Operator review 2026-11-23: with two computers telling rows, each computer's rows stand together after this computer's, in 내 차례 and 읽을 것 alike, and every row carries its own computer's chip.
+it("keeps each connected computer's rows together, each with its computer's chip, in both states", async () => {
+  const agents = [row("ask", { status_code: "question" }, { group: "needs_you" })];
+  const base = snapshot(agents, [card("ask", "needs_you", "hide-main")]);
+  const told = (prefix: string) => [
+    { id: `${prefix}1`, group: "needs_you", title: "Fix login", agent_kind: "claude", mark: "turn", status_code: "approval", changed_at_unix_ms: 1 },
+    { id: `${prefix}2`, group: "done", title: "Old work", agent_kind: "claude", mark: "unread", status_code: "done", changed_at_unix_ms: 1 },
+    { id: `${prefix}3`, group: "needs_you", title: "Ship docs", agent_kind: "codex", mark: "turn", status_code: "question", changed_at_unix_ms: 1 },
+  ];
+  const peers = [{ key: "ab".repeat(32), device_id: "mini", name: "Mac-mini", connected: true }, { key: "cd".repeat(32), device_id: "pc", name: "Windows PC", connected: true }];
+  const rest = { ...base, navigator: { ...base.navigator, peers, peer_work: [{ device_id: "mini", key: peers[0]!.key, needs_you: 2, done: 1, rows: told("m") }, { device_id: "pc", key: peers[1]!.key, needs_you: 2, done: 1, rows: told("p") }] } } as unknown as SnapshotRest;
+  const { container } = await render(rest, agents);
+  const shown = (state: string) => [...container.querySelectorAll(`[data-task-group='${state}'] [data-peer-machine]`)].map((item) => `${item.getAttribute("data-peer-machine")}:${item.querySelector("[data-device-chip]")?.textContent}`);
+  expect(shown("needs_you")).toEqual(["mini:Mac-mini", "mini:Mac-mini", "pc:Windows PC", "pc:Windows PC"]);
+  expect(shown("done")).toEqual(["mini:Mac-mini", "pc:Windows PC"]);
 });
 
 // Another computer showing this one's screen shows this computer's Needs You only, not the rows of the machines this one opens.

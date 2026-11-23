@@ -2,7 +2,7 @@
 //!
 //! The daemon keeps listening on loopback only; the transport module
 //! (`tailscale.rs`) publishes that port inside the operator's tailnet while
-//! Settings > Mobile is on. A phone pairs with a five-minute code from the QR,
+//! 폰에서 Hide 열기 (Settings › Devices) is on. A phone pairs with a five-minute code from the QR,
 //! holds a credential of its own, and talks only over `/ws` (`phone.rs`): it
 //! sees the agent list (`projection.rs`), reads and answers one pane
 //! (`pane.rs`), reads its agent's conversation (`conversation.rs`), and
@@ -75,11 +75,11 @@ fn automation_asks(rest: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// How often the checklist is read again while Settings > Mobile is open.
+/// How often the checklist is read again while Settings › Devices is open.
 const OBSERVE_INTERVAL: Duration = Duration::from_secs(3);
 /// How often the seven-day sweep runs.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// How often Mobile is reconciled with no one watching Settings > Mobile:
+/// How often Mobile is reconciled with no one watching Settings › Devices:
 /// while on, to expose once Tailscale is ready and to notice what changed
 /// under an exposed entry (a Funnel); while off, to finish a failed removal.
 const BACKGROUND_INTERVAL: Duration = Duration::from_secs(60);
@@ -270,7 +270,7 @@ struct Inner {
     /// iOS app phone's notice reaches Apple (`docs/RELAY_PROTOCOL.md`).
     relay_link: Option<relay::Link>,
     relay_cleanup_failure: Option<String>,
-    /// Renderer connections with Settings > Mobile open.
+    /// Renderer connections with Settings › Devices open.
     observers: HashSet<u64>,
     /// Closes owned by each phone until transport preparation succeeds (PRD D-21).
     pending_clear: HashMap<String, BTreeSet<AgentKey>>,
@@ -936,7 +936,10 @@ impl Mobile {
             .map(|phone| {
                 json!({
                     "id": phone.id,
-                    "name": phone.name,
+                    "name": phone.shown_name(),
+                    // The name it was paired under, once the operator chose
+                    // another, which a rename's empty field takes it back to.
+                    "own_name": phone.chosen_name.as_ref().map(|_| phone.name.as_str()),
                     "last_seen_ms": phone.last_seen_ms,
                     "connected": live.contains(&phone.id),
                     "notifications": match (phone.notifications, phone.reachable()) {
@@ -1406,7 +1409,7 @@ impl Mobile {
         }
     }
 
-    /// Rechecks every three seconds while Settings > Mobile is open, and
+    /// Rechecks every three seconds while Settings › Devices is open, and
     /// once a minute otherwise when Mobile is on but not exposed (Tailscale
     /// may come up after hided) or a removal is still owed after switching off.
     async fn observe_loop(self: Arc<Self>) {
@@ -1862,7 +1865,7 @@ impl Mobile {
                 let reread = {
                     let mut inner = self.lock();
                     if observing {
-                        // Opening Settings > Mobile issues no code and voids
+                        // Opening Settings › Devices issues no code and voids
                         // none (B58); only `mobile_show_code` does.
                         inner.observers.insert(connection);
                         inner.settings.enabled
@@ -1902,6 +1905,17 @@ impl Mobile {
                     .ok_or("mobile_revoke.phone_id must be a string")?;
                 self.revoke(id, "revoked_in_settings");
             }
+            "mobile_rename" => {
+                let id = payload
+                    .get("phone_id")
+                    .and_then(Value::as_str)
+                    .ok_or("mobile_rename.phone_id must be a string")?;
+                let name = payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("mobile_rename.name must be a string")?;
+                self.rename(id, name).map_err(str::to_owned)?;
+            }
             "mobile_push_mode" => {
                 let mode = payload
                     .get("mode")
@@ -1921,7 +1935,7 @@ impl Mobile {
         Ok(())
     }
 
-    /// A renderer connection closed: it no longer watches Settings > Mobile.
+    /// A renderer connection closed: it no longer watches Settings › Devices.
     pub fn release(&self, connection: u64) {
         let removed = {
             let mut inner = self.lock();
@@ -1933,6 +1947,32 @@ impl Mobile {
         };
         if removed {
             self.publish();
+        }
+    }
+
+    /// Gives a phone the name this computer's operator chose; an empty
+    /// `name` takes it back to the one it was paired under. The name is
+    /// saved before any list shows it, and one that cannot be saved is
+    /// refused with the list as it was.
+    pub fn rename(&self, phone_id: &str, name: &str) -> Result<(), &'static str> {
+        let chosen = match name.trim() {
+            "" => None,
+            _ => Some(hide_core::device_command::device_name(name).ok_or("phone_name_invalid")?),
+        };
+        let renamed = self.lock().phones.rename(phone_id, chosen);
+        match renamed {
+            Ok(true) => {
+                self.publish();
+                Ok(())
+            }
+            Ok(false) => Err("phone_unknown"),
+            Err(error) => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_phone", "kind": "phone.rename_failed", "phone_id": phone_id,
+                    "message": error.to_string(),
+                }));
+                Err("phone_rename_failed")
+            }
         }
     }
 

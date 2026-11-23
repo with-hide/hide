@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import type { Actions } from "./actions";
+import { DeviceChip } from "./components/device-chip";
 import { StatusMark } from "./components/status-mark";
 import { RowButton } from "./components/ui/row-button";
 import { AgentRowMark } from "./AgentRowMark";
 import { Elapsed } from "./components/elapsed";
 import { SessionRowBody } from "./components/session-row";
 import { GuestMark, useGuestPanes } from "./GuestPaneScreen";
-import { guestGroups, guestPlaces, markOf, peerMachines, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { guestGroups, guestPlaces, markOf, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
 import { ownWindow } from "./pairing";
-import { tileMonogram } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { useShellStore } from "./store";
@@ -123,46 +123,24 @@ const NO_PEER_ROWS: PeerRow[] = [];
 
 /**
  * Another machine's own Needs You or Done rows (D-50, B49), after this
- * computer's, under one small head per machine with its letters, its name
- * and its count; this computer's own rows keep no head. Each row is drawn as
- * this computer's own are: the status mark and the agent's logo as the logo
- * view mode says, the title and the time since it changed, then where it
- * runs and why it waits. This computer rings nothing for them; the machine
- * that owns the work picks where its notice goes.
+ * computer's, one machine's rows together in the order the machines told
+ * them. Each row is drawn as this computer's own are: the status mark and the
+ * agent's logo as the logo view mode says, the title and the time since it
+ * changed, then where it runs and why it waits, and its second line ends with
+ * the machine's chip, the one another device's row in 내 차례 wears (operator
+ * review 2026-11-23). This computer rings nothing for them; the machine that
+ * owns the work picks where its notice goes.
  */
 export function PeerWorkRows({ group, actions, treeIndent = false }: { group: "needs_you" | "done"; actions: Actions; /** Leave the tree chevron's room, so the rows line up under a list whose rows have one. */ treeIndent?: boolean }) {
-  const rows = usePeerRows(group);
-  const machines = useMemo(() => peerMachines(rows), [rows]);
-  if (rows.length === 0) return null;
-  return (
-    <>
-      {machines.map((machine) => (
-        <li key={machine.deviceId} data-peer-machine={machine.deviceId} className={treeIndent ? "mt-xs" : undefined}>
-          {/* Under a list whose rows keep a tree chevron's room, the head stands on the rows' inner line, inside the state's head (operator review 2026-11-22). */}
-          <div className={cn("flex h-(--size-sidebar-section-header) items-center gap-xs text-micro font-medium text-muted-foreground", treeIndent ? "pr-xs" : "px-xs")} data-peer-machine-head={machine.deviceId}>
-            {treeIndent ? <span aria-hidden="true" className="w-(--size-lineage-chevron) shrink-0" /> : null}
-            <span aria-hidden="true" className="rounded-xs bg-secondary px-xxs font-semibold text-subtle-foreground">{tileMonogram(machine.name)}</span>
-            <span className="min-w-0 truncate">{machine.name}</span>
-            <span className="tabular-nums">{machine.rows.length}</span>
-          </div>
-          <ul aria-label={machine.name} className="flex min-w-0 flex-col">
-            <PeerMachineRows group={group} rows={machine.rows} actions={actions} treeIndent={treeIndent} />
-          </ul>
-        </li>
-      ))}
-    </>
-  );
-}
-
-function PeerMachineRows({ group, rows, actions, treeIndent }: { group: "needs_you" | "done"; rows: PeerRow[]; actions: Actions; treeIndent: boolean }) {
   const { t } = useInterfaceTranslation();
+  const rows = usePeerRows(group);
   return (
     <>
       {rows.map(({ row, deviceId, machine }) => {
         const reasonKey = peerReasonKey(row);
         const reason = row.detail ?? (reasonKey ? t(reasonKey) : null);
         return (
-          <li key={`${deviceId}:${row.id}`}>
+          <li key={`${deviceId}:${row.id}`} data-peer-machine={deviceId}>
             <RowButton
               aria-label={[t("pairing.work.peerRowAria", { title: row.title, name: machine }), row.place, reason].filter(Boolean).join(", ")}
               data-peer-row={`${deviceId}:${row.id}`}
@@ -185,13 +163,16 @@ function PeerMachineRows({ group, rows, actions, treeIndent }: { group: "needs_y
                   <Elapsed since={row.changed_at_unix_ms} aria-hidden="true" className="shrink-0 font-mono text-caption text-muted-foreground" data-peer-elapsed="true" />
                 </>}
               >
-                {row.place || reason ? (
-                  // Under the task list the line is drawn as its own rows' second line: a step down, in micro text.
-                  <span aria-hidden="true" className={cn("flex min-w-0 gap-xs leading-(--size-sidebar-line-detail)", treeIndent ? "mt-xs items-baseline text-micro" : "text-caption")}>
-                    {row.place ? <span className="min-w-0 shrink truncate text-muted-foreground">{row.place}</span> : null}
-                    {reason ? <span className={cn("min-w-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
+                {/* Under the task list the line is drawn as its own rows' second line: a step down, in micro text.
+                    Room goes in order, not by share: why it waits keeps its width (up to three fifths), the place keeps what it can,
+                    and the chip takes only what is left, from its mark and a letter up to two fifths. */}
+                <span aria-hidden="true" className={cn("flex min-w-0 items-center gap-xs leading-(--size-sidebar-line-detail)", treeIndent ? "mt-xs text-micro" : "text-caption")}>
+                  {row.place ? <span className="min-w-0 shrink truncate text-muted-foreground">{row.place}</span> : null}
+                  {reason ? <span className={cn("max-w-3/5 shrink-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
+                  <span className="flex min-w-0 max-w-2/5 shrink-0 grow basis-xxxl">
+                    <DeviceChip label={machine} className="max-w-full" />
                   </span>
-                ) : null}
+                </span>
               </SessionRowBody>
             </RowButton>
           </li>

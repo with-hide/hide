@@ -1468,30 +1468,34 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Whether this page is looking at the Agents tab; the daemon owns the core's flag. */
-    /** Settings > Mobile's switch; hided runs tailscale serve (PRD mobile-companion D-06). */
+    /** Settings › Devices' 폰에서 Hide 열기; hided connects the relay or runs tailscale serve (PRD mobile-companion D-06). */
     setMobileEnabled(enabled: boolean) {
       dispatch({ schema_version: 2, kind: "mobile_enable", payload: { enabled } });
     },
-    /** Settings > Mobile open or closed: hided rechecks the checklist while it is open; a code is made only by Show QR. */
     setMobileMethod(method: "relay" | "tailscale") {
       dispatch({ schema_version: 2, kind: "mobile_method", payload: { method } });
     },
     retryMobile() {
       dispatch({ schema_version: 2, kind: "mobile_retry", payload: {} });
     },
+    /** Settings › Devices open or closed on this machine's own window: hided rechecks the checklist while it is open; a code is made only by the QR window. */
     observeMobile(observing: boolean) {
       dispatch({ schema_version: 2, kind: "mobile_observe", payload: { observing } });
     },
-    /** Show QR: hided makes one pairing code and shows it in the `mobile` frame (PRD settings-cleanup B58). */
+    /** The QR window: hided makes one pairing code and shows it in the `mobile` frame (PRD settings-cleanup B58). */
     showMobileCode() {
       dispatch({ schema_version: 2, kind: "mobile_show_code", payload: {} });
     },
-    /** Hide QR: the code leaves the frame. */
+    /** The QR window closed: the code leaves the frame. */
     hideMobileCode() {
       dispatch({ schema_version: 2, kind: "mobile_hide_code", payload: {} });
     },
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
+    },
+    /** The name this computer shows a phone under; an empty name takes it back to the one it paired with. */
+    renamePhone(phoneId: string, name: string) {
+      dispatch({ schema_version: 2, kind: "mobile_rename", payload: { phone_id: phoneId, name } });
     },
     /**
      * One thing the operator does about pairing this machine with another
@@ -1893,9 +1897,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
-    /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11). */
-    openAddDevice() {
-      ui().openAddDevice();
+    /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11); `computer` skips its computer-or-phone question. */
+    openAddDevice(kind?: "computer") {
+      ui().openAddDevice(kind);
     },
 
     /**

@@ -11,8 +11,6 @@ import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMach
 import { isRemoteView } from "./remoteView";
 import { localDeviceId, type AgentRow, type Device, type SnapshotRest, type Workspace } from "./snapshot";
 
-export { thisMachineKey } from "./screenMachine";
-
 /**
  * The rail is shown unless the operator hid it; the choice is the core's
  * `ui_state.device_rail_visible`. Another machine's view draws none: the
