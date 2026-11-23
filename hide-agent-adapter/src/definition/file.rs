@@ -224,9 +224,7 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     }
     if let Some(permission) = &answer.permission {
         match &permission.command {
-            Some(slot)
-                if !text(&slot.title) || !text(&slot.separator) =>
-            {
+            Some(slot) if !text(&slot.title) || !text(&slot.separator) => {
                 return Err(format!(
                     "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
                 ));

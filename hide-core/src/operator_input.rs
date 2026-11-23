@@ -968,8 +968,8 @@ mod tests {
     fn keys_stop_before_the_pick_when_the_screen_is_not_what_they_expect() {
         let gate = Arc::new(PaneInputGate::default());
         let open = node(None);
-        let screen = choice_screen("claude", Ask::Permission, "deny", &[])
-            .showing("cargo test --workspace");
+        let screen =
+            choice_screen("claude", Ask::Permission, "deny", &[]).showing("cargo test --workspace");
         let keys = ["down", "down", "down", "enter"];
         let write_with = |fake: &Arc<FakeEngine<'static>>, keys: &[&str], screen: &Screen| {
             let engine = EngineHandle::new(fake.engine());
@@ -1164,11 +1164,17 @@ mod tests {
         let two = [safe, "rm /tmp/review-important"];
         assert!(!claude(safe, &dialog("Make the file", &gutter(&two))));
         assert!(!claude(&two.join("\n"), &dialog("Make the file", safe)));
-        assert!(!claude(&two.join("\n"), &dialog("Make the file", &gutter(&two))));
+        assert!(!claude(
+            &two.join("\n"),
+            &dialog("Make the file", &gutter(&two))
+        ));
         assert!(!claude(safe, &dialog("Make the file", &two.join("\n"))));
         assert!(!claude(
             safe,
-            &dialog("Make the file", &gutter(&[safe, "╌", "rm /tmp/review-important"]))
+            &dialog(
+                "Make the file",
+                &gutter(&[safe, "╌", "rm /tmp/review-important"])
+            )
         ));
         // The review's screens: a command of two lines behind a box's
         // borders, and one with a separator among them.
