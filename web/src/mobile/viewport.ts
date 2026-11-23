@@ -5,6 +5,10 @@
 //
 // The visual viewport also changes while a list scrolls: Safari and Chrome fold their toolbar away as the page moves and
 // bring it back as it returns. That scroll is the reader's, and only the keyboard's own move of the page is taken back.
+//
+// While a field being written in has the keyboard, the page stays at its top whenever the browser moves it: the page is as
+// tall as what shows, so any move is the browser bringing the field up, and it lands before, with or after the resize (Safari
+// often pans the visual viewport a few hundred milliseconds after it), so every move is answered, not only the resize.
 
 export const VIEWPORT_HEIGHT = "--phone-viewport-height";
 
@@ -16,20 +20,29 @@ function writing(page: Document): boolean {
   return page.activeElement instanceof Element && page.activeElement.matches(WRITING);
 }
 
+type View = Pick<Window, "visualViewport" | "scrollTo" | "addEventListener" | "removeEventListener">;
+
 /** Follows the visual viewport's height until the returned stop is called; nothing where the browser has none. */
-export function followVisualViewport(view: { visualViewport: VisualViewport | null; scrollTo: (x: number, y: number) => void } = window, root: HTMLElement = document.documentElement): () => void {
+export function followVisualViewport(view: View = window, root: HTMLElement = document.documentElement): () => void {
   const viewport = view.visualViewport;
   if (!viewport) return () => {};
+  // With no field being written in, the page's scroll is the reader's and stays.
+  const holdTop = () => {
+    if (writing(root.ownerDocument)) view.scrollTo(0, 0);
+  };
   const follow = () => {
     root.style.setProperty(VIEWPORT_HEIGHT, `${viewport.height}px`);
-    // A browser that scrolled the page to bring the field up above the keyboard has nothing left to scroll, since the page
-    // is now as tall as what shows. With no field being written in, the page's scroll is the reader's and stays.
-    if (writing(root.ownerDocument)) view.scrollTo(0, 0);
+    holdTop();
   };
   follow();
   viewport.addEventListener("resize", follow);
+  // Safari pans the visual viewport without scrolling the page, and Chrome scrolls the page: each says so on its own target.
+  viewport.addEventListener("scroll", holdTop);
+  view.addEventListener("scroll", holdTop);
   return () => {
     viewport.removeEventListener("resize", follow);
+    viewport.removeEventListener("scroll", holdTop);
+    view.removeEventListener("scroll", holdTop);
     root.style.removeProperty(VIEWPORT_HEIGHT);
   };
 }

@@ -3870,6 +3870,7 @@ The notification words follow the language in effect, so an explicit language al
 The app follows the phone's light or dark choice, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 In the iOS app every screen keeps clear of the notch, the home indicator and the keyboard, the page does not rubber-band or zoom, and a press on a control selects nothing and opens no callout.
 In a browser and a Home Screen app the page is as tall as what the keyboard leaves of the screen, so the reply bar stays above it there too, and a detail read at its bottom keeps its newest line in view above the reply bar when the keyboard comes up; one scrolled up to older lines stays where it was.
+While a field being written in has the keyboard, the page stays at its top whenever the browser moves it, before, with or after the keyboard's resize (Safari often pans a few hundred milliseconds after it), so every raise of the keyboard, the first or a later one, after a list scroll or on another agent, shows the header, the newest line and the reply bar above the keyboard, and the page is back in place when it goes down.
 Only the keyboard moves the page back to its top: a list scrolled in a browser stays where the reader left it while the browser folds its toolbar away and brings it back.
 
 The start page with no computer connected is a first screen that says what to do, in order (`web/src/mobile/StartScreens.tsx`).
