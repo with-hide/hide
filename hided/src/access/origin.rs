@@ -140,12 +140,22 @@ pub(super) fn in_holder(peer: i32, home: &Path, state: &Path) -> Result<Origin, 
         if !same_account {
             return Ok(Origin::Outside);
         }
-        let image = process::image_path(pid).map_err(|error| unread("image", pid, &error))?;
-        let image = canonical(&image).map_err(|error| unread("image", pid, &error))?;
+        // Linux names a process's image only to an account that may trace
+        // it, and a process that changed accounts on its way to this one
+        // may not be traced by it: the process a root sshd keeps for each
+        // login, which every command that arrives over SSH descends from.
+        // Such a process is none of this home's holders, which this account
+        // starts from its own files and so always reads, and the walk goes
+        // on to its parent, whose account and birth it still has to read.
+        let image = match process::image_path(pid) {
+            Ok(image) => Some(canonical(&image).map_err(|error| unread("image", pid, &error))?),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(error) => return Err(unread("image", pid, &error)),
+        };
         if process::start_time(pid).map_err(|error| unread("start", pid, &error))? != started {
             return Err(moved(pid));
         }
-        if roots.iter().flatten().any(|root| image.starts_with(root)) {
+        if image.is_some_and(|image| roots.iter().flatten().any(|root| image.starts_with(root))) {
             return Ok(Origin::Holder);
         }
         let parent = process::parent_of(pid);
