@@ -71,16 +71,17 @@ impl NodePages {
     /// path that was checked, as a core's own `file:` pages are judged; the
     /// core passes this machine's addresses through unread.
     fn own_page(&self, mut source: BrowserRouteSource) -> Result<BrowserRouteSource, &'static str> {
-        if !crate::file_url::is_file_url(&source.url) {
+        if !hide_platform::path::is_file_url(&source.url) {
             return Ok(source);
         }
         let (path, suffix) =
-            crate::file_url::file_path(&source.url).ok_or("file_page_outside_checkout")?;
+            hide_platform::path::from_file_url(&source.url).ok_or("file_page_outside_checkout")?;
         let real = self
             .boundary
             .resolve_target(&path)
             .map_err(|_| "file_page_outside_checkout")?;
-        source.url = crate::file_url::file_url(&hide_platform::path::to_wire_lossy(&real), suffix);
+        source.url =
+            hide_platform::path::to_file_url(&hide_platform::path::to_wire_lossy(&real), suffix);
         Ok(source)
     }
 }

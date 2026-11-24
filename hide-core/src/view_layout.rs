@@ -145,13 +145,6 @@ pub fn browser_address(url: &str) -> bool {
         && rest.len() > 2
 }
 
-/// Whether `url` names a local file, which only a Workspace on this Mac can
-/// show.
-pub fn is_file_address(url: &str) -> bool {
-    url.get(..5)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
-}
-
 /// A page title as a browser display keeps it: one line, cut at the cap.
 pub fn browser_title(title: &str) -> String {
     title

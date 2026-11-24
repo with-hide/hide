@@ -907,6 +907,24 @@ test("browser: Open in default browser hands a web page's address to the system 
   expect(await handed()).toEqual([address]);
 });
 
+// @platform: `hide browser open` sends a checkout's file as the system spells
+// it, `file:///C:/...` on Windows, and the daemon and the core both have to
+// read that as the calling pane's checkout (with-hide/hide#2920).
+test("browser: hide browser open shows an HTML file of the calling pane's own checkout", { tag: "@platform" }, async () => {
+  const report = path.join(fs.realpathSync.native(fixture.root), "fixture", "docs", "보고서 1.html");
+  fs.mkdirSync(path.dirname(report), { recursive: true });
+  fs.writeFileSync(report, '<!doctype html><meta charset="utf-8"><title>Checkout report</title><h1>보고서</h1>');
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await shellPage(app);
+  await enterWorkspaceWithLane(page, "fixture");
+
+  const opened = await openFromCli(report, ["--wait"]);
+  expect(opened, JSON.stringify(opened)).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
+  expect((await views()).some((view) => view.url.startsWith("file://") && view.title === "Checkout report")).toBe(true);
+  await expect(tab(page, "Checkout report")).toBeVisible();
+});
+
 test("new-tab: empty page creates no native renderer and address loads in the same display", async () => {
   ({ app } = await launchShell(run.env));
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);

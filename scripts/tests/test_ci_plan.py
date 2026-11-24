@@ -1344,7 +1344,7 @@ class WindowsCheckLane(unittest.TestCase):
             with self.subTest(step=key):
                 self.assertEqual(conditions[key], "${{ !cancelled() }}")
         test_steps = [step for step in self.jobs["tests"]["steps"] if "$TEST_TARGETS -E" in step.get("run", "")]
-        self.assertEqual(len(test_steps), 29)
+        self.assertEqual(len(test_steps), 30)
         for step in test_steps:
             with self.subTest(step=step["name"][:60]):
                 self.assertEqual(step.get("if"), "${{ !cancelled() && steps.tests.outcome == 'success' }}")

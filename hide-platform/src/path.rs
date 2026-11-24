@@ -18,10 +18,17 @@
 //! which is correct whatever system owns them because the spelling is the
 //! same; what it may not do is ask its own filesystem about another
 //! machine's path or read it by its own system's rules.
+//!
+//! A `file:` URL is one more spelling of an absolute wire path: Hide writes
+//! and reads its own (a browser display's address) only here
+//! ([`to_file_url`], [`from_file_url`]), so a Windows drive is
+//! `file:///C:/...` for every reader.
 
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
 /// Why a path cannot be spelled or read as asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -373,6 +380,63 @@ pub fn wire_relative(root: &str, path: &str) -> Result<RelPath, PathError> {
         return Ok(RelPath::root());
     }
     RelPath::parse(rest)
+}
+
+/// WHATWG's path percent-encode set, which Chromium writes a file URL in,
+/// plus `%`, so a decoded path encodes back to the URL it came from.
+const FILE_URL_PATH: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+
+/// Whether `url` has the `file:` scheme, in any case.
+pub fn is_file_url(url: &str) -> bool {
+    url.get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+}
+
+/// The absolute wire spelling a `file:` URL names on its own machine, and
+/// the query or fragment after it. A Windows drive is `file:///C:/a`
+/// (RFC 8089): the slash before the drive belongs to the URL, so the path
+/// is `C:/a`. `None` when the URL names another host, has no absolute path,
+/// or does not decode to UTF-8 without a NUL. It reads the spelling only,
+/// so any machine may ask it of any machine's URL.
+pub fn from_file_url(url: &str) -> Option<(String, &str)> {
+    if !is_file_url(url) {
+        return None;
+    }
+    let rest = url[5..].strip_prefix("//")?;
+    let (host, located) = rest.split_at(rest.find('/')?);
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        return None;
+    }
+    let (path, suffix) = located.split_at(located.find(['?', '#']).unwrap_or(located.len()));
+    let decoded = percent_decode_str(path).decode_utf8().ok()?;
+    if decoded.contains('\0') {
+        return None;
+    }
+    let path = match decoded.strip_prefix('/') {
+        Some(drive) if windows::drive_rest(drive).is_some() => drive.to_owned(),
+        _ => decoded.into_owned(),
+    };
+    Some((path, suffix))
+}
+
+/// The `file:` URL of an absolute wire spelling, with `suffix` (a query or
+/// fragment) kept as written: the one spelling [`from_file_url`] reads back.
+pub fn to_file_url(path: &str, suffix: &str) -> String {
+    let slash = if path.starts_with('/') { "" } else { "/" };
+    format!(
+        "file://{slash}{}{suffix}",
+        utf8_percent_encode(path, FILE_URL_PATH)
+    )
 }
 
 #[cfg(unix)]

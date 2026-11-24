@@ -133,6 +133,13 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^pairing::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
+      - name: A browser display's file page in the core
+        # The core reads the `file:` address `hide browser open` sends, which
+        # for a drive is `file:///C:/...`, against the calling checkout; the
+        # Linux lane never spells a drive (with-hide/hide#2920).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=runtime::tests::workspace_control::browser_file_source_is_confined_to_the_calling_checkout)'
       - name: Automations, their command and their daemon
         # PRD automations D-23: the CLI's reading of a schedule and a folder,
         # the core's schedules in the system's zone, its book and runs, and

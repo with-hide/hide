@@ -194,3 +194,96 @@ fn a_wire_spelling_s_parent_keeps_its_root_whatever_system_reads_it() {
         assert_eq!(path::wire_parent(wire), parent, "{wire}");
     }
 }
+
+/// A `file:` URL names one wire path whatever system reads it (RFC 8089):
+/// the slash before a Windows drive belongs to the URL, so a drive path
+/// reads as `D:/...`, never as `/D:/...`, which no checkout root matches
+/// (with-hide/hide#2920). Another host, or a path that does not decode, is
+/// no local file.
+#[test]
+fn a_file_url_reads_as_the_wire_path_it_names_on_every_system() {
+    for (url, expected) in [
+        (
+            "file:///work/repo/page.html",
+            Some(("/work/repo/page.html", "")),
+        ),
+        (
+            "file:///D:/work/repo/page.html",
+            Some(("D:/work/repo/page.html", "")),
+        ),
+        (
+            "file://localhost/D:/work/page.html",
+            Some(("D:/work/page.html", "")),
+        ),
+        (
+            "file:////server/share/page.html",
+            Some(("//server/share/page.html", "")),
+        ),
+        ("FILE:///work/page.html", Some(("/work/page.html", ""))),
+        (
+            "FiLe://LocalHost/work/a%20b.html",
+            Some(("/work/a b.html", "")),
+        ),
+        (
+            "file:///work/page.html?x=1#top",
+            Some(("/work/page.html", "?x=1#top")),
+        ),
+        (
+            "file:///D:/%EB%AC%B8%EC%84%9C/a.html#top",
+            Some(("D:/문서/a.html", "#top")),
+        ),
+        ("file://server/share/page.html", None),
+        ("file://elsewhere/work/page.html", None),
+        ("file:/work/page.html", None),
+        ("file:work", None),
+        ("file:///a%00b", None),
+        ("file:///%FF", None),
+        ("https://example.test/page.html", None),
+    ] {
+        let read = path::from_file_url(url);
+        assert_eq!(
+            read.as_ref().map(|(path, suffix)| (path.as_str(), *suffix)),
+            expected,
+            "{url}"
+        );
+        assert_eq!(
+            path::is_file_url(url),
+            url[..5].eq_ignore_ascii_case("file:")
+        );
+    }
+}
+
+/// The URL `to_file_url` writes reads back as the wire path it was written
+/// from, and on this system as the file itself: a drive gains the URL's
+/// slash, and a name keeps every character a URL would otherwise read as
+/// its own.
+#[test]
+fn a_file_url_written_here_reads_back_as_its_path_and_its_file() {
+    let (_dir, root) = checkout();
+    let file = root.join("src").join("main.rs");
+    let wire = path::to_wire(&file).unwrap();
+    let url = path::to_file_url(&wire, "#top");
+    let (read, suffix) = path::from_file_url(&url).unwrap();
+    assert_eq!((read.as_str(), suffix), (wire.as_str(), "#top"));
+    assert_eq!(path::from_wire(&read).unwrap(), file);
+    for wire in [
+        "/a/b.html",
+        "/문서/보고서 1.html",
+        "/a/100%/#x?.html",
+        "/a/{b}`c\"<d>",
+        "C:/a b/c.html",
+        "//server/share/a.html",
+    ] {
+        let url = path::to_file_url(wire, "");
+        assert_eq!(
+            path::from_file_url(&url),
+            Some((wire.to_owned(), "")),
+            "{url}"
+        );
+    }
+    assert_eq!(path::to_file_url("C:/a/b.html", ""), "file:///C:/a/b.html");
+    assert_eq!(
+        path::to_file_url("/문서/a b.html", "#top"),
+        "file:///%EB%AC%B8%EC%84%9C/a%20b.html#top"
+    );
+}

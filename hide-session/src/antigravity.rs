@@ -146,18 +146,11 @@ pub(crate) struct Row {
 /// a `file://` URI; a Windows drive is `file:///C:/...`.
 fn workspace(uris: &str) -> Option<PathBuf> {
     let uris: Vec<String> = serde_json::from_str(uris).ok()?;
-    let uri = uris.first()?.strip_prefix("file://")?;
-    let decoded = percent_encoding::percent_decode_str(uri)
-        .decode_utf8()
-        .ok()?;
-    let spelling = match decoded.strip_prefix('/') {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest,
-        _ => decoded.as_ref(),
-    };
+    let (spelling, _) = hide_platform::path::from_file_url(uris.first()?)?;
     if spelling.chars().any(char::is_control) {
         return None;
     }
-    hide_platform::path::from_wire(spelling)
+    hide_platform::path::from_wire(&spelling)
         .ok()
         .filter(|path| path.is_absolute())
 }

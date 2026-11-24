@@ -20,7 +20,7 @@ pub fn address(target: &str, cwd: &Path) -> Result<String, String> {
             .map_err(|error| format!("{text}: {error}"))?;
         let real =
             hide_platform::path::to_wire(&real).map_err(|error| format!("{text}: {error}"))?;
-        return Ok(crate::file_url::file_url(&real, ""));
+        return Ok(hide_platform::path::to_file_url(&real, ""));
     }
     if text.starts_with(['/', '.', '~']) {
         return Err(format!("no such file: {text}"));
@@ -94,7 +94,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("보고서 1.html"), "<p>ok</p>").unwrap();
         let real = dir.path().canonicalize().unwrap();
-        let file = crate::file_url::file_url(&real.join("보고서 1.html").display().to_string(), "");
+        let file =
+            hide_platform::path::to_file_url(&real.join("보고서 1.html").display().to_string(), "");
         assert_eq!(address("보고서 1.html", dir.path()), Ok(file.clone()));
         assert_eq!(
             address(

@@ -300,12 +300,12 @@ impl BrowserRoutes {
         let way = tokio::task::spawn_blocking(move || pages.way(&device))
             .await
             .map_err(|_| "core_unavailable")??;
-        let (url, kind) = if crate::file_url::is_file_url(&source.url) {
+        let (url, kind) = if hide_platform::path::is_file_url(&source.url) {
             let Way::Device(link) = &way else {
                 return Err("file_page_unavailable");
             };
             let (path, suffix) =
-                crate::file_url::file_path(&source.url).ok_or("invalid_file_url")?;
+                hide_platform::path::from_file_url(&source.url).ok_or("invalid_file_url")?;
             // The device's paths in the wire spelling, related by names
             // alone whatever system the device runs.
             let relative = hide_platform::path::wire_relative(&source.checkout_path, &path)

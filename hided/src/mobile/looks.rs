@@ -147,7 +147,7 @@ impl Shown {
 fn html_path(view: &LookView) -> Option<String> {
     let path = match view.kind {
         DisplayKind::File => view.path.clone(),
-        DisplayKind::Browser => crate::file_url::file_path(view.url.as_deref()?)?.0,
+        DisplayKind::Browser => hide_platform::path::from_file_url(view.url.as_deref()?)?.0,
         DisplayKind::Diff | DisplayKind::External | DisplayKind::Card => return None,
     };
     let name = std::path::Path::new(hide_platform::path::wire_name(&path));
