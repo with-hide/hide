@@ -2,10 +2,12 @@
 //! in `~/.config/systemd/user`, wanted by `default.target`, so the account's
 //! user manager starts it when it starts: at the account's first login, or
 //! at boot once the account lingers ([`Systemd::linger`]). It is restarted
-//! ten seconds after any exit while its marker file exists
-//! (`ConditionPathExists=`, checked again at each restart), and an exit with
-//! the marker gone leaves it stopped. `systemctl --user` and `loginctl` are
-//! the commands that change it.
+//! ten seconds after any exit while its marker file exists, and an exit with
+//! the marker gone leaves it stopped: the unit asks for the marker before
+//! each run (`ExecCondition=`), a first start and a restart alike, where a
+//! unit's own conditions (`ConditionPathExists=`) are read at a start and
+//! not at a restart. `systemctl --user` and `loginctl` are the commands that
+//! change it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -130,7 +132,10 @@ impl Systemd {
     }
 
     /// Writes `agent`'s unit under `home`, has the manager start it with
-    /// the account and starts it now; one running already is stopped first.
+    /// the account and starts it now; one running already is stopped first,
+    /// under the unit as written now: the manager stops a run by the unit it
+    /// last read, and one an earlier build wrote ends every process the run
+    /// started, the panes' holders among them.
     pub(super) fn install(
         &self,
         agent: &LoginAgent<'_>,
@@ -138,8 +143,9 @@ impl Systemd {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
+        self.place(agent, marker, home, stop)?;
         self.unload(agent.label, home, stop)?;
-        self.adopt(agent, marker, home, stop)
+        self.start(agent.label, home, stop)
     }
 
     /// Writes `agent`'s unit under `home`, has the manager start it with the
@@ -152,18 +158,29 @@ impl Systemd {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
-        let path = Self::unit_file(home, agent.label);
-        crate::fs::private::create_dir_all(&Self::units(home))?;
-        crate::fs::atomic::write_file(
-            &path,
-            unit(agent, marker).as_bytes(),
-            crate::fs::Access::Private,
-        )?;
-        self.load(agent.label, home, stop)?;
+        self.place(agent, marker, home, stop)?;
         if self.is_loaded(agent.label, home, stop)? {
             return Ok(());
         }
         self.start(agent.label, home, stop)
+    }
+
+    /// Writes `agent`'s unit under `home` and has the manager read it, which
+    /// neither stops nor starts a run.
+    fn place(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
+        crate::fs::private::create_dir_all(&Self::units(home))?;
+        crate::fs::atomic::write_file(
+            &Self::unit_file(home, agent.label),
+            unit(agent, marker).as_bytes(),
+            crate::fs::Access::Private,
+        )?;
+        self.load(agent.label, home, stop)
     }
 
     /// Has the manager read the installed unit `label` and start it with the
@@ -250,7 +267,12 @@ impl Systemd {
     }
 
     /// Removes the unit and its link, so the manager starts nothing of it
-    /// again; a running process is left running until it exits.
+    /// again; a running process is left running until it exits. The manager
+    /// is told to read its units again only when it runs nothing of this
+    /// one: it ends a run by the unit it last read, and reads a unit whose
+    /// file is gone as one whose end ends everything its run started. That
+    /// holds until something else has the manager read again while the
+    /// forgotten run goes on, which this cannot prevent.
     pub(super) fn forget(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         let mut removed = false;
         for path in [Self::wanted_link(home, label), Self::unit_file(home, label)] {
@@ -260,7 +282,7 @@ impl Systemd {
                 Err(error) => return Err(error),
             }
         }
-        if removed && self.manager_runs() {
+        if removed && self.manager_runs() && !self.is_loaded(label, home, stop)? {
             self.check(&["daemon-reload"], home, stop)?;
         }
         Ok(())
@@ -357,8 +379,12 @@ fn login_name() -> String {
 }
 
 /// `agent`'s unit: started with the account's manager, restarted ten
-/// seconds after any exit while `marker` exists, and stopped within
-/// [`STOP_WITHIN_SECS`].
+/// seconds after any exit while `marker` exists (`ExecCondition=`, which
+/// is asked before every run), and stopped within
+/// [`STOP_WITHIN_SECS`]. A stop, and the end of its program, ends that
+/// program alone (`KillMode=process`): what it started to outlive it
+/// ([`crate::process::start_resident`]) stays in the unit's control group,
+/// which systemd otherwise ends whole.
 fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
     let mut command = quote(&agent.program.to_string_lossy());
     for argument in agent.arguments {
@@ -371,15 +397,21 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
         .map(|(key, value)| format!("Environment={}\n", quote(&format!("{key}={value}"))))
         .collect();
     let log = escape_path(&agent.log.to_string_lossy());
+    let marker_exists = format!(
+        "/bin/sh -c {} sh {}",
+        quote("test -e \"$1\""),
+        quote(&marker.to_string_lossy())
+    );
     format!(
         "[Unit]\n\
          Description={label}\n\
-         ConditionPathExists={marker}\n\
          StartLimitIntervalSec=0\n\
          \n\
          [Service]\n\
+         ExecCondition={marker_exists}\n\
          ExecStart={command}\n\
          {environment}\
+         KillMode=process\n\
          Restart=always\n\
          RestartSec=10\n\
          TimeoutStopSec={STOP_WITHIN_SECS}\n\
@@ -389,7 +421,6 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
          [Install]\n\
          WantedBy=default.target\n",
         label = escape_specifiers(agent.label),
-        marker = escape_path(&marker.to_string_lossy()),
     )
 }
 
@@ -464,14 +495,17 @@ mod tests {
             "{unit}"
         );
         assert!(
-            unit.contains("ConditionPathExists=/home/example/a b/state/keep-alive\n"),
-            "{unit}"
-        );
-        assert!(
             unit.contains("Environment=\"HIDE_KEEP_ALIVE=1\"\n"),
             "{unit}"
         );
+        assert!(
+            unit.contains(
+                "ExecCondition=/bin/sh -c \"test -e \\\"$$1\\\"\" sh \"/home/example/a b/state/keep-alive\"\n"
+            ),
+            "{unit}"
+        );
         assert!(unit.contains("Restart=always\n"), "{unit}");
+        assert!(unit.contains("KillMode=process\n"), "{unit}");
         assert!(unit.contains("WantedBy=default.target\n"), "{unit}");
     }
 }

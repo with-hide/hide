@@ -22,7 +22,16 @@ use hide_platform::process::{
     take_lent,
 };
 
-const ROLE: &str = "HIDE_PLATFORM_RESIDENT_ROLE";
+/// The variable that names a role; a login agent's contract test
+/// (`user_agents`) runs the `starter` role as its agent's program.
+pub(crate) const ROLE: &str = "HIDE_PLATFORM_RESIDENT_ROLE";
+/// The arguments this test binary runs a role with.
+pub(crate) const ROLE_ARGUMENTS: [&str; 4] = [
+    "--exact",
+    "resident::role",
+    "--nocapture",
+    "--test-threads=1",
+];
 /// What a starter does to itself before it starts a resident.
 const SETUP: &str = "HIDE_PLATFORM_RESIDENT_SETUP";
 /// Where a session member writes the pids it started.
@@ -103,12 +112,7 @@ fn pinned(pids: &[u32]) -> Vec<Pinned> {
 fn role_command(role: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
-        .args([
-            "--exact",
-            "resident::role",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(ROLE_ARGUMENTS)
         .env(ROLE, role)
         .env_remove(SETUP)
         .stdin(Stdio::null())
@@ -126,12 +130,7 @@ fn resident_command() -> ResidentCommand {
 fn resident_command_of(program: &Path) -> ResidentCommand {
     let mut command = ResidentCommand::new(program);
     command
-        .args([
-            "--exact",
-            "resident::role",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(ROLE_ARGUMENTS)
         .env(ROLE, "resident")
         .env_remove(SETUP);
     command
