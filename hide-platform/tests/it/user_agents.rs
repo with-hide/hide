@@ -666,9 +666,10 @@ fn a_login_agent_restarts_while_its_marker_exists_and_ends_when_removed() {
 /// holder is) goes on when the run's program ends, when a replacement
 /// stops the run, which is what a core's update does to the core it
 /// replaces, and when the run of an agent that was forgotten ends, which
-/// is a core that stops after its last pairing went. On Linux the same holds for a run a unit of an earlier build
-/// started: systemd ends every process of a unit it stops unless the unit
-/// says otherwise, and it stops a run by the unit it last read.
+/// is a core that stops after its last pairing went. On Linux the same
+/// holds for a run a unit of an earlier build started: systemd ends every
+/// process of a unit it stops unless the unit says otherwise, and it stops
+/// a run by the unit it last read.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 #[ignore = "the real login agents: only on a disposable CI runner"]
