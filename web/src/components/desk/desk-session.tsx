@@ -7,7 +7,8 @@ import { cn } from "../../lib/utils";
 import { PaneHeadChildren, PanePrChip } from "../../PaneHeaderBand";
 import { PaneWorkChip } from "../../PaneMissionChip";
 import { AncestorPath, usePaneMenu } from "../../PaneRelations";
-import type { AgentRow, PaneRow, SleepingSession } from "../../snapshot";
+import { useNoticeFloor } from "../../noticeFloor";
+import type { AgentRow, PaneRow } from "../../snapshot";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -227,15 +228,22 @@ export function SessionAskCard({ onWrite, ...card }: Parameters<typeof AskCardVi
 /**
  * Where the input box stood while the session sleeps (PRD desk-2-ui D-28,
  * B43): the sleeping session row's moon, its name and `에이전트 깨우기`, as
- * the sidebar's sleeping row offers it.
+ * the sidebar's sleeping row and the sleeping pane offer it. `state` is the
+ * sleep's own: an agent asleep in its pane (`sleeping`, `waking`, `failed`)
+ * or a sleeping session whose pane closed (its phase). `onWake` is null while
+ * nothing can wake it; a wake under way says so in its place.
  */
-export function SessionSleepingFoot({ title, session, onWake }: { title: string; session: SleepingSession | null; onWake: (sleepId: string) => void }) {
+export function SessionSleepingFoot({ title, state, onWake }: { title: string; state: string; onWake: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
+  // A notice in the window's corner stands above the foot, as above the input box it replaces.
+  const foot = useRef<HTMLDivElement>(null);
+  useNoticeFloor(foot);
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-xs border-t border-border px-md py-sm text-body" data-desk-session-sleeping={session?.phase ?? "unknown"}>
+    <div ref={foot} className="flex min-w-0 shrink-0 items-center gap-xs border-t border-border px-md py-sm text-body" data-desk-session-sleeping={state}>
       <MoonIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-subtle-foreground">{title}</span>
-      {session?.wake_available ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={() => onWake(session.sleep_id)}>{t("panes.sleep.wake")}</Button> : null}
+      {state === "waking" ? <span role="status" className="shrink-0 text-caption text-muted-foreground">{t("panes.sleep.waking")}</span> : null}
+      {onWake ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={onWake}>{t("panes.sleep.wake")}</Button> : null}
     </div>
   );
 }

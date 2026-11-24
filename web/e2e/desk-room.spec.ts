@@ -2,10 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { draftId, seedDraft, storedDrafts } from "./drafts";
+import { nativeSessionId, prepareEngineWriter } from "./session-reader-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 // PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
@@ -242,6 +244,83 @@ test("a draft notice stands above Desk's input boxes, never over them (PRD desk-
 });
 
 type Box = { x: number; y: number; width: number; height: number };
+
+test("a session beside Desk that sleeps in its own pane offers 에이전트 깨우기 in its input box's place, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
+  test.setTimeout(150_000);
+  const desk = await startDesk(page, "desk-room-sleep");
+  try {
+    await row(page, desk.pane).click();
+    const panel = page.locator(`[data-desk-thread-panel="${desk.pane}"]`);
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
+    // Sleep agent from the session head's own pane menu: the agent ends and its pane stays.
+    await page.locator(`[data-desk-session-menu="${desk.pane}"]`).click();
+    const item = page.locator('[data-menu-item="sleep_agent"]');
+    await expect(item).toBeEnabled({ timeout: 20_000 });
+    await item.click();
+
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", /.+/, { timeout: 30_000 });
+    await screenshot(page, "desk-room-sleep");
+    const wake = panel.locator("[data-desk-session-wake]");
+    await expect(wake).toBeVisible({ timeout: 30_000 });
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", "sleeping");
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(0);
+    await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
+
+    await wake.click();
+    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible({ timeout: 40_000 });
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveCount(0);
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
+    await screenshot(page, "desk-room-woke");
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43) @platform", async ({ page }) => {
+  test.setTimeout(180_000);
+  // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`).
+  const engine = await startFixture({ agents: false });
+  const daemon = await startHided(engine, "desk-room-pi-sleep", path.join(engine.root, "home"));
+  try {
+    const pane = engine.panes[0]!;
+    const session = prepareEngineWriter(engine, "pi");
+    await withControl(daemon, (control) => sendKeys(control, pane, "pi\r"));
+    await expect.poll(() => fs.existsSync(session)).toBe(true);
+    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId("pi") ? true : undefined), `${pane} on its pi session`, 30_000));
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // A quiet agent's project can be folded before the page first reads its session.
+    const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
+    await expect(row(page, pane).or(folded)).toBeVisible();
+    if (!(await row(page, pane).isVisible())) await folded.click();
+    await row(page, pane).click();
+    const panel = page.locator(`[data-desk-thread-panel="${pane}"]`);
+    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible({ timeout: 30_000 });
+
+    await page.locator(`[data-desk-session-menu="${pane}"]`).click();
+    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 });
+    await page.locator('[data-menu-item="sleep_agent"]').click();
+    await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
+    const wake = panel.locator("[data-desk-session-wake]");
+    await expect(wake).toBeVisible({ timeout: 30_000 });
+    await screenshot(page, "desk-room-pi-asleep");
+    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible();
+    await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
+
+    await wake.click();
+    const fresh = await withControl(daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; agent_kind: string | null }[] } | undefined)?.agents ?? []).find((agent) => agent.agent_kind === "pi" && agent.pane_id !== pane)?.pane_id, "a fresh pi agent", 30_000));
+    await expect(page.locator(`[data-desk-thread-panel="${fresh}"]`)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible();
+  } finally {
+    daemon.stop();
+    engine.stop();
+  }
+});
 
 test("a child session beside Desk names its ancestors before its name, as its pane head does, and an ancestor's name opens it beside Desk (PRD desk-2-ui B47) @platform", async ({ page }) => {
   test.setTimeout(120_000);

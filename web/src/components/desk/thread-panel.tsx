@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "../../actions";
 import { refusalText, submitThreadInput } from "../../attachments";
-import type { DeskJob, DeskMention } from "../../desk";
+import type { DeskJob, DeskMention, DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
@@ -13,6 +13,8 @@ import type { ReactNode } from "react";
 import { ThreadView, type ThreadPartActions } from "./thread-view";
 
 type Attached = ComposerAttachment & { bytes: Uint8Array };
+
+const NO_OUTPUTS: readonly DeskOutput[] = [];
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
@@ -122,13 +124,13 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
     if (answer > 0) root.current?.querySelector<HTMLTextAreaElement>("[data-desk-composer-input]")?.focus();
   }, [answer]);
 
-  if (!job) {
-    // The thread opened from the first frame and its card is on its way, or the session has no card any more (asleep,
-    // or its pane closed): the head and its `✕` stand either way, and a sleeping session's foot wakes it (B6, B43).
+  if (!job && !foot) {
+    // The thread opened from the first frame and its card is on its way, or the session has no card any more (its
+    // pane closed): the head and its `✕` stand either way (B6).
     return (
       <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""} data-desk-thread-pending="true">
         {head}
-        {foot ?? <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>}
+        <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>
       </div>
     );
   }
@@ -142,7 +144,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         failure={screen.failure}
         mentions={mentions}
         startedByDesk={startedByDesk}
-        outputs={job.outputs}
+        outputs={job?.outputs ?? NO_OUTPUTS}
         ask={ask}
         foot={foot}
         selectedOutput={selectedOutput}

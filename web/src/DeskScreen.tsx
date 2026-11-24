@@ -527,7 +527,10 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
   if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
   const identity = known.current;
   const asleep = useShellStore((s) => (identity ? sleepingOf(s.rest?.navigator?.sleeping_sessions, identity) : null));
-  const sleeping = job?.state === "sleeping" || (!row && asleep !== null);
+  // Most agents sleep in their own pane, which stays (PRD agent-sleep) and wakes there; an agent whose sleep closes
+  // its pane (Pi's) is found among the sleeping sessions and wakes in a new one (B43).
+  const inPane = row?.sleep ?? null;
+  const sleeping = inPane !== null || job?.state === "sleeping" || (!row && asleep !== null);
   const title = row?.identity_label ?? job?.title ?? identity?.title ?? "";
   const [waking, setWaking] = useState<SessionIdentity | null>(null);
   useWakeFollow(waking, paneId, () => setWaking(null));
@@ -571,11 +574,17 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       foot={sleeping ? (
         <SessionSleepingFoot
           title={title}
-          session={asleep}
-          onWake={(id) => {
-            actions.wakeSleepingSession(id);
-            setWaking(identity);
-          }}
+          state={inPane?.state ?? asleep?.phase ?? "unknown"}
+          onWake={
+            inPane
+              ? inPane.state === "waking" ? null : () => actions.wakeAgent(paneId)
+              : asleep?.wake_available
+                ? () => {
+                    actions.wakeSleepingSession(asleep.sleep_id);
+                    setWaking(identity);
+                  }
+                : null
+          }
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}

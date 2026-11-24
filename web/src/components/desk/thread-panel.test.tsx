@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
@@ -45,7 +45,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -54,7 +54,7 @@ async function mount() {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={job} paneId={job.pane_id} actions={actions} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -81,6 +81,17 @@ it("opens its pane's thread while shown, draws what the core read, and closes it
   await act(async () => root.unmount());
   mounted = [];
   expect(actions.closeThread).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a sleeping session's record above the foot that wakes it once its card is gone with its pane (PRD desk-2-ui B43)", async () => {
+  const { container } = await mount(null, <p data-foot="true">에이전트 깨우기</p>);
+  await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.textContent).toContain("다크도 찍어줘");
+  expect(container.textContent).toContain("라이트는 끝났어요");
+  // The foot stands in the input box's place, after the conversation.
+  const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
+  expect(conversation.compareDocumentPosition(container.querySelector('[data-foot="true"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector("textarea")).toBeNull();
 });
 
 it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {

@@ -326,10 +326,12 @@ function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) 
  * question at the foot, its outputs after it, and the box that types into
  * its terminal. Its state is in the head, said once. A record that cannot be
  * read says why in one line and offers the terminal; one being read, or with
- * nothing in it yet, says so in one quiet line.
+ * nothing in it yet, says so in one quiet line. A session asleep with no
+ * card any more (its sleep closed its pane, B43) keeps its record above the
+ * foot that wakes it.
  */
 export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, ask = null, foot = null, onTerminal, onReachTop, ...actions }: {
-  job: DeskJob;
+  job: DeskJob | null;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */
   reading?: boolean;
@@ -352,10 +354,10 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const { t } = useInterfaceTranslation();
   const scroller = useThreadScroll(lines, onReachTop);
   // An asking job's question is said once, in the wait at the foot (D-75).
-  const turns = job.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
-  const running = job.state === "working" || job.state === "starting";
+  const turns = job?.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
+  const running = job?.state === "working" || job?.state === "starting";
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job.id}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
       <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
         {failure ? (
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
@@ -384,7 +386,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer
             value={composer.value}
-            label={t("desk.thread.composerLabel", { title: job.title })}
+            label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
             placeholder={t("desk.thread.placeholder")}
             attachments={composer.attachments}
             focused={composer.focused}
