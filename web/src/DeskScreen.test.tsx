@@ -170,6 +170,11 @@ describe("Desk's room", () => {
     await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/attachments/${message!.request_id}-0-install.log` }] }]));
     expect(document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")).toHaveLength(0);
     expect(document.body.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("install.log");
+
+    // The agent was not signed in: the core takes the message out, and its words and its file come back to send again (B6).
+    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }]));
+    expect(useUiStore.getState().deskDraft.text).toBe("왜 끊기는지 봐 줘");
+    expect([...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent])).toEqual([["ready", expect.stringContaining("install.log")]]);
   });
 
   it("names the agent's own reason on a failed turn when it gave one", async () => {

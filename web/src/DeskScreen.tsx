@@ -132,8 +132,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const tray = useComposerTray();
   const [notice, setNotice] = useState<string | null>(null);
   const refusal = useShellStore((s) => s.composerRefusal);
-  // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
-  const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
+  // The last send as written, its files with it, put back in the box when the agent turned out not to be signed in (B6).
+  const lastSent = useRef<{ words: typeof draft; files: { name: string; bytes: Uint8Array; type: string }[]; after: number } | null>(null);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -168,6 +168,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
     lastSent.current = null;
     if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
+    if (tray.files.length === 0 && sent.files.length > 0) tray.restore(sent.files);
   }, [items, setDraft]);
 
   useLayoutEffect(() => {
@@ -199,7 +200,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.image));
     setNotice(null);
     pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null };
-    lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
+    lastSent.current = { words, files: files.map(({ name, bytes, type }) => ({ name, bytes, type })), after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions, staged);
   };

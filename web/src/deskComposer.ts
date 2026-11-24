@@ -179,8 +179,10 @@ export type ComposerTray = {
   add: (files: readonly File[]) => void;
   remove: (id: string) => void;
   /** The files' names and bytes, each picture also as an image the sent bubble can draw, or null while the tray holds the send (`traySendable`). */
-  outgoing: () => (AttachmentInput & { image: Blob | null })[] | null;
+  outgoing: () => (AttachmentInput & { type: string; image: Blob | null })[] | null;
   clear: () => void;
+  /** Puts files a send carried back as they were read, ready to send again, when the message did not reach its agent. */
+  restore: (files: readonly (AttachmentInput & { type: string })[]) => void;
 };
 
 /**
@@ -244,12 +246,21 @@ export function useComposerTray(): ComposerTray {
       if (!ready) return null;
       return ready.map((file) => {
         const read = bytes.current.get(file.id)!;
-        return { name: safeName(file.name), bytes: read.bytes, image: file.preview ? new Blob([read.bytes as BlobPart], { type: read.type }) : null };
+        return { name: safeName(file.name), bytes: read.bytes, type: read.type, image: file.preview ? new Blob([read.bytes as BlobPart], { type: read.type }) : null };
       });
     },
     clear: () => {
       live.current.forEach(release);
       setFiles([]);
+    },
+    restore: (sent) => {
+      const entries = sent.map((file) => {
+        const id = crypto.randomUUID();
+        bytes.current.set(id, { bytes: file.bytes, type: file.type });
+        const preview = file.type.startsWith("image/") ? URL.createObjectURL(new Blob([file.bytes as BlobPart], { type: file.type })) : null;
+        return { id, name: file.name, size: file.bytes.byteLength, preview, state: "ready" as const, read: file.bytes.byteLength };
+      });
+      setFiles((current) => [...current, ...entries]);
     },
   };
 }
