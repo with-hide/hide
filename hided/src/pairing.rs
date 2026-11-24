@@ -42,7 +42,7 @@ use tokio::time::Instant;
 
 use crate::core::CoreHandle;
 use crate::ending::Ending;
-use crate::guests::HelperFolder;
+use crate::guests::{HelperBack, HelperFolder};
 use crate::pairing_ssh;
 use crate::pairing_wsl;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
@@ -241,6 +241,12 @@ pub enum Ask {
         #[serde(default)]
         grant: Option<String>,
     },
+    /// The device helper this account runs for a machine reached over SSH
+    /// asks, as it starts, for the folder a switch handed to a machine that
+    /// is no longer paired here (D-49): the way back from a switch is to
+    /// remove the machine and add this one again over SSH. Answered by
+    /// [`Guests::release_helper`].
+    ReleaseHelper,
 }
 
 impl Ask {
@@ -264,7 +270,8 @@ impl Ask {
             | Self::PairWsl { .. }
             | Self::Carry
             | Self::Switch { .. }
-            | Self::AcceptSsh { .. } => true,
+            | Self::AcceptSsh { .. }
+            | Self::ReleaseHelper => true,
             Self::Status { .. }
             | Self::DismissJoin
             | Self::Pause { .. }
@@ -1125,6 +1132,9 @@ impl Pairing {
                 "user": moves.user,
             }));
         }
+        if let Ask::ReleaseHelper = ask {
+            return self.release_helper().await;
+        }
         if let Ask::LookWsl { distro } = &ask {
             let (carriers, reach) = (self.wsl()?, self.ssh.clone());
             let target = distro.clone();
@@ -1177,7 +1187,8 @@ impl Pairing {
             Ask::Status { .. }
             | Ask::LookSsh { .. }
             | Ask::LookWsl { .. }
-            | Ask::LookSwitch { .. } => {
+            | Ask::LookSwitch { .. }
+            | Ask::ReleaseHelper => {
                 unreachable!("answered above")
             }
             // A carrier is a stream, which only the bootstrap socket hands
@@ -1891,6 +1902,47 @@ impl Pairing {
         }
     }
 
+    /// [`Ask::ReleaseHelper`]: gives the device helper's folder back from a
+    /// machine that holds no grant here any more, or names the paired
+    /// machine that still holds it. It opens no endpoint: the machine that
+    /// took the folder may have been this one's last pairing.
+    async fn release_helper(self: &Arc<Self>) -> Result<Value, &'static str> {
+        let Some(guests) = self.guests.get().cloned() else {
+            return Ok(json!({ "helper": "free" }));
+        };
+        let _one = self.helper_asks.lock().await;
+        // A record that cannot be read gives nothing back: the machine it
+        // names may still be paired.
+        let paired = match self.host.peers() {
+            Some(peers) => self.paired(&peers),
+            None => {
+                let (guests, hosts) = self.host.recorded().await.map_err(|_| "hide_unavailable")?;
+                rows(&hosts, &guests, |_| None, &HashMap::new()).0
+            }
+        };
+        let granted: Vec<PeerKey> = paired
+            .iter()
+            .filter(|paired| paired.machine.opened_by.is_some())
+            .map(|paired| paired.key)
+            .collect();
+        let back =
+            tokio::task::spawn_blocking(move || guests.release_helper(|key| granted.contains(key)))
+                .await
+                .map_err(|_| "hide_unavailable")?;
+        Ok(match back {
+            HelperBack::Free => json!({ "helper": "free" }),
+            HelperBack::Released => json!({ "helper": "released" }),
+            HelperBack::HeldBy(holder) => {
+                let by = paired
+                    .into_iter()
+                    .find(|paired| paired.key == holder)
+                    .map(|paired| paired.machine.name)
+                    .unwrap_or_default();
+                json!({ "helper": "held", "by": by })
+            }
+        })
+    }
+
     /// Who holds the device helper's folder on this machine, as `guest`
     /// finds it; with `take`, `guest` takes it when it is free.
     async fn helper(
@@ -2042,7 +2094,9 @@ impl Pairing {
         let mut answer = match ask {
             // A window never holds a share by asking, and never answers
             // for a target of an SSH pairing.
-            Some(Ask::Status { .. } | Ask::AcceptSsh { .. }) | None => refused("invalid_request"),
+            Some(Ask::Status { .. } | Ask::AcceptSsh { .. } | Ask::ReleaseHelper) | None => {
+                refused("invalid_request")
+            }
             Some(ask) => {
                 let caller = if own {
                     Caller::Operator

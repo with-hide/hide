@@ -31,6 +31,7 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
             // The link that started this node is where its records are read:
             // a device's own stderr reaches no log.
             hide_node::diagnostics::install(hide_node::terminal::device::forward_diagnostic);
+            ask_for_the_helpers_folder();
             let input = BufReader::new(io::stdin().lock());
             // The node's terminals ride the same link (PRD
             // core-host-node-terminal D-18).
@@ -54,4 +55,36 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
         }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// Asks this account's own Hide, once as the node starts, for the folder
+/// a switch handed to the machine that switched this one to a server
+/// (D-49), when that machine is no longer paired here: removing it and
+/// adding this machine again over SSH is the way back, and its node there
+/// would otherwise keep the terminals' ownership while their shells run.
+/// A folder no machine took, or an account whose Hide does not run (whose
+/// guests' nodes then do not run either), asks nothing; a Hide that still
+/// pairs that machine keeps it, and so does one that does not know the
+/// ask. Either way the node goes on, and what the Hide answered is in its
+/// log.
+fn ask_for_the_helpers_folder() {
+    let Ok(env) = crate::env::load() else {
+        return;
+    };
+    let node = hide_kit::layout::device_node_state(&env.home);
+    if hide_kit::layout::HelperGuest::read(&node).is_none() {
+        return;
+    }
+    let answer =
+        crate::workspace_cli::pairing_ask(&env, serde_json::json!({"verb": "release_helper"}));
+    hide_node::diagnostics::emit(serde_json::json!({
+        "component": "device_node",
+        "kind": "device_node.helper_folder_asked",
+        "answer": match &answer {
+            Ok(answer) if answer["ok"] == true => answer["helper"].clone(),
+            Ok(answer) => answer["reason"].clone(),
+            Err(error) => serde_json::json!(error),
+        },
+        "by": answer.as_ref().ok().map(|answer| answer["by"].clone()),
+    }));
 }
