@@ -239,7 +239,7 @@ test("a finished run whose terminal the core closed opens its conversation again
   }
 });
 
-test("a run's screen draws its terminal beside the run's summary, then beside what its agent opened", async ({ page }) => {
+test("a run's screen draws its terminal beside the run's desk, which leads with a fixed summary tab and lists what its agent opened", async ({ page }) => {
   const stack = await start(page, "automations-pair");
   try {
     const project = fs.realpathSync.native(path.join(stack.fixture.root, "fixture"));
@@ -254,16 +254,36 @@ test("a run's screen draws its terminal beside the run's summary, then beside wh
     const pane = await terminal.getAttribute("data-automation-run-pane");
     if (!pane) throw new Error("the run's terminal names no pane");
 
-    // Its agent opened nothing yet: the right side is the run's summary, its task first.
-    await expect(page.locator('[data-automation-run-side="summary"]')).toContainText("보고서를 열어 줘");
+    // Its agent opened nothing yet: the run's desk holds its summary alone, first and fixed (no close button), its task shown, and the 결과 heading with its quiet line.
+    const desk = page.locator('[data-automation-run-side="desk"]');
+    const summaryTab = desk.locator('[role="tab"][data-tab-kind="card"]');
+    await expect(summaryTab).toHaveCount(1, { timeout: 30_000 }); // wait-ok: the core placed the run's summary card on its desk as the screen showed the run
+    await expect(desk.locator('[data-card="automation_run"]')).toContainText("보고서를 열어 줘");
+    await expect(desk.locator("[data-automation-run-results-empty]")).toBeVisible();
+    await expect(summaryTab.locator("button")).toHaveCount(0);
 
-    // The agent opens its report: the run's desk takes the right side with it in front, the terminal still on the left.
+    // The agent opens its report: it comes in front as a tab after the summary, which stays first and unclosable; the terminal stays on the left.
     const opened = await stack.fixture.runAs(pane)(["file", "open", report]);
     expect(opened.status, opened.out).toBe(0);
-    const desk = page.locator('[data-automation-run-side="desk"]');
-    await expect(desk).toBeVisible({ timeout: 30_000 }); // wait-ok: the core placed the agent's View on the run's desk, in front
+    const fileTab = desk.locator('[role="tab"][data-tab-kind="file"]');
+    await expect(fileTab).toHaveAttribute("aria-selected", "true", { timeout: 30_000 }); // wait-ok: the core placed the agent's View on the run's desk, in front
     await expect(desk).toContainText("오늘의 보고서", { timeout: 30_000 }); // wait-ok: the document read from the run's checkout
+    await expect(desk.locator('[role="tab"]').first()).toHaveAttribute("data-tab-kind", "card");
+    await expect(summaryTab).toHaveAttribute("aria-selected", "false");
+    await expect(summaryTab.locator("button")).toHaveCount(0);
     await expect(terminal).toBeVisible();
+
+    // The summary lists what the agent opened; the file's tab closed, its row opens it again in front.
+    await summaryTab.click();
+    const row = desk.locator('[data-automation-run-result-kind="file"]');
+    await expect(row).toContainText("report.md");
+    await fileTab.hover();
+    await fileTab.locator("button").click();
+    await expect(fileTab).toHaveCount(0);
+    await expect(row).toHaveCount(1);
+    await row.locator("[data-automation-run-result-open]").click();
+    await expect(fileTab).toHaveAttribute("aria-selected", "true", { timeout: 30_000 }); // wait-ok: the core opened the closed View again from what it kept
+    await expect(desk).toContainText("오늘의 보고서");
 
     // Its tab stays out of the project's tab row and the sidebar's tree (B12), and leaving the run gives the focus back to the pane the operator was on.
     type Rest = { focused?: { pane_id?: string }; workspace_view?: { agent_layout?: { groups?: { tabs: string[] }[] } }; navigator?: { workspaces?: { checkouts: { tabs: { id?: string; panes: { id: string }[] }[] }[] }[] } };

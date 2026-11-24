@@ -2231,6 +2231,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     automationRunStop(id: string, run: number) {
       dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
     },
+    /** A press on a result row of the run's summary: the core brings that View in front on the run's desk, opening it again from what it kept when its tab was closed (operator choice 2026-11-24). */
+    automationRunResultOpen(id: string, run: number, key: string) {
+      dispatch({ schema_version: 2, kind: "automation_run_result_open", payload: { id, run, key } });
+    },
     /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
     automationRunViewing(id: string, run: number, on: boolean, restore: string | null = null) {
       dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on, ...(restore ? { restore } : {}) } });

@@ -4,7 +4,7 @@
 // running, one paused and one whose last run failed; `empty` has none;
 // `unreadable` is the table under the line for a book set aside; `detail` is
 // one automation's facts and runs; `form` makes a new one, its schedule read
-// back by a stand-in core; `run` is a finished run whose terminal is closed, its summary with the agent's last answer;
+// back by a stand-in core; `run` is a finished run whose terminal is closed, its summary with the agent's last answer and the results its agent opened (shown, not pressable: the run has no tab);
 // `loading` is the section not yet sent. No daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -40,7 +40,7 @@ function automations(project: string, now: number): Automation[] {
       schedule: { kind: "weekdays", time: "09:00" }, reads_as: { kind: "weekdays", time: "09:00" }, next_run_at_unix_ms: now + 15 * HOUR,
       agent: { kind: "claude", model: "opus", effort: "high" }, folder: { path: `${ROOT}/아침-이슈-정리-a1`, default: true, worktree: false }, running: false, unseen: 1, recent_spend: { tokens: 16_440, micro_usd: 510_000, unpriced: true, runs: 2 },
       records: [
-        { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, spend: { tokens: 12_340, micro_usd: 420_000, unpriced: false }, answer: "새 이슈 3건에 라벨을 붙였고, 먼저 올라온 이슈와 겹치는 1건은 닫았어요. 사람이 볼 건 없어요." },
+        { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, spend: { tokens: 12_340, micro_usd: 420_000, unpriced: false }, answer: "새 이슈 3건에 라벨을 붙였고, 먼저 올라온 이슈와 겹치는 1건은 닫았어요. 사람이 볼 건 없어요.", results: [{ key: "0a1b2c3d4e5f6071", kind: "file", label: "triage-report.md" }, { key: "1b2c3d4e5f607182", kind: "diff", label: "labels.diff" }, { key: "2c3d4e5f60718293", kind: "browser", label: "Issues - with-hide/hide" }] },
         { kind: "run", number: 3, trigger: "manual", started_at_unix_ms: now - 30 * HOUR, ended_at_unix_ms: now - 30 * HOUR + 8 * 60_000, state: "stopped", reason: "stopped_by_person", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true, spend: { tokens: 4_100, micro_usd: 90_000, unpriced: true } },
         { kind: "skipped", at_unix_ms: now - 33 * HOUR, last_unix_ms: now - 29 * HOUR, count: 5, reason: { kind: "usage_limit", agent: "claude" } },
         { kind: "missed", first_unix_ms: now - 81 * HOUR, last_unix_ms: now - 57 * HOUR, count: 2, reason: "core_off" },

@@ -45,6 +45,7 @@ export function cardTitle(s: ShellState, t: Translate, item: DetailItem | null, 
     const name = row?.attempt?.branch?.name ?? item.row;
     return item.path ? t("detail.branchFile", { name, path: item.path }) : t("detail.branch", { name });
   }
+  if (item.kind === "automation_run") return t("automationScreen.run.summaryTab");
   if (item.kind === "worktrees" || item.kind === "cost") {
     const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.label ?? "";
     return t(item.kind === "worktrees" ? "projectTool.worktrees.title" : "projectTool.cost.title", { project });
