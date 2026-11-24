@@ -804,6 +804,7 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
         // An agent forgotten while it runs keeps its run, and that run's
         // end is like any other's: with its marker gone nothing starts it
         // again, and what it started to outlive it goes on.
+        let started = runs().len();
         let (last_program, last) = *runs().last().unwrap();
         let last = pinned(last);
         std::fs::remove_file(&marker).unwrap();
@@ -815,8 +816,9 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
             assert!(Instant::now() < deadline, "the run's program did not end");
             std::thread::sleep(Duration::from_millis(100)); // wait-ok: the killed run's program is gone
         }
-        #[allow(clippy::disallowed_methods)] // past the manager's handling of the exit
-        std::thread::sleep(Duration::from_secs(2)); // wait-ok: the manager handled the run's exit, which neither manager shows as a state
+        #[allow(clippy::disallowed_methods)] // past either manager's ten-second restart
+        std::thread::sleep(Duration::from_secs(15)); // wait-ok: the manager's restart hold after the exit has passed, which neither manager shows as a state
+        assert_eq!(runs().len(), started, "started again with its marker gone");
         assert!(runs_still(last), "ended with a forgotten agent's run");
     }));
     let removal = agents.remove(&label, home, &stop);

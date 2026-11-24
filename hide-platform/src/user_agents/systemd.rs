@@ -2,10 +2,12 @@
 //! in `~/.config/systemd/user`, wanted by `default.target`, so the account's
 //! user manager starts it when it starts: at the account's first login, or
 //! at boot once the account lingers ([`Systemd::linger`]). It is restarted
-//! ten seconds after any exit while its marker file exists
-//! (`ConditionPathExists=`, checked again at each restart), and an exit with
-//! the marker gone leaves it stopped. `systemctl --user` and `loginctl` are
-//! the commands that change it.
+//! ten seconds after any exit while its marker file exists, and an exit with
+//! the marker gone leaves it stopped: systemd reads a unit's conditions
+//! (`ConditionPathExists=`) when it starts the unit and not when it restarts
+//! it, so the unit asks for the marker again before each run
+//! (`ExecCondition=`). `systemctl --user` and `loginctl` are the commands
+//! that change it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -375,7 +377,8 @@ fn login_name() -> String {
 }
 
 /// `agent`'s unit: started with the account's manager, restarted ten
-/// seconds after any exit while `marker` exists, and stopped within
+/// seconds after any exit while `marker` exists (`ExecCondition=`, since a
+/// restart reads no `ConditionPathExists=`), and stopped within
 /// [`STOP_WITHIN_SECS`]. A stop, and the end of its program, ends that
 /// program alone (`KillMode=process`): what it started to outlive it
 /// ([`crate::process::start_resident`]) stays in the unit's control group,
@@ -392,6 +395,11 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
         .map(|(key, value)| format!("Environment={}\n", quote(&format!("{key}={value}"))))
         .collect();
     let log = escape_path(&agent.log.to_string_lossy());
+    let marker_exists = format!(
+        "/bin/sh -c {} sh {}",
+        quote("test -e \"$1\""),
+        quote(&marker.to_string_lossy())
+    );
     format!(
         "[Unit]\n\
          Description={label}\n\
@@ -399,6 +407,7 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
          StartLimitIntervalSec=0\n\
          \n\
          [Service]\n\
+         ExecCondition={marker_exists}\n\
          ExecStart={command}\n\
          {environment}\
          KillMode=process\n\
@@ -491,6 +500,12 @@ mod tests {
         );
         assert!(
             unit.contains("Environment=\"HIDE_KEEP_ALIVE=1\"\n"),
+            "{unit}"
+        );
+        assert!(
+            unit.contains(
+                "ExecCondition=/bin/sh -c \"test -e \\\"$$1\\\"\" sh \"/home/example/a b/state/keep-alive\"\n"
+            ),
             "{unit}"
         );
         assert!(unit.contains("Restart=always\n"), "{unit}");
