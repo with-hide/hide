@@ -34,6 +34,12 @@ const STAGED_KEEP: usize = 512;
 /// file goes, and nothing committed within the grace window is evicted: the
 /// core may still be reading the file a just-pasted token names.
 const MAX_STAGED_BYTES: u64 = 256 * 1024 * 1024;
+/// Desk's own folder keeps this many of the newest files its messages sent,
+/// and no more bytes than this; past either the oldest go first, and a
+/// message that names one gone is refused when sent again
+/// (`hide-core/src/runtime/desk/worker.rs`).
+const DESK_KEEP: usize = 64;
+const DESK_KEEP_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Stages one connection may have open at once; past it the oldest open stage
 /// is dropped, so an abandoned upload cannot hold file descriptors forever.
@@ -175,8 +181,43 @@ fn make_room(
     Ok(())
 }
 
+/// Leaves at most `count` files and `bytes` in `dir`, removing the oldest
+/// first; `fresh` (the files just put there) are never removed.
+fn keep_newest(dir: &Path, fresh: &[PathBuf], count: usize, bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut left = files.len();
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    for (_, size, path) in files {
+        if left <= count && total <= bytes {
+            break;
+        }
+        if fresh.contains(&path) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            left -= 1;
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
 pub struct Attachments {
     dir: PathBuf,
+    /// Desk's files, kept across runs (`hide_kit::layout::desk_attachments`).
+    desk_dir: PathBuf,
     clipboard_root: PathBuf,
     /// The account's state folder, where a View comment's screenshot is
     /// staged (`hide_host::feedback`).
@@ -190,7 +231,8 @@ impl Attachments {
         // The core reads a clipboard image from its own fixed path, so hided
         // stages it exactly there (`hide-core/src/terminal_attachments.rs`).
         let clipboard_root = state_dir.join(hide_node_link::attachments::CLIPBOARD_FOLDER);
-        for folder in [&dir, &clipboard_root] {
+        let desk_dir = hide_kit::layout::desk_attachments(state_dir);
+        for folder in [&dir, &clipboard_root, &desk_dir] {
             // The staged bytes are the operator's own files and screenshots;
             // the directories stay private like the state file itself.
             if let Err(error) = hide_platform::fs::private::create_dir_all(folder) {
@@ -228,6 +270,7 @@ impl Attachments {
         }
         Self {
             dir,
+            desk_dir,
             clipboard_root,
             state_dir: state_dir.to_owned(),
             state: Mutex::new(State::default()),
@@ -456,31 +499,71 @@ impl Attachments {
     }
 
     /// The staged files of a message to Desk's agent (PRD desk-2-ui B41), in
-    /// the order the client names them, with a batch's caps: each file's
-    /// name as the operator's file was called, its bytes and its staged path.
+    /// the order the client names them, with a batch's caps, moved into
+    /// Desk's own folder: the stored message names them after a restart and
+    /// past the staging folder's eviction. Each answers its name as the
+    /// operator's file was called, its bytes and its path there. Blocks on
+    /// the disk.
     pub fn commit_named(&self, stages: &[String]) -> Result<Vec<CommittedFile>, &'static str> {
         let files = self.commit_files(stages, MAX_FILES, None)?;
-        Ok(stages
-            .iter()
-            .zip(files)
-            .map(|(stage, (path, bytes))| {
-                let staged = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                // `begin` names a stage's file `<stage>-<name>`.
-                let name = staged
-                    .strip_prefix(stage.as_str())
-                    .and_then(|rest| rest.strip_prefix('-'))
-                    .unwrap_or(&staged)
-                    .to_owned();
-                CommittedFile {
-                    name,
-                    bytes,
-                    path: path.display().to_string(),
+        // The staging folder lets go of them: they are Desk's now.
+        {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (moved, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut state.staged)
+                .into_iter()
+                .partition(|entry| stages.contains(&entry.request_id));
+            state.staged = kept;
+            let freed: u64 = moved.iter().map(|entry| entry.bytes).sum();
+            state.staged_bytes = state.staged_bytes.saturating_sub(freed);
+        }
+        let mut committed: Vec<CommittedFile> = Vec::with_capacity(files.len());
+        for (stage, (path, bytes)) in stages.iter().zip(&files) {
+            let staged = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // A prompt quotes each path in `"`, so the kept name has none
+            // (`hide-core/src/runtime/desk.rs`); the bubble keeps the file's name.
+            let kept = self.desk_dir.join(staged.replace('"', "'"));
+            if let Err(error) = std::fs::rename(path, &kept) {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "hided",
+                        "kind": "attachment.desk_keep_failed",
+                        "request_id": stage,
+                        "message": error.to_string(),
+                    })
+                );
+                for (path, _) in &files {
+                    let _ = std::fs::remove_file(path);
                 }
-            })
-            .collect())
+                for file in &committed {
+                    let _ = std::fs::remove_file(&file.path);
+                }
+                return Err("stage_failed");
+            }
+            // `begin` names a stage's file `<stage>-<name>`.
+            let name = staged
+                .strip_prefix(stage.as_str())
+                .and_then(|rest| rest.strip_prefix('-'))
+                .unwrap_or(&staged)
+                .to_owned();
+            committed.push(CommittedFile {
+                name,
+                bytes: *bytes,
+                path: kept.display().to_string(),
+            });
+        }
+        let fresh: Vec<PathBuf> = committed
+            .iter()
+            .map(|file| PathBuf::from(&file.path))
+            .collect();
+        keep_newest(&self.desk_dir, &fresh, DESK_KEEP, DESK_KEEP_BYTES);
+        Ok(committed)
     }
 
     /// The staged paths of a phone's reply, in the order it names them, with
@@ -706,10 +789,10 @@ mod tests {
     /// layout names for a window's attachments, with the operator's own
     /// file names and sizes beside their staged paths.
     #[test]
-    fn a_desk_message_s_files_are_committed_with_their_names_in_the_layout_s_folder() {
+    fn a_desk_message_s_files_are_moved_to_desk_s_own_folder_with_their_names() {
         let (dir, service) = attachments();
         let id = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
-        for (index, (name, bytes)) in [("화면 a.png", &[1u8, 2, 3][..]), ("log-1.txt", &[9u8][..])]
+        for (index, (name, bytes)) in [("화면 a.png", &[1u8, 2, 3][..]), ("log\"1.txt", &[9u8][..])]
             .into_iter()
             .enumerate()
         {
@@ -727,9 +810,11 @@ mod tests {
                 .iter()
                 .map(|file| (file.name.as_str(), file.bytes))
                 .collect::<Vec<_>>(),
-            [("화면 a.png", 3), ("log-1.txt", 1)]
+            [("화면 a.png", 3), ("log\"1.txt", 1)]
         );
-        let folder = hide_kit::layout::screen_attachments(dir.path());
+        // The bubble keeps the file's name; the path a prompt quotes has no `"`.
+        assert!(files[1].path.ends_with("-1-log'1.txt"), "{}", files[1].path);
+        let folder = hide_kit::layout::desk_attachments(dir.path());
         for file in &files {
             assert_eq!(
                 std::path::Path::new(&file.path).parent(),
@@ -737,11 +822,54 @@ mod tests {
             );
         }
         assert_eq!(std::fs::read(&files[0].path).unwrap(), [1, 2, 3]);
+        assert_eq!(
+            std::fs::read_dir(hide_kit::layout::screen_attachments(dir.path()))
+                .unwrap()
+                .count(),
+            0,
+            "the staging folder lets go of them"
+        );
         // A commit takes open stages only: the same files cannot be named twice.
         assert_eq!(
             service.commit_named(&[format!("{id}-0")]),
             Err("unknown_stage")
         );
+        // A new run empties the staging folder, not Desk's.
+        drop(service);
+        let _ = Attachments::new(dir.path());
+        assert_eq!(std::fs::read(&files[1].path).unwrap(), [9]);
+    }
+
+    #[test]
+    fn desk_s_folder_keeps_its_newest_files_and_never_the_ones_just_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("kept");
+        std::fs::create_dir(&folder).unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(600);
+        for index in 0..4 {
+            let path = folder.join(format!("f{index}"));
+            std::fs::write(&path, [0u8; 10]).unwrap();
+            let at = old + Duration::from_secs(index * 60);
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        }
+        // The oldest file is the one just sent; past three files the next oldest goes.
+        let fresh = folder.join("f0");
+        keep_newest(&folder, std::slice::from_ref(&fresh), 3, u64::MAX);
+        let mut left: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["f0", "f2", "f3"]);
+        // Past the bytes the oldest go too.
+        keep_newest(&folder, &[], 3, 10);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+        assert!(folder.join("f3").exists());
     }
 
     #[test]

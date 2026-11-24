@@ -473,19 +473,19 @@ impl Runtime {
         if (text.is_empty() && files.is_empty()) || text.len() > MAX_MESSAGE_BYTES {
             return refused("message_size");
         }
-        // The paths go before the words as a dragged file's do onto a
-        // terminal: each quoted, one space apart (`terminal_attachments`).
+        // The paths go before the words, each in double quotes, one space
+        // apart: a prompt, not a shell line, so a path reads as the system
+        // spells it. hided names each file, so none holds a quote.
         let sent = if files.is_empty() {
             text.to_owned()
+        } else if files.iter().any(|file| file.path.contains('"')) {
+            return refused("attachments");
         } else {
-            let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
-            match crate::terminal_attachments::paste_bytes(&paths, false, false)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-            {
-                Some(quoted) => format!("{quoted}{text}"),
-                None => return refused("attachments"),
-            }
+            let quoted: String = files
+                .iter()
+                .map(|file| format!("\"{}\" ", file.path))
+                .collect();
+            format!("{quoted}{text}")
         };
         if payload.mentions.len() > MAX_MENTIONS
             || payload.mentions.iter().any(|mention| {
@@ -519,6 +519,7 @@ impl Runtime {
         mentions: Vec<DeskMention>,
         attachments: Vec<DeskAttachment>,
     ) {
+        let files = attachments.iter().map(|file| file.path.clone()).collect();
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
             .flatten();
@@ -562,6 +563,7 @@ impl Runtime {
                 DeskLocation::Worktree => hide_desk::Placement::Worktree,
                 DeskLocation::Checkout => hide_desk::Placement::Checkout,
             },
+            files,
         }));
         self.desk.host.state = Some(if self.desk.host.open {
             DeskHostState::Thinking
@@ -1117,6 +1119,18 @@ impl Runtime {
                     }
                 }
                 return false;
+            }
+            Report::AttachmentsGone { tag } => {
+                // No agent received the message: it goes back to the
+                // operator's input, as a sign-in's does, with a line that
+                // says its files are gone.
+                let Some(turn) = self.desk.turn.as_ref().filter(|turn| turn.tag == tag) else {
+                    return false;
+                };
+                let (message, agent) = (turn.message, turn.agent);
+                self.desk.stored.conversation.remove(message);
+                self.push_notice(DeskNotice::AttachmentsGone, Some(agent), None);
+                self.save_desk();
             }
             Report::TurnEnded { tag, outcome } => {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
@@ -2302,21 +2316,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
-        let shot = root.path().join("attachments").join("a b.png");
-        let log = root.path().join("attachments").join("install.log");
-        let quoted = |path: &std::path::Path| {
-            let mut out = String::from("\"");
-            for c in path.display().to_string().chars() {
-                if "\\\"$`".contains(c) {
-                    out.push('\\');
-                }
-                out.push(c);
-            }
-            out.push('"');
-            out
-        };
+        // A prompt, not a shell line: a path reads as the system spells it, `$` and all.
+        let shot = root.path().join("desk-attachments").join("a $b.png");
+        let log = root.path().join("desk-attachments").join("install.log");
+        let quoted = |path: &std::path::Path| format!("\"{}\"", path.display());
         let files = json!([
-            {"name": "a b.png", "bytes": 2048, "path": shot.display().to_string()},
+            {"name": "a $b.png", "bytes": 2048, "path": shot.display().to_string()},
             {"name": "install.log", "bytes": 84, "path": log.display().to_string()},
         ]);
         assert!(event(
@@ -2328,6 +2333,10 @@ mod tests {
         assert_eq!(
             send.text,
             format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
+        );
+        assert_eq!(
+            send.files,
+            [shot.display().to_string(), log.display().to_string()]
         );
         let bubble = items(&runtime)
             .into_iter()
@@ -2348,7 +2357,7 @@ mod tests {
                 .iter()
                 .map(|file| (file.name.as_str(), file.bytes))
                 .collect::<Vec<_>>(),
-            [("a b.png", 2048), ("install.log", 84)]
+            [("a $b.png", 2048), ("install.log", 84)]
         );
 
         runtime.desk_report(Report::TurnEnded {
@@ -2364,6 +2373,41 @@ mod tests {
             sent(&received).text,
             format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
         );
+    }
+
+    #[test]
+    fn a_message_whose_file_is_gone_goes_back_to_the_input_with_a_line() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let gone = root.path().join("desk-attachments").join("shot.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "look", "files": [{"name": "shot.png", "bytes": 3, "path": gone.display().to_string()}]})
+        ));
+        let send = sent(&received);
+        // The worker finds the file gone and asks no agent.
+        runtime.desk_report(Report::AttachmentsGone { tag: send.tag });
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        let shown = items(&runtime);
+        assert!(
+            !shown
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. })),
+            "the message went back to the input"
+        );
+        assert!(shown.iter().any(|item| matches!(
+            item,
+            DeskItem::Notice {
+                notice: DeskNotice::AttachmentsGone,
+                ..
+            }
+        )));
+        assert!(runtime.desk.turn.is_none());
     }
 
     /// Files alone are a message; nothing at all is not.

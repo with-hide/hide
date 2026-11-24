@@ -77,6 +77,9 @@ pub(super) struct Send {
     pub effort: Option<String>,
     /// Where Settings › Labs › Desk puts each task's work (B19).
     pub placement: hide_desk::Placement,
+    /// The files `text` names (PRD desk-2-ui B41), each looked for before
+    /// the agent is asked.
+    pub files: Vec<String>,
 }
 
 /// What the worker tells the runtime.
@@ -109,6 +112,11 @@ pub(super) enum Report {
     TurnEnded {
         tag: u64,
         outcome: TurnOutcome,
+    },
+    /// A file the message names is gone (Desk's folder dropped it past its
+    /// cap), so the agent was not asked; the turn ends next.
+    AttachmentsGone {
+        tag: u64,
     },
     /// A request Hide can read, for the runtime to answer from the table
     /// or put on a card.
@@ -397,6 +405,18 @@ impl Worker {
     }
 
     fn send(&mut self, send: Send) {
+        if send
+            .files
+            .iter()
+            .any(|path| !std::path::Path::new(path).is_file())
+        {
+            self.report(Report::AttachmentsGone { tag: send.tag });
+            self.report(Report::TurnEnded {
+                tag: send.tag,
+                outcome: TurnOutcome::Cancelled,
+            });
+            return;
+        }
         if self
             .running
             .as_ref()

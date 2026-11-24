@@ -1151,6 +1151,7 @@ pub const UNBOUND: &[&str] = &[
     hide_kit::layout::AUTOMATIONS_STORE,
     "pane-capabilities",
     hide_kit::layout::SCREEN_ATTACHMENTS,
+    hide_kit::layout::DESK_ATTACHMENTS,
     "TerminalClipboard",
     // Device generator locks before they moved to each device's node.
     "label-generators",

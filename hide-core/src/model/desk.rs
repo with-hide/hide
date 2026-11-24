@@ -740,6 +740,9 @@ pub enum DeskNotice {
     /// The turn failed; the detail is the agent's own one-line reason, when
     /// it gave one.
     TurnFailed,
+    /// A file the message named was gone, so the agent was not asked and the
+    /// message went back to the operator's input (PRD desk-2-ui B41).
+    AttachmentsGone,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
