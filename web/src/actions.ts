@@ -4028,6 +4028,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
      * project Desk named last, comes first in the answer.
      */
+    /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
+    askPane(deviceId: string, paneId: string) {
+      dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
+    },
+
+    /**
+     * Answers the ask a `pane_ask` frame showed with one of its choice ids, as the phone does: the daemon types the
+     * keys the agent's screen takes for it. Returns the request id the `pane_choice_result` frame names, or null when
+     * nothing could be sent.
+     */
+    answerPane(deviceId: string, paneId: string, ask: { turn: string; kind: "question" | "plan_approval" | "permission" }, choice: string): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "pane_choice", payload: { request_id: requestId, device_id: deviceId, pane_id: paneId, turn: ask.turn, kind: ask.kind, choice } });
+      return sent === false ? null : requestId;
+    },
+
     requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
       dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },

@@ -11,6 +11,7 @@ import type { AgentRow, PaneRow, SleepingSession } from "../../snapshot";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Hint } from "../ui/tooltip";
+import { AskCardView } from "../../mobile/AskCard";
 import { JobLead, OutputsChip } from "./desk-job-card";
 
 /**
@@ -137,27 +138,25 @@ export function SessionHead({ paneId, job, row, pane, machine, disconnected, sle
   );
 }
 
-/** What a waiting session asks, as the card names it (B14, B34). */
-export type SessionQuestion = { kind: "question" | "plan_approval" | "decision" | "approval"; text: string; choices: string[]; notes: (string | undefined)[] };
+/** What a waiting session asks, as its sidebar row or its card names it (B14, B34). */
+export type SessionQuestion = { kind: "question" | "plan_approval" | "decision" | "approval"; text: string };
 
 /** The question a session waits on (B14): the agent's own ask from its sidebar row, else the card's line. */
 export function sessionQuestion(job: DeskJob, row: AgentRow | null): SessionQuestion | null {
   if (job.state !== "asking") return null;
   const turn = row?.user_turn;
-  if (turn?.content) return { kind: turn.kind, text: turn.content.text, choices: turn.content.choices, notes: turn.content.notes ?? [] };
+  if (turn?.content) return { kind: turn.kind, text: turn.content.text };
   const kind = job.ask === "approval" ? "approval" : job.ask === "decision" ? "decision" : job.ask === "plan_review" ? "plan_approval" : "question";
-  return job.question ? { kind, text: job.question, choices: [], notes: [] } : null;
+  return job.question ? { kind, text: job.question } : null;
 }
 
 const QUESTION_WORD = { question: "desk.ask.question", plan_approval: "desk.ask.plan_review", decision: "desk.ask.decision", approval: "desk.ask.approval" } as const;
 
 /**
- * The question card at the conversation's end (PRD desk-2-ui D-11, B14,
- * B34): on the warning ground, the kind of ask, what it asks and the
- * choices the agent offered, as the terminal lists them. `직접 쓰기` gives
- * the keyboard to the input box below; the choices are answered in the
- * session's own box or terminal (Desk has no answer path of its own, PRD
- * Risks).
+ * The question card while what the agent asks on its screen has not been
+ * read (PRD desk-2-ui B14): the kind of ask and what it asks, from its
+ * sidebar row or its card, and `직접 쓰기`, which gives the keyboard to the
+ * input box below.
  */
 export function SessionQuestionCard({ question, onWrite }: { question: SessionQuestion; onWrite: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -167,20 +166,32 @@ export function SessionQuestionCard({ question, onWrite }: { question: SessionQu
         <span className="shrink-0 text-caption text-warning">{t(QUESTION_WORD[question.kind])}</span>
         <span className="min-w-0 whitespace-pre-wrap break-keep font-semibold [overflow-wrap:anywhere]">{question.text}</span>
       </p>
-      {question.choices.length ? (
-        <ol className="flex min-w-0 flex-col gap-xs" data-desk-question-choices={question.choices.length}>
-          {question.choices.map((choice, index) => (
-            <li key={index} className="flex min-w-0 flex-col rounded-md bg-background/60 px-sm py-xs text-body text-foreground" data-desk-question-choice={index + 1}>
-              <span className="min-w-0 break-keep [overflow-wrap:anywhere]"><span className="mr-xs tabular-nums text-muted-foreground">{index + 1}.</span>{choice}</span>
-              {question.notes[index] ? <span className="pl-md text-caption text-muted-foreground">{question.notes[index]}</span> : null}
-            </li>
-          ))}
-        </ol>
-      ) : null}
       <div className="flex justify-end">
         <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
       </div>
     </section>
+  );
+}
+
+/**
+ * The question card at the conversation's end (PRD desk-2-ui D-11, B14,
+ * B34): the phone's own ask card (`AskCardView`), its choices answered
+ * through the phone's path, which types the keys the agent's screen takes;
+ * one the computer cannot answer goes to the terminal. `직접 쓰기` under it
+ * gives the keyboard to the input box below, for an answer of the
+ * operator's own words.
+ */
+export function SessionAskCard({ onWrite, ...card }: Parameters<typeof AskCardView>[0] & { onWrite: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="flex min-w-0 flex-col gap-xs" data-desk-ask={card.ask.kind}>
+      <AskCardView {...card} />
+      {card.ask.answerable && card.answer !== "sent" ? (
+        <div className="flex justify-end">
+          <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

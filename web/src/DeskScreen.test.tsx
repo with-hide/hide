@@ -334,4 +334,31 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().deskRoom.session).toBeNull();
     expect(sent("session_thread_close")).toHaveLength(1);
   });
+
+  it("reads what the session beside Desk asks and answers it as the phone does, once (B14)", async () => {
+    const row = { pane_id: "w1:p2", device_id: "local", identity_label: "fixer", agent_kind: "claude", mark: "turn" } as never;
+    const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
+      state: "asking", queue_position: null, now: null, plan: null, question: "Delete the old captures?", summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: "question",
+      mark: "turn", mark_read: false, machine: null, disconnected: false, changed_at_unix_ms: 5, read: true, mission: null, workers: [], agent_id: null };
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } }));
+    await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, answer: 0 })));
+    expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
+    // Until the screen is read, the card says what the card knows, with 직접 쓰기 only.
+    expect(document.body.querySelector("[data-desk-question]")?.textContent).toContain("Delete the old captures?");
+
+    const ask = { kind: "question" as const, turn: "7", since_ms: null, text: "Delete the old captures?", choices: [{ id: "1", label: "Keep" }, { id: "2", label: "Delete" }], answerable: true };
+    await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask, reason: null } }));
+    expect(document.body.querySelectorAll("[data-phone-ask-choice]")).toHaveLength(2);
+    await press('[data-phone-ask-choice="2"]');
+    await press("[data-phone-ask-send]");
+    const [choice] = sent("pane_choice");
+    expect(choice).toMatchObject({ device_id: "local", pane_id: "w1:p2", turn: "7", kind: "question", choice: "2" });
+    // A second press while it is on its way sends nothing more.
+    await press("[data-phone-ask-send]");
+    expect(sent("pane_choice")).toHaveLength(1);
+    await act(async () => useShellStore.setState({ paneChoice: { request_id: String(choice!.request_id), ok: true, reason: null } }));
+    expect(document.body.querySelector("[data-phone-ask-sent]")).not.toBeNull();
+  });
 });

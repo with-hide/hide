@@ -42,10 +42,13 @@ export function DeskChatColumn({ head, children, composer, scrollRef }: { head: 
  * the session panel sets the session width. Both widen leftwards. Nothing at
  * rest; on hover, keyboard focus and while dragging the lane divider's grip.
  * A drag moves a guide and lands once on release (`onLand`, one event); a
- * focused edge moves one step per arrow key, one event per press.
+ * focused edge moves the guide one step per arrow key and lands once on key
+ * up, never per key repeat, since each landing resends Desk's section.
  */
 function DeskEdge({ label, kind, right, width, min, max, onLand, onGuide }: { label: string; kind: "view" | "session"; right: number; width: number; min: number; max: number; onLand: (width: number) => void; onGuide: (right: number | null) => void }) {
   const clamp = (value: number) => Math.round(Math.max(min, Math.min(max, value)));
+  // The width the arrow keys moved to while held, landed on key up.
+  const stepped = useRef<number | null>(null);
   const drag = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -90,8 +93,21 @@ function DeskEdge({ label, kind, right, width, min, max, onLand, onGuide }: { la
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
-        const next = clamp(width + (event.key === "ArrowLeft" ? EDGE_STEP : -EDGE_STEP));
-        if (next !== width) onLand(next);
+        const next = clamp((stepped.current ?? width) + (event.key === "ArrowLeft" ? EDGE_STEP : -EDGE_STEP));
+        stepped.current = next;
+        onGuide(right + next);
+      }}
+      onKeyUp={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        const next = stepped.current;
+        stepped.current = null;
+        onGuide(null);
+        if (next !== null && next !== width) onLand(next);
+      }}
+      onBlur={() => {
+        if (stepped.current === null) return;
+        stepped.current = null;
+        onGuide(null);
       }}
     >
       <DividerGrip className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
@@ -134,7 +150,7 @@ export function DeskRoom({ chat, session = null, panel = null, widths, onDim, on
   /** The widths the core keeps; null until the operator drags one. */
   widths: { view_width: number | null; session_width: number | null };
   onDim: () => void;
-  onWidth: (width: { view_width: number } | { session_width: number }) => void;
+  onWidth: (panel: "view_width" | "session_width", width: number) => void;
 }) {
   const { t } = useInterfaceTranslation();
   const [room, available] = useRoomWidth();
@@ -166,10 +182,10 @@ export function DeskRoom({ chat, session = null, panel = null, widths, onDim, on
           >
             {panel}
           </section>
-          {placed.panelCovers ? null : <DeskEdge kind="view" label={t("desk.room.viewWidth")} right={placed.session} width={placed.view} min={DESK_WIDTHS.viewMin} max={Math.max(DESK_WIDTHS.viewMin, available - placed.session)} onGuide={setGuide} onLand={(width) => onWidth({ view_width: width })} />}
+          {placed.panelCovers ? null : <DeskEdge kind="view" label={t("desk.room.viewWidth")} right={placed.session} width={placed.view} min={DESK_WIDTHS.viewMin} max={Math.max(DESK_WIDTHS.viewMin, available - placed.session)} onGuide={setGuide} onLand={(width) => onWidth("view_width", width)} />}
         </>
       ) : null}
-      {session !== null ? <DeskEdge kind="session" label={t("desk.room.sessionWidth")} right={0} width={placed.session} min={DESK_WIDTHS.sessionMin} max={Math.max(DESK_WIDTHS.sessionMin, available - (panel !== null ? DESK_WIDTHS.viewMin : DESK_WIDTHS.chatMin))} onGuide={setGuide} onLand={(width) => onWidth({ session_width: width })} /> : null}
+      {session !== null ? <DeskEdge kind="session" label={t("desk.room.sessionWidth")} right={0} width={placed.session} min={DESK_WIDTHS.sessionMin} max={Math.max(DESK_WIDTHS.sessionMin, available - (panel !== null ? DESK_WIDTHS.viewMin : DESK_WIDTHS.chatMin))} onGuide={setGuide} onLand={(width) => onWidth("session_width", width)} /> : null}
       {guide !== null ? (
         <div className="pointer-events-none absolute inset-y-0 z-40 flex w-sm justify-center" style={{ right: guide - EDGE_HALF }} data-desk-guide="true">
           <DividerGrip />

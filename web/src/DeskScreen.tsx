@@ -18,7 +18,9 @@ import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { SessionHead, SessionQuestionCard, SessionSleepingFoot, sessionQuestion } from "./components/desk/desk-session";
+import { SessionAskCard, SessionHead, SessionQuestionCard, SessionSleepingFoot, sessionQuestion } from "./components/desk/desk-session";
+import { useElapsed } from "./components/elapsed";
+import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
@@ -525,7 +527,6 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
     if (unread) actions.deskJobRead(unread);
   }, [actions, unread]);
   const write = () => useUiStore.getState().setDeskRoom((now) => openSession(now, paneId, { answer: true }));
-  const question = job ? sessionQuestion(job, row) : null;
   return (
     <ThreadPanel
       job={job}
@@ -554,12 +555,63 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
           onClose={() => useUiStore.getState().setDeskRoom(closeSession)}
         />
       ) : null}
-      ask={question ? <SessionQuestionCard question={question} onWrite={write} /> : null}
+      ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
       foot={sleeping ? <SessionSleepingFoot title={row?.identity_label ?? job.title} session={asleep} onWake={(id) => wake(actions, id, job.title, paneId)} /> : null}
       onTerminal={actions.deskTerminal}
       onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output) })}
       onMission={room.mission}
       onSession={room.session}
+    />
+  );
+}
+
+/**
+ * What the session beside Desk asks, read from its screen with `pane_ask`
+ * each time its ask changes (PRD desk-2-ui B14), and answered with
+ * `pane_choice` as the phone answers it: a choice is marked, `답하기` sends
+ * it once, and one that may have landed or that the screen no longer shows
+ * is answered in the terminal from then on. Until the read lands, the card
+ * says what its row or card says, with `직접 쓰기` only.
+ */
+function DeskSessionAsk({ paneId, deviceId, job, row, actions, onWrite }: { paneId: string; deviceId: string | null; job: DeskJob; row: AgentRow | null; actions: Actions; onWrite: () => void }) {
+  const { t } = useInterfaceTranslation();
+  // A new ask moves the row's turn or the card's change time; each is read again.
+  const turn = row?.user_turn ? JSON.stringify(row.user_turn) : null;
+  useEffect(() => {
+    if (deviceId) actions.askPane(deviceId, paneId);
+  }, [actions, deviceId, paneId, turn, job.changed_at_unix_ms]);
+  const read = useShellStore((s) => (s.paneAsk && s.paneAsk.pane_id === paneId && s.paneAsk.device_id === deviceId ? s.paneAsk : null));
+  const [marked, setMarked] = useState<{ ask: string; id: string } | null>(null);
+  const [sent, setSent] = useState<{ ask: string; choice: string; request: string | null } | null>(null);
+  const result = useShellStore((s) => (sent?.request && s.paneChoice?.request_id === sent.request ? s.paneChoice : null));
+  const ask = read?.ask ?? null;
+  const waited = useElapsed(ask?.since_ms ?? null);
+  if (!ask || !deviceId) {
+    const question = sessionQuestion(job, row);
+    return question ? <SessionQuestionCard question={question} onWrite={onWrite} /> : null;
+  }
+  const identity = askIdentity({ device_id: deviceId, pane_id: paneId }, ask);
+  const mine = sent?.ask === identity ? sent : null;
+  const answer = !mine ? null : mine.request === null || (result && !result.ok) ? "failed" : result ? "sent" : "sending";
+  const reason = mine?.request === null ? "offline" : result && !result.ok ? result.reason : null;
+  const inTerminal = answer === "failed" && (reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown");
+  return (
+    <SessionAskCard
+      ask={ask}
+      disabled={false}
+      waited={waited}
+      picked={marked?.ask === identity ? marked.id : (mine?.choice ?? null)}
+      answer={answer}
+      error={answer === "failed" ? noticeText(t, inputFailure(reason)) : null}
+      inTerminal={inTerminal}
+      onPick={(id) => setMarked({ ask: identity, id })}
+      onAnswer={(choice) => {
+        // An answer sent, or one that may have landed, is never sent again from here: a second send would be a second press.
+        if (answer === "sending" || answer === "sent" || inTerminal) return;
+        setSent({ ask: identity, choice, request: actions.answerPane(deviceId, paneId, ask, choice) });
+      }}
+      onTerminal={actions.deskTerminal}
+      onWrite={onWrite}
     />
   );
 }
