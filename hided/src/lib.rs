@@ -1178,6 +1178,7 @@ fn apply_snapshot(
             )
             .collect::<Vec<_>>(),
     );
+    index.set_projects(projects_from_rest(rest, boundary.node().as_str()));
     let root = rest.navigator.root_path.as_ref().cloned();
     let expanded = rest.ui_state.expanded_paths.clone();
     let root = root.and_then(|root| {
@@ -1213,6 +1214,45 @@ fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {
                     checkout_id: checkout.id.clone(),
                     path: std::path::PathBuf::from(&checkout.path),
                 })
+        })
+        .collect()
+}
+
+/// One root per project, this machine's and each device's, for the search
+/// across every project (PRD desk-2-ui B38): the project's primary checkout,
+/// or its first when none is primary; a worktree is the same project's files
+/// again. This machine's checkouts count only while their folder exists.
+fn projects_from_rest(rest: &hide_core::RestSections, node: &str) -> Vec<(String, String)> {
+    rest.navigator
+        .workspaces
+        .iter()
+        .chain(
+            rest.status
+                .remote
+                .iter()
+                .filter_map(|remote| remote.session.as_ref())
+                .flat_map(|session| &session.workspaces),
+        )
+        .filter_map(|workspace| {
+            let local = workspace.device_id == node;
+            if local && workspace.remote_target_id.is_some() {
+                return None;
+            }
+            let checkouts = || {
+                workspace
+                    .checkouts
+                    .iter()
+                    .filter(move |checkout| !local || checkout.exists)
+            };
+            let checkout = checkouts()
+                .find(|checkout| checkout.is_primary)
+                .or_else(|| checkouts().next())?;
+            let path = if local {
+                hide_platform::path::to_wire_lossy(std::path::Path::new(&checkout.path))
+            } else {
+                checkout.path.clone()
+            };
+            Some((workspace.device_id.clone(), path))
         })
         .collect()
 }

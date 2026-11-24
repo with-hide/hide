@@ -94,15 +94,18 @@ export type FileIndexResult = {
   /** Why a device's helper could not walk the root; the next query walks again. */
   unavailable: string | null;
 };
-/** The answer to a `file_index_all` query: every registered checkout's matches, each naming its checkout (PRD desk-2-ui B38). */
+/** The answer to a `file_index_all` query: every project's matches, each naming its project root (PRD desk-2-ui B38). */
 export type FileIndexAllResult = {
   query: string;
-  /** Best first, at most 80, across every checkout. */
+  /** The `prefer` project's first (up to 40 while others match), then the others' by score; at most 80. */
   files: (FileIndexEntry & { device_id: string; root_path: string })[];
-  truncated: boolean;
-  /** A checkout's walk still runs: ask again. */
+  /** Some project matched more than are listed. */
+  more: boolean;
+  /** Some project's index stopped at its 50,000-file cap. */
+  index_truncated: boolean;
+  /** A project's walk has not landed or is refreshing: ask again. */
   indexing: boolean;
-  /** The device checkouts whose walk failed, with the code a `file_index_result` would carry. */
+  /** The projects whose walk failed, with the code a `file_index_result` would carry. */
   unavailable: { device_id: string; root_path: string; code: string }[];
 };
 

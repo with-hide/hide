@@ -1072,6 +1072,8 @@ async fn screen_loop(
     // The operator's comments and Sends from this screen, in the order it
     // made them, off the socket loop; started by the first one.
     let mut feedback: Option<FeedbackQueue> = None;
+    // This screen's search across every project, one at a time, off the socket loop.
+    let file_search = FileSearch::default();
     let mut device_reads: std::collections::VecDeque<DeviceRead> =
         std::collections::VecDeque::new();
     let daemon = json!({"type": "daemon", "payload": state.daemon_info.as_ref()});
@@ -1456,6 +1458,12 @@ async fn screen_loop(
                                     continue;
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
+                            Ok(ClientAction::ScreenAsk(event)) => {
+                                spawn_screen_ask(&state, event, device_frames_tx.clone());
+                            }
+                            Ok(ClientAction::FileIndexAll(event)) => {
+                                file_search.ask(&state, event, device_frames_tx.clone());
                             }
                             Ok(ClientAction::Automation(event)) => {
                                 crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
@@ -2804,6 +2812,12 @@ enum ClientAction {
     /// The operator's comment or Send, which the screen's feedback queue
     /// hands the core in order.
     Feedback(Value),
+    /// The palette's search across every project (`file_index_all`),
+    /// answered off the socket loop by `FileSearch`.
+    FileIndexAll(Value),
+    /// An agent's ask read (`pane_ask`) or answered (`pane_choice`) from a
+    /// window as a phone does (`mobile::screen_ask`), off the socket loop.
+    ScreenAsk(Value),
     Replies(Vec<Message>),
 }
 
@@ -2868,8 +2882,14 @@ fn handle_client_text(
     if event.get("kind").and_then(Value::as_str) == Some("file_index") {
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
+    if matches!(
+        event.get("kind").and_then(Value::as_str),
+        Some("pane_ask" | "pane_choice")
+    ) {
+        return Ok(ClientAction::ScreenAsk(event));
+    }
     if event.get("kind").and_then(Value::as_str) == Some("file_index_all") {
-        return Ok(ClientAction::Replies(handle_file_index_all(state, &event)));
+        return Ok(ClientAction::FileIndexAll(event));
     }
     match event.get("kind").and_then(Value::as_str) {
         Some("home_folder_list" | "importable_projects") => {
@@ -4247,97 +4267,197 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     vec![Message::Text(answer.to_string().into())]
 }
 
-/// A `file_index_all` query (PRD desk-2-ui B38, D-23): the palette's search
-/// across every checkout the catalog carries, this machine's and each
-/// device's, at once. Each checkout is asked of its own index exactly as a
-/// `file_index` asks it, so a first query starts the walks it needs and the
-/// next one has their lists; the matches are merged by the palette's score,
-/// each naming its checkout, and capped at `RESULT_LIMIT`. Nothing here
-/// takes the core's lock: the roots are the boundary's, kept from the
-/// snapshot.
-fn handle_file_index_all(state: &AppState, event: &Value) -> Vec<Message> {
-    let query = payload_str(event, "query");
-    // The roots follow the snapshot while a window is connected; one that
-    // just connected may ask before the first read landed.
-    if state.boundary.root_paths().is_empty() && state.boundary.device_root_list().is_empty() {
-        roots_current(&state.roots);
-    }
-    let answers = state
-        .boundary
-        .root_paths()
-        .iter()
-        .map(|root| local_file_index(state, &hide_platform::path::to_wire_lossy(root), &query))
-        .chain(
-            state
-                .boundary
-                .device_root_list()
-                .iter()
-                .map(|root| device_file_index(state, &root.device_id, &root.path, &query)),
-        )
-        .collect::<Vec<_>>();
-    vec![Message::Text(
-        merged_index_result(&query, &answers, crate::index::RESULT_LIMIT)
-            .to_string()
-            .into(),
-    )]
+/// A window's `pane_ask` or `pane_choice` (PRD desk-2-ui B14), answered on
+/// the blocking pool: each reads the core once and a choice writes keys.
+fn spawn_screen_ask(state: &AppState, event: Value, frames: tokio::sync::mpsc::Sender<String>) {
+    let mobile = Arc::clone(&state.mobile);
+    tokio::spawn(async move {
+        let frame = tokio::task::spawn_blocking(move || {
+            let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+            match event.get("kind").and_then(Value::as_str) {
+                Some("pane_choice") => crate::mobile::screen_ask::choose(&mobile, &payload),
+                _ => crate::mobile::screen_ask::ask_frame(&mobile, &payload),
+            }
+        })
+        .await
+        .unwrap_or_else(|error| {
+            json!({"type": "error", "payload": {}, "message": format!("pane ask failed: {error}")})
+        });
+        let _ = frames.send(frame.to_string()).await;
+    });
 }
 
-/// The `file_index_all_result` frame: every checkout's `file_index_result`
-/// merged, best match first, at most `limit`. A checkout the boundary no
-/// longer holds (its answer is a refusal) is left out; one whose device walk
-/// failed is named in `unavailable` and the others still answer.
-fn merged_index_result(query: &str, answers: &[Value], limit: usize) -> Value {
-    let needle = query.trim().to_lowercase();
-    let mut files = Vec::new();
-    let (mut truncated, mut indexing) = (false, false);
-    let mut unavailable = Vec::new();
-    for answer in answers {
-        if answer["type"] != "file_index_result" {
-            continue;
-        }
-        let payload = &answer["payload"];
-        truncated |= payload["truncated"] == true;
-        indexing |= payload["indexing"] == true;
-        if let Some(code) = payload["unavailable"].as_str() {
-            unavailable.push(json!({
-                "device_id": payload["device_id"],
-                "root_path": payload["root_path"],
-                "code": code,
-            }));
-        }
-        for file in payload["files"].as_array().into_iter().flatten() {
-            let relative = file["relative_path"].as_str().unwrap_or_default();
-            let Some(score) = crate::index::fuzzy_score(&relative.to_lowercase(), &needle) else {
-                continue;
-            };
-            files.push((
-                score,
-                json!({
-                    "device_id": payload["device_id"],
-                    "root_path": payload["root_path"],
-                    "path": file["path"],
-                    "relative_path": relative,
-                }),
-            ));
-        }
+/// One screen's search across every project (`file_index_all`, PRD desk-2-ui
+/// B38, D-23). Ranking every project's list is up to 50,000 paths each, so
+/// it runs on a blocking worker and never on the socket loop; one runs at a
+/// time per screen, and a query typed while it runs replaces the one
+/// waiting, so a fast typist starts at most one more and the answers end on
+/// the newest query.
+#[derive(Clone, Default)]
+struct FileSearch {
+    waiting: Arc<std::sync::Mutex<Option<Value>>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FileSearch {
+    fn waiting(&self) -> std::sync::MutexGuard<'_, Option<Value>> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-    files.sort_by(|left, right| {
-        right.0.cmp(&left.0).then_with(|| {
-            hide_host::list::natural_cmp(
-                left.1["relative_path"].as_str().unwrap_or_default(),
-                right.1["relative_path"].as_str().unwrap_or_default(),
-            )
-        })
+
+    fn ask(&self, state: &AppState, event: Value, frames: tokio::sync::mpsc::Sender<String>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        *self.waiting() = Some(event);
+        if self.running.swap(true, SeqCst) {
+            return;
+        }
+        let (search, state) = (self.clone(), state.clone());
+        tokio::spawn(async move {
+            loop {
+                let Some(event) = search.waiting().take() else {
+                    search.running.store(false, SeqCst);
+                    // A query that arrived between the take and the store
+                    // finds the worker still running and leaves it here.
+                    if search.waiting().is_some() && !search.running.swap(true, SeqCst) {
+                        continue;
+                    }
+                    return;
+                };
+                let state = state.clone();
+                let frame = tokio::task::spawn_blocking(move || file_index_all(&state, &event))
+                    .await
+                    .unwrap_or_else(|error| {
+                        json!({"type": "error", "payload": {}, "message": format!("file search failed: {error}")})
+                    });
+                if frames.send(frame.to_string()).await.is_err() {
+                    search.running.store(false, SeqCst);
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// The `file_index_all_result` frame for one query: each project's root (one
+/// per project, `IndexService::set_projects`) asked of its own index, at most
+/// `SEARCH_WALKS_MAX` walks at once, merged and capped at `RESULT_LIMIT`, and
+/// only the rows kept resolved to the paths a screen opens. `prefer`, the
+/// project the screen shows first, keeps up to half of them.
+fn file_index_all(state: &AppState, event: &Value) -> Value {
+    let query = payload_str(event, "query");
+    let prefer = event.pointer("/payload/prefer").and_then(|prefer| {
+        Some((
+            prefer.get("device_id")?.as_str()?.to_owned(),
+            prefer.get("root_path")?.as_str()?.to_owned(),
+        ))
     });
-    truncated |= files.len() > limit;
-    files.truncate(limit);
+    let node = state.boundary.node().as_str().to_owned();
+    let searched = state.index.search(
+        &query,
+        prefer.as_ref(),
+        crate::index::RESULT_LIMIT,
+        |(device, root)| {
+            if *device == node {
+                local_walk(state, root)
+            } else {
+                device_walk(state, device, root)
+            }
+        },
+    );
+    let files: Vec<Value> = searched
+        .hits
+        .iter()
+        .filter_map(|hit| {
+            let (device, root) = &hit.project;
+            let relative = hide_platform::path::RelPath::parse(&hit.relative_path).ok()?;
+            let path = hide_platform::path::wire_join(root, &relative);
+            // This machine's file is answered only while it is still inside
+            // its checkout; a device's helper confines its own.
+            if *device == node && state.boundary.resolve_target(&path).is_err() {
+                return None;
+            }
+            Some(json!({
+                "device_id": device,
+                "root_path": root,
+                "path": path,
+                "relative_path": hit.relative_path,
+            }))
+        })
+        .collect();
     json!({"type": "file_index_all_result", "payload": {
         "query": query,
-        "files": files.into_iter().map(|(_, file)| file).collect::<Vec<_>>(),
-        "truncated": truncated,
-        "indexing": indexing,
-        "unavailable": unavailable,
+        "files": files,
+        "more": searched.more,
+        "index_truncated": searched.index_truncated,
+        "indexing": searched.indexing,
+        "unavailable": searched.unavailable.iter().map(|((device, root), code)| json!({
+            "device_id": device,
+            "root_path": root,
+            "code": code,
+        })).collect::<Vec<_>>(),
     }})
+}
+
+/// The walk of this machine's checkout `root`, opened on the walk's own
+/// thread; a root the boundary no longer holds fails as `outside_checkout`.
+fn local_walk(state: &AppState, root: &str) -> crate::index::WalkFn {
+    let (boundary, core, root) = (
+        Arc::clone(&state.boundary),
+        Arc::clone(&state.core),
+        root.to_owned(),
+    );
+    Box::new(move || {
+        let (known, opened) = boundary
+            .open_directory(Path::new(&root), &root)
+            .map_err(|refusal| refusal.code().to_owned())?;
+        let node = boundary.node().as_str().to_owned();
+        let others: Vec<PathBuf> = core
+            .registered_paths(&node)?
+            .iter()
+            .filter_map(|path| hide_host::root::native_absolute(path))
+            .collect();
+        Ok(hide_host::index::walk(
+            &cap_std::fs::Dir::from_std_file(opened),
+            &known,
+            Some(boundary.home()),
+            &others,
+        ))
+    })
+}
+
+/// The walk of a device's checkout `root`, by that device's helper; a
+/// failure answers the code the palette words and logs the helper's sentence.
+fn device_walk(state: &AppState, device: &str, root: &str) -> crate::index::WalkFn {
+    let core = Arc::clone(&state.core);
+    let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
+    Box::new(move || {
+        let log = |code: &str, message: String| {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "hided",
+                    "kind": "device.index_unavailable",
+                    "device": walk_device,
+                    "code": code,
+                    "message": message,
+                })
+            );
+            code.to_owned()
+        };
+        let channel = core
+            .node_link(&walk_device)
+            .map_err(|message| log("link.not_connected", message))?;
+        let others = core
+            .registered_paths(&walk_device)
+            .map_err(|message| log("core.unavailable", message))?;
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
+            log(
+                &hide_core::node_access::link_failure_code(&error),
+                error.to_string(),
+            )
+        })
+    })
 }
 
 /// A `file_index` query for a checkout of this machine: the root is checked
@@ -4439,37 +4559,11 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
     if !device_root_known(&state.boundary, &state.roots, device, root) {
         return refused("file_index", root, Refusal::OutsideCheckout);
     }
-    let core = Arc::clone(&state.core);
-    let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
     // A walk that failed answers the code the palette words; the helper's
     // sentence goes to the log.
-    let answer = state.index.query(device, root, query, move || {
-        let log = |code: &str, message: String| {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "device.index_unavailable",
-                    "device": walk_device,
-                    "code": code,
-                    "message": message,
-                })
-            );
-            code.to_owned()
-        };
-        let channel = core
-            .node_link(&walk_device)
-            .map_err(|message| log("link.not_connected", message))?;
-        let others = core
-            .registered_paths(&walk_device)
-            .map_err(|message| log("core.unavailable", message))?;
-        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
-            log(
-                &hide_core::node_access::link_failure_code(&error),
-                error.to_string(),
-            )
-        })
-    });
+    let answer = state
+        .index
+        .query(device, root, query, device_walk(state, device, root));
     index_result(device, root, query, answer, |relative| {
         hide_platform::path::RelPath::parse(relative)
             .ok()

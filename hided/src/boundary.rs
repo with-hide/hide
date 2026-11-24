@@ -456,23 +456,6 @@ impl Boundary {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = roots;
     }
 
-    /// Every checkout root of this machine the catalog carries, as the
-    /// snapshot spells it.
-    pub fn root_paths(&self) -> Vec<PathBuf> {
-        self.roots_for_read()
-            .iter()
-            .map(|root| root.source.path.clone())
-            .collect()
-    }
-
-    /// Every device checkout root the catalog carries.
-    pub fn device_root_list(&self) -> Vec<DeviceRoot> {
-        self.device_roots
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
     /// Whether `root` is a checkout the catalog carries for `device_id`.
     pub fn is_device_root(&self, device_id: &str, root: &str) -> bool {
         self.device_roots

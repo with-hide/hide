@@ -2785,11 +2785,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23): one event per drag, naming
-     * only the width it moved; the core keeps it across a restart.
+     * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23), in whole CSS pixels from 1 to
+     * 8192, which this rounds and clamps to: the core refuses any other. One event per drag, and a
+     * keyboard handle's ←→ commits once, on key up, never per key repeat: each event resends the `desk`
+     * section, conversation included. The core keeps it across a restart.
      */
-    deskLaneWidth(width: { view_width: number } | { session_width: number }) {
-      dispatch({ schema_version: 2, kind: "desk_lane", payload: width });
+    deskLaneWidth(panel: "view_width" | "session_width", width: number) {
+      const whole = Math.min(8192, Math.max(1, Math.round(width)));
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { [panel]: whole } });
     },
 
     /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */
@@ -3928,9 +3931,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
     },
 
-    /** Asks every registered checkout's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38). */
-    requestFileIndexAll(query: string) {
-      dispatch({ schema_version: 2, kind: "file_index_all", payload: { query } });
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
+    requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
+      dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },
 
     /** A palette pick opens in the checkout's preview tab (B12) and closes the palette. */
