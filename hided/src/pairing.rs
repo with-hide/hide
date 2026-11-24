@@ -2617,7 +2617,11 @@ mod tests {
     fn a_login_cut_during_a_switch_is_not_a_login_that_asks() {
         assert_eq!(cut_midway("ssh_not_reached"), "switch_cut");
         assert_eq!(cut_midway("wsl_not_reached"), "switch_cut");
-        for code in ["ssh_core_not_started", "switch_not_connected", "ssh_mac_signed_out"] {
+        for code in [
+            "ssh_core_not_started",
+            "switch_not_connected",
+            "ssh_mac_signed_out",
+        ] {
             assert_eq!(cut_midway(code), code);
         }
         assert!(next_action("switch_cut").contains("Try the switch again"));
