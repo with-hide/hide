@@ -5,8 +5,8 @@
 //! a host connection generation, target and conflict-scope ids, phase, stage,
 //! start time and absolute deadline. Transport success is never topology
 //! truth, and an expired or ambiguous mutation becomes an explicit unknown
-//! that is never resent, until fresh topology confirms it or a device's
-//! later connection settles it; `docs/ARCHITECTURE.md` owns the reasons. The close
+//! that is never resent, until the device's next layout settles it, whatever
+//! that layout shows; `docs/ARCHITECTURE.md` owns the reasons. The close
 //! lifecycle itself lives beside reopen in `editor.rs`.
 
 use super::*;
@@ -281,9 +281,10 @@ enum RemoteSettle {
     FreshSession,
     /// A report that arrived earlier, read when the operation began to wait.
     HeldSession,
-    /// A report of a later connection than the operation was sent on, whose
+    /// A report read once the operation's answer could no longer come (its
+    /// deadline passed, or it was sent on an earlier connection), whose
     /// layout is its result whatever it shows.
-    LaterConnection,
+    AnswerLost,
 }
 
 impl RemoteSettle {
@@ -292,14 +293,14 @@ impl RemoteSettle {
     fn kind(self) -> &'static str {
         match self {
             Self::FreshSession | Self::HeldSession => "remote.control.topology_confirmed",
-            Self::LaterConnection => "remote.control.superseded",
+            Self::AnswerLost => "remote.control.settled_by_layout",
         }
     }
 
     fn verb(self) -> &'static str {
         match self {
             Self::FreshSession | Self::HeldSession => "Confirmed",
-            Self::LaterConnection => "Settled",
+            Self::AnswerLost => "Settled",
         }
     }
 
@@ -307,7 +308,7 @@ impl RemoteSettle {
         match self {
             Self::FreshSession => "fresh topology",
             Self::HeldSession => "the session received before it waited",
-            Self::LaterConnection => "the layout of a later connection",
+            Self::AnswerLost => "the layout read after its answer was lost",
         }
     }
 }
@@ -564,14 +565,16 @@ impl Runtime {
     /// fresh report, shows the effect of. Another device's operation is not
     /// judged by it: its pane being absent here proves nothing there.
     ///
-    /// An operation sent on an earlier connection than the one `session`
-    /// came on is settled by it whatever it shows: its answer can no longer
-    /// arrive (a result of an earlier connection is dropped as stale), so
-    /// the engine's layout in this session is its result, as it is for
-    /// anything drawn ahead of the engine. Nothing is resent, and the tab's
-    /// line moves on; held as `unknown`, it refused every later operation of
-    /// that tab until the core started anew, which a device's core ending
-    /// or being replaced by an update (a new connection) left behind.
+    /// An operation whose answer can no longer come is then settled by this
+    /// layout whatever it shows: one already `unknown` (its deadline passed,
+    /// and this report was read after that, which the deadline asked the
+    /// device for), and one sent on an earlier connection than this report
+    /// came on (a result of an earlier connection is dropped as stale). The
+    /// engine's layout is its result, as it is for anything drawn ahead of
+    /// the engine; nothing is resent, and the tab's line moves on. Held as
+    /// `unknown` instead, it refused every later operation of that tab until
+    /// the core started anew, which a device's core ending or being replaced
+    /// by an update left behind.
     pub(super) fn observe_remote_operations(
         &mut self,
         target_id: &str,
@@ -582,23 +585,6 @@ impl Runtime {
             .get(target_id)
             .copied()
             .unwrap_or(0);
-        let open = |operation: &PendingRemoteOperation| {
-            matches!(
-                operation.phase.as_str(),
-                "transmitting" | "awaiting_topology" | "unknown"
-            )
-        };
-        let superseded = self
-            .remote_operations
-            .iter()
-            .filter(|((target, _), operation)| {
-                target == target_id
-                    && operation.connection_generation != generation
-                    && open(operation)
-            })
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-        let mut changed = self.settle_remote_operations(superseded, RemoteSettle::LaterConnection);
         let completed = self
             .remote_operations
             .iter()
@@ -609,7 +595,22 @@ impl Runtime {
             .filter(|(_, operation)| remote_operation_confirmed_by(operation, session))
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        changed |= self.settle_remote_operations(completed, RemoteSettle::FreshSession);
+        let mut changed = self.settle_remote_operations(completed, RemoteSettle::FreshSession);
+        let lost = self
+            .remote_operations
+            .iter()
+            .filter(|((target, _), operation)| {
+                target == target_id
+                    && (operation.phase == "unknown"
+                        || (operation.connection_generation != generation
+                            && matches!(
+                                operation.phase.as_str(),
+                                "transmitting" | "awaiting_topology"
+                            )))
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        changed |= self.settle_remote_operations(lost, RemoteSettle::AnswerLost);
         changed
     }
 
@@ -671,11 +672,20 @@ impl Runtime {
             }
         }
         let changed = !expired.is_empty();
-        // An unknown operation waits for the device's next session, which an
-        // idle device may never send; the one already held may show the effect.
+        // The session already held may show the effect; otherwise the
+        // device's next session decides, and an idle device may never send
+        // one, so its coordinator is asked to read it again now.
         let mut settled = false;
+        let mut read_again = Vec::new();
         for key in &expired {
-            settled |= self.settle_remote_operation_from_known_session(key);
+            if self.settle_remote_operation_from_known_session(key) {
+                settled = true;
+            } else if !read_again.contains(&key.0) {
+                read_again.push(key.0.clone());
+            }
+        }
+        for target in read_again {
+            self.read_machine_again(&target);
         }
         if changed && !settled {
             self.sync_async_operations();
@@ -707,6 +717,8 @@ impl Runtime {
             format!("Remote operation {operation_id} requires fresh topology"),
         );
         if !self.settle_remote_operation_from_known_session(key) {
+            // The device's next session decides; ask for it now.
+            self.read_machine_again(&key.0);
             self.sync_async_operations();
         }
         true

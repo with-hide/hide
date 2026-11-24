@@ -917,7 +917,7 @@ impl Runtime {
 
     /// Asks the coordinator of `machine`, this one's or a connected
     /// device's, to read its session again and publish it.
-    fn read_machine_again(&mut self, machine: &str) {
+    pub(super) fn read_machine_again(&mut self, machine: &str) {
         if machine == self.node.as_str() {
             self.request_republish();
         } else if let Some(sync) = self

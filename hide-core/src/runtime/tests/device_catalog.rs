@@ -3175,8 +3175,10 @@ fn an_operation_left_unknown_when_a_device_core_ended_is_settled_by_its_next_con
         "the later connection's layout settled the zoom"
     );
     assert_eq!(
-        diagnostic_messages(&runtime, "remote.control.superseded"),
-        ["Settled pane.zoom for remote:mini:pane:t1 on mini from the layout of a later connection"]
+        diagnostic_messages(&runtime, "remote.control.settled_by_layout"),
+        [
+            "Settled pane.zoom for remote:mini:pane:t1 on mini from the layout read after its answer was lost"
+        ]
     );
 
     assert!(
@@ -3190,6 +3192,36 @@ fn an_operation_left_unknown_when_a_device_core_ended_is_settled_by_its_next_con
             "zoom-2".to_owned(),
             "transmitting".to_owned()
         )]
+    );
+}
+
+/// The same on a connection that never dropped: a zoom whose answer is lost
+/// turns unknown at its deadline and refuses the tab's next operation, and
+/// the device's next layout settles it whatever it shows, a zoom never
+/// applied included, so the tab is not held until the core starts anew.
+#[test]
+fn an_unknown_device_operation_is_settled_by_the_next_layout_on_the_same_connection() {
+    let t = tree();
+    let mut runtime = connected_device_runtime();
+    runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
+    let _requests = recording_device(&mut runtime);
+
+    assert!(!zoom_t1(&mut runtime, "zoom-1"));
+    runtime.expire_remote_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
+    assert_eq!(pending_remote(&runtime)[0].2, "unknown");
+    assert!(
+        zoom_t1(&mut runtime, "zoom-2"),
+        "the tab refuses while unknown"
+    );
+
+    runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
+    assert!(
+        runtime.remote_operations.is_empty(),
+        "the next layout settled the zoom"
+    );
+    assert!(
+        !zoom_t1(&mut runtime, "zoom-3"),
+        "the tab takes its next operation"
     );
 }
 
