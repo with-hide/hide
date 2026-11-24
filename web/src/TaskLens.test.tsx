@@ -665,6 +665,20 @@ it("rests a read question with a hollow ! and no 읽음 word, and its ☆ puts i
   expect(sent.map((event) => [event.kind, event.payload.pane_id])).toEqual([["revisit_star", "asked"], ["revisit_done", "kept"]]);
 });
 
+// Operator decision 2026-11-24: the read `!` in 쉬는 중 is dimmed as the 프로젝트 tab dims a read badge; an unread one stays bright.
+it("dims a read question's hollow ! in 쉬는 중 and leaves an unread question's ! bright", async () => {
+  const agents = [
+    row("asking", { mark: "turn", group: "needs_you", demand: "question", status_code: "question", activity: "idle", unread: true } as Partial<AgentRow>),
+    row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
+  ];
+  const { container } = await render(snapshot(agents, [card("asking", "needs_you", "hide-main"), { ...card("asked", "resting", "hide-main"), read: true }]), agents);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
+  const mark = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-mark="turn"]`)!;
+  expect(mark("asked").classList.contains("opacity-(--opacity-read-status)")).toBe(true);
+  expect(mark("asking").getAttribute("data-mark-read")).toBeNull();
+  expect(mark("asking").className).not.toContain("opacity-");
+});
+
 it("draws a middle child's whole pull request list on its child row, its grandchild's included, as its pane and record do", async () => {
   // A -> B -> C: B made #41 and C made #42. The core lays one list on each
   // session (with-hide/hide-private docs/task-identity.md, One list per session); B's is both.

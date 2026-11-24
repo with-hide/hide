@@ -22,7 +22,8 @@ import { Hint } from "./ui/tooltip";
  * (status-marks D-21). A row of unknown state, and a slot with no live agent
  * behind it (`null`: an ended session, a disconnected device's row), keep the
  * slot empty so titles line up (D-04, D-05). Each shape carries its own colour;
- * a caller's class dims a read turn. A surface with no second line passes
+ * a mark drawn `read` (hollow) dims itself to the read-status opacity on every surface, as a caller's
+ * `markTone` class dims a filled read turn (operator decision 2026-11-24). A surface with no second line passes
  * `label`, the mark's words, so its hover and accessible name tell a waiting
  * ring from a working one (B36).
  */
@@ -38,7 +39,7 @@ export function StatusMark({ mark, label, read = false, human = false, automatio
       data-mark-read={read ? "true" : undefined}
       data-mark-human={human && mark !== null ? "true" : undefined}
       data-mark-automation={repeat ? "true" : undefined}
-      className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
+      className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", read && "opacity-(--opacity-read-status)", className)}
       {...rest}
     >
       {human && mark !== null ? (
