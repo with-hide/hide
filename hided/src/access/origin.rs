@@ -64,6 +64,28 @@ fn unread(step: &'static str, pid: u32, error: &std::io::Error) -> &'static str 
     UNAVAILABLE
 }
 
+/// The image of `pid`, a process of this account, from what the kernel
+/// answered for it (`read`): `None` when the kernel refuses it to this
+/// account, and any other failure refuses the walk.
+///
+/// Linux names a process's image only to an account that may trace it, and
+/// a process that changed accounts on its way to this one may not be traced
+/// by it: the process a root sshd keeps for each login, which every command
+/// that arrives over SSH descends from. Such a process is none of this
+/// home's holders, which this account starts from its own files and so
+/// always reads, and the walk goes on to its parent, whose account and
+/// birth it still has to read. A pane's program that takes that right from
+/// itself is walked past the same way, to the holder above it.
+fn image_read(pid: u32, read: std::io::Result<PathBuf>) -> Result<Option<PathBuf>, &'static str> {
+    match read {
+        Ok(image) => canonical(&image)
+            .map(Some)
+            .map_err(|error| unread("image", pid, &error)),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok(None),
+        Err(error) => Err(unread("image", pid, &error)),
+    }
+}
+
 /// The walk's answer for a caller it could not read at all: on Windows,
 /// [`Origin::Hidden`] when the system confirms the caller keeps this
 /// account out of its access list too; anything else is unavailable.
@@ -140,18 +162,7 @@ pub(super) fn in_holder(peer: i32, home: &Path, state: &Path) -> Result<Origin, 
         if !same_account {
             return Ok(Origin::Outside);
         }
-        // Linux names a process's image only to an account that may trace
-        // it, and a process that changed accounts on its way to this one
-        // may not be traced by it: the process a root sshd keeps for each
-        // login, which every command that arrives over SSH descends from.
-        // Such a process is none of this home's holders, which this account
-        // starts from its own files and so always reads, and the walk goes
-        // on to its parent, whose account and birth it still has to read.
-        let image = match process::image_path(pid) {
-            Ok(image) => Some(canonical(&image).map_err(|error| unread("image", pid, &error))?),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
-            Err(error) => return Err(unread("image", pid, &error)),
-        };
+        let image = image_read(pid, process::image_path(pid))?;
         if process::start_time(pid).map_err(|error| unread("start", pid, &error))? != started {
             return Err(moved(pid));
         }
@@ -236,6 +247,36 @@ mod tests {
             std::os::unix::fs::symlink(root.path().join("gone"), &broken).unwrap();
             assert_eq!(super::root(&broken.join("holders")), Err(UNAVAILABLE));
         }
+    }
+
+    // Only an image the kernel refuses this account is walked past; one it
+    // cannot name for any other reason (a removed file, an ended process)
+    // refuses the walk, as an ancestor's unread parent or birth does.
+    #[test]
+    fn only_an_image_the_kernel_refuses_this_account_is_walked_past() {
+        use std::io::{Error, ErrorKind};
+        let own = std::process::id();
+        assert_eq!(
+            image_read(own, Err(Error::from(ErrorKind::PermissionDenied))),
+            Ok(None)
+        );
+        for kind in [
+            ErrorKind::NotFound,
+            ErrorKind::Other,
+            ErrorKind::Unsupported,
+        ] {
+            assert_eq!(image_read(own, Err(Error::from(kind))), Err(UNAVAILABLE));
+        }
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            image_read(own, Ok(root.path().join("removed"))),
+            Err(UNAVAILABLE)
+        );
+        let image = std::env::current_exe().unwrap();
+        assert_eq!(
+            image_read(own, Ok(image.clone())),
+            Ok(Some(canonical(&image).unwrap()))
+        );
     }
 
     #[cfg(unix)]
