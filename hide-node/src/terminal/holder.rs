@@ -1539,6 +1539,17 @@ impl Holders {
         *self.ends.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(ended);
     }
 
+    /// Tells the watch of [`Holders::watch_ends`] that `pane` ended, for a
+    /// close its engine did not ask for: a host's window ending a guest's
+    /// pane in the guest's node (PRD device-connect-iroh D-74). The engine
+    /// owns the pane and closes it, its tab with it when it was the last,
+    /// as it closes a pane whose program exited; a [`Holders::terminate`]
+    /// the engine asked for tells nothing, since the engine removes that
+    /// pane itself.
+    pub fn tell_ended(&self, pane: &str) {
+        self.ends.tell(pane);
+    }
+
     /// Tells `sink` each holder pane's facts from now on, and at once the
     /// last facts of every pane heard from before it.
     pub fn watch_facts(&self, sink: hide_node_link::holders::PaneFactsSink) {

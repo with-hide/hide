@@ -328,14 +328,20 @@ pub fn run(dir: &str) -> ! {
     {
         let owned = Arc::clone(&owned);
         let life = Arc::clone(&life);
+        let told = Arc::clone(&terminals);
         hub.serve(
             &terminals,
+            // The host's window ends a pane the guest's engine owns: the
+            // engine hears it ended, as when its program exits, and closes
+            // it and its tab. A guest not linked now hears it from the
+            // pane's record when it links again (`HolderRecovery::closed`).
             Box::new(move |pane| {
-                if let Err(error) = owned.terminate(pane) {
-                    record(
+                match owned.terminate(pane) {
+                    Ok(()) => told.tell_ended(pane),
+                    Err(error) => record(
                         "guest_node.terminate_failed",
                         json!({"pane": pane, "error": format!("{error:?}")}),
-                    );
+                    ),
                 }
                 life.look();
             }),

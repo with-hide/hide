@@ -2560,6 +2560,7 @@ Pressing a row shows the pane in the center as the window's own page (`Screen` `
 The operator reads it, types into it, and it follows this window's size while this window is the one typing; this computer's tile is ringed.
 Splitting, a new tab, renaming and starting an agent are drawn dimmed in its menu with `<machine>에서 할 수 있어요` under each, whether or not that machine is connected (D-74), and their shortcuts say the same line as a notice in place of acting.
 `닫기…`, ⌘W and the pane-close shortcut ask first (`이 터미널을 닫을까요?`, with what ends and that the machine is told); confirming sends `guest_pane_close`, from this computer's window or from the screen another computer shows of it, since either already types into the pane (D-74), and the page waits for the answer.
+The machine that started the work loses its tab of it with the pane: at once while it is connected, else when it connects again or its Hide starts anew, and never with a new shell in its place.
 Once it ended, the page shows what stands in its place: the next tab of that work, else the one before it, else the project row it stood under, else this computer's Workspace, never the Overview (`afterGuestClose`).
 A close that did not go keeps the page and says why in one corner line: `닫지 못했어요. 이 터미널은 이제 여기 없어요`, `닫지 못했어요. 연결이 끊겼어요. 다시 해 보세요`, `닫지 못했어요. 이 컴퓨터의 Hide는 여기서 닫을 수 없어요` (an older build of that computer), or `이 터미널을 닫지 못했어요. 다시 해 보세요`.
 A pane that left the list while its page is open says `이 터미널은 끝났어요`.

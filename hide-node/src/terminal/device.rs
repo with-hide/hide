@@ -639,6 +639,15 @@ impl NodeTerminals {
         }
     }
 
+    /// Tells this node's core that `pane` ended by a close the core did not
+    /// ask for (`Holders::tell_ended`); nothing before the node started its
+    /// holders.
+    pub fn tell_ended(&self, pane: &str) {
+        if let Some(holders) = lock(&self.local).as_ref() {
+            holders.tell_ended(pane);
+        }
+    }
+
     /// This node's panes that may still run, as its holders' records say;
     /// none before it started its holders.
     pub fn live_panes(&self) -> Result<Vec<String>, String> {
