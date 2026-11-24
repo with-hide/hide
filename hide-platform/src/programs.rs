@@ -680,9 +680,13 @@ fn interpreter(path: &Path) -> Option<Interpreter> {
 }
 
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.
-fn usual_install_folders(home: &Path) -> [PathBuf; 9] {
+fn usual_install_folders(home: &Path) -> [PathBuf; 10] {
     [
         home.join(".local/bin"),
+        // Claude Code's former local install: the program in its own folder
+        // and only a shell alias naming it, which no search reads. After
+        // `~/.local/bin`, where its current installer puts the program.
+        home.join(".claude/local"),
         // agy's Windows installer: `%LOCALAPPDATA%\agy\bin`, whose default is
         // under the profile folder.
         home.join("AppData").join("Local").join("agy").join("bin"),
