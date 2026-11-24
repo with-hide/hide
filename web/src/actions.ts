@@ -1,4 +1,5 @@
 import { projectCheckout } from "./projects";
+import type { PhoneAsk } from "./mobile/protocol";
 import { deviceConnected, readsHere } from "./devices";
 import { samePull } from "./codeHost";
 import { useGroupFeedback } from "./groupTabs";
@@ -4034,13 +4035,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * Answers the ask a `pane_ask` frame showed with one of its choice ids, as the phone does: the daemon types the
-     * keys the agent's screen takes for it. Returns the request id the `pane_choice_result` frame names, or null when
+     * Answers the ask a `pane_ask` frame showed with one of its choice ids, as the phone does: `ask` goes back as
+     * the frame gave it, untouched, and the daemon types the keys the agent's screen takes for the choice only
+     * while the agent asks exactly that. Returns the request id the `pane_choice_result` frame names, or null when
      * nothing could be sent.
      */
-    answerPane(deviceId: string, paneId: string, ask: { turn: string; kind: "question" | "plan_approval" | "permission" }, choice: string): string | null {
+    answerPane(deviceId: string, paneId: string, ask: PhoneAsk, choice: string): string | null {
       const requestId = crypto.randomUUID();
-      const sent = dispatch({ schema_version: 2, kind: "pane_choice", payload: { request_id: requestId, device_id: deviceId, pane_id: paneId, turn: ask.turn, kind: ask.kind, choice } });
+      const sent = dispatch({ schema_version: 2, kind: "pane_choice", payload: { request_id: requestId, device_id: deviceId, pane_id: paneId, choice, ask } });
       return sent === false ? null : requestId;
     },
 

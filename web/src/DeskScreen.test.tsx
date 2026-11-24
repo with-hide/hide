@@ -354,11 +354,21 @@ describe("Desk's room", () => {
     await press('[data-phone-ask-choice="2"]');
     await press("[data-phone-ask-send]");
     const [choice] = sent("pane_choice");
-    expect(choice).toMatchObject({ device_id: "local", pane_id: "w1:p2", turn: "7", kind: "question", choice: "2" });
+    // The ask goes back as the frame gave it, so the daemon answers only the ask the card drew.
+    expect(choice).toMatchObject({ device_id: "local", pane_id: "w1:p2", choice: "2", ask });
     // A second press while it is on its way sends nothing more.
     await press("[data-phone-ask-send]");
     expect(sent("pane_choice")).toHaveLength(1);
     await act(async () => useShellStore.setState({ paneChoice: { request_id: String(choice!.request_id), ok: true, reason: null } }));
     expect(document.body.querySelector("[data-phone-ask-sent]")).not.toBeNull();
+
+    // A choice refused stale reads the card again.
+    await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask: { ...ask, turn: "8" }, reason: null } }));
+    await press('[data-phone-ask-choice="1"]');
+    await press("[data-phone-ask-send]");
+    const second = sent("pane_choice")[1]!;
+    const asks = sent("pane_ask").length;
+    await act(async () => useShellStore.setState({ paneChoice: { request_id: String(second.request_id), ok: false, reason: "stale" } }));
+    expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
 });

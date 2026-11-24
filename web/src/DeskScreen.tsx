@@ -570,22 +570,29 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
  * each time its ask changes (PRD desk-2-ui B14), and answered with
  * `pane_choice` as the phone answers it: a choice is marked, `답하기` sends
  * it once, and one that may have landed or that the screen no longer shows
- * is answered in the terminal from then on. Until the read lands, the card
+ * is answered in the terminal from then on; a choice refused stale reads
+ * the card again. Until the read lands, the card
  * says what its row or card says, with `직접 쓰기` only.
  */
 function DeskSessionAsk({ paneId, deviceId, job, row, actions, onWrite }: { paneId: string; deviceId: string | null; job: DeskJob; row: AgentRow | null; actions: Actions; onWrite: () => void }) {
   const { t } = useInterfaceTranslation();
-  // A new ask moves the row's turn or the card's change time; each is read again.
-  const turn = row?.user_turn ? JSON.stringify(row.user_turn) : null;
+  // The daemon does not push an ask: it is read when the panel opens and again whenever the agent's row moves (its change time or group).
+  const changed = row?.changed_at_unix_ms ?? null;
+  const group = row?.group ?? null;
   useEffect(() => {
     if (deviceId) actions.askPane(deviceId, paneId);
-  }, [actions, deviceId, paneId, turn, job.changed_at_unix_ms]);
+  }, [actions, deviceId, paneId, changed, group, job.changed_at_unix_ms]);
   const read = useShellStore((s) => (s.paneAsk && s.paneAsk.pane_id === paneId && s.paneAsk.device_id === deviceId ? s.paneAsk : null));
   const [marked, setMarked] = useState<{ ask: string; id: string } | null>(null);
   const [sent, setSent] = useState<{ ask: string; choice: string; request: string | null } | null>(null);
   const result = useShellStore((s) => (sent?.request && s.paneChoice?.request_id === sent.request ? s.paneChoice : null));
   const ask = read?.ask ?? null;
   const waited = useElapsed(ask?.since_ms ?? null);
+  // A choice refused stale means the agent asks something else now: the card is read again.
+  const stale = result?.ok === false && result.reason === "stale" ? result.request_id : null;
+  useEffect(() => {
+    if (stale && deviceId) actions.askPane(deviceId, paneId);
+  }, [actions, deviceId, paneId, stale]);
   if (!ask || !deviceId) {
     const question = sessionQuestion(job, row);
     return question ? <SessionQuestionCard question={question} onWrite={onWrite} /> : null;
