@@ -1072,8 +1072,10 @@ async fn screen_loop(
     // The operator's comments and Sends from this screen, in the order it
     // made them, off the socket loop; started by the first one.
     let mut feedback: Option<FeedbackQueue> = None;
-    // This screen's search across every project, one at a time, off the socket loop.
-    let file_search = FileSearch::default();
+    // This screen's search across every project, and its asks of agents,
+    // each one at a time, off the socket loop.
+    let file_search = OneAtATime::<Option<Value>>::default();
+    let screen_asks = OneAtATime::<ScreenAsks>::default();
     let mut device_reads: std::collections::VecDeque<DeviceRead> =
         std::collections::VecDeque::new();
     let daemon = json!({"type": "daemon", "payload": state.daemon_info.as_ref()});
@@ -1460,10 +1462,10 @@ async fn screen_loop(
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
                             Ok(ClientAction::ScreenAsk(event)) => {
-                                spawn_screen_ask(&state, event, device_frames_tx.clone());
+                                screen_asks.ask(&state, device_frames_tx.clone(), |asks| asks.add(event), screen_ask);
                             }
                             Ok(ClientAction::FileIndexAll(event)) => {
-                                file_search.ask(&state, event, device_frames_tx.clone());
+                                file_search.ask(&state, device_frames_tx.clone(), |waiting| { *waiting = Some(event); Ok(()) }, file_index_all);
                             }
                             Ok(ClientAction::Automation(event)) => {
                                 crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
@@ -2813,7 +2815,7 @@ enum ClientAction {
     /// hands the core in order.
     Feedback(Value),
     /// The palette's search across every project (`file_index_all`),
-    /// answered off the socket loop by `FileSearch`.
+    /// answered off the socket loop by `OneAtATime`.
     FileIndexAll(Value),
     /// An agent's ask read (`pane_ask`) or answered (`pane_choice`) from a
     /// window as a phone does (`mobile::screen_ask`), off the socket loop.
@@ -4267,71 +4269,167 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     vec![Message::Text(answer.to_string().into())]
 }
 
-/// A window's `pane_ask` or `pane_choice` (PRD desk-2-ui B14), answered on
-/// the blocking pool: each reads the core once and a choice writes keys.
-fn spawn_screen_ask(state: &AppState, event: Value, frames: tokio::sync::mpsc::Sender<String>) {
-    let mobile = Arc::clone(&state.mobile);
-    tokio::spawn(async move {
-        let frame = tokio::task::spawn_blocking(move || {
-            let payload = event.get("payload").cloned().unwrap_or(Value::Null);
-            match event.get("kind").and_then(Value::as_str) {
-                Some("pane_choice") => crate::mobile::screen_ask::choose(&mobile, &payload),
-                _ => crate::mobile::screen_ask::ask_frame(&mobile, &payload),
-            }
-        })
-        .await
-        .unwrap_or_else(|error| {
-            json!({"type": "error", "payload": {}, "message": format!("pane ask failed: {error}")})
-        });
-        let _ = frames.send(frame.to_string()).await;
-    });
+/// What one screen has asked a [`OneAtATime`] worker and not had answered.
+trait Waiting: Default + Send + 'static {
+    /// The next request to answer, if any.
+    fn next(&mut self) -> Option<Value>;
+    /// Whether a request waits.
+    fn any(&self) -> bool;
 }
 
-/// One screen's search across every project (`file_index_all`, PRD desk-2-ui
-/// B38, D-23). Ranking every project's list is up to 50,000 paths each, so
-/// it runs on a blocking worker and never on the socket loop; one runs at a
-/// time per screen, and a query typed while it runs replaces the one
-/// waiting, so a fast typist starts at most one more and the answers end on
-/// the newest query.
-#[derive(Clone, Default)]
-struct FileSearch {
-    waiting: Arc<std::sync::Mutex<Option<Value>>>,
+/// The search keeps only the newest query.
+impl Waiting for Option<Value> {
+    fn next(&mut self) -> Option<Value> {
+        self.take()
+    }
+
+    fn any(&self) -> bool {
+        self.is_some()
+    }
+}
+
+/// A screen's asks of agents (`mobile::screen_ask`, PRD desk-2-ui B14): its
+/// choices in the order pressed, each answered, and the newest `pane_ask` of
+/// each pane, since an older one would only be answered with what the newer
+/// one reads. A choice goes first: it is what the operator pressed.
+#[derive(Default)]
+struct ScreenAsks {
+    choices: std::collections::VecDeque<Value>,
+    asks: Vec<Value>,
+}
+
+/// Choices a screen may have waiting; one past it is answered `busy`.
+const SCREEN_CHOICES_WAITING: usize = 8;
+/// Panes whose ask a screen may have waiting; past it the oldest gives way,
+/// as the newer read answers what the window shows now.
+const SCREEN_ASKS_WAITING: usize = 16;
+
+impl ScreenAsks {
+    /// Adds `event`, or answers it at once when a choice finds the line full.
+    fn add(&mut self, event: Value) -> Result<(), Value> {
+        if event.get("kind").and_then(Value::as_str) == Some("pane_choice") {
+            if self.choices.len() >= SCREEN_CHOICES_WAITING {
+                return Err(json!({"type": "pane_choice_result", "payload": {
+                    "request_id": event.pointer("/payload/request_id"), "ok": false, "reason": "busy",
+                }}));
+            }
+            self.choices.push_back(event);
+            return Ok(());
+        }
+        let pane = |event: &Value| {
+            (
+                event.pointer("/payload/device_id").cloned(),
+                event.pointer("/payload/pane_id").cloned(),
+            )
+        };
+        self.asks.retain(|waiting| pane(waiting) != pane(&event));
+        if self.asks.len() >= SCREEN_ASKS_WAITING {
+            self.asks.remove(0);
+        }
+        self.asks.push(event);
+        Ok(())
+    }
+}
+
+impl Waiting for ScreenAsks {
+    fn next(&mut self) -> Option<Value> {
+        self.choices
+            .pop_front()
+            .or_else(|| (!self.asks.is_empty()).then(|| self.asks.remove(0)))
+    }
+
+    fn any(&self) -> bool {
+        !self.choices.is_empty() || !self.asks.is_empty()
+    }
+}
+
+/// A screen's `pane_ask` or `pane_choice`, answered on the blocking pool.
+fn screen_ask(state: &AppState, event: &Value) -> Value {
+    let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+    match event.get("kind").and_then(Value::as_str) {
+        Some("pane_choice") => crate::mobile::screen_ask::choose(&state.mobile, &payload),
+        _ => crate::mobile::screen_ask::ask_frame(&state.mobile, &payload),
+    }
+}
+
+/// One screen's requests that read every project or every agent, answered
+/// one at a time on a blocking worker and never on the socket loop: the
+/// search across every project (`file_index_all`, PRD desk-2-ui B38, D-23),
+/// which ranks up to 50,000 paths per project, and an agent's ask read or
+/// answered from a window (`pane_ask`, `pane_choice`), each a core snapshot
+/// and a projection of every agent. What waits is `W`'s to bound: a query
+/// typed while one runs replaces the one waiting, so a fast typist starts at
+/// most one more and the answers end on the newest query.
+struct OneAtATime<W> {
+    waiting: Arc<std::sync::Mutex<W>>,
     running: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl FileSearch {
-    fn waiting(&self) -> std::sync::MutexGuard<'_, Option<Value>> {
+impl<W> Clone for OneAtATime<W> {
+    fn clone(&self) -> Self {
+        Self {
+            waiting: Arc::clone(&self.waiting),
+            running: Arc::clone(&self.running),
+        }
+    }
+}
+
+impl<W: Waiting> Default for OneAtATime<W> {
+    fn default() -> Self {
+        Self {
+            waiting: Arc::default(),
+            running: Arc::default(),
+        }
+    }
+}
+
+impl<W: Waiting> OneAtATime<W> {
+    fn waiting(&self) -> std::sync::MutexGuard<'_, W> {
         self.waiting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn ask(&self, state: &AppState, event: Value, frames: tokio::sync::mpsc::Sender<String>) {
+    /// Puts a request in line with `put`, which may answer it at once
+    /// instead, and starts the worker unless it runs; `answer` makes each
+    /// request's frame.
+    fn ask(
+        &self,
+        state: &AppState,
+        frames: tokio::sync::mpsc::Sender<String>,
+        put: impl FnOnce(&mut W) -> Result<(), Value>,
+        answer: fn(&AppState, &Value) -> Value,
+    ) {
         use std::sync::atomic::Ordering::SeqCst;
-        *self.waiting() = Some(event);
+        if let Err(frame) = put(&mut self.waiting()) {
+            tokio::spawn(async move {
+                let _ = frames.send(frame.to_string()).await;
+            });
+            return;
+        }
         if self.running.swap(true, SeqCst) {
             return;
         }
-        let (search, state) = (self.clone(), state.clone());
+        let (worker, state) = (self.clone(), state.clone());
         tokio::spawn(async move {
             loop {
-                let Some(event) = search.waiting().take() else {
-                    search.running.store(false, SeqCst);
-                    // A query that arrived between the take and the store
+                let Some(event) = worker.waiting().next() else {
+                    worker.running.store(false, SeqCst);
+                    // A request that arrived between the take and the store
                     // finds the worker still running and leaves it here.
-                    if search.waiting().is_some() && !search.running.swap(true, SeqCst) {
+                    if worker.waiting().any() && !worker.running.swap(true, SeqCst) {
                         continue;
                     }
                     return;
                 };
                 let state = state.clone();
-                let frame = tokio::task::spawn_blocking(move || file_index_all(&state, &event))
+                let frame = tokio::task::spawn_blocking(move || answer(&state, &event))
                     .await
                     .unwrap_or_else(|error| {
-                        json!({"type": "error", "payload": {}, "message": format!("file search failed: {error}")})
+                        json!({"type": "error", "payload": {}, "message": format!("request failed: {error}")})
                     });
                 if frames.send(frame.to_string()).await.is_err() {
-                    search.running.store(false, SeqCst);
+                    worker.running.store(false, SeqCst);
                     return;
                 }
             }
