@@ -2804,6 +2804,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom(toggleDeskExplorer);
     },
 
+    /** Whether a sidebar row's press opens its session beside Desk: Desk in front and no ⌘-click (PRD desk-2-ui B3, B5, B44). */
+    rowOpensBesideDesk(how?: { tab: boolean }): boolean {
+      return ui().screen?.kind === "desk" && deskOn(useShellStore.getState().desk) && how?.tab !== true;
+    },
+
     /** The tab panel's `✕`, Escape or a press on the dimmed outside (B21). */
     deskClosePanel() {
       ui().setDeskRoom(closeDeskPanel);
@@ -2995,7 +3000,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * other row does (PRD hide-ai-work-home B11, PRD hide-ai-suggestions
      * B11).
      */
-    openListedAgent(paneId: string) {
+    openListedAgent(paneId: string, how?: { tab: boolean }) {
+      // While Desk is in front a row opens its session beside Desk; a ⌘-click goes to its tab as anywhere else (PRD desk-2-ui D-03, D-04, B3, B5).
+      if (this.rowOpensBesideDesk(how)) return this.openDeskSession(paneId);
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);

@@ -5,12 +5,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob } from "./desk";
-import { DeskScreen, DeskSettingsPage, DeskSidebarEntry } from "./DeskScreen";
+import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { useDeskLaneStore } from "./deskLane";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 
@@ -91,17 +90,8 @@ describe("Desk's room", () => {
     await act(async () => element.click());
   };
 
-  it("draws no sidebar entry while Desk is off, and leaves the room when it is switched off in front (B41)", async () => {
+  it("leaves the room when Desk is switched off in front (B41, B44)", async () => {
     const off = (section: DeskSection): DeskSection => ({ ...section, settings: { ...section.settings, enabled: false } });
-    const actions = createActions((event) => { events.push(event); return true; });
-    await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: off(desk([])), deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: { sessions: [], projects: [] } });
-      root.render(<TooltipProvider><DeskSidebarEntry actions={actions} /></TooltipProvider>);
-    });
-    expect(document.body.querySelector("[data-desk-sidebar-row]")).toBeNull();
-    await show(desk([]));
-    expect(document.body.querySelector("[data-desk-sidebar-row]")).not.toBeNull();
-
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
@@ -310,8 +300,8 @@ describe("Desk's room", () => {
     expect(unasked).toEqual([["read", "Always runs in Codex"]]);
   });
 
-  it("opens a session that is no job of Desk's as a thread in the lane and stays in Desk (D-87, B51)", async () => {
-    // `fixer` runs in the sidebar but Desk did not start it: it has no card until its thread opens.
+  it("opens a session a chip names beside Desk, stays in Desk, and closes the tab panel before the session on Escape (D-09, B2, B21)", async () => {
+    // `fixer` runs in the sidebar but Desk did not start it: it has no card until its conversation opens.
     const row = { pane_id: "w1:p2", identity_label: "fixer", agent_kind: "claude", mark: "going" } as never;
     const card: DeskJob = { id: "pane:w1:p2", pane_id: "w1:p2", title: "fixer", agent_kind: "claude", project: { workspace_id: "w-repo", label: "repo" }, location: { kind: "checkout", label: "main" },
       state: "working", queue_position: null, now: "고치는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
@@ -319,18 +309,29 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([{ kind: "user", id: 1, text: "@session(w1:p2 fixer) 어디까지 왔어?", at_ms: 0, mentions: [fixer] }]));
     await act(async () => useShellStore.setState({ agents: [row] }));
+    expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("closed");
 
     await press("[data-desk-session-chip]");
-    expect(useDeskLaneStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
+    expect(useUiStore.getState().deskRoom.session).toBe("w1:p2");
     expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p2" }]);
     expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
-    expect(document.body.querySelector("[data-desk-thread-pending]")).not.toBeNull();
+    expect(document.body.querySelector("[data-desk-room]")?.getAttribute("data-desk-room")).toBe("session");
 
-    // The core sends the session's card with the open thread; the thread's head reads it and the Threads list does not list it.
+    // The core sends the session's card with the open conversation; the head reads it.
     await act(async () => useShellStore.setState({ deskJobs: { jobs: [], workers: [], named: [card] } }));
-    expect(document.body.querySelector("[data-desk-thread-pending]")).toBeNull();
-    expect(document.body.querySelector("[data-desk-thread-head]")?.textContent).toContain("fixer");
+    expect(document.body.querySelector("[data-desk-session-head]")?.textContent).toContain("fixer");
     expect(sent("session_thread_open")).toHaveLength(1);
-    expect(sent("session_thread_close")).toHaveLength(0);
+
+    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
+    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "m-1", title: "1.3.0" }], preview: null, active: "mission:m-1", explorer: false } })));
+    expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
+    // Escape runs the innermost layer the shell's Escape owner holds, as keyboard.ts does.
+    const escape = () => act(async () => { useUiStore.getState().escapeLayers.at(-1)!(); });
+    await escape();
+    expect([useUiStore.getState().deskRoom.panel, useUiStore.getState().deskRoom.session]).toEqual([null, "w1:p2"]);
+    await escape();
+    expect(useUiStore.getState().deskRoom.session).toBeNull();
+    expect(sent("session_thread_close")).toHaveLength(1);
   });
 });

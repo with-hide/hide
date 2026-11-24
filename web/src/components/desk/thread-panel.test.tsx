@@ -52,7 +52,7 @@ async function mount() {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={job} actions={actions} pinned={false} onBack={noop} onPin={noop} onClose={noop} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={job} paneId={job.pane_id} actions={actions} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
