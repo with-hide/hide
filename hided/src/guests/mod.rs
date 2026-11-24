@@ -596,6 +596,10 @@ impl Guests {
                 Ok(_) => self.leave(&guest, EndMode::AfterLastPane),
                 Err(_) => {}
             }
+            // A guest that gave the device helper's folder back is gone.
+            if self.known(&guest).is_none() {
+                continue;
+            }
             if has_panes && removed.as_deref().map(str::trim).ok() != Some(END_NOW) {
                 self.start_remembered(&guest, &node);
             }
@@ -682,7 +686,9 @@ impl Guests {
     /// and on every change of the paired machines. A guest that has a
     /// folder here and no grant was taken off this machine (B26, D-77
     /// (6)): its node takes no new link and ends with its last pane, and
-    /// what is left of it goes once nothing of it runs here. A guest in
+    /// what is left of it goes once nothing of it runs here; one that took
+    /// the device helper's folder gives it back at once
+    /// ([`Guests::give_helper_back`]). A guest in
     /// the list that was taken off before is a guest again.
     pub fn granted(self: &Arc<Self>, granted: Vec<PeerKey>) {
         let resumed = {
@@ -750,6 +756,10 @@ impl Guests {
         if hosted.removed.swap(true, Ordering::SeqCst) && mode == EndMode::AfterLastPane {
             return;
         }
+        if mode == EndMode::AfterLastPane && self.place(guest).helper {
+            self.give_helper_back(guest);
+            return;
+        }
         // What the next start of this daemon goes on with.
         let word = match mode {
             EndMode::Now => END_NOW,
@@ -798,6 +808,59 @@ impl Guests {
         );
         hosted.node.end(mode);
         self.forget_if_done(guest);
+    }
+
+    /// Gives the device helper's folder back from `guest`, which took it
+    /// over and was taken off with its work left running: its node ends now
+    /// and leaves the panes to their holders, the record that it holds the
+    /// folder goes, and the next node in that folder, the helper a machine
+    /// that adds this one again over SSH starts, owns those holders and
+    /// takes them up as on any new link (D-49). A node that stayed until
+    /// the last pane would keep the folder's ownership while its shells run,
+    /// which no other node can take. The folder, the helper root and the
+    /// hook entries of the installation the panes name stay with the panes.
+    /// Blocking.
+    fn give_helper_back(&self, guest: &PeerKey) {
+        let dropped = {
+            let mut hosted = lock(&self.hosted);
+            let dropped = hosted.remove(guest);
+            if let Some(dropped) = &dropped {
+                dropped.node.stop();
+            }
+            // Under the lock, as a forgotten guest's folder goes: a guest
+            // paired again takes the folder only after this.
+            for gone in [
+                layout::device_node_guest(&self.home),
+                layout::guest_dir(&self.state_dir, guest),
+            ] {
+                let removed = if gone.is_dir() {
+                    std::fs::remove_dir_all(&gone)
+                } else {
+                    std::fs::remove_file(&gone)
+                };
+                if let Err(error) = removed
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    record(
+                        "guests.folder_not_removed",
+                        guest,
+                        json!({"reason": error.to_string()}),
+                    );
+                }
+            }
+            dropped
+        };
+        let panes = dropped
+            .as_ref()
+            .map_or(0, |dropped| dropped.tap.panes().len());
+        if let Some(dropped) = dropped {
+            dropped.tap.detach();
+            if let Some(screens) = &self.screens {
+                screens.core.terminals.remove_guest(dropped.tap.device());
+            }
+        }
+        record("guests.helper_given_back", guest, json!({"panes": panes}));
+        self.tell_core();
     }
 
     /// A guest that was taken off this machine is a guest again: its node
@@ -2308,6 +2371,18 @@ mod tests {
     /// pane it had.
     #[cfg(unix)]
     fn left_by_an_earlier_run(state: &Path, home: &Path, guest: &PeerKey) {
+        left_by_an_earlier_run_from(
+            state,
+            home,
+            guest,
+            &layout::guest_install_root(state, guest),
+        );
+    }
+
+    /// The same, with the build under the install root `root`: a guest's
+    /// own, or the device helper's root of a guest that took it over.
+    #[cfg(unix)]
+    fn left_by_an_earlier_run_from(state: &Path, home: &Path, guest: &PeerKey, root: &Path) {
         use hide_peer::protocol::panes::{self, Pane, Panes};
 
         let programs = tempfile::tempdir().unwrap();
@@ -2322,9 +2397,7 @@ mod tests {
             None,
         );
         earlier.folder(guest).unwrap();
-        build
-            .place(&layout::guest_install_root(state, guest))
-            .unwrap();
+        build.place(root).unwrap();
         let write = |path: PathBuf, bytes: Vec<u8>| {
             private::create_dir_all(path.parent().unwrap()).unwrap();
             atomic::write_file(&path, &bytes, Access::Private).unwrap();
@@ -2356,7 +2429,7 @@ mod tests {
         // The hook entries the guest's node wrote into this account's
         // Claude Code settings, beside another Hide's.
         std::fs::create_dir_all(home.join(".claude")).unwrap();
-        for install in [guest_install(state, guest), "app".to_owned()] {
+        for install in [layout::install_of_root(root), "app".to_owned()] {
             // An entry whose helper is gone is no installation's any more.
             let helper = home.join("helper");
             std::fs::write(&helper, b"").unwrap();
@@ -2399,6 +2472,102 @@ mod tests {
             }
         })
         .await;
+    }
+
+    /// D-49: a machine that took the device helper's folder over and is
+    /// taken off with its work left running gives the folder back at once.
+    /// Its node ends and leaves the panes to their holders, and the folder
+    /// with its pane records, the helper's build and the hook entries its
+    /// panes name stay for the helper that adding this machine again over
+    /// SSH starts, the next node to own those holders. A node that stayed
+    /// until its last pane ended would keep that ownership while its shells
+    /// run, and the helper could take up none of them.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_machine_taken_off_gives_the_helpers_folder_back_and_leaves_its_shells_running() {
+        use std::io::Write as _;
+
+        use hide_peer::protocol::tap::{PaneSize, ToHost, ToNode};
+
+        let state = short_root();
+        let home = short_root();
+        let guest = key(7);
+        let spelled = "~/.hide/host-helper";
+        let helper_root = layout::expand_home(spelled, home.path());
+        let node_dir = layout::device_node_state(home.path());
+        let records = layout::pane_records(&node_dir);
+        std::fs::create_dir_all(&records).unwrap();
+        left_by_an_earlier_run_from(state.path(), home.path(), &guest, &helper_root);
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        assert_eq!(
+            guests.take_helper(&guest, spelled, |_| true),
+            HelperFolder::Taken
+        );
+        // This test is the tap of the node the stand-in says is ready, in
+        // the helper's folder.
+        let taps = ipc::LocalListener::bind(&node_dir.join(launch::TAP_ENDPOINT)).unwrap();
+        {
+            let guests = Arc::clone(&guests);
+            tokio::task::spawn_blocking(move || guests.resume())
+                .await
+                .unwrap();
+        }
+        let mut tap = within(
+            "the tap of the guest's node",
+            tokio::task::spawn_blocking(move || {
+                let mut tap = taps.accept().unwrap();
+                assert!(matches!(tap::tests::heard(&mut tap), ToNode::Hello { .. }));
+                tap
+            }),
+        )
+        .await
+        .unwrap();
+        tap.write_all(
+            &ToHost::Welcome {
+                version: hide_peer::protocol::tap::NEWEST_TAP,
+                panes: vec![PaneSize {
+                    pane: "w1:p1".to_owned(),
+                    rows: 24,
+                    cols: 80,
+                }],
+            }
+            .encode()
+            .unwrap(),
+        )
+        .unwrap();
+        until("the pane on this screen", || guests.panes().len() == 1).await;
+        let node = guests.node(&guest).unwrap();
+        assert!(node.running().is_some());
+
+        // The machine holds no grant any more, with no word about its
+        // work: the work stays.
+        guests.granted(Vec::new());
+        let ended = tokio::task::spawn_blocking(move || {
+            node.stopped_by(Instant::now() + Duration::from_secs(20))
+        })
+        .await
+        .unwrap();
+        assert!(ended, "its node ends now, not with its last pane");
+        until("the machine to be forgotten", || {
+            guests.node(&guest).is_none()
+        })
+        .await;
+        assert!(guests.panes().is_empty());
+        assert_eq!(guests.helper_holder(), None);
+        assert!(!layout::guest_dir(state.path(), &guest).exists());
+        // What the panes run from and name stays with them, and the folder
+        // is free: the next machine to switch this one may take it.
+        assert!(hooked(home.path(), &layout::install_of_root(&helper_root)));
+        assert_eq!(
+            guests.helper_for(&key(8), spelled, |_| true),
+            HelperFolder::Kept,
+            "the pane records and the helper's build are there, held by no one"
+        );
     }
 
     /// B26: the host takes a guest off, and ends its work here or not.
