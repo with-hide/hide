@@ -281,8 +281,9 @@ pub struct IndexService {
     /// The roots the catalog carried at the last `set_roots`, so one that
     /// came or went is seen.
     roots: Mutex<HashSet<IndexKey>>,
-    /// One root per project, the ones `search` asks (`set_projects`).
-    projects: Mutex<Vec<IndexKey>>,
+    /// One root per project, the ones `search` asks (`set_projects`);
+    /// `None` until the first catalog has been read.
+    projects: Mutex<Option<Vec<IndexKey>>>,
     walking: Walking,
 }
 
@@ -291,7 +292,7 @@ impl IndexService {
         Self {
             entries: Mutex::new(HashMap::new()),
             roots: Mutex::new(HashSet::new()),
-            projects: Mutex::new(Vec::new()),
+            projects: Mutex::new(None),
             walking: Walking::default(),
         }
     }
@@ -354,7 +355,7 @@ impl IndexService {
         *self
             .projects
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = projects;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(projects);
     }
 
     /// The ranked matches for one root of one device. The first call starts
@@ -394,6 +395,8 @@ impl IndexService {
     /// stale list is served until there is room to refresh it. `walk_for`
     /// makes a project's walk, and is called only for one that starts.
     /// Each project's list is ranked, then `merge` keeps `limit` of them.
+    /// Asked before the first catalog was read, it answers `indexing`, so
+    /// the screen asks again instead of showing no match.
     pub fn search(
         &self,
         query: &str,
@@ -407,6 +410,10 @@ impl IndexService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let mut searched = Searched::default();
+        let Some(projects) = projects else {
+            searched.indexing = true;
+            return searched;
+        };
         let mut lists = Vec::new();
         for key in projects {
             let room = self.walking.room_for(&key.0);
@@ -953,6 +960,13 @@ mod tests {
     #[test]
     fn the_search_asks_each_project_once_and_names_the_ones_whose_walk_failed() {
         let service = IndexService::new();
+        let early = service.search("txt", None, RESULT_LIMIT, |_| -> WalkFn {
+            unreachable!("no project to walk before the catalog")
+        });
+        assert!(
+            early.indexing && early.hits.is_empty(),
+            "asked before the first catalog, the screen is told to ask again"
+        );
         service.set_projects(vec![
             key("mac", "/a"),
             key("mini", "/b"),
