@@ -86,6 +86,32 @@ export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
  * keeping the preview stops calling it the preview.
  */
 export function openTab(room: DeskRoomWindow, tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}): DeskRoomWindow {
+  return capFiles(placeTab(room, tab, options));
+}
+
+/**
+ * The most file tabs a room keeps: hided holds at most this many files for
+ * one window (`DESK_FILES_PER_CONNECTION` in `hided/src/demand.rs`).
+ */
+export const MAX_DESK_FILE_TABS = 32;
+
+/** Past the cap, the oldest file tabs close, never the one in front or the one beside it. */
+function capFiles(room: DeskRoomWindow): DeskRoomWindow {
+  const panel = room.panel;
+  if (!panel) return room;
+  let over = panel.tabs.filter((tab) => tab.kind === "file").length - MAX_DESK_FILE_TABS;
+  if (over <= 0) return room;
+  const tabs = panel.tabs.filter((tab) => {
+    const key = tabKey(tab);
+    if (over <= 0 || tab.kind !== "file" || key === panel.active || key === panel.beside) return true;
+    over -= 1;
+    return false;
+  });
+  const kept = (key: string | null) => (key !== null && tabs.some((tab) => tabKey(tab) === key) ? key : null);
+  return { ...room, panel: { ...panel, tabs, preview: kept(panel.preview) } };
+}
+
+function placeTab(room: DeskRoomWindow, tab: DeskTab, options: { preview?: boolean; beside?: boolean }): DeskRoomWindow {
   const panel = room.panel ?? EMPTY_PANEL;
   const key = tabKey(tab);
   if (options.beside && tab.kind === "file") return openBeside(room, panel, tab, key);
@@ -111,7 +137,7 @@ const EMPTY_PANEL: DeskPanel = { tabs: [], preview: null, active: null, explorer
  */
 function openBeside(room: DeskRoomWindow, panel: DeskPanel, tab: DeskTab, key: string): DeskRoomWindow {
   const front = activeTab(panel);
-  if (!front) return openTab(room, tab);
+  if (!front) return placeTab(room, tab, {});
   const present = panel.tabs.some((one) => tabKey(one) === key);
   const tabs = present ? panel.tabs : [...panel.tabs, tab];
   const preview = panel.preview === key ? null : panel.preview;
@@ -221,22 +247,29 @@ export function namesView(made: DeskOutput, written: string): boolean {
   return made.path.length > tail.length && same(made.path.slice(-tail.length), tail);
 }
 
-/** The panels' first widths before the operator drags one, and their floors (B24), in CSS pixels. */
-export const DESK_WIDTHS = { session: 500, view: 640, sessionMin: 360, viewMin: 360, chatMin: 420 } as const;
+/**
+ * The panels' first widths before the operator drags one, and their floors
+ * (B24), in CSS pixels. The tab panel's first width reaches left over the
+ * sidebar until `panelMargin` of the window is left (Doop ③-다).
+ */
+export const DESK_WIDTHS = { session: 500, panelMargin: 140, sessionMin: 360, viewMin: 360, chatMin: 420 } as const;
 
 /**
  * The widths the room draws (B22-B24): the remembered ones, else the first
- * ones. The tab panel's view width gives way first, down to its floor; with
- * no room for both floors the tab panel covers Desk's place whole. A session
- * panel that would leave Desk's chat under its floor floats over the chat.
+ * ones. `available` is the room's own width and `reach` the window's width
+ * left of it, the sidebar, which the floating tab panel may cover. The tab
+ * panel's view width gives way first, down to its floor; with no room for
+ * both floors the tab panel covers Desk's place whole. A session panel that
+ * would leave Desk's chat under its floor floats over the chat.
  */
-export function roomWidths(available: number, stored: { view_width: number | null; session_width: number | null }, session: boolean): { session: number; view: number; panelCovers: boolean; sessionFloats: boolean } {
+export function roomWidths(available: number, reach: number, stored: { view_width: number | null; session_width: number | null }, session: boolean): { session: number; view: number; viewMax: number; panelCovers: boolean; sessionFloats: boolean } {
   const sessionWant = Math.max(DESK_WIDTHS.sessionMin, stored.session_width ?? DESK_WIDTHS.session);
   const sessionWidth = session ? Math.min(sessionWant, Math.max(DESK_WIDTHS.sessionMin, available)) : 0;
   const sessionFloats = session && available - sessionWidth < DESK_WIDTHS.chatMin;
   const left = available - sessionWidth;
-  const viewWant = Math.max(DESK_WIDTHS.viewMin, stored.view_width ?? DESK_WIDTHS.view);
+  const viewMax = Math.max(0, left + reach);
+  const viewWant = Math.max(DESK_WIDTHS.viewMin, stored.view_width ?? viewMax - DESK_WIDTHS.panelMargin);
   const panelCovers = left < DESK_WIDTHS.viewMin;
-  const view = panelCovers ? Math.max(0, left) : Math.min(viewWant, left);
-  return { session: sessionWidth, view, panelCovers, sessionFloats };
+  const view = panelCovers ? Math.max(0, left) : Math.min(viewWant, viewMax);
+  return { session: sessionWidth, view, viewMax, panelCovers, sessionFloats };
 }

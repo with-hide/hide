@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeTab, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, keepTab, namesView, openSession, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskTab } from "./deskRoom";
+import { activeTab, MAX_DESK_FILE_TABS, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, keepTab, namesView, openSession, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskTab } from "./deskRoom";
 import type { DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-08, D-14, D-15, D-22-D-25 and
@@ -27,6 +27,22 @@ describe("the tab panel's open contract", () => {
       expect(panelPlace(opened)).toBe("window_edge");
       expect(activeTab(opened.panel)).toEqual(tab);
     }
+  });
+
+  it("closes the oldest file tab past the cap, never the one in front or the one beside it", () => {
+    let room = openTab(openSession(DESK_ROOM_CLOSED, "p1"), file("first.md"));
+    room = openTab(room, file("second.md"), { beside: true });
+    room = openTab(room, mission);
+    for (let n = 0; n < MAX_DESK_FILE_TABS - 1; n += 1) room = openTab(room, file(`more-${n}.md`));
+    // 33 files: first.md was in front once, but more-30 is now; second.md is beside.
+    room = openTab(room, file("first.md"));
+    room = openTab(room, file("last.md"));
+    const files = keys(room).filter((key) => key.startsWith("file:"));
+    expect(files).toHaveLength(MAX_DESK_FILE_TABS);
+    expect(files).toContain(tabKey(file("first.md")));
+    expect(files).toContain(tabKey(file("second.md")));
+    expect(files).not.toContain(tabKey(file("more-0.md")));
+    expect(keys(room)).toContain(tabKey(mission));
   });
 
   it("brings a tab already open to the front instead of adding it twice", () => {
@@ -101,10 +117,18 @@ describe("Desk's room", () => {
 
   it("gives up the view width first, covers Desk's place when both floors do not fit, and floats the session over a too-narrow chat (B24)", () => {
     const stored = { view_width: 700, session_width: 520 };
-    expect(roomWidths(1600, stored, true)).toEqual({ session: 520, view: 700, panelCovers: false, sessionFloats: false });
-    expect(roomWidths(1000, stored, true)).toEqual({ session: 520, view: 480, panelCovers: false, sessionFloats: false });
-    expect(roomWidths(800, stored, true)).toMatchObject({ session: 520, view: 280, panelCovers: true, sessionFloats: true });
-    expect(roomWidths(1400, { view_width: null, session_width: null }, false)).toMatchObject({ session: 0, view: 640 });
+    expect(roomWidths(1600, 0, stored, true)).toEqual({ session: 520, view: 700, viewMax: 1080, panelCovers: false, sessionFloats: false });
+    expect(roomWidths(1000, 0, stored, true)).toEqual({ session: 520, view: 480, viewMax: 480, panelCovers: false, sessionFloats: false });
+    expect(roomWidths(800, 0, stored, true)).toMatchObject({ session: 520, view: 280, panelCovers: true, sessionFloats: true });
+  });
+
+  it("opens the tab panel first over the sidebar up to the window's margin, and keeps a dragged width (Doop ③-다)", () => {
+    const fresh = { view_width: null, session_width: null };
+    // A 1440 window with a 340 sidebar: the panel's left edge lands at 140.
+    expect(roomWidths(1100, 340, fresh, true)).toMatchObject({ session: 500, view: 800, viewMax: 940 });
+    expect(roomWidths(1100, 340, fresh, false)).toMatchObject({ session: 0, view: 1300 });
+    expect(roomWidths(1100, 340, { view_width: 520, session_width: null }, true)).toMatchObject({ view: 520 });
+    expect(roomWidths(1100, 340, { view_width: 2000, session_width: null }, true)).toMatchObject({ view: 940 });
   });
 
   it("finds the View a thread's file names, as a path, from its folder, or with a Windows device's backslashes", () => {
