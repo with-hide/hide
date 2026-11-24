@@ -12,6 +12,8 @@ publish = false
 
 [dependencies]
 interprocess = "=2.4.4"
+# Decodes and encodes the path of a `file:` URL (`path::from_file_url`).
+percent-encoding = "=2.3.2"
 # Reads the `bin` of the package an npm launcher runs (`programs::Start`).
 serde_json = "=1.0.151"
 trash = { version = "=5.2.9", default-features = false }

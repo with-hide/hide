@@ -1025,7 +1025,7 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
     let path = dir.path().join("index.html");
     std::fs::write(&path, "<title>Inside</title>").unwrap();
     let action = Action::OpenBrowser {
-        url: format!("file://{}", path.display()),
+        url: file_address(&path),
         area_id: Some(other_area.clone()),
         new_target: true,
     };
@@ -1382,14 +1382,21 @@ fn browser_scope_is_part_of_retry_identity_and_closed_target_replays_its_receipt
     );
 }
 
+/// The address `hide browser open <file>` sends for a file: its wire
+/// spelling as a `file:` URL (`hided/src/browser_cli.rs`), `file:///C:/...`
+/// on Windows.
+fn file_address(path: &std::path::Path) -> String {
+    hide_platform::path::to_file_url(&hide_platform::path::to_wire_lossy(path), "")
+}
+
 #[test]
 fn browser_file_source_is_confined_to_the_calling_checkout() {
     let (mut runtime, dir) = caller_fixture();
     let checkout = dir.path().join("checkout");
     std::fs::create_dir(&checkout).unwrap();
-    runtime.snapshot.navigator.workspaces[1].path = checkout.to_string_lossy().into_owned();
-    runtime.snapshot.navigator.workspaces[1].checkouts[0].path =
-        checkout.to_string_lossy().into_owned();
+    let wire = hide_platform::path::to_wire_lossy(&checkout);
+    runtime.snapshot.navigator.workspaces[1].path = wire.clone();
+    runtime.snapshot.navigator.workspaces[1].checkouts[0].path = wire;
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
         .unwrap()
@@ -1397,7 +1404,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
     let outside = dir.path().join("outside.html");
     std::fs::write(&outside, "<title>Outside</title>").unwrap();
     let action = Action::OpenBrowser {
-        url: format!("file://{}", outside.display()),
+        url: file_address(&outside),
         area_id: None,
         new_target: false,
     };
@@ -1423,7 +1430,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
     let elsewhere = crate::workspace_control::ActionSource::browser(
         root,
         channel,
-        outside.to_string_lossy().into_owned(),
+        hide_platform::path::to_wire_lossy(&outside),
         false,
     );
     assert_eq!(
@@ -1433,7 +1440,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
     let inside = checkout.join("index.html");
     std::fs::write(&inside, "<title>Inside</title>").unwrap();
     let action = Action::OpenBrowser {
-        url: format!("file://{}", inside.display()),
+        url: file_address(&inside),
         area_id: None,
         new_target: false,
     };

@@ -35,7 +35,7 @@ use crate::model::{
 };
 use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
-    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
+    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title,
 };
 use crate::workspace_views::Place;
 
@@ -3865,10 +3865,8 @@ pub(super) fn browser_label(display: &Display) -> String {
         .url
         .as_deref()
         .unwrap_or(crate::view_layout::BLANK_PAGE);
-    if is_file_address(url) {
-        let path = url.split(['?', '#']).next().unwrap_or(url);
-        let name = path.rsplit('/').next().unwrap_or(path);
-        return file_label(&percent_encoding::percent_decode_str(name).decode_utf8_lossy());
+    if let Some((path, _)) = hide_platform::path::from_file_url(url) {
+        return file_label(&path);
     }
     url.split_once("://")
         .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(rest))

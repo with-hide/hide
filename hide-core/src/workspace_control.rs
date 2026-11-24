@@ -460,26 +460,9 @@ impl ActionSource {
     }
 }
 
-/// Decode a file URL without accepting an authority or an encoded NUL.
-pub fn local_file_path(url: &str) -> Option<String> {
-    if !url.get(..7)?.eq_ignore_ascii_case("file://") {
-        return None;
-    }
-    let rest = &url[7..];
-    let (host, located) = rest.split_at(rest.find('/')?);
-    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
-        return None;
-    }
-    let path = located.split(['?', '#']).next()?;
-    let decoded = percent_encoding::percent_decode_str(path)
-        .decode_utf8()
-        .ok()?;
-    (decoded.starts_with('/') && !decoded.contains('\0')).then(|| decoded.into_owned())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Action, Caller, checkout_caller_id, gateway_caller_id, local_file_path};
+    use super::{Action, Caller, checkout_caller_id, gateway_caller_id};
 
     #[test]
     fn legacy_browser_open_decodes_and_serializes_without_target_options() {
@@ -612,18 +595,5 @@ mod tests {
             Caller::parse("gateway:k:relative"),
             Caller::Pane("gateway:k:relative")
         );
-    }
-
-    #[test]
-    fn file_address_scheme_is_case_insensitive_at_the_workspace_boundary() {
-        assert_eq!(
-            local_file_path("FILE:///checkout/page.html"),
-            Some("/checkout/page.html".to_owned())
-        );
-        assert_eq!(
-            local_file_path("FiLe://localhost/checkout/page.html"),
-            Some("/checkout/page.html".to_owned())
-        );
-        assert_eq!(local_file_path("FILE://elsewhere/checkout/page.html"), None);
     }
 }

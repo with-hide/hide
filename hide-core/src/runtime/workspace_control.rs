@@ -316,8 +316,8 @@ impl Runtime {
                 });
             }
             self.check_browser_area(&key, area_id.as_deref())?;
-            if crate::view_layout::is_file_address(url) {
-                let path = crate::workspace_control::local_file_path(url).ok_or(Refusal {
+            if hide_platform::path::is_file_url(url) {
+                let (path, _) = hide_platform::path::from_file_url(url).ok_or(Refusal {
                     reason: "invalid_address",
                     next_action: "Use a local file URL with an absolute path",
                 })?;
@@ -530,7 +530,7 @@ impl Runtime {
                     next_action: "Use an http, https, or checkout HTML address",
                 });
             }
-            if crate::view_layout::is_file_address(url) && material.is_none() {
+            if hide_platform::path::is_file_url(url) && material.is_none() {
                 return Err(Refusal {
                     reason: "html_unavailable",
                     next_action: "Check the HTML file and retry",

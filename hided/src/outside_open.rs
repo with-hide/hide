@@ -38,7 +38,7 @@ pub(crate) fn outside_target(
             url,
             area_id: None,
             new_target: false,
-        } => (crate::file_url::file_path(url)?.0, true),
+        } => (hide_platform::path::from_file_url(url)?.0, true),
         _ => return None,
     };
     if boundary.written_under_root(&path) || (catch_up() && boundary.written_under_root(&path)) {
@@ -126,7 +126,7 @@ mod tests {
         let outside = format!("{}/scratch/r.png", repo.trim_end_matches("/repo"));
         let file = |path: &str| Action::OpenFile { path: path.into() };
         let page = |path: &str, area_id: Option<&str>| Action::OpenBrowser {
-            url: crate::file_url::file_url(path, ""),
+            url: hide_platform::path::to_file_url(path, ""),
             area_id: area_id.map(str::to_owned),
             new_target: false,
         };

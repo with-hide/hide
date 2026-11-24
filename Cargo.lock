@@ -1776,6 +1776,7 @@ dependencies = [
  "junction",
  "libc",
  "notify",
+ "percent-encoding",
  "serde_json",
  "tempfile",
  "trash",

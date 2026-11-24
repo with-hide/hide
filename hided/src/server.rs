@@ -5245,7 +5245,7 @@ fn explorer_open(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<V
 /// address is the core's to judge.
 fn browser_url(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Value> {
     let raw = payload_str(event, "url");
-    if !crate::file_url::is_file_url(&raw) {
+    if !hide_platform::path::is_file_url(&raw) {
         return None;
     }
     if !boundary.names_this_node(
@@ -5257,7 +5257,7 @@ fn browser_url(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Val
         // Mac's checkout boundary cannot resolve a path on that device.
         return None;
     }
-    let Some((path, suffix)) = crate::file_url::file_path(&raw) else {
+    let Some((path, suffix)) = hide_platform::path::from_file_url(&raw) else {
         return Some(refused(kind, &raw, Refusal::InvalidPath));
     };
     let checked = if kind == "browser_state" {
@@ -5267,7 +5267,10 @@ fn browser_url(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Val
     };
     match checked {
         Ok(real) => {
-            let url = crate::file_url::file_url(&hide_platform::path::to_wire_lossy(&real), suffix);
+            let url = hide_platform::path::to_file_url(
+                &hide_platform::path::to_wire_lossy(&real),
+                suffix,
+            );
             event["payload"]["url"] = Value::String(url);
             None
         }
@@ -6627,8 +6630,10 @@ mod tests {
         }]);
         // Sent as `localhost` with the file name escaped in lower case; it
         // reaches the core as the one spelling of the path that was checked.
-        let checked =
-            crate::file_url::file_url(&checkout.join("보고서.html").display().to_string(), "#top");
+        let checked = hide_platform::path::to_file_url(
+            &checkout.join("보고서.html").display().to_string(),
+            "#top",
+        );
         let inside = checked
             .replacen("file://", "file://localhost", 1)
             .replace("%EB%B3%B4", "%eb%b3%b4");
@@ -6642,8 +6647,10 @@ mod tests {
         assert_eq!(apply_boundary(&boundary, &mut event), None);
         assert_eq!(event["payload"]["url"], checked);
 
-        let outside =
-            crate::file_url::file_url(&home.path().join("secret.html").display().to_string(), "");
+        let outside = hide_platform::path::to_file_url(
+            &home.path().join("secret.html").display().to_string(),
+            "",
+        );
         for (url, reason) in [
             (outside.as_str(), Refusal::OutsideCheckout),
             ("file://server/share/a.html", Refusal::InvalidPath),
@@ -6715,8 +6722,8 @@ mod tests {
             },
         ]);
         let native = checkout.join("manual.html").canonicalize().unwrap();
-        let native_url = crate::file_url::file_url(&native.display().to_string(), "#loaded");
-        let checked_url = crate::file_url::file_url(
+        let native_url = hide_platform::path::to_file_url(&native.display().to_string(), "#loaded");
+        let checked_url = hide_platform::path::to_file_url(
             &checkout.join("manual.html").display().to_string(),
             "#loaded",
         );
@@ -6738,14 +6745,16 @@ mod tests {
 
         // An unrelated path still cannot become a browser load report.
         std::fs::write(home.path().join("secret.html"), "outside").unwrap();
-        let outside =
-            crate::file_url::file_url(&home.path().join("secret.html").display().to_string(), "");
+        let outside = hide_platform::path::to_file_url(
+            &home.path().join("secret.html").display().to_string(),
+            "",
+        );
         std::os::unix::fs::symlink(
             home.path().join("secret.html"),
             checkout.join("escape.html"),
         )
         .unwrap();
-        let escape = crate::file_url::file_url(
+        let escape = hide_platform::path::to_file_url(
             &native
                 .parent()
                 .unwrap()
