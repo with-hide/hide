@@ -1376,7 +1376,7 @@
       }
     },
     "automationCall": {
-      "description": "A client `automation_call` event is a call on this core's automations whose answer the window waits for (PRD automations B6-B8): the form's preview of a schedule and a name, its make and its edit. `call` is the same call the CLI's `hide automation` sends, tagged by `call` (`add`, `edit`, `pause`, `resume`, `run`, `remove`, `run_stop`, `run_open`, `run_viewing`, `seen`, `list`, `show`, `preview`; `hide_core::automations::Call`). hided asks the core on a blocking task and answers this window alone with an automation_result frame under the same `request_id`; a call it cannot read is answered `automation_call_invalid` without asking the core. A press whose result the snapshot shows is the window event of the same name (`automation_run`, `automation_pause`, ...) instead.",
+      "description": "A client `automation_call` event is a call on this core's automations whose answer the window waits for (PRD automations B6-B8): the form's preview of a schedule and a name, its make and its edit. `call` is the same call the CLI's `hide automation` sends, tagged by `call` (`add`, `edit`, `pause`, `resume`, `run`, `remove`, `run_stop`, `run_open`, `run_viewing`, `run_result_open`, `seen`, `list`, `show`, `preview`; `hide_core::automations::Call`). hided asks the core on a blocking task and answers this window alone with an automation_result frame under the same `request_id`; a call it cannot read is answered `automation_call_invalid` without asking the core. A press whose result the snapshot shows is the window event of the same name (`automation_run`, `automation_pause`, ...) instead.",
       "type": "object",
       "required": ["request_id", "call"],
       "properties": {

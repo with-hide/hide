@@ -2635,6 +2635,7 @@ impl Runtime {
                 let pane_id = payload.pane_id.clone();
                 self.focus_pane(payload.pane_id, payload.origin, payload.request_id);
                 if payload.reveal_unseen && self.snapshot.status.last_error.is_none() {
+                    self.lay_viewed_run_desk(&pane_id);
                     self.reveal_unseen_view(&pane_id);
                 }
                 if payload.focus_device

@@ -12,7 +12,7 @@
 
 import type { ProjectTasksScope } from "../../agentScope";
 import type { AutomationCall } from "../../automationCall";
-import type { AgentRow, Automation, AutomationAgent, AutomationRecord, AutomationSchedule, AutomationWeekday, PaneHeader } from "../../snapshot";
+import type { AgentRow, Automation, AutomationAgent, AutomationRecord, AutomationSchedule, AutomationWeekday, PaneHeader, ViewDisplaySnapshot } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
 import { agent, applyDesk, checkoutId, counted, deskSnapshot, oneTabDesk, rowRequest, rowState, shellScreen, viewedFileFrames, withTasks, withViewedFile, type DeskModel, type PracticePlace, type ViewedFile } from "./kit";
 
@@ -32,6 +32,8 @@ const OWN_ROOT = "/Users/me/hide/automations";
 const LEAD_TITLE = "Fix the checkout timeout";
 const RUN_TITLE = "Morning briefing";
 const BRIEFING_FILE = "morning-briefing.md";
+/** The key of the briefing in the run's results: what a press on its row names. */
+const BRIEFING_KEY = "briefing";
 
 const BRIEFING = [
   "# Morning briefing",
@@ -84,6 +86,8 @@ export type AutomationModel = {
   /** What the run's agent opened is on the run's desk, and the run was dealt with. */
   gathered: boolean;
   resolved: boolean;
+  /** The run's tab holds its summary card, placed when the screen first showed the run (the core keeps it on the desk after). */
+  placed: boolean;
 };
 
 /** Whether an automation was made. */
@@ -99,7 +103,7 @@ function initial(): AutomationModel {
   const lead = agent({ pane_id: LEAD, identity_label: LEAD_TITLE, agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "4m" });
   return {
     desk: oneTabDesk({ id: LEAD, agent: lead, title: LEAD_TITLE }),
-    stage: 0, times: { 0: Date.now() }, made: null, run: null, seen: false, viewing: false, focus: false, gathered: false, resolved: false,
+    stage: 0, times: { 0: Date.now() }, made: null, run: null, seen: false, viewing: false, focus: false, gathered: false, resolved: false, placed: false,
   };
 }
 
@@ -217,8 +221,12 @@ function apply(model: AutomationModel, event: CoreEvent): AutomationModel | null
       const viewing = p.on;
       const resolved = model.resolved || (viewing && model.stage >= 4);
       const focus = viewing || typeof p.restore !== "string" ? model.focus : false;
-      return viewing === model.viewing && resolved === model.resolved && focus === model.focus ? null : { ...model, viewing, resolved, focus };
+      const placed = model.placed || viewing;
+      return viewing === model.viewing && resolved === model.resolved && focus === model.focus && placed === model.placed ? null : { ...model, viewing, resolved, focus, placed };
     }
+    // A press on a result row brings that View in front on the run's desk, as the core does with one the agent opened.
+    case "automation_run_result_open":
+      return model.stage >= 4 && model.placed && p.key === BRIEFING_KEY && !model.gathered ? { ...model, gathered: true } : null;
     // The window moves the core's focus to the run's pane; with `reveal_unseen` what the run opened comes onto its desk.
     case "focus_pane": {
       if (p.pane_id === RUN_PANE) {
@@ -330,6 +338,8 @@ function record(model: AutomationModel, run: Run): AutomationRecord {
     kind: "run", number: 1, trigger: run.manual ? "manual" : "scheduled", ...(run.manual ? {} : { due_unix_ms: run.startedAt }), started_at_unix_ms: run.startedAt,
     ...(done ? { ended_at_unix_ms: run.endedAt } : {}), state: done ? "succeeded" : "running", attempt: 1, pane_id: RUN_PANE, opened: false, resumable: true,
     conversation_missing: false, seen: model.seen || !done, ...(done ? { answer: ANSWER } : {}),
+    // What the agent opened rides the run only while the screen shows it (`results`, operator choice 2026-11-24).
+    ...(done && model.viewing ? { results: [{ key: BRIEFING_KEY, kind: "file" as const, label: BRIEFING_FILE }] } : {}),
   };
 }
 
@@ -348,6 +358,21 @@ function automation(model: AutomationModel): Automation {
 
 // --- The snapshot ------------------------------------------------------------------------------
 
+/** The run tab's desk: its summary card first and fixed, then what its agent opened, which is in front once it is there. */
+type WorldView = NonNullable<WorldSnapshot["rest"]["workspace_view"]>;
+
+function runDeskView(view: WorldView, briefing: ViewedFile | null): WorldView {
+  const summary: ViewDisplaySnapshot = { id: "summary1", tab_id: null, path: "", label: "", kind: "card", committed: null, preview: false, state: "open", reason: null, card: { kind: "automation_run", automation: AUTOMATION_ID, run: 1 } };
+  const opened = briefing ? withViewedFile({ ...view, open: true }, briefing) : { ...view, open: true, tray: { ...view.tray, shown: true } };
+  const files = opened.layout?.root && "area" in opened.layout.root ? opened.layout.root.area.displays : [];
+  const displays = [summary, ...files];
+  return {
+    ...opened,
+    tray: { ...opened.tray, shown: true, count: displays.length },
+    layout: { root: { area: { id: "v1", active: (files.at(-1) ?? summary).id, displays } }, active_area: "v1", display_count: displays.length, limits: { areas: 4, depth: 3, displays: 32 } },
+  };
+}
+
 function snapshot(model: AutomationModel, nowMs: number): WorldSnapshot {
   const runDesk = model.made && model.stage >= 3 ? oneTabDesk({ id: RUN_PANE, agent: runRow(model), title: RUN_TITLE }) : null;
   const desks = [{ place: PLACE, model: model.desk }, ...(runDesk ? [{ place: RUN_PLACE, model: runDesk }] : [])];
@@ -364,13 +389,14 @@ function snapshot(model: AutomationModel, nowMs: number): WorldSnapshot {
   // The window's focus on the run's pane makes its tab's desk the one in front; it holds what the run opened once the core brought it there.
   const briefing: ViewedFile = { path: `${model.made?.folder ?? OWN_ROOT}/${BRIEFING_FILE}`, label: BRIEFING_FILE, contents: BRIEFING, workspaceId: RUN_PLACE.project, checkoutId: checkoutId(RUN_PLACE) };
   const showsBriefing = model.focus && model.gathered && runDesk !== null;
+  const showsSummary = model.focus && model.placed && runDesk !== null;
   return {
     ...drawn,
     rest: {
       ...base,
       navigator: { ...navigator, workspaces },
       ui_state: { ...base.ui_state!, sidebar_lens: "tasks" },
-      workspace_view: showsBriefing ? withViewedFile({ ...base.workspace_view!, open: true }, briefing) : base.workspace_view,
+      workspace_view: showsSummary ? runDeskView(base.workspace_view!, showsBriefing ? briefing : null) : base.workspace_view,
       terminal: { headers },
     },
     focused: model.focus && runDesk ? RUN_PANE : drawn.focused,

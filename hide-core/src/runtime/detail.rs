@@ -433,6 +433,9 @@ impl Runtime {
                     && self.local_tab_pane(&conductor.pane_id))
                 .then(|| conductor.pane_id.clone())
             }
+            // A run's summary belongs to the run's own pane, which is also
+            // what keeps it on the strip beside that pane in pair view.
+            DetailItem::AutomationRun { automation, run } => self.viewed_run_pane(automation, *run),
             DetailItem::PullRequest {
                 workspace_id,
                 number,
@@ -589,7 +592,8 @@ impl Runtime {
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }
-                | DetailItem::Branch { .. },
+                | DetailItem::Branch { .. }
+                | DetailItem::AutomationRun { .. },
             )
             | None => {
                 if was_record {

@@ -128,6 +128,15 @@ export type ViewMenuId =
 
 export type ViewMenuEntry = MenuEntry<ViewMenuId>;
 
+/**
+ * Whether a display is fixed on its desk: a run's summary card, which the core
+ * refuses to close or move. The one place the shell derives it from, for the
+ * tab, its menu and the close shortcut (operator choice 2026-11-24).
+ */
+export function isFixedDisplay(display: Pick<ViewDisplaySnapshot, "card">): boolean {
+  return display.card?.kind === "automation_run";
+}
+
 /** The menu's items in docs/UI_BEHAVIOR.md's order, with its fixed labels. */
 const MENU_ITEMS: readonly { id: ViewMenuId; label: () => string }[] = [
   { id: "keep_open", label: () => translate("documents.view.keepOpen") },
@@ -193,6 +202,8 @@ function displayCommands(
       // Only the window holding the grant knows the path.
       hidden = !display.external || !useExternalStore.getState().described[display.external.grant];
     }
+    // A fixed display offers nothing that closes it, moves it or keeps it open.
+    if (isFixedDisplay(display) && (id === "keep_open" || id === "close_view" || edge)) hidden = true;
     const named = id === "copy_path" && display.kind === "browser" ? translate("documents.view.copyAddress") : label;
     return { id, label: named, unavailable, hidden, separated: id === "copy_path" || id === "close_view" };
   });

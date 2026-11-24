@@ -1454,7 +1454,9 @@ export type DetailItem =
   | { kind: "remains"; workspace_id: string; checkout_id: string }
   | { kind: "plan"; session: WorkSession }
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
-  | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
+  | { kind: "branch"; workspace_id: string; row: string; path?: string | null }
+  /** An automation run's summary: the fixed first tab of its desk, which cannot be closed or moved (operator choice 2026-11-24). */
+  | { kind: "automation_run"; automation: string; run: number };
 
 /**
  * Which Agent tab's desk a card opens on, where it was pressed (PRD
@@ -1478,6 +1480,7 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
     case "remains": return b.kind === "remains" && a.workspace_id === b.workspace_id && a.checkout_id === b.checkout_id;
     case "plan": return b.kind === "plan" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
     case "branch": return b.kind === "branch" && a.workspace_id === b.workspace_id && a.row === b.row && (a.path ?? null) === (b.path ?? null);
+    case "automation_run": return b.kind === "automation_run" && a.automation === b.automation && a.run === b.run;
   }
 }
 
@@ -3584,7 +3587,12 @@ export type AutomationRun = {
   spend?: AutomationSpend;
   /** The agent's last answer, one paragraph, only while a window shows the run (operator decision 2026-11-21). */
   answer?: string;
+  /** What the run's agent opened for the operator, newest first, only while a window shows the run (operator choice 2026-11-24); a row is pressed by its `key`. */
+  results?: AutomationRunResult[];
 };
+
+/** One row of a run's 결과: the View's kind and name, and the key a press names it by (`automation_run_result_open`). */
+export type AutomationRunResult = { key: string; kind: "file" | "diff" | "browser"; label: string };
 
 /**
  * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new

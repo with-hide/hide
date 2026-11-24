@@ -187,15 +187,18 @@ export function closeShortcutPolicy(input: {
   owner: KeyboardOwner;
   workspace: string | null;
   displayId: string | null;
+  /** The display in front of the focused area is fixed on its desk (`isFixedDisplay`): there is nothing to close. */
+  fixed?: boolean;
   paneIds: readonly string[];
 }): CloseShortcutTarget {
-  const { owner, workspace, displayId, paneIds } = input;
+  const { owner, workspace, displayId, paneIds, fixed = false } = input;
   // A card tab closes like any View tab; the tool column closes nothing (PRD
   // lane-two-columns B13, B16; PRD lane-desk-pair-view D-13).
   if (owner.kind === "none") return { kind: "nothing", reason: "no keyboard owner" };
   if (owner.workspace !== workspace) return { kind: "nothing", reason: "keyboard owner is outside the front Workspace" };
   if (owner.kind === "agent") return { kind: "nothing", reason: "the Agent controls own the keyboard" };
   if (owner.kind === "tool") return { kind: "nothing", reason: "the lane's tool owns the keyboard" };
+  if (owner.kind === "view" && fixed) return { kind: "nothing", reason: "the focused View is fixed on its desk" };
   if (owner.kind === "view") return displayId
     ? { kind: "view", id: displayId }
     : { kind: "nothing", reason: "the focused View area has no visible display" };

@@ -1054,6 +1054,7 @@ mod tests {
             json!({"call": "run_stop", "id": "n", "run": 1}),
             json!({"call": "run_open", "id": "n", "run": 1}),
             json!({"call": "run_viewing", "id": "n", "run": 1, "on": true}),
+            json!({"call": "run_result_open", "id": "n", "run": 1, "key": "k"}),
         ] {
             assert!(from_wire(&event).is_none(), "{event}");
         }

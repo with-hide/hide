@@ -3528,3 +3528,484 @@ fn a_pane_with_no_view_keeps_the_desk_the_operator_opened_onto_in_focus_mode() {
     assert_eq!(pair.pane_id, "w-order:t1:p");
     assert!(!pair.alone);
 }
+
+/// What each tab of the desk `tab` is, in tree order: `summary` for a run's
+/// summary card, else a file's name or a page's address.
+fn desk_marks(runtime: &Runtime, directory: &Path, tab: &str) -> Vec<String> {
+    runtime
+        .view_layout_at(&key(directory), &Place::Tray(tab.to_owned()))
+        .map_or_else(Vec::new, |layout| layout.displays().map(mark).collect())
+}
+
+fn mark(display: &crate::view_layout::Display) -> String {
+    if display.is_run_summary() {
+        "summary".to_owned()
+    } else {
+        name_of(display.url.as_deref().unwrap_or(&display.path))
+    }
+}
+
+/// The tab in front on the desk `tab`, as `desk_marks` names it.
+fn desk_front_mark(runtime: &Runtime, directory: &Path, tab: &str) -> Option<String> {
+    let layout = runtime.view_layout_at(&key(directory), &Place::Tray(tab.to_owned()))?;
+    let area = layout.active_area();
+    let active = area.active.as_ref()?;
+    area.displays
+        .iter()
+        .find(|display| &display.id == active)
+        .map(mark)
+}
+
+/// Runs of one automation going in the panes named, as the core's own
+/// start leaves them: the book holds each run with its agent, and the ledger
+/// holds each agent in its pane.
+fn runs_in_panes(runtime: &mut Runtime, runs: &[(&str, u64)]) {
+    let mut ledger = runtime
+        .delivery_state()
+        .map(|ledger| (*ledger).clone())
+        .unwrap_or_default();
+    let mut records = Vec::new();
+    for (pane, number) in runs {
+        ledger.agents.push(crate::coordination::AgentRecord {
+            id: format!("agent-{number}"),
+            name: None,
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: crate::node::TEST_NODE.into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: format!("session-{number}"),
+            instance: (*pane).into(),
+            pane: (*pane).into(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: crate::delivery::Actor {
+                pane_id: (*pane).into(),
+                name: format!("agent-{number}"),
+                kind: "claude".into(),
+                device_id: crate::node::TEST_NODE.into(),
+                session: None,
+            },
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        });
+        records.push(serde_json::json!({
+            "kind": "run", "number": number, "trigger": "manual",
+            "started_at_unix_ms": 1, "state": "running", "attempt": 1,
+            "agent_id": format!("agent-{number}"),
+        }));
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let automation: crate::automations::Automation = serde_json::from_value(serde_json::json!({
+        "id": "auto-1", "name": "Issues", "task": "Sort the new issues",
+        "schedule": {"kind": "daily", "time": "09:00"}, "agent": {"kind": "claude"},
+        "folder": {"path": "/work", "default": false, "worktree": false},
+        "created_at_unix_ms": 1, "records": records, "next_run_number": runs.len(),
+    }))
+    .expect("an automation the core reads");
+    let folder = scratch_dir("hide-run-book-");
+    let (store, mut stored, _) =
+        crate::runtime::automations::restore(folder.path().join("automations.json"));
+    stored.automations.push(automation);
+    runtime.install_automations_store(store, stored, jiff::tz::TimeZone::UTC);
+    runtime.test_dirs.push(folder);
+}
+
+/// One call on the automations, as a window's event or the CLI sends it.
+fn automation_call(
+    runtime: &mut Runtime,
+    call: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let call = serde_json::from_value(call).expect("a call the core reads");
+    runtime.automation_call(call).0
+}
+
+fn run_shown(runtime: &mut Runtime, run: u64, on: bool) {
+    automation_call(
+        runtime,
+        serde_json::json!({"call": "run_viewing", "id": "auto-1", "run": run, "on": on}),
+    )
+    .expect("the run is shown");
+    runtime.sync_workspace_view();
+}
+
+/// The names of the results the book keeps for `run`, oldest first.
+fn result_names(runtime: &Runtime, run: u64) -> Vec<String> {
+    runtime
+        .automation_book()
+        .iter()
+        .flat_map(|automation| automation.runs())
+        .find(|candidate| candidate.number == run)
+        .expect("the run is in the book")
+        .results
+        .iter()
+        .map(|result| name_of(&result.kept.address))
+        .collect()
+}
+
+fn result_key(runtime: &Runtime, run: u64, name: &str) -> String {
+    runtime
+        .automation_book()
+        .iter()
+        .flat_map(|automation| automation.runs())
+        .find(|candidate| candidate.number == run)
+        .expect("the run is in the book")
+        .results
+        .iter()
+        .find(|result| name_of(&result.kept.address) == name)
+        .unwrap_or_else(|| panic!("{name} is a result"))
+        .key()
+}
+
+/// Operator choice 2026-11-24: the desk of a run the automation screen shows
+/// leads with the run's summary card, which is in front on an empty desk,
+/// stays behind what the agent opens while the operator watches, is made once
+/// however often the screen says it shows the run, cannot be closed or moved
+/// to another desk, is no pane's View, is never written to the views file,
+/// and goes with its tab.
+#[test]
+fn a_shown_runs_desk_leads_with_a_summary_card_that_stays_fixed_and_is_never_stored() {
+    let (mut runtime, checkout, directory) = setup("run-summary");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+
+    run_shown(&mut runtime, 1, true);
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), ["summary"]);
+    assert_eq!(
+        desk_front_mark(&runtime, &directory, TABS[1]).as_deref(),
+        Some("summary"),
+        "an empty desk shows the summary"
+    );
+
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "opened");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        desk_marks(&runtime, &directory, TABS[1]),
+        ["summary", "a.md"]
+    );
+    assert_eq!(
+        desk_front_mark(&runtime, &directory, TABS[1]).as_deref(),
+        Some("a.md"),
+        "what the agent opens comes in front, the summary stays beside it"
+    );
+    run_shown(&mut runtime, 1, true);
+    assert_eq!(
+        desk_marks(&runtime, &directory, TABS[1]),
+        ["summary", "a.md"],
+        "said again, it is not made twice"
+    );
+    assert!(
+        pane_rows(&runtime)
+            .iter()
+            .all(|(_, name, _)| !name.is_empty()),
+        "the card is in no pane's list: {:?}",
+        pane_rows(&runtime)
+    );
+
+    // It cannot be closed, whoever asks, nor taken to another desk.
+    let summary = runtime
+        .view_displays(&key(&directory))
+        .find(|display| display.is_run_summary())
+        .expect("the card is placed")
+        .id
+        .clone();
+    let before = desk_marks(&runtime, &directory, TABS[1]);
+    assert!(!runtime.close_view_display(&key(&directory), &summary, None, false));
+    assert!(!runtime.bring_view_to(&key(&directory), &summary, &Place::Tray(TABS[0].to_owned())));
+    runtime.sync_workspace_view();
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), before);
+    assert!(desk_marks(&runtime, &directory, TABS[0]).is_empty());
+
+    // The views file holds the agent's tab and never the card.
+    let folder = scratch_dir("hide-views-written-");
+    let written = folder.path().join("views.json");
+    crate::workspace_views::save(&written, &runtime.workspace_views.as_ref().unwrap().views)
+        .expect("the views file is written");
+    let text = std::fs::read_to_string(&written).unwrap();
+    assert!(text.contains("a.md"), "{text}");
+    assert!(!text.contains("automation_run"), "{text}");
+
+    // The tab leaves the engine: its desk goes, the card with it.
+    runtime.ingest_session(Ok(tab_order_payload(
+        &directory.to_string_lossy(),
+        &[TABS[0], TABS[2]],
+        &[TABS[0], TABS[2]],
+        TABS[0],
+    )));
+    runtime.sync_workspace_view();
+    assert!(
+        runtime
+            .view_layout_at(&key(&directory), &Place::Tray(TABS[1].to_owned()))
+            .is_none()
+    );
+    assert!(
+        runtime
+            .view_displays(&key(&directory))
+            .all(|display| !display.is_run_summary()),
+        "the card is neither inherited nor shelved"
+    );
+}
+
+/// Operator decision 2026-11-21, kept: what a run's agent opened while nobody
+/// watched its pane comes onto its desk when the screen shows the run, the
+/// last in front, though the desk already holds the run's summary card; a desk
+/// holding any other View is left as the operator arranged it.
+#[test]
+fn a_run_desk_holding_only_its_summary_takes_what_its_agent_opened_unwatched() {
+    let (mut runtime, _checkout, directory) = setup("run-gather-summary");
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    for name in ["a.md", "c.md"] {
+        control_file(&mut runtime, "w-order:t2:p", &directory, name, name);
+    }
+    runtime.sync_workspace_view();
+    assert_eq!(shelf(&runtime, &directory), ["a.md", "c.md"]);
+
+    run_shown(&mut runtime, 1, true);
+    assert_eq!(
+        desk_marks(&runtime, &directory, TABS[1]),
+        ["summary", "a.md", "c.md"]
+    );
+    assert_eq!(
+        desk_front_mark(&runtime, &directory, TABS[1]).as_deref(),
+        Some("c.md"),
+        "the last opened is in front"
+    );
+    assert!(shelf(&runtime, &directory).is_empty());
+
+    control_file(&mut runtime, "w-order:t2:p", &directory, "d.md", "later");
+    runtime.sync_workspace_view();
+    assert!(
+        !runtime.gather_run_views("w-order:t2:p"),
+        "a desk that holds a View beyond the summary is left as it is"
+    );
+    assert_eq!(shelf(&runtime, &directory), ["d.md"]);
+}
+
+/// Operator choice 2026-11-24: the Views a run's agent opens are the run's
+/// results, each once with the latest open newest, whichever desk they landed
+/// on and only for that run; pressing a result brings it in front on the
+/// run's desk, a closed one opening again from what was kept as the View of the
+/// run's agent. A press naming no result, or a run with no terminal, is
+/// refused and opens nothing.
+#[test]
+fn a_runs_results_are_what_its_agent_opened_and_open_again_on_its_desk() {
+    let (mut runtime, checkout, directory) = setup("run-results");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1), ("w-order:t3:p", 2)]);
+    run_shown(&mut runtime, 1, true);
+
+    for name in ["a.md", "b.md", "a.md"] {
+        control_file(&mut runtime, "w-order:t2:p", &directory, name, name);
+    }
+    control_file(
+        &mut runtime,
+        "w-order:t3:p",
+        &directory,
+        "c.md",
+        "other-run",
+    );
+    control_file(&mut runtime, "w-order:t1:p", &directory, "d.md", "no-run");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        result_names(&runtime, 1),
+        ["b.md", "a.md"],
+        "each once, the latest open newest"
+    );
+    assert_eq!(result_names(&runtime, 2), ["c.md"], "the other run's own");
+
+    // An open View comes in front.
+    let b = result_key(&runtime, 1, "b.md");
+    let a = result_key(&runtime, 1, "a.md");
+    automation_call(
+        &mut runtime,
+        serde_json::json!({"call": "run_result_open", "id": "auto-1", "run": 1, "key": b}),
+    )
+    .expect("an open result comes in front");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        desk_front_mark(&runtime, &directory, TABS[1]).as_deref(),
+        Some("b.md")
+    );
+
+    // A closed one opens again from what was kept, as its agent's View.
+    let closed = display_id(&runtime, &directory, "a.md");
+    assert!(runtime.close_view_display(&key(&directory), &closed, None, false));
+    runtime.sync_workspace_view();
+    assert!(!desk_marks(&runtime, &directory, TABS[1]).contains(&"a.md".to_owned()));
+    runtime.dispatch_json(&explorer_event(
+        "automation_run_result_open",
+        serde_json::json!({"id": "auto-1", "run": 1, "key": a}),
+    ));
+    runtime.sync_workspace_view();
+    assert_eq!(
+        desk_front_mark(&runtime, &directory, TABS[1]).as_deref(),
+        Some("a.md"),
+        "it opens again on the run's desk, in front"
+    );
+    let reopened = runtime
+        .view_displays(&key(&directory))
+        .find(|display| name_of(&display.path) == "a.md")
+        .expect("it is open again");
+    assert!(
+        reopened.opener.is_some(),
+        "the run's agent opened it again: it is in that agent's list"
+    );
+    assert_eq!(result_names(&runtime, 1), ["b.md", "a.md"]);
+
+    // Refusals open nothing and change no result.
+    let desk = desk_marks(&runtime, &directory, TABS[1]);
+    assert_eq!(
+        automation_call(
+            &mut runtime,
+            serde_json::json!({"call": "run_result_open", "id": "auto-1", "run": 1, "key": "nope"}),
+        ),
+        Err("automation_result_unknown".to_owned())
+    );
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[0].ended = true;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        automation_call(
+            &mut runtime,
+            serde_json::json!({"call": "run_result_open", "id": "auto-1", "run": 1, "key": b}),
+        ),
+        Err("automation_run_no_pane".to_owned()),
+        "a run with no terminal opens nothing"
+    );
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), desk);
+}
+
+/// The screen can say it shows a run before the run's pane has a tab (a run
+/// still starting), so the focus the window then moves to the pane lays the
+/// run's desk too, and only for a run the screen shows.
+#[test]
+fn the_focus_the_window_moves_to_a_shown_runs_pane_lays_its_desk() {
+    let (mut runtime, checkout, directory) = setup("run-summary-focus");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    let lose_summary = |runtime: &mut Runtime| {
+        let summary = runtime
+            .view_displays(&key(&directory))
+            .find(|display| display.is_run_summary())
+            .expect("the card is placed")
+            .id
+            .clone();
+        let place = Place::Tray(TABS[1].to_owned());
+        runtime
+            .change_view_layout(&key(&directory), &place, |layout, _| {
+                layout.remove(&summary);
+                Ok(((), true))
+            })
+            .expect("the card leaves its desk");
+    };
+
+    run_shown(&mut runtime, 1, true);
+    lose_summary(&mut runtime);
+    assert!(desk_marks(&runtime, &directory, TABS[1]).is_empty());
+    runtime.lay_viewed_run_desk("w-order:t2:p");
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), ["summary"]);
+
+    run_shown(&mut runtime, 1, false);
+    lose_summary(&mut runtime);
+    runtime.lay_viewed_run_desk("w-order:t2:p");
+    assert!(
+        desk_marks(&runtime, &directory, TABS[1]).is_empty(),
+        "a run the screen does not show gets no desk laid"
+    );
+}
+
+/// An agent's own `hide view close` meets the same refusal as the window's
+/// close, and the summary is not among the Views it lists.
+#[test]
+fn an_agent_cannot_close_a_run_summary_and_does_not_see_it_listed() {
+    let (mut runtime, checkout, directory) = setup("run-summary-agent");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    run_shown(&mut runtime, 1, true);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "opened");
+    runtime.sync_workspace_view();
+    let summary = runtime
+        .view_displays(&key(&directory))
+        .find(|display| display.is_run_summary())
+        .expect("the card is placed")
+        .id
+        .clone();
+
+    let listed_ids = listed(&runtime, "w-order:t2:p");
+    assert_eq!(
+        listed_ids.len(),
+        1,
+        "only the agent's file is listed: {listed_ids:?}"
+    );
+    assert!(!listed_ids.contains(&summary));
+
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "w-order:t2:p", Query::Info)
+        .unwrap()
+        .context;
+    let refused = runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            "w-order:t2:p",
+            &expected,
+            &format!("{}-close-summary", unix_milliseconds()),
+            Action::Close {
+                view_id: summary.clone(),
+                expected_browser_area: None,
+            },
+            Ok(None),
+        )
+        .unwrap_err();
+    assert_eq!(refused.reason, "view_fixed");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        desk_marks(&runtime, &directory, TABS[1]),
+        ["summary", "a.md"]
+    );
+}
+
+/// A result opens only on the desk in front: with the run's tab behind
+/// another, the press is refused and nothing moves.
+#[test]
+fn a_result_of_a_run_whose_desk_is_behind_opens_nothing() {
+    let (mut runtime, _checkout, directory) = setup("run-result-behind");
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "opened");
+    runtime.sync_workspace_view();
+    let a = result_key(&runtime, 1, "a.md");
+    let before = desk_marks(&runtime, &directory, TABS[1]);
+
+    assert_eq!(
+        automation_call(
+            &mut runtime,
+            serde_json::json!({"call": "run_result_open", "id": "auto-1", "run": 1, "key": a}),
+        ),
+        Err("automation_run_desk_not_in_front".to_owned())
+    );
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), before);
+}
+
+/// A run that opens more Views than the cap while it goes keeps the newest
+/// `RESULT_CAP`, the oldest dropped first, and each once.
+#[test]
+fn a_running_run_that_opens_more_than_the_cap_keeps_the_newest() {
+    let (mut runtime, checkout, directory) = setup("run-results-cap");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    run_shown(&mut runtime, 1, true);
+    let total = crate::automations::RESULT_CAP + 3;
+    for index in 0..total {
+        let name = format!("n{index:02}.md");
+        std::fs::write(directory.join(&name), "x\n").expect("fixture");
+        control_file(&mut runtime, "w-order:t2:p", &directory, &name, &name);
+        runtime.sync_workspace_view();
+    }
+    let kept = result_names(&runtime, 1);
+    assert_eq!(kept.len(), crate::automations::RESULT_CAP);
+    assert_eq!(kept.first().map(String::as_str), Some("n03.md"));
+    assert_eq!(
+        kept.last().map(String::as_str),
+        Some(format!("n{:02}.md", total - 1).as_str())
+    );
+}

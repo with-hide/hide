@@ -1,4 +1,4 @@
-import { CoinsIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon } from "lucide-react";
+import { ClipboardListIcon, CoinsIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -8,6 +8,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { MissionMap } from "./MissionMap";
 import { PlanMap } from "./PlanMap";
 import { ProjectCostView, RemainsView, WorktreesView } from "./ProjectDetail";
+import { RunSummaryCard } from "./AutomationRunSummary";
 import { BranchCardView } from "./BranchCard";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
@@ -46,6 +47,7 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
   if (item.kind === "cost") return <CoinsIcon aria-hidden="true" className={className} data-detail-mark="cost" />;
   if (item.kind === "remains") return <FileDiffIcon aria-hidden="true" className={className} data-detail-mark="remains" />;
   if (item.kind === "branch") return <GitBranchIcon aria-hidden="true" className={className} data-detail-mark="branch" />;
+  if (item.kind === "automation_run") return <ClipboardListIcon aria-hidden="true" className={className} data-detail-mark="automation_run" />;
   if (item.kind !== "pull_request") return <FileTextIcon aria-hidden="true" className={className} />;
   const look = state ? PR_LOOK[state] : null;
   const Icon = look?.icon ?? GitPullRequestIcon;
@@ -67,7 +69,15 @@ export function CardBody({ item, ownerPane = null, actions }: { item: DetailItem
   const front = useDeskFront(item);
   const ownerRow = useShellStore((s) => (ownerPane ? s.agents.find((row) => row.pane_id === ownerPane) ?? null : null));
   const owner: ViewOpener | null = ownerRow ? { name: ownerRow.identity_label, provider: ownerRow.agent_kind, device_id: ownerRow.device_id, pane_id: ownerRow.pane_id, resumable: false } : null;
-  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;
+  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : item.kind === "automation_run" ? `automation_run:${item.automation}:${item.run}` : `${item.kind}:${item.workspace_id}`;
+  // A run's summary is a page of its own: the tab already names it, so it carries no path line (quiet screens).
+  if (item.kind === "automation_run") {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground" data-card={item.kind} key={key}>
+        <RunSummaryCard automation={item.automation} run={item.run} actions={actions} />
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground" data-card={item.kind}>
       <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-xxs border-b border-border bg-card px-xs text-caption" data-card-head="true">

@@ -27,12 +27,14 @@ use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use super::Runtime;
+use super::workspace_view::WorkspaceKey;
 use crate::automations::{
     AgentChoice, Ask, Automation, Call, Changes, Conversation, Draft, Entry, Folder,
-    MACHINE_CHANGED, Notice, Opened, Pause, PauseReason, RunState, RunWorktree, SkipReason, Stored,
-    Trigger, Unreadable, attempt_intent, open_intent, reason_code,
+    MACHINE_CHANGED, Notice, Opened, Pause, PauseReason, RESULT_ADDRESS_LIMIT, RunResult, RunState,
+    RunWorktree, SkipReason, Stored, Trigger, Unreadable, attempt_intent, open_intent, reason_code,
 };
 use crate::latest_file::{LatestFile, read_capped};
+use crate::view_layout::{DisplayKind, KeptView};
 
 /// Hide's own identity the runs start under (D-22).
 pub(crate) const AUTOMATION_ROLE: &str = "automation";
@@ -148,7 +150,7 @@ pub(crate) struct AutomationsRuntime {
     /// Counts what moves the section; the section is made again only when
     /// it or a live run's pane moved.
     edit: u64,
-    composed: Option<(u64, Vec<Option<String>>)>,
+    composed: Option<(u64, Vec<Option<String>>, Vec<RunKey>)>,
     /// The agents of the runs whose terminal the section names, kept when
     /// the book changes so a snapshot read looks only these up.
     live_agents: Vec<String>,
@@ -262,7 +264,7 @@ pub(crate) fn restore(path: PathBuf) -> (Option<LatestFile<Stored>>, Stored, Tim
 }
 
 /// The window event kinds, each one `Call` by the same name.
-pub(super) const EVENT_KINDS: [&str; 10] = [
+pub(super) const EVENT_KINDS: [&str; 11] = [
     "automation_add",
     "automation_edit",
     "automation_pause",
@@ -272,6 +274,7 @@ pub(super) const EVENT_KINDS: [&str; 10] = [
     "automation_run_stop",
     "automation_run_open",
     "automation_run_viewing",
+    "automation_run_result_open",
     "automation_seen",
 ];
 
@@ -2063,13 +2066,29 @@ impl Runtime {
                 restore,
             } => {
                 let before = (!on).then(|| self.viewed_run_pane(&id, run)).flatten();
-                let answer = self.view_run(&id, run, on, now);
+                let (answer, laid) = match self.view_run(&id, run, on, now) {
+                    Ok((value, laid)) => (Ok(value), laid),
+                    Err(code) => (Err(code), false),
+                };
                 let synced = self.sync_viewed_panes();
                 let restored = match (before, restore) {
                     (Some(pane), Some(back)) => self.give_focus_back(&pane, back),
                     _ => false,
                 };
-                return (answer, synced || restored);
+                return (answer, laid || synced || restored);
+            }
+            Call::RunResultOpen { id, run, key } => {
+                return match self.open_run_result(&id, run, &key) {
+                    Ok(value) => (Ok(value), true),
+                    Err(code) => {
+                        crate::diagnostic!(json!({
+                            "component": "automations",
+                            "kind": "automation.result_open_refused",
+                            "automation": id, "run": run, "code": code,
+                        }));
+                        (Err(code.to_owned()), false)
+                    }
+                };
             }
             Call::List => {
                 return (Ok(json!({"items": self.automations_view().items})), false);
@@ -2112,7 +2131,18 @@ impl Runtime {
     /// A window shows the run's terminal in the automation screen, or no
     /// longer does: while it does, the terminal is on screen and is not
     /// closed (B15). The word holds `VIEWING_HOLD_MS` unless sent again.
-    fn view_run(&mut self, id: &str, number: u64, on: bool, now: u64) -> Result<Value, String> {
+    ///
+    /// Showing it also puts the run's summary card first on its tab's desk
+    /// and brings onto the desk what its agent opened unwatched
+    /// (`place_run_summary`, `gather_run_views`); whether either moved a
+    /// View comes back with the answer.
+    fn view_run(
+        &mut self,
+        id: &str,
+        number: u64,
+        on: bool,
+        now: u64,
+    ) -> Result<(Value, bool), String> {
         let id = self
             .automations
             .book
@@ -2120,6 +2150,7 @@ impl Runtime {
             .map(|automation| automation.id.clone())
             .ok_or_else(|| "automation_unknown".to_owned())?;
         let key = (id.clone(), number);
+        let mut laid = false;
         if on {
             let arriving = !self.automations.viewing.contains_key(&key);
             self.automations.viewing.insert(key.clone(), now);
@@ -2127,7 +2158,8 @@ impl Runtime {
                 self.put_away_viewed_run(&key);
             }
             if let Some(pane) = self.viewed_run_pane(&id, number) {
-                self.gather_run_views(&pane);
+                laid |= self.place_run_summary(&pane, &id, number);
+                laid |= self.gather_run_views(&pane);
             }
             while self.automations.viewing.len() > VIEWING_CAP {
                 let oldest = self
@@ -2142,15 +2174,167 @@ impl Runtime {
         } else {
             self.automations.viewing.remove(&key);
         }
-        Ok(json!({"id": id, "run": number, "on": on}))
+        Ok((json!({"id": id, "run": number, "on": on}), laid))
+    }
+
+    /// The window moved the focus to `pane` to show it: when it is the
+    /// terminal of a run the screen shows, its desk gets the summary card and
+    /// what the agent opened unwatched, as when the screen said it shows the
+    /// run. The word can come before the run has a pane or a tab (a run
+    /// still starting), so the pane arriving is the second moment it is laid.
+    pub(super) fn lay_viewed_run_desk(&mut self, pane: &str) {
+        // At most `VIEWING_CAP` runs are shown, so the pane is asked of those only.
+        let Some(key) = self
+            .automations
+            .viewing
+            .keys()
+            .find(|(id, number)| self.viewed_run_pane(id, *number).as_deref() == Some(pane))
+            .cloned()
+        else {
+            return;
+        };
+        self.place_run_summary(pane, &key.0, key.1);
+        self.gather_run_views(pane);
     }
 
     /// The pane of the run `number` of `id` while it has one.
-    fn viewed_run_pane(&self, id: &str, number: u64) -> Option<String> {
+    pub(super) fn viewed_run_pane(&self, id: &str, number: u64) -> Option<String> {
         let id = self.automations.book.find(id)?.id.clone();
         let run = self.run_of(&(id, number))?;
         let ledger = self.delivery_state().ok();
         self.run_pane(run, ledger.as_ref())
+    }
+
+    /// The run whose terminal is `pane`, as the core names it, while the
+    /// run goes or its conversation is open again.
+    fn run_of_pane(&self, pane: &str) -> Option<RunKey> {
+        let ledger = self.delivery_state().ok();
+        self.automations
+            .book
+            .automations
+            .iter()
+            .find_map(|automation| {
+                automation
+                    .runs()
+                    .find(|run| self.run_pane(run, ledger.as_ref()).as_deref() == Some(pane))
+                    .map(|run| (automation.id.clone(), run.number))
+            })
+    }
+
+    /// An agent's `hide file|diff|browser open` in `pane` landed in the View
+    /// `view_id` of `key` (`stamp_control_opener`): when `pane` is a run's
+    /// terminal, the View is one of the run's results, the newest, once. A
+    /// View that keeps no address (an outside file) or one past
+    /// `RESULT_ADDRESS_LIMIT` is not recorded. The book is saved off the lock
+    /// as every run change is.
+    pub(super) fn record_run_result(
+        &mut self,
+        key: &WorkspaceKey,
+        view_id: &str,
+        pane: &str,
+        now: u64,
+    ) {
+        if self.automations.book.automations.is_empty() {
+            return;
+        }
+        let pane = crate::address::named_pane_id(self.node.as_str(), &key.0, pane);
+        let Some((id, number)) = self.run_of_pane(&pane) else {
+            return;
+        };
+        let Some(display) = self.view_display(key, view_id) else {
+            return;
+        };
+        let Some(kept) = KeptView::of(
+            display,
+            super::view_areas::display_label(display),
+            RESULT_ADDRESS_LIMIT,
+        ) else {
+            // A View with no address to open again (an outside file, a card)
+            // is quietly not a result; one whose address is too long is said.
+            let bytes = match display.kind {
+                DisplayKind::File | DisplayKind::Diff => display.path.len(),
+                DisplayKind::Browser => display.url.as_ref().map_or(0, String::len),
+                DisplayKind::External | DisplayKind::Card => 0,
+            };
+            if bytes > RESULT_ADDRESS_LIMIT {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "automations", "kind": "automation.result_not_kept",
+                    "automation": id, "run": number, "address_bytes": bytes,
+                    "limit": RESULT_ADDRESS_LIMIT,
+                }));
+            }
+            return;
+        };
+        // The run's own agent is the opener, found again by its pane when a
+        // result is pressed, so the book keeps no agent's identity per row.
+        let result = RunResult {
+            display_id: view_id.to_owned(),
+            at_unix_ms: now,
+            kept: KeptView {
+                opener: None,
+                ..kept
+            },
+        };
+        let changed = self
+            .automation_mut(&id)
+            .is_some_and(|automation| automation.record_result(number, result));
+        if changed {
+            self.automations_changed(true);
+        }
+    }
+
+    /// The operator pressed a result row of the run's screen
+    /// (`automation_run_result_open`): the View comes in front on the run's
+    /// desk, the open one as it is, a closed one opened again from what the
+    /// result kept, as the View of the run's agent. Refused, with the code
+    /// the log names, when the run has no terminal now, its desk is not the
+    /// one in front, the row is not one of its results, or the open was
+    /// refused.
+    fn open_run_result(&mut self, id: &str, number: u64, key: &str) -> Result<Value, &'static str> {
+        use super::mission_views::KeptOpenRefusal;
+        let id = self
+            .automations
+            .book
+            .find(id)
+            .map(|automation| automation.id.clone())
+            .ok_or("automation_unknown")?;
+        let run = self
+            .run_of(&(id.clone(), number))
+            .ok_or("automation_run_unknown")?;
+        let result = run
+            .results
+            .iter()
+            .find(|result| result.key() == key)
+            .cloned()
+            .ok_or("automation_result_unknown")?;
+        let pane = self
+            .viewed_run_pane(&id, number)
+            .ok_or("automation_run_no_pane")?;
+        let place = self
+            .pane_workspace_key(&pane)
+            .ok_or("automation_run_no_pane")?;
+        // The View opens on the desk in front: the run's, while the screen
+        // shows it (its focus is on the run's pane).
+        if self.pane_tab(&place, &pane).as_deref() != Some(self.front_tab(&place).as_str()) {
+            return Err("automation_run_desk_not_in_front");
+        }
+        let kept = KeptView {
+            opener: self.opener_of_pane(&pane),
+            ..result.kept
+        };
+        match self.open_kept_view(&place, Some(&result.display_id), Some(&kept)) {
+            Ok(open) => Ok(json!({"id": id, "run": number, "open": open})),
+            Err(KeptOpenRefusal::CheckoutGone) => Err("automation_run_checkout_gone"),
+            Err(KeptOpenRefusal::NotKept) => Err("automation_result_not_kept"),
+            Err(KeptOpenRefusal::Page(refusal)) => {
+                crate::diagnostic!(json!({
+                    "component": "automations", "kind": "automation.result_page_refused",
+                    "automation": id, "run": number, "refusal": refusal,
+                }));
+                Err("automation_result_open_refused")
+            }
+            Err(KeptOpenRefusal::Refused) => Err("automation_result_open_refused"),
+        }
     }
 
     /// The automation screen left a run whose pane it had given the focus
@@ -2761,7 +2945,11 @@ impl Runtime {
                 })
             })
             .collect();
-        let inputs = (self.automations.edit, panes);
+        // The runs a window shows carry their answer and results (`shown`),
+        // so the section is made again when that set moves.
+        let mut shown: Vec<RunKey> = self.automations.viewing.keys().cloned().collect();
+        shown.sort();
+        let inputs = (self.automations.edit, panes, shown);
         if self.automations.composed.as_ref() == Some(&inputs) {
             return;
         }

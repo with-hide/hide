@@ -5124,6 +5124,10 @@ pub enum DetailItem {
         #[serde(default)]
         path: Option<String>,
     },
+    /// An automation run's summary: the card its tab's desk keeps first,
+    /// fixed there (no close, no move, never stored), drawn from the
+    /// `automations` section (operator choice 2026-11-24).
+    AutomationRun { automation: String, run: u64 },
 }
 
 /// The cards an older build's 보기 slot kept for one pane, waiting to move
@@ -11472,6 +11476,10 @@ mod wire_enum_tests {
                 row: "s1".into(),
                 path: None,
             },
+            DetailItem::AutomationRun {
+                automation: "a1".into(),
+                run: 1,
+            },
         ];
         for item in &items {
             match item {
@@ -11482,7 +11490,8 @@ mod wire_enum_tests {
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }
                 | DetailItem::Plan { .. }
-                | DetailItem::Branch { .. } => {}
+                | DetailItem::Branch { .. }
+                | DetailItem::AutomationRun { .. } => {}
             }
         }
         let kinds: Vec<String> = items

@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, ChartColumnIcon, CircleAlertIcon, FolderOpenIcon, MinusIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, RepeatIcon, SquareIcon, SunriseIcon, Trash2Icon, XIcon, type LucideIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChartColumnIcon, CircleAlertIcon, FolderOpenIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, RepeatIcon, SquareIcon, SunriseIcon, Trash2Icon, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -6,12 +6,14 @@ import { agentProductName } from "./agentAdapters";
 import { callAutomations } from "./automationCall";
 import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, shownOwnFolder, type AutomationExample } from "./automationDraft";
 import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
+import { type Words, RecordWords, ToneMark, useWords } from "./automationMarks";
+import { RunSummary } from "./AutomationRunSummary";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
-import { lastResult, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, spendText, whenText, type RecordTone } from "./automationWords";
+import { lastResult, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, spendText, whenText } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { LookChip } from "./components/linked-view";
-import { formatElapsed, useMinuteClock } from "./components/elapsed";
+import { formatElapsed } from "./components/elapsed";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Badge } from "./components/ui/badge";
@@ -20,7 +22,7 @@ import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
 import { hostBridge } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
-import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale";
+import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { agentProps } from "./PaneGrid";
 import { PaneView } from "./PaneView";
@@ -38,15 +40,6 @@ import { useUiStore } from "./ui";
 // stands is `AutomationPlace`. Every value is the core's `automations`
 // section; a press is one window event, and the form's calls wait for the
 // core's answer (`automationCall.ts`).
-
-type Words = { t: ReturnType<typeof useInterfaceTranslation>["t"]; language: InterfaceLanguage; zone: string | undefined; now: number };
-
-function useWords(): Words {
-  const { t, i18n } = useInterfaceTranslation();
-  const zone = useShellStore((s) => s.automations?.zone);
-  const now = useMinuteClock();
-  return { t, language: requireInterfaceLanguage(i18n.language), zone, now };
-}
 
 export function AutomationScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -295,40 +288,6 @@ function RecentRuns({ automation, words }: { automation: Automation; words: Word
   );
 }
 
-const TONE_CLASS: Record<RecordTone, string> = {
-  ok: "text-success",
-  failed: "text-destructive",
-  skipped: "text-muted-foreground",
-  running: "text-agent-working",
-  stopped: "text-muted-foreground",
-};
-
-/** A record's mark: ✓, ✗, –, ● or ■ (B3, B16, B20, B22). */
-function ToneMark({ tone }: { tone: RecordTone }) {
-  const className = cn("size-(--size-icon-sm) shrink-0", TONE_CLASS[tone]);
-  switch (tone) {
-    case "ok":
-      return <CheckIcon aria-hidden="true" className={className} />;
-    case "failed":
-      return <XIcon aria-hidden="true" className={className} />;
-    case "skipped":
-      return <MinusIcon aria-hidden="true" className={className} />;
-    case "running":
-      return <span aria-hidden="true" className="flex size-(--size-icon-sm) shrink-0 items-center justify-center"><span className="size-(--size-tab-status-dot) rounded-full bg-agent-working" /></span>;
-    case "stopped":
-      // ■, filled, so it never reads as an empty checkbox.
-      return <SquareIcon aria-hidden="true" className={cn(className, "fill-current")} />;
-  }
-}
-
-function RecordWords({ tone, text }: { tone: RecordTone; text: string }) {
-  return (
-    <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground" data-automation-record-tone={tone}>
-      <ToneMark tone={tone} />
-      <span className={cn("min-w-0 truncate", tone === "failed" && "text-destructive")} title={text}>{text}</span>
-    </span>
-  );
-}
 
 /** `기본 폴더`, `hide · 새 워크트리`: where a run works; the row's logo names the agent. */
 function Where({ automation }: { automation: Automation }) {
@@ -599,8 +558,9 @@ function placeOf(rest: SnapshotRest | null, paneId: string | undefined): { pane:
 }
 
 /**
- * Whether the desk in front is the run's tab's and holds something: the
- * window moved the core's focus to the run's pane (`showAutomationRunPane`),
+ * Whether the desk in front is the run's tab's and holds something (the
+ * core places the run's summary card on it, so any desk of a run's tab does):
+ * the window moved the core's focus to the run's pane (`showAutomationRunPane`),
  * so the front Workspace's desk is the one its agent opened Views on.
  */
 function useRunDesk(tabId: string | null): boolean {
@@ -686,98 +646,10 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
       <div className="flex min-h-0 min-w-0 flex-1" data-automation-run-body={run.number}>
         <div className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col" data-automation-run-side="terminal">{body}</div>
         <div className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-card" role="region" aria-label={desk ? t("panes.lane.documents") : t("automationScreen.run.summary")} data-automation-run-side={desk ? "desk" : "summary"} data-view-area={desk ? "true" : undefined}>
-          {desk ? <ViewAreas actions={actions} /> : <RunSummary automation={automation} run={run} going={going} actions={actions} />}
+          {desk ? <ViewAreas actions={actions} /> : <RunSummary automation={automation} run={run} going={going} actions={actions} pressable={false} />}
         </div>
       </div>
     </>
-  );
-}
-
-/** The answer card's edge, in the run's tone. */
-const TONE_EDGE: Record<RecordTone, string> = {
-  ok: "border-success",
-  failed: "border-destructive",
-  skipped: "border-border",
-  running: "border-agent-working",
-  stopped: "border-border",
-};
-
-/**
- * The right side while the run's agent opened nothing (operator decision
- * 2026-11-21, card A): how the run ended in large, when it started, how and
- * with which agent; the agent's last answer as the body; the task folded to
- * three lines; and the automation's last runs, each a press to that run.
- */
-function RunSummary({ automation, run, going, actions }: { automation: Automation; run: Extract<AutomationRecord, { kind: "run" }>; going: boolean; actions: Actions }) {
-  const words = useWords();
-  const { t } = words;
-  const [taskOpen, setTaskOpen] = useState(false);
-  const shown = recordText(run, words.now, words.zone, words.language, t);
-  const headline = shown.tone === "ok" ? t("automationScreen.run.summaryDone", { time: shown.text }) : shown.text;
-  const when = whenText(run.started_at_unix_ms, words.now, words.zone, words.language, t);
-  const how = run.trigger === "manual" ? t("automationScreen.run.manual") : run.trigger === "missed" ? t("automationScreen.run.missed") : t("automationScreen.run.scheduled");
-  const agent = [agentProductName(automation.agent.kind), automation.agent.model].filter(Boolean).join(" · ");
-  const long = automation.task.length > 160 || automation.task.split("\n").length > 3;
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-lg overflow-y-auto px-lg py-lg" data-automation-run-summary={run.number}>
-      <div className="flex items-center gap-sm" data-automation-run-summary-head={shown.tone}>
-        <span className="flex size-(--size-control) shrink-0 items-center justify-center rounded-full bg-secondary"><ToneMark tone={shown.tone} /></span>
-        <div className="flex min-w-0 flex-col gap-xxs">
-          <span className={cn("truncate text-subhead font-semibold", shown.tone === "failed" && "text-destructive")} title={headline}>{headline}</span>
-          <span className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xxs text-caption text-muted-foreground">
-            <span className="tabular-nums">{when} · {how}</span>
-            <span className="flex min-w-0 items-center gap-xxs"><AgentLogo agent={automation.agent.kind} label={agentProductName(automation.agent.kind)} /><span className="truncate">{agent}</span></span>
-          </span>
-        </div>
-      </div>
-      <section className="flex flex-col gap-xs">
-        <h3 className="text-micro text-muted-foreground">{t("automationScreen.run.summaryAnswer")}</h3>
-        {going ? (
-          <p className="text-caption text-muted-foreground">{t("automationScreen.run.summaryGoing")}</p>
-        ) : run.answer ? (
-          <p className={cn("whitespace-pre-wrap break-words rounded-r-md border-l-2 bg-secondary px-md py-sm text-body text-foreground", TONE_EDGE[shown.tone])} data-automation-run-answer="true">{run.answer}</p>
-        ) : (
-          <p className="text-caption text-muted-foreground">{t("automationScreen.run.summaryNoAnswer")}</p>
-        )}
-      </section>
-      <section className="flex flex-col gap-xxs" data-automation-run-task={taskOpen ? "open" : "folded"}>
-        <h3 className="text-micro text-muted-foreground">{t("automationScreen.run.summaryTask")}</h3>
-        <p className={cn("whitespace-pre-wrap break-words text-caption text-subtle-foreground", !taskOpen && "line-clamp-3")}>{automation.task}</p>
-        {long ? (
-          <Button variant="text" size="inline" className="self-start text-caption" onClick={() => setTaskOpen(!taskOpen)} data-automation-run-task-toggle="true">
-            {taskOpen ? t("automationScreen.run.taskFold") : t("automationScreen.run.taskUnfold")}
-          </Button>
-        ) : null}
-      </section>
-      <RunStrip automation={automation} current={run.number} actions={actions} words={words} />
-    </div>
-  );
-}
-
-/** The automation's last five runs, oldest first, each its mark and a press to it; the run shown is ringed, and `5회 중 4번 끝남` sums them. */
-function RunStrip({ automation, current, actions, words }: { automation: Automation; current: number; actions: Actions; words: Words }) {
-  const { t } = words;
-  const runs = automation.records.filter((record): record is Extract<AutomationRecord, { kind: "run" }> => record.kind === "run").slice(0, 5).reverse();
-  if (runs.length < 2) return null;
-  const done = runs.filter((row) => row.state === "succeeded").length;
-  return (
-    <section className="mt-auto flex flex-col gap-xs" data-automation-run-recent={runs.length}>
-      <h3 className="text-micro text-muted-foreground">{t("automationScreen.run.recent")}</h3>
-      <div className="flex items-center gap-xs">
-        {runs.map((row) => {
-          const line = recordText(row, words.now, words.zone, words.language, t);
-          const label = `${whenText(row.due_unix_ms ?? row.started_at_unix_ms, words.now, words.zone, words.language, t)} · ${line.text}`;
-          return (
-            <Hint key={row.number} label={label}>
-              <Button variant="outline" size="icon-xs" aria-label={label} aria-current={row.number === current ? "true" : undefined} className={cn(row.number === current && "ring-2 ring-ring")} onClick={() => actions.openAutomation(automation.id, row.number)} data-automation-run-recent-item={row.number}>
-                <ToneMark tone={line.tone} />
-              </Button>
-            </Hint>
-          );
-        })}
-        <span className="ml-xs text-caption text-muted-foreground tabular-nums">{t("automationScreen.run.recentDone", { count: runs.length, done })}</span>
-      </div>
-    </section>
   );
 }
 

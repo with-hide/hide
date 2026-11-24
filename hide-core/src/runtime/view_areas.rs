@@ -667,6 +667,32 @@ impl Runtime {
         }
     }
 
+    /// Whether the View `display_id` is a run's summary card, which is fixed
+    /// on its run's desk: it is not closed (by the window or by `hide view
+    /// close`) and does not go to another desk, and a refusal says which
+    /// (`view_layout.run_summary_refused`). Moving it inside its desk and
+    /// splitting it are the layout's own refusals (`AreaItem::pinned`).
+    pub(super) fn refuse_fixed_view(
+        &self,
+        key: &WorkspaceKey,
+        display_id: &str,
+        action: &str,
+    ) -> bool {
+        let fixed = self
+            .view_display(key, display_id)
+            .is_some_and(|display| display.is_run_summary());
+        if fixed {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas",
+                "kind": "view_layout.run_summary_refused",
+                "device": key.0,
+                "display": display_id,
+                "action": action,
+            }));
+        }
+        fixed
+    }
+
     /// Moves the View `id` of `key` onto `place` (D-20: one View, one desk),
     /// making room there first. Whether it moved.
     pub(super) fn bring_view_to(&mut self, key: &WorkspaceKey, id: &str, place: &Place) -> bool {
@@ -674,6 +700,9 @@ impl Runtime {
             Some(from) if &from != place => from,
             _ => return false,
         };
+        if self.refuse_fixed_view(key, id, "move") {
+            return false;
+        }
         if !self.make_view_room(key, place) {
             return false;
         }
@@ -954,6 +983,8 @@ impl Runtime {
         let mut closable: Vec<_> = layout
             .displays()
             .filter(|display| !fronts.contains(display.id.as_str()))
+            // A run's summary card is never closed to make room.
+            .filter(|display| !display.is_run_summary())
             // A file still being restored has no document to close yet.
             .filter(|display| match &display.tab_id {
                 Some(tab_id) => !self.document_kept(tab_id),
@@ -2686,7 +2717,7 @@ impl Runtime {
     }
 
     /// The Workspace of a pane on this Mac: the checkout whose tab holds it.
-    fn pane_workspace_key(&self, pane_id: &str) -> Option<WorkspaceKey> {
+    pub(super) fn pane_workspace_key(&self, pane_id: &str) -> Option<WorkspaceKey> {
         self.snapshot
             .navigator
             .workspaces
@@ -2759,6 +2790,9 @@ impl Runtime {
         let Some(display) = self.view_display(key, display_id) else {
             return self.close_absent_display(key, display_id);
         };
+        if self.refuse_fixed_view(key, display_id, "close") {
+            return false;
+        }
         let (path, kind, committed) = (display.path.clone(), display.kind, display.committed);
         let tab = display.tab_id.clone();
         // A document can show in another Workspace too, a file a terminal
@@ -3260,7 +3294,7 @@ impl Runtime {
 
     /// Whether `tab` of the Workspace `key` holds the terminal of a run the
     /// automation screen shows, which draws the tab's desk beside it.
-    fn viewed_run_tab(&self, key: &WorkspaceKey, tab: &str) -> bool {
+    pub(super) fn viewed_run_tab(&self, key: &WorkspaceKey, tab: &str) -> bool {
         let viewed = self.viewed_panes();
         !viewed.is_empty()
             && self
@@ -3274,13 +3308,68 @@ impl Runtime {
                 .any(|pane| viewed.contains(&pane.id))
     }
 
+    /// Places the summary card of the run `automation` / `run` first in the
+    /// first area of the desk of the tab holding `pane`, its terminal: the
+    /// card the run's screen draws beside it, whose tab is fixed there
+    /// (operator choice 2026-11-24). It takes the front only on an empty
+    /// desk, so what the operator or the run's agent has in front stays in
+    /// front. Made again each time the screen says it shows the run, once
+    /// the desk holds it. Whether a card was placed.
+    pub(super) fn place_run_summary(&mut self, pane: &str, automation: &str, run: u64) -> bool {
+        let Some(key) = self.pane_workspace_key(pane) else {
+            return false;
+        };
+        let Some(tab) = self.pane_tab(&key, pane) else {
+            return false;
+        };
+        let place = Place::Tray(tab);
+        let card = crate::model::DetailItem::AutomationRun {
+            automation: automation.to_owned(),
+            run,
+        };
+        if self.view_layout_at(&key, &place).is_some_and(|layout| {
+            layout
+                .displays()
+                .any(|display| display.card.as_ref() == Some(&card))
+        }) {
+            return false;
+        }
+        if !self.make_view_room(&key, &place) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas", "kind": "view_layout.run_summary_no_room",
+                "device": key.0, "automation": automation, "run": run,
+            }));
+            return false;
+        }
+        let placed = self.change_view_layout(&key, &place, |layout, _| {
+            let display = layout.new_card_display(card);
+            let area = layout
+                .areas()
+                .first()
+                .map(|area| area.id.clone())
+                .unwrap_or_else(|| layout.active_area().id.clone());
+            layout.prepend(&area, display)?;
+            Ok(((), true))
+        });
+        if let Err(error) = placed {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas", "kind": "view_layout.run_summary_refused",
+                "device": key.0, "automation": automation, "run": run,
+                "error": error.kind(),
+            }));
+            return false;
+        }
+        true
+    }
+
     /// A run the automation screen shows draws its tab's desk beside its
-    /// terminal (`viewed_run_tab`). While that desk holds nothing, what the
-    /// run's agent opened while nobody watched its pane, which waits on no
-    /// desk (B1), comes onto it, the last opened in front, as it would have
-    /// had the operator watched (operator decision 2026-11-21). A desk that
-    /// already holds a View is left as the operator arranged it. Whether a
-    /// View moved.
+    /// terminal (`viewed_run_tab`). While that desk holds nothing but the
+    /// run's summary card, what the run's agent opened while nobody watched
+    /// its pane, which waits on no desk (B1), comes onto it, the last opened
+    /// in front, as it would have had the operator watched (operator
+    /// decision 2026-11-21); with nothing to bring, the summary stays in
+    /// front. A desk that already holds another View is left as the operator
+    /// arranged it. Whether a View moved.
     pub(super) fn gather_run_views(&mut self, pane: &str) -> bool {
         let Some(key) = self.pane_workspace_key(pane) else {
             return false;
@@ -3291,7 +3380,7 @@ impl Runtime {
         let place = Place::Tray(tab);
         if self
             .view_layout_at(&key, &place)
-            .is_some_and(|layout| layout.display_count() > 0)
+            .is_some_and(|layout| layout.holds_views_beyond_run_summary())
         {
             return false;
         }

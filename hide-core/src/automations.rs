@@ -28,9 +28,21 @@ pub const AUTOMATION_CAP: usize = 100;
 pub const MAX_ATTEMPTS: u32 = 3;
 /// The file is refused past this size rather than read. A book filled to
 /// every cap below with the widest text JSON writes stays under it
-/// (`a_book_at_every_cap_reads_back`), so a book this core wrote is never
-/// refused.
-pub(crate) const READ_CAP: u64 = 64 * 1024 * 1024;
+/// (`a_book_at_every_cap_reads_back`: 91,466,700 bytes at `RESULT_CAP` 32,
+/// measured), so a book this core wrote is never refused.
+pub(crate) const READ_CAP: u64 = 96 * 1024 * 1024;
+/// What an automation keeps of the Views its runs' agents opened for the
+/// operator (`Run::results`), counted across all its runs: one entry per
+/// View a run's agent opened, the same View again in a run counted once.
+/// A write past it drops the oldest result, whichever run holds it, and logs
+/// it (`automation.result_dropped`); nothing is ever refused, since a result
+/// is a pointer the operator can do without. A read of a book written with a
+/// larger cap cuts to the newest. The runs a record cap drops take their
+/// results with them.
+pub const RESULT_CAP: usize = 32;
+/// The longest address (a file's path or a page's URL, in bytes) a run's
+/// result keeps; a View whose address is longer is not recorded.
+pub const RESULT_ADDRESS_LIMIT: usize = 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
@@ -299,6 +311,38 @@ pub struct Run {
     /// seven days no longer hold it (D-26).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spend: Option<Spend>,
+    /// The Views its agent opened for the operator, oldest first, each
+    /// once: what the run's screen lists as its 결과 and opens again from
+    /// here. Capped across the automation's runs (`RESULT_CAP`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<RunResult>,
+}
+
+/// A View the run's agent opened, as the run's 결과 keeps it: what the View
+/// was (kind, name, address), so it opens again after its tab closed. It
+/// names no device or checkout (the run's own tab is where it opens) and no
+/// opener (the run's agent is, when the press comes).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunResult {
+    /// The View's id when the agent opened it, which an open View is found
+    /// by before its address is.
+    pub display_id: String,
+    pub at_unix_ms: u64,
+    pub kept: crate::view_layout::KeptView,
+}
+
+impl RunResult {
+    /// The name a row asks for this result by, in the snapshot and in
+    /// `automation_run_result_open`: a short token of what it shows (kind,
+    /// address and a diff's group), stable while the list moves.
+    pub fn key(&self) -> String {
+        self.kept.token()
+    }
+
+    fn shows_same(&self, other: &Self) -> bool {
+        self.kept.same_view(&other.kept)
+    }
 }
 
 impl Run {
@@ -552,8 +596,54 @@ impl Automation {
             opens: 0,
             ask: None,
             spend: None,
+            results: Vec::new(),
         }));
         number
+    }
+
+    /// Keeps `result` as the newest of run `number`'s results: the same View
+    /// again moves to newest, once. Past [`RESULT_CAP`] over all the runs
+    /// the oldest goes. Whether the list changed.
+    pub fn record_result(&mut self, number: u64, result: RunResult) -> bool {
+        let Some(run) = self.run_mut(number) else {
+            return false;
+        };
+        if let Some(last) = run.results.last_mut()
+            && last.shows_same(&result)
+        {
+            let changed = last.display_id != result.display_id;
+            *last = result;
+            return changed;
+        }
+        run.results.retain(|known| !known.shows_same(&result));
+        run.results.push(result);
+        self.trim_results();
+        true
+    }
+
+    /// Drops the oldest results, whichever run holds them, down to
+    /// [`RESULT_CAP`].
+    fn trim_results(&mut self) {
+        loop {
+            let total: usize = self.runs().map(|run| run.results.len()).sum();
+            if total <= RESULT_CAP {
+                return;
+            }
+            let oldest = self
+                .records
+                .iter_mut()
+                .filter_map(|entry| match entry {
+                    Entry::Run(run) if !run.results.is_empty() => Some(run),
+                    _ => None,
+                })
+                .min_by_key(|run| run.results[0].at_unix_ms)
+                .expect("over the cap, so a run holds results");
+            let dropped = oldest.results.remove(0);
+            crate::diagnostic!(serde_json::json!({
+                "component": "automations", "kind": "automation.result_dropped",
+                "automation": self.id, "total": total, "at_unix_ms": dropped.at_unix_ms,
+            }));
+        }
     }
 
     /// The run `number`, refused by the provider for the account's usage
@@ -760,6 +850,14 @@ pub enum Call {
         /// 2026-11-21).
         #[serde(default)]
         restore: Option<String>,
+    },
+    /// The operator pressed a result row of the run's screen: that View, by
+    /// the row's `key` (`RunResult::key`), opens on the run's desk, in front
+    /// (operator choice 2026-11-24).
+    RunResultOpen {
+        id: String,
+        run: u64,
+        key: String,
     },
     /// The operator looked at the automation's runs (B11).
     Seen {
@@ -1048,12 +1146,25 @@ pub struct RunSnapshot {
     /// section does not grow by a paragraph for each of its runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// What the run's agent opened for the operator, newest first, while a
+    /// window shows the run, as `answer` rides: the run screen's 결과.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<ResultSnapshot>,
+}
+
+/// One row of a run's 결과: the View's kind and name, and the `key` a press
+/// on it names it by (`RunResult::key`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ResultSnapshot {
+    pub key: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
 }
 
 impl AutomationsSnapshot {
     /// The section of `book`, each run's terminal named by `run_pane`, each
-    /// opened conversation's by `opened_pane`, and the answer of each run
-    /// `shown` names (automation id, run number).
+    /// opened conversation's by `opened_pane`, and the answer and results of
+    /// each run `shown` names (automation id, run number).
     pub fn of(
         book: &Stored,
         zone: &TimeZone,
@@ -1111,6 +1222,19 @@ impl AutomationsSnapshot {
                             answer: shown(&automation.id, run.number)
                                 .then(|| run.answer.clone())
                                 .flatten(),
+                            results: if shown(&automation.id, run.number) {
+                                run.results
+                                    .iter()
+                                    .rev()
+                                    .map(|result| ResultSnapshot {
+                                        key: result.key(),
+                                        kind: result.kept.kind,
+                                        label: result.kept.label.clone(),
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            },
                         }),
                         Entry::Skipped {
                             at_unix_ms,
@@ -1166,6 +1290,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Stored, String> {
     for automation in &mut stored.automations {
         let excess = automation.records.len().saturating_sub(RECORD_CAP);
         automation.records.drain(..excess);
+        automation.trim_results();
     }
     let excess = stored.cleanups.len().saturating_sub(CLEANUP_CAP);
     stored.cleanups.drain(..excess);
@@ -1594,6 +1719,167 @@ mod tests {
         assert_eq!(answer(true).as_deref(), Some("보고서를 열었어요."));
     }
 
+    /// A result as a run keeps it: a file named `name` opened at `at`.
+    fn result(name: &str, at: u64) -> RunResult {
+        RunResult {
+            display_id: format!("v-{name}-{at}"),
+            at_unix_ms: at,
+            kept: crate::view_layout::KeptView {
+                kind: crate::view_layout::DisplayKind::File,
+                label: name.into(),
+                address: format!("/work/{name}"),
+                committed: false,
+                opener: None,
+            },
+        }
+    }
+
+    fn labels(automation: &Automation, number: u64) -> Vec<String> {
+        automation
+            .runs()
+            .find(|run| run.number == number)
+            .unwrap()
+            .results
+            .iter()
+            .map(|result| result.kept.label.clone())
+            .collect()
+    }
+
+    /// Operator choice 2026-11-24: a run keeps each View its agent opened
+    /// once, the newest last: opening the same one again moves it to newest,
+    /// and a repeat of the newest one changes nothing the book has to save.
+    #[test]
+    fn a_run_keeps_each_view_its_agent_opened_once_with_the_latest_open_newest() {
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let number = automation.new_run(Trigger::Manual, None, now);
+        assert!(automation.record_result(number, result("report.md", 1)));
+        assert!(automation.record_result(number, result("chart.png", 2)));
+        assert!(automation.record_result(number, result("report.md", 3)));
+        assert_eq!(labels(&automation, number), ["chart.png", "report.md"]);
+        assert!(
+            !automation.record_result(number, result("report.md", 3)),
+            "the newest again is no change"
+        );
+        assert!(
+            !automation.record_result(number + 1, result("x.md", 4)),
+            "a run that is not there keeps nothing"
+        );
+    }
+
+    /// Engineering 15: the cap counts across the automation's runs and
+    /// drops the oldest result, whichever run holds it; the newest and every
+    /// other run's own stay.
+    #[test]
+    fn results_past_the_cap_drop_the_oldest_across_the_runs() {
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let first = automation.new_run(Trigger::Manual, None, now);
+        let second = automation.new_run(Trigger::Manual, None, now);
+        // The older run holds half of the cap, then the newer run fills the
+        // rest and one more.
+        for index in 0..RESULT_CAP / 2 {
+            assert!(automation.record_result(first, result(&format!("a{index}"), index as u64)));
+        }
+        for index in 0..=RESULT_CAP / 2 {
+            let at = (RESULT_CAP / 2 + index) as u64;
+            assert!(automation.record_result(second, result(&format!("b{index}"), at)));
+        }
+        let held = |number| labels(&automation, number).len();
+        assert_eq!(held(first) + held(second), RESULT_CAP);
+        assert_eq!(
+            labels(&automation, first)[0],
+            "a1",
+            "the oldest, a0, went from the older run"
+        );
+        assert_eq!(
+            labels(&automation, second).last().unwrap(),
+            &format!("b{}", RESULT_CAP / 2),
+            "the newest stays"
+        );
+    }
+
+    /// Operator choice 2026-11-24: a run's results ride the section newest
+    /// first, only while a window shows the run, as its answer does; a book
+    /// written before results read with none.
+    #[test]
+    fn a_runs_results_ride_the_section_newest_first_only_while_the_run_is_shown() {
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let number = automation.new_run(Trigger::Manual, None, now);
+        automation.record_result(number, result("report.md", 1));
+        automation.record_result(number, result("chart.png", 2));
+        let stored = Stored {
+            automations: vec![automation],
+            ..Stored::default()
+        };
+        let rows = |shown: bool| {
+            let section = AutomationsSnapshot::of(
+                &stored,
+                &seoul(),
+                None,
+                |_| None,
+                |_| None,
+                |id, run| shown && id == "abc123" && run == number,
+            );
+            match &section.items[0].records[0] {
+                RecordSnapshot::Run(run) => run.results.clone(),
+                other => panic!("a run's record, not {other:?}"),
+            }
+        };
+        assert!(rows(false).is_empty());
+        let shown = rows(true);
+        assert_eq!(
+            shown
+                .iter()
+                .map(|row| row.label.as_str())
+                .collect::<Vec<_>>(),
+            ["chart.png", "report.md"]
+        );
+        assert_ne!(shown[0].key, shown[1].key);
+        let keys = stored.automations[0].runs().next().unwrap().results[1].key();
+        assert_eq!(shown[0].key, keys, "a row's key names its result");
+
+        // A book an earlier build wrote has no `results` on its runs.
+        let mut book: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        book["automations"][0]["records"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("results")
+            .expect("the run wrote its results");
+        let read = decode(book.to_string().as_bytes()).unwrap();
+        assert!(
+            read.automations[0]
+                .runs()
+                .next()
+                .unwrap()
+                .results
+                .is_empty()
+        );
+    }
+
+    /// Engineering 15 on the read: a book written with a larger result cap
+    /// reads cut to the newest results.
+    #[test]
+    fn a_book_with_more_results_than_the_cap_reads_cut_to_the_newest() {
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let number = automation.new_run(Trigger::Manual, None, now);
+        let run = automation.run_mut(number).unwrap();
+        run.results = (0..RESULT_CAP + 5)
+            .map(|index| result(&format!("f{index}"), index as u64))
+            .collect();
+        let stored = Stored {
+            automations: vec![automation],
+            ..Stored::default()
+        };
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        let kept = labels(&read.automations[0], number);
+        assert_eq!(kept.len(), RESULT_CAP);
+        assert_eq!(kept[0], "f5");
+    }
+
     #[test]
     fn a_book_written_by_a_newer_build_is_refused_and_records_are_capped() {
         assert!(decode(br#"{"schema_version": 9}"#).is_err());
@@ -1692,6 +1978,30 @@ mod tests {
                 ask: (index == 1).then(|| ask(None)),
             });
             run.opens = u32::MAX;
+        }
+        // The results the cap keeps, each at its longest, spread over the
+        // runs (the cap counts across them, so any spread adds up alike).
+        for index in 0..RESULT_CAP {
+            let run = full
+                .records
+                .iter_mut()
+                .filter_map(|entry| match entry {
+                    Entry::Run(run) => Some(run),
+                    _ => None,
+                })
+                .nth(index % RECORD_CAP)
+                .unwrap();
+            run.results.push(RunResult {
+                display_id: wide(64),
+                at_unix_ms: u64::MAX,
+                kept: crate::view_layout::KeptView {
+                    kind: crate::view_layout::DisplayKind::Diff,
+                    label: wide(crate::view_layout::KEPT_LABEL_LIMIT),
+                    address: wide(RESULT_ADDRESS_LIMIT),
+                    committed: true,
+                    opener: None,
+                },
+            });
         }
         let choice = full.agent.clone();
         let one = |automations: Vec<Automation>, cleanups: Vec<Cleanup>| {

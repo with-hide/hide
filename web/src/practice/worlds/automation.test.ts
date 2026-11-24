@@ -142,7 +142,8 @@ describe("the automation flow's script (UI_BEHAVIOR, Practice window)", () => {
     expect(after.focused).toBe(RUN_PANE);
     expect(after.rest.navigator!.focused_workspace_id).toBe("automation-a1");
     expect(after.rest.workspace_view!.tray.tab_id).toBe("t1");
-    expect(after.rest.workspace_view!.layout!.display_count).toBe(1);
+    // The run's summary leads its desk, then what the agent opened; before anything was gathered the summary alone is in front.
+    expect(after.rest.workspace_view!.layout!.display_count).toBe(2);
     expect(after.frames!.documents!.file1!.contents_utf8).toContain("# Morning briefing");
     expect(cards(shown).map((card) => card.root)).toEqual([LEAD]);
     expect(rows(shown).find((one) => one.pane_id === RUN_PANE)!.mark).toBe("quiet");
@@ -156,7 +157,23 @@ describe("the automation flow's script (UI_BEHAVIOR, Practice window)", () => {
     expect(left.gathered).toBe(true);
     // Shown again, the desk still holds it.
     const again = AUTOMATION_WORLD.snapshot(apply(left, focusRun(true)), Date.now());
-    expect(again.rest.workspace_view!.layout!.display_count).toBe(1);
+    expect(again.rest.workspace_view!.layout!.display_count).toBe(2);
+  });
+
+  it("leads the run's desk with its summary, lists what the agent opened as results, and opens a pressed row in front", () => {
+    const summaryOnly = (model: AutomationModel) => {
+      const layout = AUTOMATION_WORLD.snapshot(model, Date.now()).rest.workspace_view!.layout!;
+      const area = "area" in layout.root ? layout.root.area : null;
+      return { kinds: area!.displays.map((display) => display.card?.kind ?? display.kind), active: area!.active };
+    };
+    const shown = apply(apply(finished(), focusRun(false)), viewing(true));
+    expect(summaryOnly(shown)).toEqual({ kinds: ["automation_run"], active: "summary1" });
+    expect(section(shown).items[0]!.records[0]).toMatchObject({ results: [{ key: "briefing", kind: "file", label: "morning-briefing.md" }] });
+    // Results ride the run only while the screen shows it.
+    expect(section(apply(shown, viewing(false))).items[0]!.records[0]).not.toHaveProperty("results");
+    const pressed = apply(shown, event("automation_run_result_open", { id: AUTOMATION_ID, run: 1, key: "briefing" }));
+    expect(summaryOnly(pressed)).toEqual({ kinds: ["automation_run", "file"], active: "view1" });
+    expect(AUTOMATION_WORLD.apply(shown, event("automation_run_result_open", { id: AUTOMATION_ID, run: 1, key: "nothing" }))).toBeNull();
   });
 
   it("says the run viewed on the pane's focus alone, and asks nothing of a run that does not exist yet", () => {

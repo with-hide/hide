@@ -1,6 +1,6 @@
 import { ExternalDisplay } from "./ExternalDisplay";
 import { useExternalGrant } from "./externalFiles";
-import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
@@ -9,7 +9,6 @@ import { AreaEmpty } from "./AreaEmpty";
 import { BrowserDisplay } from "./BrowserDisplay";
 import { focusBrowserDisplay, hostKey, useBrowserStore } from "./browserViews";
 import { Badge } from "./components/ui/badge";
-import { FileMark } from "./components/file-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
@@ -18,16 +17,16 @@ import { CardBody, DetailIcon, useCardTitle } from "./CardBody";
 import { cardTitle } from "./cardTitle";
 import { StatusMark } from "./components/status-mark";
 import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
-import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { windowDeviceId } from "./screenMachine";
 import { editorTabFor, frontCheckout, type ViewDisplaySnapshot, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
+import { ViewKindMark } from "./viewMark";
 import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
-import { displayIdentity, displayMenu, displayName, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
+import { displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
 import { DeskExpandButton, DeskPairButton, PairOthers } from "./DeskPairControls";
 import { drawnPair } from "./pairView";
@@ -260,6 +259,8 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
   ].filter(Boolean).join(" · ");
   const name = displayName(display, t);
   const closeLabel = t("documents.closeView", { label: name });
+  // A run's summary is fixed on its desk (operator choice 2026-11-24): the core refuses to close or move it, so its tab draws neither a close button nor a drag.
+  const fixed = isFixedDisplay(sent);
   return (
     <Hint label={identity} reveals>
     <div
@@ -281,11 +282,11 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
       className={`group relative flex min-w-0 flex-1 cursor-default select-none items-center gap-xs ${fit.tab} text-caption outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
         selected ? `text-foreground ${areaActive ? "bg-background" : "bg-secondary"}` : "text-subtle-foreground hover:bg-accent"
       } ${interaction.dragging ? "opacity-[var(--opacity-dimmed)]" : ""}`}
-      onPointerDown={interaction.press}
+      onPointerDown={fixed ? undefined : interaction.press}
       onClick={() => {
         interaction.select();
       }}
-      onDoubleClick={() => actions.keepViewOpen(display.id)}
+      onDoubleClick={fixed ? undefined : () => actions.keepViewOpen(display.id)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -309,22 +310,24 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
       </span>
       {display.kind === "external" && fit.title !== "hidden" ? <ExternalBadge path={outside?.path ?? null} /> : null}
       <CommentCount display={display} />
-      <Hint label={closeLabel}>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={`${fit.close} shrink-0 hover:bg-popover hover:text-foreground focus-visible:visible group-hover:visible ${selected ? "visible" : "invisible"}`}
-          aria-label={closeLabel}
-          data-keyboard-stays="true"
-          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
-          onClick={(event) => {
-            event.stopPropagation();
-            actions.closeView(display.id);
-          }}
-        >
-          <XIcon />
-        </Button>
-      </Hint>
+      {fixed ? null : (
+        <Hint label={closeLabel}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={`${fit.close} shrink-0 hover:bg-popover hover:text-foreground focus-visible:visible group-hover:visible ${selected ? "visible" : "invisible"}`}
+            aria-label={closeLabel}
+            data-keyboard-stays="true"
+            onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+            onClick={(event) => {
+              event.stopPropagation();
+              actions.closeView(display.id);
+            }}
+          >
+            <XIcon />
+          </Button>
+        </Hint>
+      )}
       {selected && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-primary" /> : null}
     </div>
     </Hint>
@@ -355,15 +358,7 @@ function tabLabel(display: ViewDisplaySnapshot, t: Parameters<typeof cardTitle>[
 /** A file's type mark, the diff's comparison mark or a card's own; never colour alone (D-15). */
 export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label" | "card">) {
   if (display.kind === "card" && display.card) return <DetailIcon item={display.card} className="size-(--size-icon) shrink-0 text-muted-foreground" />;
-  if (display.kind === "browser") return <GlobeIcon aria-hidden="true" data-view-mark="browser" className="size-(--size-icon) shrink-0 text-muted-foreground" />;
-  if (display.kind === "diff") {
-    return (
-      <span aria-hidden="true" data-view-mark="diff" className="shrink-0 font-mono text-warning">
-        ±
-      </span>
-    );
-  }
-  return <FileMark icon={fileIcon(display.label)} data-view-mark="file" />;
+  return <ViewKindMark kind={display.kind} label={display.label} />;
 }
 
 /** The minimum-density identity choice lives here so review can replace it without changing the fit curve. */
