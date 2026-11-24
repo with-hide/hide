@@ -919,10 +919,10 @@ test("browser: hide browser open shows an HTML file of the calling pane's own ch
   const page = await shellPage(app);
   await enterWorkspaceWithLane(page, "fixture");
 
-  const opened = await openFromCli(report);
-  expect(opened, JSON.stringify(opened)).toMatchObject({ status: 0, ok: true });
-  await expect(tab(page, "Checkout report")).toBeVisible({ timeout: 20_000 });
+  const opened = await openFromCli(report, ["--wait"]);
+  expect(opened, JSON.stringify(opened)).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
   expect((await views()).some((view) => view.url.startsWith("file://") && view.title === "Checkout report")).toBe(true);
+  await expect(tab(page, "Checkout report")).toBeVisible();
 });
 
 test("new-tab: empty page creates no native renderer and address loads in the same display", async () => {
