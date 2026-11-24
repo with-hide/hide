@@ -26,7 +26,7 @@ import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
-import { displayIdentity, displayMenu, displayName, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
+import { displayIdentity, displayMenu, displayName, focusRequestArrived, isFixedDisplay, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
 import { DeskExpandButton, DeskPairButton, PairOthers } from "./DeskPairControls";
 import { drawnPair } from "./pairView";
@@ -260,7 +260,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
   const name = displayName(display, t);
   const closeLabel = t("documents.closeView", { label: name });
   // A run's summary is fixed on its desk (operator choice 2026-11-24): the core refuses to close or move it, so its tab draws neither a close button nor a drag.
-  const fixed = sent.card?.kind === "automation_run";
+  const fixed = isFixedDisplay(sent);
   return (
     <Hint label={identity} reveals>
     <div

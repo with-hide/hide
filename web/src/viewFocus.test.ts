@@ -9,6 +9,11 @@ describe("close shortcut policy", () => {
     expect(decide({ kind: "view", workspace: "workspace", areaId: "a1" })).toEqual({ kind: "view", id: "d1" });
   });
 
+  it("closes nothing while the display in front is fixed on its desk", () => {
+    const owner: KeyboardOwner = { kind: "view", workspace: "workspace", areaId: "a1" };
+    expect(closeShortcutPolicy({ owner, workspace: "workspace", displayId: "d1", fixed: true, paneIds: ["p1"] })).toEqual({ kind: "nothing", reason: "the focused View is fixed on its desk" });
+  });
+
   it("closes only the keyboard's pane in a split tab or a one-pane tab", () => {
     const owner: KeyboardOwner = { kind: "pane", workspace: "workspace", paneId: "p2" };
     expect(decide(owner)).toEqual({ kind: "pane", id: "p2" });

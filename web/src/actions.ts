@@ -110,6 +110,7 @@ import {
   areasOf,
   displaysOfDocument,
   findArea,
+  isFixedDisplay,
   locateDisplay,
   menuEdge,
   neighbourArea,
@@ -3202,6 +3203,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         owner,
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
         displayId: viewUp("documents") ? area?.active ?? null : null,
+        fixed: area?.displays.some((display) => display.id === area.active && isFixedDisplay(display)) ?? false,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
       });
       if (target.kind === "view") return closeView(target.id);

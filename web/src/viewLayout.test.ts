@@ -10,6 +10,7 @@ import {
   type ExternalReveal,
   dropTarget,
   focusRequestArrived,
+  isFixedDisplay,
   neighbourArea,
   placeKey,
   ratioForFirst,
@@ -418,5 +419,25 @@ describe("a display's identity", () => {
 
   it("names the kind and the state in the chosen language", () => {
     expect(displayIdentity(display("d1", { kind: "diff", committed: true, preview: true }), ko)).toBe("브랜치 변경 비교: /repo/d1.md · 미리보기");
+  });
+});
+
+describe("a run's summary card is fixed on its desk", () => {
+  const summary = display("s1", { kind: "card", path: "", tab_id: null, card: { kind: "automation_run", automation: "auto-1", run: 1 } });
+  const root = split("s1x", "row", 0.5, area("a1", [summary, "a"]), area("a2", ["b"]));
+  const external: ExternalReveal = { host: null, device: "local", node: "local" };
+  const ids = (entries: { id: string }[]) => entries.map((entry) => entry.id);
+
+  it("is read from the card kind alone", () => {
+    expect(isFixedDisplay(summary)).toBe(true);
+    expect(isFixedDisplay(display("a"))).toBe(false);
+    expect(isFixedDisplay(display("c", { kind: "card", card: { kind: "mission", mission: "m1" } }))).toBe(false);
+  });
+
+  it("offers no close, keep open, split or move in its menu, while another tab keeps them", () => {
+    const fixedMenu = ids(displayMenu(layout(root), viewGeometry(root, body(1000), SIZES), SIZES, "s1", external));
+    for (const gone of ["close_view", "keep_open", "split_right", "split_down", "move_right", "move_left"]) expect(fixedMenu).not.toContain(gone);
+    const ordinary = ids(displayMenu(layout(root), viewGeometry(root, body(1000), SIZES), SIZES, "a", external));
+    expect(ordinary).toContain("close_view");
   });
 });
