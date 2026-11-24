@@ -1318,7 +1318,7 @@ impl Runtime {
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
-            lane: desk.stored.lane.clone(),
+            lane: desk.stored.lane,
         }));
     }
 

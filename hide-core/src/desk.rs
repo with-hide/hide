@@ -610,10 +610,12 @@ mod tests {
             pinned: bool,
             kept: Vec<serde_json::Value>,
         }
-        let mut stored = Stored::default();
-        stored.lane = crate::model::DeskLane {
-            view_width: Some(720),
-            session_width: Some(480),
+        let stored = Stored {
+            lane: crate::model::DeskLane {
+                view_width: Some(720),
+                session_width: Some(480),
+            },
+            ..Stored::default()
         };
         let bytes = encode(&stored).unwrap();
         assert_eq!(decode(&bytes).unwrap().lane, stored.lane);
