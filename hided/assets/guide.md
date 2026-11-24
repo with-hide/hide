@@ -160,7 +160,7 @@ hide device update <device> [--json]
 hide device address <device> <ip:port> [--json]
 hide device rename <device> <name> [--json]
 hide device retry <device> [--wait] [--json]
-hide device switch <device> [--install] [--own-folder] [--json]
+hide device switch <device> [--install] [--own-folder | --keep] [--json]
 ```
 
 - Add, connect or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
