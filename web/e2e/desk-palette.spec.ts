@@ -10,7 +10,7 @@ import { countSent, enterWorkspace, screenshot } from "./wire";
 // engine and hided. With no session open beside Desk, ⌘P searches every
 // project at once, each result led by its project, and a pick is opened as the
 // preview of the tab panel without leaving Desk; ⌘K finds the same rows as
-// elsewhere. Every other screen keeps its palettes (`DeskFilePalette.test.tsx`,
+// elsewhere. Every other screen keeps its palettes (`Palette.desk.test.tsx`,
 // `SearchPalette.desk.test.tsx` hold the rules; this holds the wire and the
 // screen). Captured for the design comparison.
 
@@ -82,7 +82,7 @@ test("⌘K on Desk lists the sessions, and Escape hands the screen back to Desk 
     const palette = page.locator('[data-palette="Search"]');
     await expect(palette).toBeVisible();
     await palette.locator("[data-palette-input]").fill("Agent");
-    await expect(palette.locator("[data-palette-row]").first()).toBeVisible();
+    await expect(palette.locator('[data-palette-group="agents"] [data-palette-row]').first()).toBeVisible();
     await screenshot(page, "palette-k-desk");
     await page.keyboard.press("Escape");
     await expect(palette).toHaveCount(0);

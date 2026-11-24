@@ -156,6 +156,16 @@ export function listedCheckouts(rest: SnapshotRest | null): { device: string; wo
   return [...local, ...remote].flatMap(({ device, workspace }) => workspace.checkouts.map((checkout) => ({ device, workspace, checkout })));
 }
 
+/** The listed checkout at `root` on `device` (PRD desk-2-ui B19, B37, B38). */
+export function checkoutAtRoot(rest: SnapshotRest | null, device: string, root: string) {
+  return listedCheckouts(rest).find((row) => row.device === device && row.checkout.path === root) ?? null;
+}
+
+/** The listed checkout whose tab holds `paneId` (PRD desk-2-ui B35, B37). */
+export function checkoutOfPaneIn(rest: SnapshotRest | null, paneId: string) {
+  return listedCheckouts(rest).find((row) => row.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId))) ?? null;
+}
+
 /**
  * Where each pane sits, as `project › branch` (Home, or the project alone for
  * a plain folder), keyed by pane id. A pane whose agent Hide AI started names

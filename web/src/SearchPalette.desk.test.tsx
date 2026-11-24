@@ -77,26 +77,59 @@ describe("⌘K on Desk", () => {
   });
   const groups = () => [...document.querySelectorAll("[data-palette-group]")].map((group) => group.getAttribute("data-palette-group"));
 
+  const system = (platform: "MacIntel" | "Win32") => Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
+  /** Moves the highlight with the arrow keys onto the row of `group`, the row Enter then acts on. */
+  const highlight = async (group: string) => {
+    for (let step = 0; step < 12; step += 1) {
+      if (document.querySelector(`[data-palette-group="${group}"] [data-selected="true"]`)) return;
+      await act(async () => document.querySelector("[data-palette-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    }
+    throw new Error(`no row of ${group} could be highlighted`);
+  };
+
+  it("lists the sessions, PRs and missions before anything is typed, and no Recent checkouts", async () => {
+    await open("");
+    expect(groups()).toEqual(["agents", "pull-requests", "missions"]);
+  });
+
   it("opens a session beside Desk on ↵ and goes to its tab on ⌘↵", async () => {
+    system("MacIntel");
     await open("login");
     expect(groups()).toEqual(expect.arrayContaining(["agents", "pull-requests", "missions"]));
-    const row = document.querySelector('[data-palette-row="agent:local:p1"], [data-palette-group="agents"] [data-palette-row]');
-    expect(row).not.toBeNull();
-    // The session row comes first among the groups when its title matches best; ↵ acts on the highlighted row.
+    await highlight("agents");
     await press({});
     expect(useUiStore.getState().deskRoom.session).toBe("p1");
     expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
 
     useUiStore.setState({ overlay: "search", deskRoom: DESK_ROOM_CLOSED });
     await open("login");
-    await press({ metaKey: true, ctrlKey: true });
+    await highlight("agents");
+    await press({ metaKey: true });
     expect(useUiStore.getState().deskReturn).toBe("p1");
     // The session's tab is asked of the core, which moves the screen, and Desk takes no session beside it.
     expect(sent.some((event) => JSON.stringify(event.payload).includes('"p1"'))).toBe(true);
     expect(useUiStore.getState().deskRoom.session).toBeNull();
   });
 
+  it("goes to a session's tab on the system's own command key: ⌘ on macOS, Ctrl elsewhere", async () => {
+    for (const [platform, held, other] of [["MacIntel", { metaKey: true }, { ctrlKey: true }], ["Win32", { ctrlKey: true }, { metaKey: true }]] as const) {
+      system(platform);
+      for (const [init, tab] of [[held, true], [other, false]] as const) {
+        useUiStore.setState({ overlay: "search", deskRoom: DESK_ROOM_CLOSED, screen: { kind: "desk" }, deskReturn: null });
+        await open("login");
+        await highlight("agents");
+        await press(init);
+        // A plain ↵ opens the session beside Desk; the command key goes to its tab.
+        expect(useUiStore.getState().deskReturn === "p1").toBe(tab);
+        expect(useUiStore.getState().deskRoom.session === "p1").toBe(!tab);
+        await act(async () => root.unmount());
+        root = createRoot(container);
+      }
+    }
+  });
+
   it("opens a PR and a mission in the tab panel, opens no session for them, and keeps ⌘↵ the same as ↵ on them", async () => {
+    system("MacIntel");
     await open("login mission");
     const mission = document.querySelector<HTMLElement>('[data-palette-row="mission:mission-a"]')!;
     expect(mission.textContent).toContain("1/2 · fixture");
@@ -107,7 +140,7 @@ describe("⌘K on Desk", () => {
 
     useUiStore.setState({ overlay: "search", deskRoom: DESK_ROOM_CLOSED });
     await open("12345");
-    await press({ metaKey: true, ctrlKey: true });
+    await press({ metaKey: true });
     room = useUiStore.getState().deskRoom;
     expect(room.session).toBeNull();
     expect(activeTab(room.panel)).toMatchObject({ kind: "output", output: { kind: "pr", label: `#${12345}` } });

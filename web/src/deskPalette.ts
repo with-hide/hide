@@ -6,8 +6,8 @@
 
 import type { DeskItem } from "./desk";
 import type { DeskTab } from "./deskRoom";
-import { listedCheckouts } from "./navigation";
-import type { SearchEntry } from "./search";
+import { checkoutAtRoot, checkoutOfPaneIn, listedCheckouts } from "./navigation";
+import { groupEntries, type SearchEntry, type SearchSection } from "./search";
 import type { SnapshotRest } from "./snapshot";
 
 /** A file a ⌘P answer names, with the checkout it is in. */
@@ -22,7 +22,7 @@ export type DeskFileScope = { kind: "checkout"; device: string; root: string } |
  */
 export function deskFileScope(rest: SnapshotRest | null, session: string | null): DeskFileScope {
   if (session === null) return { kind: "all" };
-  const found = listedCheckouts(rest).find((row) => row.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === session)));
+  const found = checkoutOfPaneIn(rest, session);
   return found ? { kind: "checkout", device: found.device, root: found.checkout.path } : { kind: "all" };
 }
 
@@ -34,7 +34,7 @@ export function deskFileScope(rest: SnapshotRest | null, session: string | null)
 export function lastNamedWorkspace(rest: SnapshotRest | null, items: readonly DeskItem[]): string | null {
   const rows = listedCheckouts(rest);
   const ofProject = (id: string) => rows.find((row) => row.workspace.id === id || row.workspace.path === id || row.workspace.checkouts.some((checkout) => checkout.path === id))?.workspace.id ?? null;
-  const ofPane = (pane: string) => rows.find((row) => row.checkout.tabs.some((tab) => tab.panes.some((one) => one.id === pane)))?.workspace.id ?? null;
+  const ofPane = (pane: string) => checkoutOfPaneIn(rest, pane)?.workspace.id ?? null;
   for (const item of [...items].reverse()) {
     if (item.kind === "user") {
       for (const mention of [...item.mentions].reverse()) {
@@ -67,11 +67,10 @@ export type ProjectFileRow = { hit: DeskFileHit; project: string; name: string; 
  * checkout that is no longer listed is left out, since nothing could open it.
  */
 export function projectFileRows(rest: SnapshotRest | null, files: readonly DeskFileHit[], named: string | null): { named: ProjectFileRow[]; other: ProjectFileRow[] } {
-  const rows = listedCheckouts(rest);
   const first: ProjectFileRow[] = [];
   const other: ProjectFileRow[] = [];
   for (const hit of files) {
-    const place = rows.find((row) => row.device === hit.device_id && row.checkout.path === hit.root_path);
+    const place = checkoutAtRoot(rest, hit.device_id, hit.root_path);
     if (!place) continue;
     const parts = hit.relative_path.split("/");
     const row = { hit, project: place.workspace.label, name: parts.at(-1) ?? hit.relative_path, folder: parts.slice(0, -1).join("/") };
@@ -90,4 +89,17 @@ export function deskTabOf(entry: SearchEntry): DeskTab | null {
     };
   }
   return null;
+}
+
+/** How many rows of each kind Desk's empty ⌘K lists; typing finds the rest. */
+export const DESK_SEARCH_SHOWN = 8;
+
+/**
+ * What Desk's ⌘K lists before anything is typed (B39): the sessions, the pull
+ * requests and the missions, each group in the snapshot's order and cut to
+ * `DESK_SEARCH_SHOWN` rows.
+ */
+export function deskSections(entries: readonly SearchEntry[]): SearchSection[] {
+  const kept = entries.filter((entry) => entry.kind === "agent" || (entry.kind === "pr" && !entry.external) || entry.kind === "mission");
+  return groupEntries(kept).map((section) => ({ ...section, entries: section.entries.slice(0, DESK_SEARCH_SHOWN) }));
 }

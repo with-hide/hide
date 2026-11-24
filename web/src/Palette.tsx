@@ -3,11 +3,11 @@ import { readFailureText } from "./fileFailure";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { FileMark } from "./components/file-mark";
-import { Command, CommandDialog, CommandInput, CommandItem, CommandList } from "./components/ui/command";
+import { Command, CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from "./components/ui/command";
 import { Kbd } from "./components/ui/kbd";
 import { changedFiles } from "./newTab";
 import { fileIcon } from "./fileIcons";
-import { DeskFilePalette } from "./DeskFilePalette";
+import { deskFileScope, lastNamedWorkspace, preferredRoot, projectFileRows, type DeskFileHit, type DeskFileScope, type ProjectFileRow } from "./deskPalette";
 import { SearchPalette } from "./SearchPalette";
 import { explorerContext } from "./snapshot";
 import { useShellStore } from "./store";
@@ -32,7 +32,7 @@ export function Palette({ actions }: { actions: Actions }) {
   const overlay = useUiStore((s) => s.overlay);
   const onDesk = useUiStore((s) => s.screen?.kind === "desk");
   // On Desk ⌘P searches the open session's checkout or every project and opens in the tab panel (PRD desk-2-ui B37, B38); every other screen keeps its own.
-  if (overlay === "file_palette") return onDesk ? <DeskFilePalette actions={actions} /> : <FilePalette actions={actions} />;
+  if (overlay === "file_palette") return <FilePalette actions={actions} desk={onDesk} />;
   if (overlay === "diff_palette") return <DiffPalette actions={actions} />;
   if (overlay === "search") return <SearchPalette actions={actions} />;
   return null;
@@ -92,9 +92,9 @@ export function PaletteRow({ icon, title }: { icon?: ReactNode; title: ReactNode
 }
 
 /** One file of a file palette: its mark and `title`, which ↵ opens through `onSelect`. */
-export function PaletteFileRow({ path, relativePath, title, onSelect }: { path: string; relativePath: string; title: ReactNode; onSelect: () => void }) {
+export function PaletteFileRow({ id, path, relativePath, title, onSelect }: { id: string; path: string; relativePath: string; title: ReactNode; onSelect: () => void }) {
   return (
-    <CommandItem asChild value={path} onSelect={onSelect}>
+    <CommandItem asChild value={id} onSelect={onSelect}>
       <button type="button" data-palette-row={path} className="group/palette-row w-full text-left">
         <PaletteRow icon={<FileMark icon={fileIcon(relativePath)} />} title={title} />
       </button>
@@ -102,85 +102,142 @@ export function PaletteFileRow({ path, relativePath, title, onSelect }: { path: 
   );
 }
 
-function FilePalette({ actions }: { actions: Actions }) {
+/** What a file palette lists and where a pick goes: a checkout's index, or on Desk every project's (PRD desk-2-ui B37, B38). */
+type FileHit = DeskFileHit;
+const hitKey = (hit: FileHit) => `${hit.device_id}:${hit.root_path}:${hit.path}`;
+
+/**
+ * ⌘P: the file palette over hided's index of the checkout in front. On Desk
+ * (`desk`) it lists the checkout of the session open beside Desk, or every
+ * project at once, and a pick opens in the tab panel; the list, the debounce,
+ * the polling and the keys are the app's own (PRD desk-2-ui D-23).
+ */
+function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
   const { t } = useInterfaceTranslation();
-  // The checkout in front on the device in front, as the Explorer shows it.
-  const device = useShellStore((s) => explorerContext(s.rest).device);
-  const root = useShellStore((s) => explorerContext(s.rest).checkout?.path ?? null);
-  // An answer for another device or checkout is not this list.
-  const fileIndex = useShellStore((s) =>
-    s.fileIndex && s.fileIndex.device_id === device && s.fileIndex.root_path === root ? s.fileIndex : null,
-  );
+  const rest = useShellStore((s) => s.rest);
+  const session = useUiStore((s) => s.deskRoom.session);
+  const items = useShellStore((s) => s.desk?.conversation.items);
+  // The checkout in front on the device in front, as the Explorer shows it; on Desk the session's, else every project.
+  const frontDevice = useShellStore((s) => explorerContext(s.rest).device);
+  const frontRoot = useShellStore((s) => explorerContext(s.rest).checkout?.path ?? null);
+  const scope: DeskFileScope | null = desk ? deskFileScope(rest, session) : frontRoot ? { kind: "checkout", device: frontDevice, root: frontRoot } : null;
+  const device = scope?.kind === "checkout" ? scope.device : null;
+  const root = scope?.kind === "checkout" ? scope.root : null;
+  const named = desk && scope?.kind === "all" ? lastNamedWorkspace(rest, items ?? []) : null;
+  const prefer = preferredRoot(rest, named);
+  // An answer for another device or checkout is not this list, and one left from an earlier open is not this palette's.
+  const checkoutAnswer = useShellStore((s) => (s.fileIndex && s.fileIndex.device_id === device && s.fileIndex.root_path === root ? s.fileIndex : null));
+  const allAnswer = useShellStore((s) => s.fileIndexAll);
+  const left = useRef({ checkout: checkoutAnswer, all: allAnswer });
+  const answer = scope?.kind === "all" ? (allAnswer === left.current.all ? null : allAnswer) : checkoutAnswer === left.current.checkout ? null : checkoutAnswer;
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState("");
   // Why ⌘↵ opened nothing, said in the footer where its hint stands.
   const [besideReason, setBesideReason] = useState<string | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
+  const ask = () => {
+    if (scope?.kind === "checkout") actions.requestFileIndex(scope.root, query, scope.device);
+    else if (scope?.kind === "all") actions.requestFileIndexAll(query, prefer ?? undefined);
+  };
   useEffect(() => {
-    if (!root) return undefined;
+    if (!scope) return undefined;
     window.clearTimeout(timer.current);
     // A palette keystroke is not one event per character: the index answer is
     // what the list draws, so the query is debounced to one request.
-    timer.current = window.setTimeout(() => actions.requestFileIndex(root, query, device), 120);
+    timer.current = window.setTimeout(ask, 120);
     return () => window.clearTimeout(timer.current);
-  }, [root, query, device, actions]);
+  }, [scope?.kind, root, query, device, prefer?.root_path, actions]);
 
   // The first query for a checkout starts the walk and answers `indexing`; ask
   // again while it says so, so the list fills without another keystroke.
+  const indexing = answer?.indexing ?? false;
   useEffect(() => {
-    if (!root || !fileIndex?.indexing) return undefined;
-    const poll = window.setTimeout(() => actions.requestFileIndex(root, query, device), 250);
+    if (!scope || !indexing) return undefined;
+    const poll = window.setTimeout(ask, 250);
     return () => window.clearTimeout(poll);
-  }, [root, query, device, fileIndex, actions]);
+  }, [scope?.kind, root, query, device, prefer?.root_path, answer, actions]);
 
-  const entries = fileIndex?.files ?? [];
+  const hits: FileHit[] = !answer ? [] : scope?.kind === "all" ? (allAnswer?.files ?? []) : (checkoutAnswer?.files ?? []).map((file) => ({ ...file, device_id: scope?.kind === "checkout" ? scope.device : "", root_path: scope?.kind === "checkout" ? scope.root : "" }));
+  const groups = scope?.kind === "all" ? projectFileRows(rest, hits, named) : null;
+  const listed = groups ? [...groups.named, ...groups.other].map((row) => row.hit) : hits;
   // The row Enter would choose: the one the pointer or arrows moved to, else the first.
-  const current = entries.find((entry) => entry.path === highlighted) ?? entries[0];
+  const current = listed.find((hit) => hitKey(hit) === highlighted) ?? listed[0];
+  const unavailable = scope?.kind === "checkout" ? (checkoutAnswer?.unavailable ?? null) : null;
+  const skipped = scope?.kind === "all" ? (allAnswer?.unavailable.length ?? 0) : 0;
+
+  const open = (hit: FileHit, beside: boolean) => {
+    if (desk) return actions.openDeskIndexEntry(hit, beside);
+    return beside ? actions.openIndexEntryBeside(hit.path) : actions.openIndexEntry(hit.path);
+  };
+  const row = (hit: FileHit, title: ReactNode) => (
+    <PaletteFileRow key={hitKey(hit)} id={hitKey(hit)} path={hit.path} relativePath={hit.relative_path} title={title} onSelect={() => open(hit, false)} />
+  );
+  const projectRow = (one: ProjectFileRow) =>
+    row(one.hit, (
+      <>
+        <span className="text-muted-foreground">{one.project} › </span>
+        {one.name}
+        {one.folder ? <span className="ml-xs text-caption font-normal text-muted-foreground">{one.folder}</span> : null}
+      </>
+    ));
 
   return (
     <PaletteShell
       label={t("documents.openFile")}
-      placeholder={t("documents.searchFiles")}
+      placeholder={scope?.kind === "all" ? t("documents.searchAllProjectFiles") : t("documents.searchFiles")}
       query={query}
       onQuery={(next) => {
         setBesideReason(null);
         setQuery(next);
       }}
-      value={current?.path ?? ""}
+      value={current ? hitKey(current) : ""}
       onValue={setHighlighted}
       onKeyDown={(event) => {
-        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4).
+        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4); on Desk it keeps it as a tab of the tab panel.
         if (event.key !== "Enter" || !holdsCommandKey(event) || composingKey(event) || !current) return;
         event.preventDefault();
         event.stopPropagation();
-        const reason = besideUnavailable(workspaceViewOf(useShellStore.getState().rest)?.layout, drawnViews());
-        if (reason) return setBesideReason(reason);
-        actions.openIndexEntryBeside(current.path);
+        if (!desk) {
+          const reason = besideUnavailable(workspaceViewOf(useShellStore.getState().rest)?.layout, drawnViews());
+          if (reason) return setBesideReason(reason);
+        }
+        open(current, true);
       }}
       footer={
         <span className="flex items-center gap-md">
-          <span data-palette-hint="beside">{besideReason ?? t("documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
-          {fileIndex?.truncated ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
+          <span data-palette-hint="beside">{besideReason ?? t(desk ? "documents.keepTab" : "documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
+          {(scope?.kind === "all" ? allAnswer?.index_truncated : checkoutAnswer?.truncated) ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
+          {scope?.kind === "all" && answer && allAnswer?.more ? <span data-palette-state="more">{t("documents.moreMatches", { count: 80 })}</span> : null}
+          {skipped > 0 ? <span data-palette-state="skipped">{t("documents.projectsUnavailable", { count: skipped })}</span> : null}
         </span>
       }
     >
-      {fileIndex?.unavailable ? (
+      {unavailable ? (
         <div className="px-md py-sm text-caption text-muted-foreground" role="alert" data-palette-state="unavailable">
-          {t("documents.filesUnavailable", { reason: readFailureText(fileIndex.unavailable, t) })}
+          {t("documents.filesUnavailable", { reason: readFailureText(unavailable, t) })}
         </div>
-      ) : fileIndex?.indexing && entries.length === 0 ? (
+      ) : indexing && listed.length === 0 ? (
         <div className="px-md py-sm text-caption text-muted-foreground" data-palette-state="indexing">
           {t("documents.indexing")}
         </div>
-      ) : entries.length === 0 ? (
+      ) : listed.length === 0 ? (
         <div className="px-md py-sm text-caption text-muted-foreground" data-palette-state="empty">
-          {query ? t("documents.noMatchingFiles") : t("documents.typeToSearch")}
+          {query ? t("documents.noMatchingFiles") : scope?.kind === "all" ? t("documents.typeToSearchAll") : t("documents.typeToSearch")}
         </div>
+      ) : groups ? (
+        groups.named.length > 0 ? (
+          <>
+            <CommandGroup heading={`${groups.named[0]?.project ?? ""} · ${t("documents.namedLastInDesk")}`} data-palette-group="named">
+              {groups.named.map(projectRow)}
+            </CommandGroup>
+            {groups.other.length > 0 ? <CommandGroup heading={t("documents.otherProjects")} data-palette-group="other">{groups.other.map(projectRow)}</CommandGroup> : null}
+          </>
+        ) : (
+          groups.other.map(projectRow)
+        )
       ) : (
-        entries.map((entry) => (
-          <PaletteFileRow key={entry.path} path={entry.path} relativePath={entry.relative_path} title={entry.relative_path} onSelect={() => actions.openIndexEntry(entry.path)} />
-        ))
+        listed.map((hit) => row(hit, hit.relative_path))
       )}
     </PaletteShell>
   );

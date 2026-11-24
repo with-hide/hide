@@ -35,7 +35,7 @@ import { latestDraft, noteClosing, noteSent } from "./editor/draft";
 import { RELATION_ANSWER_TIMEOUT_MS, relationState } from "./lineage";
 import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { allAgents, boardProjects, listedCheckouts } from "./navigation";
+import { allAgents, boardProjects, checkoutAtRoot, checkoutOfPaneIn } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
@@ -470,20 +470,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspaceId, checkout_id: checkoutId, ...(expanded === undefined ? {} : { expanded }), ...(projectExpanded === undefined ? {} : { project_expanded: projectExpanded }) } });
   };
 
-  /** Every listed checkout with its project id and machine: this machine's, then each connected device's. */
-  const everyCheckout = () => listedCheckouts(rest()).map(({ device, workspace, checkout }) => ({ device, workspace: workspace.id, checkout }));
-
-  /** The checkout at `root` on `device` (PRD desk-2-ui B19, B37, B38). */
-  const checkoutAt = (device: string, root: string) => {
-    const found = everyCheckout().find((row) => row.device === device && row.checkout.path === root);
-    return found ? { device: found.device, workspace: found.workspace, checkout: found.checkout.id, path: found.checkout.path } : null;
-  };
-
-  /** The checkout whose tab holds `paneId` (PRD desk-2-ui B35). */
-  const checkoutOfPane = (paneId: string) => {
-    const found = everyCheckout().find((row) => row.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId)));
-    return found ? { device: found.device, workspace: found.workspace, checkout: found.checkout.id, path: found.checkout.path } : null;
-  };
+  /** A listed checkout as the focus and file events name it: its machine, project id, checkout id and path. */
+  const checkoutPlace = (found: ReturnType<typeof checkoutAtRoot>) => (found ? { device: found.device, workspace: found.workspace.id, checkout: found.checkout.id, path: found.checkout.path } : null);
+  const checkoutAt = (device: string, root: string) => checkoutPlace(checkoutAtRoot(rest(), device, root));
+  const checkoutOfPane = (paneId: string) => checkoutPlace(checkoutOfPaneIn(rest(), paneId));
 
   /**
    * One checkout in front in the core, its device too, with no screen
@@ -2766,7 +2756,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * its preview slot or keeps it (`preview`), and the panel draws that
      * display, so editing and ⌘S are the app's.
      */
-    deskOpen(tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}) {
+    deskOpen(tab: DeskTab, options: { preview?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       if (ui().screen?.kind !== "desk") this.openDesk();
       if (tab.kind === "file") {
@@ -2776,7 +2766,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         dispatch({
           schema_version: 2,
           kind: "file_open",
-          payload: { path: tab.path, workspace_id: place.workspace, checkout_id: place.checkout, preview: options.beside ? false : (options.preview ?? false), ...(options.beside ? { beside: true } : {}), ...deviceField(place.device, localDeviceId(rest())) },
+          payload: { path: tab.path, workspace_id: place.workspace, checkout_id: place.checkout, preview: options.preview ?? false, ...deviceField(place.device, localDeviceId(rest())) },
         });
       }
       ui().setDeskRoom((room) => openDeskTab(room, tab, options));
@@ -2785,13 +2775,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
      * tab panel, as the checkout's preview tab as the app's ⌘P opens it, or
-     * to the side (`beside`, ⌘↵) as the app's Open to the side does: a pinned
-     * second view of the file. The Explorer column stays as it was.
+     * as a tab of its own (`keep`, ⌘↵). The Explorer column stays as it was.
      */
-    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, beside = false) {
+    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, keep = false) {
       ui().closeOverlay();
       ui().setExplorerSelection(hit.path);
-      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, beside ? { beside: true } : { preview: true });
+      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, { preview: !keep });
     },
 
     /** ⌘↵ on a session in Desk's ⌘K (PRD desk-2-ui D-24, B39): its tab, where ⌘J brings Desk back (B7). */

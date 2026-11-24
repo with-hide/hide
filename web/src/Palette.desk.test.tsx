@@ -14,7 +14,8 @@ import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-2-ui D-23, B37, B38: ⌘P on Desk searches the
 // session's checkout or every project, ↵ opens the file in the tab panel as a
-// preview, ⌘↵ keeps it, and the Explorer column is left as it was.
+// preview, ⌘↵ (Ctrl+Enter off macOS) keeps it as a tab, and the Explorer
+// column is left as it was.
 
 Element.prototype.scrollIntoView = () => {};
 
@@ -39,10 +40,13 @@ describe("⌘P on Desk", () => {
   let saved: ReturnType<typeof useShellStore.getState>;
   let savedUi: ReturnType<typeof useUiStore.getState>;
   let sent: Parameters<DispatchFn>[0][];
+  const all = (files: ReturnType<typeof file>[], extra: Partial<NonNullable<ReturnType<typeof useShellStore.getState>["fileIndexAll"]>> = {}) =>
+    ({ query: "", files, more: false, index_truncated: false, indexing: false, unavailable: [], ...extra });
 
   beforeEach(async () => {
     saved = useShellStore.getState();
     savedUi = useUiStore.getState();
+    vi.useFakeTimers();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
     sent = [];
@@ -50,11 +54,9 @@ describe("⌘P on Desk", () => {
     document.body.append(container);
     root = createRoot(container);
     await act(async () => { await clientI18n.changeLanguage("en"); });
-    useShellStore.setState({
-      rest, desk, agents: [],
-      fileIndexAll: { query: "", files: [file("/atorni", "src/token-guard.ts"), file("/ide", "web/src/token.ts")], more: false, index_truncated: false, indexing: false, unavailable: [] },
-    });
+    useShellStore.setState({ rest, desk, agents: [], fileIndexAll: null });
     useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED, overlay: "file_palette" });
+    system("MacIntel");
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -62,25 +64,36 @@ describe("⌘P on Desk", () => {
     useShellStore.setState(saved, true);
     useUiStore.setState(savedUi, true);
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  const open = async () => {
+  /** Opens the palette and lets the debounced request go out, as the core would then answer it with `answer`. */
+  const open = async (answer?: ReturnType<typeof all>) => {
     const actions = createActions((event) => { sent.push(event); return true; });
     await act(async () => root.render(<TooltipProvider><Palette actions={actions} /></TooltipProvider>));
+    await act(async () => { vi.advanceTimersByTime(150); });
+    if (answer) await act(async () => useShellStore.setState({ fileIndexAll: answer }));
   };
+  /** The system the keys are read as: ⌘ on macOS, Ctrl elsewhere (`keySystem`). */
+  const system = (platform: "MacIntel" | "Win32") => Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
   const press = async (init: KeyboardEventInit) => act(async () => {
     document.querySelector("[data-palette-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init }));
   });
   const rows = () => [...document.querySelectorAll("[data-palette-row]")].map((row) => row.textContent?.replace(/\s+/gu, " ").replace(/↵$/u, "").trim());
+  const footer = () => document.querySelector("[data-palette-footer]")?.textContent ?? "";
+  const two = () => all([file("/atorni", "src/token-guard.ts"), file("/ide", "web/src/token.ts")]);
 
   it("with no session open searches every project, the project Desk named last first, each result led by its project", async () => {
-    await open();
+    await open(two());
+    expect(sent.map((event) => event.kind)).toEqual(["file_index_all"]);
+    // The project Desk named last is asked for first.
+    expect(sent[0]!.payload).toMatchObject({ prefer: { device_id: "local", root_path: "/ide" } });
     expect(rows()).toEqual(["herdr-ide › token.tsweb/src", "atorni-ax › token-guard.tssrc"]);
     expect([...document.querySelectorAll("[data-palette-group]")].map((group) => group.getAttribute("data-palette-group"))).toEqual(["named", "other"]);
   });
 
-  it("opens the highlighted file in the tab panel as the preview on ↵ and to the side on ⌘↵, leaving the Explorer column alone", async () => {
-    await open();
+  it("opens the highlighted file in the tab panel as the preview on ↵ and keeps it as a tab on ⌘↵, leaving the Explorer column alone", async () => {
+    await open(two());
     await press({});
     let room = useUiStore.getState().deskRoom;
     expect(activeTab(room.panel)).toEqual({ kind: "file", device_id: "local", root: "/ide", path: "/ide/web/src/token.ts" });
@@ -90,19 +103,58 @@ describe("⌘P on Desk", () => {
     expect(useUiStore.getState().overlay).toBe("none");
 
     useUiStore.setState({ overlay: "file_palette" });
-    await open();
-    await press({ metaKey: true, ctrlKey: true });
+    await open(two());
+    await press({ metaKey: true });
     room = useUiStore.getState().deskRoom;
-    // The same file again, to the side as the app's Open to the side asks the core for it: a pinned second view.
     expect(room.panel?.tabs).toHaveLength(1);
     expect(room.panel?.preview).toBeNull();
-    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: false, beside: true });
+    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: false });
+    expect(sent.at(-1)?.payload).not.toHaveProperty("beside");
+  });
+
+  it("keeps a file on the system's own command key: ⌘ on macOS, Ctrl elsewhere, and the other key alone is a plain ↵", async () => {
+    const keeps = () => sent.filter((event) => event.kind === "file_open").map((event) => (event.payload as { preview: boolean }).preview);
+    for (const [platform, held, other] of [["MacIntel", { metaKey: true }, { ctrlKey: true }], ["Win32", { ctrlKey: true }, { metaKey: true }]] as const) {
+      system(platform);
+      sent = [];
+      for (const [init, keep] of [[held, true], [other, false]] as const) {
+        useUiStore.setState({ overlay: "file_palette", deskRoom: DESK_ROOM_CLOSED });
+        await open(two());
+        await press(init);
+        expect(keeps().at(-1)).toBe(!keep);
+        await act(async () => root.unmount());
+        root = createRoot(container);
+      }
+    }
+  });
+
+  it("tells a project whose files could not be listed, and a cut list, in the footer", async () => {
+    await open(all([file("/ide", "web/src/token.ts")], { more: true, unavailable: [{ device_id: "away", root_path: "/x", code: "unavailable" }] }));
+    expect(footer()).toContain("Showing the first 80 matches");
+    expect(footer()).toContain("1 projects could not be listed");
+    expect(document.querySelector('[data-palette-state="empty"]')).toBeNull();
+  });
+
+  it("opens the file of the highlighted row when two devices hold the same path", async () => {
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }] }, status: { remote: [{ target_id: "mini", session: { workspaces: [workspace(checkout("ide2", "/ide", "p-mini"), "herdr-ide")] } }] } } as unknown as SnapshotRest });
+    await open(all([file("/ide", "a.ts"), { ...file("/ide", "a.ts"), device_id: "mini" }]));
+    // Move the highlight to the second row, which is the device's.
+    await act(async () => document.querySelector("[data-palette-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    await press({});
+    expect(activeTab(useUiStore.getState().deskRoom.panel)).toMatchObject({ device_id: "mini", path: "/ide/a.ts" });
+  });
+
+  it("does not list an answer left from an earlier open", async () => {
+    useShellStore.setState({ fileIndexAll: two() });
+    await open();
+    expect(rows()).toEqual([]);
+    await act(async () => useShellStore.setState({ fileIndexAll: all([file("/ide", "x.ts")]) }));
+    expect(rows()).toHaveLength(1);
   });
 
   it("searches only the checkout of the session open beside Desk", async () => {
     useUiStore.setState({ deskRoom: { ...DESK_ROOM_CLOSED, session: "p-atorni" } });
     await open();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
     expect(sent.map((event) => event.kind)).toEqual(["file_index"]);
     expect(sent[0]!.payload).toMatchObject({ root: "/atorni" });
   });
@@ -110,7 +162,6 @@ describe("⌘P on Desk", () => {
   it("is the app's own palette on every other screen", async () => {
     useUiStore.setState({ screen: { kind: "workspace" } });
     await open();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
     // The front checkout is asked, not every project.
     expect(sent.map((event) => event.kind)).toEqual(["file_index"]);
     expect(sent[0]!.payload).toMatchObject({ root: "/ide" });

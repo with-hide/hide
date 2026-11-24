@@ -9,7 +9,7 @@ import { PrMark } from "./components/pr-mark";
 import { DeviceChip } from "./components/device-chip";
 import { Command, CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from "./components/ui/command";
 import { Kbd } from "./components/ui/kbd";
-import { deskTabOf } from "./deskPalette";
+import { deskSections, deskTabOf } from "./deskPalette";
 import { fieldLabel } from "./shortcutLabels";
 import { composingKey } from "./keys";
 import { frontTarget, relationRows, relationsOf, type Relations } from "./relations";
@@ -109,7 +109,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return () => observer.disconnect();
   }, [box]);
 
-  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(front.desk ? missionEntries(rest) : [])] : []), [rest, t, front]);
+  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(front.desk ? missionEntries(rest) : [])] : []), [rest, t, front.desk]);
   const related = useMemo<Relations | null>(() => (front.target ? relationsOf(rest, front.target, t, true) : null), [rest, front, t]);
   const trimmed = query.trim();
   useEffect(() => { actions.searchSessionWork(trimmed); }, [actions, trimmed, summaries]);
@@ -119,7 +119,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
   const showGithub = trimmed.length > 0 && hasGithubProject(rest);
 
   const sections: SearchSection[] = useMemo(() => {
-    if (!trimmed) return [];
+    if (!trimmed) return front.desk ? deskSections(entries) : [];
     // A page opens in the desktop app's View area, so a browser tab or a screen without a Workspace in front lists the row with the reason.
     const unavailable = !browserBridge() ? t("search.openUrlDesktopOnly") : !front.checkout ? t("search.openUrlNoWorkspace") : null;
     const link = openUrlEntry(trimmed, unavailable, t);
@@ -139,7 +139,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     if (front.checkout) shown.add(front.checkout.id);
     return recentEntries(rest, shown);
   }, [trimmed, rest, relatedRows, front]);
-  const listed: SearchEntry[] = trimmed ? sections.flatMap((section) => section.entries) : [...relatedRows, ...recentRows];
+  const listed: SearchEntry[] = trimmed || front.desk ? sections.flatMap((section) => section.entries) : [...relatedRows, ...recentRows];
   const ids = [...listed.map((entry) => entry.id), ...(showGithub ? [GITHUB_ROW_ID] : [])];
   // A surviving highlight stays; a retired one moves to the first row (B25).
   const selected = ids.includes(highlighted) ? highlighted : (ids[0] ?? "");
@@ -241,7 +241,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
           {collapsed ? null : (
             <div className={`flex min-h-0 ${detailVisible ? "h-(--size-search-sheet-h)" : ""}`}>
               <CommandList className={`${detailVisible ? "max-h-[none] w-[calc(var(--size-search-sheet-w)-var(--spacing-xxs))] shrink-0 border-r border-border" : "min-w-0 flex-1"}`} data-palette-list="true">
-                {trimmed ? (
+                {trimmed || front.desk ? (
                   <>
                     {sections.length === 0 ? (
                       <div className="px-md py-sm text-caption text-muted-foreground" data-palette-state="no-match">
