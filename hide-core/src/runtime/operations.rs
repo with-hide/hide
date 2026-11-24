@@ -567,14 +567,15 @@ impl Runtime {
     ///
     /// An operation whose answer can no longer come is then settled by this
     /// layout whatever it shows: one already `unknown` (its deadline passed,
-    /// and this report was read after that, which the deadline asked the
-    /// device for), and one sent on an earlier connection than this report
-    /// came on (a result of an earlier connection is dropped as stale). The
-    /// engine's layout is its result, as it is for anything drawn ahead of
-    /// the engine; nothing is resent, and the tab's line moves on. Held as
-    /// `unknown` instead, it refused every later operation of that tab until
-    /// the core started anew, which a device's core ending or being replaced
-    /// by an update left behind.
+    /// so the next layout the device reports, this ingest's session or a
+    /// later one, is its result), and one sent on an earlier connection than
+    /// this report came on (a result of an earlier connection is dropped as
+    /// stale). The engine's layout is its result, as it is for anything drawn
+    /// ahead of the engine; nothing is resent, and the tab's line moves on.
+    /// Held as `unknown` instead, it refused every later operation of that
+    /// tab until the core started anew, which a device's core ending or being
+    /// replaced by an update left behind. A device's tab move ends by the
+    /// same rule (`settle_lost_tab_moves`).
     pub(super) fn observe_remote_operations(
         &mut self,
         target_id: &str,
@@ -611,7 +612,48 @@ impl Runtime {
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         changed |= self.settle_remote_operations(lost, RemoteSettle::AnswerLost);
+        changed |= self.settle_lost_tab_moves(target_id, generation);
         changed
+    }
+
+    /// Ends a device's tab move whose answer can no longer come. This ingest
+    /// placed the device's strips before this (`place_device_strips`), which
+    /// lands a move the engine reported, so a move still held did not happen
+    /// in this layout: the strip keeps the engine's order and the next drag is
+    /// taken again.
+    fn settle_lost_tab_moves(&mut self, target_id: &str, generation: u64) -> bool {
+        let lost = self
+            .pending_tab_move
+            .iter()
+            .filter(|(checkout_id, pending)| {
+                // A device's checkout id is scoped to that device.
+                crate::address::device_of(checkout_id) == Some(target_id)
+                    && (pending.phase == "unknown"
+                        || (pending.connection_generation != generation
+                            && matches!(
+                                pending.phase.as_str(),
+                                "transmitting" | "awaiting_topology"
+                            )))
+            })
+            .map(|(checkout_id, _)| checkout_id.clone())
+            .collect::<Vec<_>>();
+        if lost.is_empty() {
+            return false;
+        }
+        for checkout_id in lost {
+            self.pending_tab_move.remove(&checkout_id);
+            self.push_diagnostic(
+                RemoteSettle::AnswerLost.kind(),
+                format!(
+                    "{} tab.move for {checkout_id} on {target_id} from {}",
+                    RemoteSettle::AnswerLost.verb(),
+                    RemoteSettle::AnswerLost.source()
+                ),
+            );
+        }
+        self.rebuild_tab_strips();
+        self.sync_async_operations();
+        true
     }
 
     fn settle_remote_operations(
