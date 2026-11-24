@@ -1929,6 +1929,273 @@ fn a_device_tab_moves_on_its_own_engine_and_a_file_tab_keeps_the_slot_it_was_dro
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
 
+/// How a device operation's answer is lost: its connection ended and the
+/// answer comes from the one before the current (the device's core ended or
+/// was replaced), or it comes on the same connection without saying whether
+/// the engine acted.
+#[derive(Clone, Copy, Debug)]
+enum LostAnswer {
+    ToANewConnection,
+    Ambiguous,
+}
+
+/// Every kind of operation this machine sends a device's engine is taken
+/// again once its answer was lost and the device reported its layout: no
+/// record of the first one is left to refuse or swallow the second. The
+/// layout reported is the one before the first operation, as if the engine
+/// never acted.
+#[test]
+fn every_device_operation_is_taken_again_once_its_answer_was_lost_and_the_device_reported() {
+    let t = tree();
+    let samples = [
+        RemoteControlAction::Pane(PaneControlAction::Focus {
+            pane_id: "t2".to_owned(),
+        }),
+        RemoteControlAction::Pane(PaneControlAction::Split {
+            pane_id: "t2".to_owned(),
+            direction: PaneSplitDirection::Right,
+            cwd: None,
+        }),
+        RemoteControlAction::Pane(PaneControlAction::ToggleZoom {
+            pane_id: "t1".to_owned(),
+        }),
+        RemoteControlAction::Pane(PaneControlAction::Close {
+            pane_id: "t1b".to_owned(),
+        }),
+        RemoteControlAction::FocusWorkspace {
+            workspace_id: "w1".to_owned(),
+        },
+        RemoteControlAction::FocusTab {
+            tab_id: "t2".to_owned(),
+        },
+        RemoteControlAction::CreateTab {
+            workspace_id: "w1".to_owned(),
+            cwd: t.main.clone(),
+            label: "Tab 3".to_owned(),
+            area_id: None,
+            group_id: None,
+            admission_id: None,
+        },
+        RemoteControlAction::OpenOwner {
+            owner: crate::checkout_owner::OwnerOpen::Worktree {
+                path: t.main.clone(),
+                repository_root: t.main.clone(),
+                label: "main".to_owned(),
+            },
+            cwd: t.main.clone(),
+            label: "Tab 3".to_owned(),
+            area_id: None,
+            group_id: None,
+            admission_id: None,
+        },
+        RemoteControlAction::CloseTab {
+            tab_id: "t2".to_owned(),
+        },
+        RemoteControlAction::MoveTab {
+            checkout_id: device_catalog::checkout_id(TARGET, &t.main),
+            tab_id: "t2".to_owned(),
+            insert_index: 0,
+            expected_order: Vec::new(),
+            generation: 0,
+            connection_generation: 0,
+        },
+        RemoteControlAction::RenameTab {
+            tab_id: "t2".to_owned(),
+            label: "renamed".to_owned(),
+            request_id: String::new(),
+        },
+    ];
+    for lost in [LostAnswer::ToANewConnection, LostAnswer::Ambiguous] {
+        for sample in &samples {
+            let mut runtime = connected_device_runtime();
+            let mut layout = device_report(TARGET, &t.main, &["t1", "t2"], false);
+            if matches!(sample, RemoteControlAction::OpenOwner { .. }) {
+                // No workspace owns the folder yet; the helper confirmed it is
+                // a repository, so a new tab opens its owner first.
+                runtime
+                    .device_facts
+                    .insert(TARGET.to_owned(), answered(&[&t.main]));
+            } else {
+                layout.workspaces[0].checkouts[0].owner_workspace_id = Some("w1".to_owned());
+            }
+            runtime.ingest_remote_session(TARGET, Ok(layout.clone()));
+            let requests = recording_device(&mut runtime);
+            let case = format!("{} with its answer lost {lost:?}", sample.kind());
+            // Shown with a failure, so it names the case that failed.
+            println!("{case}");
+
+            let sent = send_device_operation(&mut runtime, &t, sample, "first");
+            next_request(&requests, 0);
+            let generation = runtime
+                .remote_connection_generations
+                .get(TARGET)
+                .copied()
+                .unwrap_or(0);
+            if matches!(lost, LostAnswer::ToANewConnection) {
+                runtime
+                    .remote_connection_generations
+                    .insert(TARGET.to_owned(), generation + 1);
+            }
+            runtime.ingest_remote_control_failure_with_generation(
+                TARGET,
+                "first",
+                sent,
+                Err(live::ControlFailure::Ambiguous(
+                    "the device's connection closed".to_owned(),
+                )),
+                3,
+                Some(generation),
+            );
+            runtime.ingest_remote_session(TARGET, Ok(layout));
+
+            runtime.snapshot.status.last_error = None;
+            runtime.snapshot.status.diagnostics.clear();
+            send_device_operation(&mut runtime, &t, sample, "again");
+            next_request(&requests, 1);
+            let refusals = runtime
+                .snapshot
+                .status
+                .diagnostics
+                .iter()
+                .map(|row| row.kind.clone())
+                .chain(
+                    runtime
+                        .snapshot
+                        .status
+                        .last_error
+                        .iter()
+                        .map(|error| error.kind.clone()),
+                )
+                .filter(|kind| {
+                    kind.ends_with("in_progress")
+                        || kind.ends_with("busy")
+                        || kind.ends_with("duplicate_tab_ignored")
+                })
+                .collect::<Vec<_>>();
+            assert!(refusals.is_empty(), "{case}: refused as {refusals:?}");
+        }
+    }
+}
+
+/// Sends `sample`'s kind of operation to the device the way the shell asks
+/// for it, and returns the action its answer carries. A new kind of device
+/// operation does not compile here until it is sent.
+fn send_device_operation(
+    runtime: &mut Runtime,
+    t: &Tree,
+    sample: &RemoteControlAction,
+    request_id: &str,
+) -> RemoteControlAction {
+    let project = runtime.snapshot.status.remote[0]
+        .session
+        .as_ref()
+        .expect("the device's session")
+        .workspaces[0]
+        .id
+        .clone();
+    let checkout_id = device_catalog::checkout_id(TARGET, &t.main);
+    let scoped_pane = |pane: &str| format!("remote:{TARGET}:pane:{pane}");
+    let scoped_tab = |tab: &str| format!("remote:{TARGET}:tab:{tab}");
+    let request = match sample {
+        RemoteControlAction::Pane(action) => match action {
+            PaneControlAction::Focus { pane_id } => RemoteControlRequest::FocusPane {
+                pane_id: scoped_pane(pane_id),
+            },
+            PaneControlAction::Split {
+                pane_id,
+                direction,
+                cwd,
+            } => RemoteControlRequest::SplitPane {
+                pane_id: scoped_pane(pane_id),
+                direction: *direction,
+                cwd: cwd.clone(),
+            },
+            PaneControlAction::ToggleZoom { pane_id } => RemoteControlRequest::TogglePaneZoom {
+                pane_id: scoped_pane(pane_id),
+            },
+            PaneControlAction::Close { pane_id } => RemoteControlRequest::ClosePane {
+                pane_id: scoped_pane(pane_id),
+                confirmed: true,
+            },
+            // This machine's own engine only: a device is never asked to
+            // project, resize or move a pane to a new tab.
+            PaneControlAction::Project { .. }
+            | PaneControlAction::Resize { .. }
+            | PaneControlAction::MoveToNewTab { .. } => {
+                panic!("{} is not sent to a device", action.kind())
+            }
+        },
+        RemoteControlAction::FocusWorkspace { .. } => RemoteControlRequest::FocusWorkspace {
+            workspace_id: project,
+            checkout_id: Some(checkout_id),
+        },
+        RemoteControlAction::FocusTab { tab_id } => RemoteControlRequest::FocusTab {
+            tab_id: scoped_tab(tab_id),
+        },
+        // A new tab; in a folder no workspace owns yet, it opens the owner.
+        RemoteControlAction::CreateTab { cwd, label, .. }
+        | RemoteControlAction::OpenOwner { cwd, label, .. } => RemoteControlRequest::CreateTab {
+            workspace_id: project,
+            checkout_id: Some(checkout_id),
+            cwd: cwd.clone(),
+            label: label.clone(),
+            area_id: None,
+        },
+        RemoteControlAction::CloseTab { tab_id } => RemoteControlRequest::CloseTab {
+            tab_id: scoped_tab(tab_id),
+            confirmed: true,
+        },
+        RemoteControlAction::MoveTab { tab_id, .. } => {
+            dispatch(
+                runtime,
+                "reorder_tab",
+                serde_json::json!({
+                    "workspace_id": project,
+                    "checkout_id": checkout_id,
+                    "tab_id": format!("engine:{}", scoped_tab(tab_id)),
+                    "to_index": 0,
+                }),
+            );
+            let pending = runtime
+                .pending_tab_move
+                .get(&checkout_id)
+                .expect("the move is held until the device reports it");
+            return RemoteControlAction::MoveTab {
+                checkout_id: checkout_id.clone(),
+                tab_id: tab_id.clone(),
+                insert_index: 0,
+                expected_order: pending.engine_order.clone(),
+                generation: pending.generation,
+                connection_generation: pending.connection_generation,
+            };
+        }
+        RemoteControlAction::RenameTab { tab_id, label, .. } => {
+            dispatch(
+                runtime,
+                "rename_tab",
+                serde_json::json!({
+                    "request_id": request_id,
+                    "tab_id": scoped_tab(tab_id),
+                    "label": label,
+                }),
+            );
+            return RemoteControlAction::RenameTab {
+                tab_id: tab_id.clone(),
+                label: label.clone(),
+                request_id: request_id.to_owned(),
+            };
+        }
+    };
+    runtime.request_remote_control(RemoteControlPayload {
+        target_id: TARGET.to_owned(),
+        request_id: request_id.to_owned(),
+        report_pane_focus_outcome: false,
+        focus_device: false,
+        request,
+    });
+    sample.clone()
+}
+
 /// B26: removing a device removes Hide's record of it and nothing else. Its
 /// project registrations, expanded folders, file tabs and closed items go;
 /// this machine's stay; and the device's engine is not asked for anything.
