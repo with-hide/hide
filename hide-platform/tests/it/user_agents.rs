@@ -537,6 +537,40 @@ fn only_an_account_its_machine_starts_with_nobody_there_is_unattended() {
     assert!(!windows.unattended(home, &stop).unwrap());
 }
 
+/// A Mac offers automatic login unless FileVault locks its disk, a state
+/// that cannot be read is one that offers it, and no other system has the
+/// setting.
+#[cfg(unix)]
+#[test]
+fn a_mac_offers_automatic_login_unless_filevault_locks_its_disk() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    let stop = AtomicBool::new(false);
+    let mac = UserAgents::fixture_of(Kind::Launchd, home);
+    assert_eq!(mac.account(), Some("fixture"));
+    // No program answers.
+    assert!(mac.offers_automatic_login(home, &stop).unwrap());
+    crate::stand_ins::program(
+        &home.join("fdesetup"),
+        "#!/bin/sh\n[ \"$1\" = status ] || exit 2\ncat \"$HOME/vault\"\n",
+    );
+    std::fs::write(home.join("vault"), "FileVault is Off.\n").unwrap();
+    assert!(mac.offers_automatic_login(home, &stop).unwrap());
+    std::fs::write(home.join("vault"), "FileVault is On.\n").unwrap();
+    assert!(!mac.offers_automatic_login(home, &stop).unwrap());
+
+    for kind in [Kind::Systemd, Kind::TaskScheduler] {
+        let other = UserAgents::fixture_of(kind, home);
+        let refused = other.offers_automatic_login(home, &stop).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Unsupported, "{refused}");
+        assert_eq!(
+            refused.to_string(),
+            "this system has no automatic login for the operator to turn on"
+        );
+    }
+}
+
 /// Task Scheduler's agent is a task under `\\Hide\\` created from its
 /// definition and run at once; it carries no environment, and a forgotten
 /// one is deleted.

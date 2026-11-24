@@ -98,10 +98,33 @@ pub(super) struct DeviceSwitchPayload {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SwitchStep {
+    /// The machine is read for the rule every switch passes.
+    Checking,
+    /// Its own Hide is looked for, and started where it has none.
+    Starting,
+    /// That Hide saves a grant for this machine.
+    Pairing,
     /// The two machines are paired and the connection is being opened.
     Connecting,
-    /// The switch is over and the device was not switched.
+    /// The device's projects are handed to its machine's Hide.
+    Projects,
+    /// The switch is over, switched or not.
     Ended,
+}
+
+impl SwitchStep {
+    /// What the device's row draws while the switch is at this step.
+    fn drawn(self) -> Option<crate::model::DeviceSwitchStep> {
+        use crate::model::DeviceSwitchStep as Drawn;
+        match self {
+            Self::Checking => Some(Drawn::Checking),
+            Self::Starting => Some(Drawn::Starting),
+            Self::Pairing => Some(Drawn::Pairing),
+            Self::Connecting => Some(Drawn::Connecting),
+            Self::Projects => Some(Drawn::Projects),
+            Self::Ended => None,
+        }
+    }
 }
 
 impl DeviceSwitchPayload {
@@ -213,27 +236,38 @@ impl Runtime {
             .map(|(device, _)| device.clone())
     }
 
-    /// One step of a device's switch, as hided said it.
+    /// One step of a device's switch, as hided said it. Every step is
+    /// drawn on the device's row until hided says the switch ended, also
+    /// the ones that follow the link change; only `connecting` changes what
+    /// the core does.
     pub(super) fn device_switch(&mut self, payload: DeviceSwitchPayload) -> bool {
         let device_id = payload.device_id;
+        // A device removed meanwhile draws nothing and keeps no entry.
+        let drawn = payload
+            .step
+            .drawn()
+            .filter(|_| self.device_registration(&device_id).is_some());
+        let stepped = match drawn {
+            Some(step) => self.device_switch_steps.insert(device_id.clone(), step) != Some(step),
+            None => self.device_switch_steps.remove(&device_id).is_some(),
+        };
+        let drawn_changed = stepped && self.refresh_device_snapshots();
         let helper = self
             .snapshot
             .ui_state
             .device_registrations
             .iter()
             .any(|registration| registration.id == device_id && registration.origin.dials_helper());
-        if !helper {
-            // Switched already, or removed meanwhile: no step is drawn.
-            let dropped = self.device_switches.remove(&device_id).is_some();
-            return dropped && self.refresh_device_snapshots();
+        if !helper || payload.step == SwitchStep::Ended {
+            // Switched already, removed meanwhile, or over: nothing waits
+            // for a grant any more.
+            self.device_switches.remove(&device_id);
+            return drawn_changed;
         }
-        let key = match payload.step {
-            SwitchStep::Ended => {
-                self.device_switches.remove(&device_id);
-                return false;
-            }
-            SwitchStep::Connecting => payload.key.unwrap_or_default(),
-        };
+        if payload.step != SwitchStep::Connecting {
+            return drawn_changed;
+        }
+        let key = payload.key.unwrap_or_default();
         self.device_switches.insert(
             device_id.clone(),
             DeviceSwitch {
@@ -243,7 +277,8 @@ impl Runtime {
         );
         // A machine that was paired before the switch was asked for is
         // active already: no change of the paired machines will say so.
-        self.peer_opens(&key) && self.switch_device_link(&device_id, &key)
+        let switched = self.peer_opens(&key) && self.switch_device_link(&device_id, &key);
+        drawn_changed || switched
     }
 
     /// The paired machine under `key` may be opened: the helper device

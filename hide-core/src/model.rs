@@ -1167,6 +1167,33 @@ pub struct DeviceSnapshot {
     /// again and closed (B36), kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_carried: Option<u32>,
+    /// The step its switch to the Hide on its machine is at, while one the
+    /// operator asked for runs (`device_switch`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_step: Option<DeviceSwitchStep>,
+    /// It was a helper device, switched to its machine's own connection
+    /// ([`LinkOrigin::switched`]): the machine's row draws what a device's
+    /// does, which a machine paired by a link does not.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switched: bool,
+}
+
+/// The steps of a device's switch, in the order hided runs them
+/// (`contracts/snapshot-wire-enums.json`: `device_switch_step`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSwitchStep {
+    /// The machine is read for the rule every switch passes.
+    Checking,
+    /// Its own Hide is looked for, and started where it has none.
+    Starting,
+    /// That Hide saves a grant for this machine.
+    Pairing,
+    /// The connection confirms the grant and the device goes on over it,
+    /// with the terminals it ran.
+    Connecting,
+    /// The device's projects are handed to that Hide.
+    Projects,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -9389,6 +9416,25 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "checkout_purpose_origin", &origins);
         checked.insert("checkout_purpose_origin");
+
+        let switch_steps = [
+            DeviceSwitchStep::Checking,
+            DeviceSwitchStep::Starting,
+            DeviceSwitchStep::Pairing,
+            DeviceSwitchStep::Connecting,
+            DeviceSwitchStep::Projects,
+        ];
+        for variant in switch_steps {
+            match variant {
+                DeviceSwitchStep::Checking
+                | DeviceSwitchStep::Starting
+                | DeviceSwitchStep::Pairing
+                | DeviceSwitchStep::Connecting
+                | DeviceSwitchStep::Projects => {}
+            }
+        }
+        assert_wire(&contract, "device_switch_step", &switch_steps);
+        checked.insert("device_switch_step");
 
         let badges = [
             PullRequestBadge::Merged,

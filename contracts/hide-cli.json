@@ -7050,7 +7050,6 @@
                 "ssh_hide_not_running",
                 "wsl_not_reached",
                 "wsl_unavailable",
-                "terminals_open",
                 "device_already_connected"
             ],
             "repeats_at_most": null,
@@ -9791,7 +9790,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1ce3f9864752c05e96943fece11b999a271f0553094740c4cf3284bf793d0000",
+    "digest": "sha256:e077ed4885cc0c6f5b1579a3550069af2cd2d2363a33b016863862380b250b52",
     "envelopes": {
         "access": {
             "answer": "value",

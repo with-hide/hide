@@ -1368,6 +1368,10 @@ pub struct Runtime {
     /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
     /// device.
     device_not_carried: HashMap<String, u32>,
+    /// The step each device's switch is at while hided runs one
+    /// (`DeviceSnapshot::switch_step`): one entry for a registered device,
+    /// dropped when hided says the switch ended or the device is removed.
+    device_switch_steps: HashMap<String, crate::model::DeviceSwitchStep>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2542,6 +2546,7 @@ impl Runtime {
             device_switches: HashMap::new(),
             device_switch_saving: HashMap::new(),
             device_not_carried: HashMap::new(),
+            device_switch_steps: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

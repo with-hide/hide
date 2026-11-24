@@ -64,6 +64,8 @@ pub fn local_device(
         dials_in: false,
         peer_key: None,
         not_carried: None,
+        switch_step: None,
+        switched: false,
     }
 }
 
@@ -104,6 +106,8 @@ pub fn devices(
                 dials_in: registration.origin == crate::model::LinkOrigin::Inbound,
                 peer_key: registration.origin.peer_key().map(str::to_owned),
                 not_carried: None,
+                switch_step: None,
+                switched: registration.origin.switched(),
             });
         }
     }

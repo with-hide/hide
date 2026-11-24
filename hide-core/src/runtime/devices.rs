@@ -391,6 +391,7 @@ impl Runtime {
         if matches!(why, Retiring::Removed) {
             self.device_switches.remove(device_id);
             self.device_not_carried.remove(device_id);
+            self.device_switch_steps.remove(device_id);
             self.snapshot.ui_state.device_switch_opens.remove(device_id);
         }
         match why {
@@ -737,12 +738,14 @@ impl Runtime {
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
             let not_carried = self.device_not_carried.get(&device.id).copied();
+            let switch_step = self.device_switch_steps.get(&device.id).copied();
             if device.state != state
                 || device.message != message
                 || device.problem != problem
                 || device.sign_in != sign_in
                 || device.test != test
                 || device.not_carried != not_carried
+                || device.switch_step != switch_step
             {
                 device.state = state.to_owned();
                 device.message = message;
@@ -750,6 +753,7 @@ impl Runtime {
                 device.sign_in = sign_in;
                 device.test = test;
                 device.not_carried = not_carried;
+                device.switch_step = switch_step;
                 changed = true;
             }
         }

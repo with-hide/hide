@@ -340,16 +340,10 @@ fn install_refusal(target: &str, from: &str, desktop: Option<bool>) -> Option<&'
     if target != "macos" {
         return None;
     }
-    if !takes_hide_from(target, from) {
+    if from != "macos" {
         return Some("ssh_mac_from_mac_only");
     }
     (desktop == Some(false)).then_some("ssh_mac_signed_out")
-}
-
-/// Whether a machine that runs `target` takes a Hide from one that runs
-/// `from`: a Mac only from a Mac (D-45), any other from any.
-fn takes_hide_from(target: &str, from: &str) -> bool {
-    target != "macos" || from == "macos"
 }
 
 /// Starts a Hide of the target account's own from the `hide` this
@@ -599,95 +593,177 @@ pub enum Folder {
     Kept,
 }
 
-/// What a machine needs from the operator before its own Hide is back
-/// after a restart with no one there (PRD device-connect-iroh B30): the
-/// one thing a switch that left a device says to change.
+/// Where a device's machine stands on the one rule every switch passes
+/// (operator decision 2026-11-24): what the button beside it says, whether
+/// it may be pressed, and what `hide device switch` answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Needs {
-    /// A Mac's core starts at a login, so after a restart it is back only
-    /// with automatic login on.
-    AutoLogin,
-    /// Linux: the account may not turn linger on itself, so the core ends
+pub enum Condition {
+    /// A Mac that logs the account in by itself: its Hide is back after a
+    /// restart with nobody there.
+    AutoLoginOn,
+    /// A Mac that does not: the switch runs, and after a restart someone
+    /// logs in to that Mac once before it connects again. `how` is whether
+    /// the setting can be turned on there, which FileVault rules out.
+    AutoLoginOff { how: bool },
+    /// A Mac nobody is logged in to: its Hide runs only in a login, so
+    /// none can be started or reached there now.
+    SignedOut,
+    /// Linux: the account lingers.
+    LingerOn,
+    /// Linux: the account does not linger yet. The switch asks for it,
+    /// and only then is it known whether the account may.
+    LingerOff,
+    /// Linux: the account may not turn linger on itself, so its Hide ends
     /// with its last session until an administrator runs `command`.
-    Linger { command: String },
-    /// A WSL distribution with no systemd: nothing there starts its core,
-    /// which lives only while the distribution runs (B43).
-    Systemd,
+    LingerAdmin { command: String },
+    /// A Linux, or a WSL distribution, with no systemd: nothing there
+    /// starts its Hide again (B43).
+    NoSystemd,
+    /// Windows: no device there is switched in 1.3.0.
+    Windows,
+    /// The account keeps no login item (a HOME that is not the account's
+    /// own), or its system is none this build knows.
+    Unknown,
 }
 
-impl Needs {
-    /// As the answer of a switch that left the device carries it.
+impl Condition {
+    /// Whether a switch runs on it.
+    pub fn may(&self) -> bool {
+        matches!(
+            self,
+            Self::AutoLoginOn | Self::AutoLoginOff { .. } | Self::LingerOn | Self::LingerOff
+        )
+    }
+
+    /// As the answer of a read and of a switch carries it.
     pub fn payload(&self) -> Value {
+        use serde_json::json;
         match self {
-            Self::AutoLogin => serde_json::json!({ "kind": "auto_login" }),
-            Self::Linger { command } => {
-                serde_json::json!({ "kind": "linger", "command": command })
-            }
-            Self::Systemd => serde_json::json!({ "kind": "systemd" }),
+            Self::AutoLoginOn => json!({ "kind": "auto_login_on" }),
+            Self::AutoLoginOff { how } => json!({ "kind": "auto_login_off", "how": how }),
+            Self::SignedOut => json!({ "kind": "signed_out" }),
+            Self::LingerOn => json!({ "kind": "linger_on" }),
+            Self::LingerOff => json!({ "kind": "linger_off" }),
+            Self::LingerAdmin { command } => json!({ "kind": "linger_admin", "command": command }),
+            Self::NoSystemd => json!({ "kind": "no_systemd" }),
+            Self::Windows => json!({ "kind": "windows" }),
+            Self::Unknown => json!({ "kind": "unknown" }),
         }
     }
 }
 
-/// Whether a helper device is switched to its machine's own Hide, and what
-/// its operator does when it is not.
-#[derive(Debug, Default, PartialEq, Eq)]
+/// What a device's machine said of the rule, and the account it said it
+/// of.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Move {
-    /// The account's Hide is back after a restart with nobody at the
-    /// machine: the device is switched.
-    pub back: bool,
-    /// What the operator turns on for that, where something does: a Mac's
-    /// automatic login, or the command a Linux administrator runs. None
-    /// for a machine that is switched, and for one nothing here would
-    /// change.
-    pub needs: Option<Needs>,
+    pub condition: Condition,
+    /// The account's login name there, which the screen's words name.
+    pub user: Option<String>,
 }
 
-/// The one rule every switch passes (operator decision 2026-11-24): a
-/// helper device is switched only when its machine's own Hide is back
-/// after a restart with nobody there, since the SSH login it is dialed by
-/// reaches such a machine and its own Hide is there only where its login
-/// item runs then. Asked of the target in its own `hide always-on linger`:
-/// where the account lingers (Linux, which that turns on when the account
-/// may: only asking says whether it may), or the machine logs it in by
-/// itself (a Mac's automatic login). The call starts no Hide; on Linux it
-/// leaves lingering on for an account that may turn it on, whether or not
-/// the device is then switched, and writes nothing else there. A target
-/// whose `hide` does not say is not known to be back and is left on its
-/// login; one the login did not reach was not read, and the code says so.
-pub(crate) fn may_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
-    let answer = match run_hide(login, reach, &["always-on", "linger", "--json"]) {
-        Ok(Said::Answer(answer)) if answer["ok"] == true => answer,
-        // It does not say: not known to be back.
-        Ok(_) => Value::Null,
-        Err(error) => return Err(not_reached(login, "linger", &error)),
-    };
-    if answer["value"]["unattended"] == true {
+/// Whether a read may change the machine it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asked {
+    /// A look: an opened row. It changes nothing there.
+    Look,
+    /// The operator asked for the switch: a Linux account that does not
+    /// linger is asked to, which alone says whether it may.
+    Switch,
+}
+
+/// The one rule every switch passes, read from the device's machine over
+/// the login it is dialed by, which asks nobody. The target's own `hide`
+/// says the facts (`hide always-on unattended`) and this reads them per
+/// system: a Mac needs someone logged in now, and is warned about, not
+/// refused, when it does not log the account in by itself; a Linux
+/// account needs systemd and linger; Windows is not switched. A look
+/// changes nothing there; a switch asks a Linux account that does not
+/// linger to (`hide always-on linger`), and nothing else. A target whose
+/// `hide` does not answer was not read, and the code says so.
+pub(crate) fn may_move(
+    login: &dyn Login,
+    reach: &Reach,
+    asked: Asked,
+) -> Result<Move, &'static str> {
+    // A command run in a distribution that is off starts it, which a look
+    // nobody pressed for does not do (B43).
+    if asked == Asked::Look
+        && !login
+            .on()
+            .map_err(|error| not_reached(login, "on", &error))?
+    {
+        return Err(login.channel().not_reached());
+    }
+    let system = login
+        .system()
+        .map_err(|error| not_reached(login, "system", &error))?;
+    if system == "windows" {
         return Ok(Move {
-            back: true,
-            needs: None,
+            condition: Condition::Windows,
+            user: None,
         });
     }
-    let needs = match login.system().ok().as_deref() {
-        // Nothing in a distribution with no systemd starts its Hide again,
-        // whatever its `hide` answered or failed to.
-        Some("linux") if login.channel() == Channel::Wsl && !runs_systemd(login) => {
-            Some(Needs::Systemd)
+    let said = match run_hide(login, reach, &["always-on", "unattended", "--json"]) {
+        Ok(Said::Answer(answer)) if answer["ok"] == true => answer["value"].clone(),
+        Ok(Said::NoProgram) => return Err("ssh_hide_absent"),
+        Ok(Said::Unread) => return Err("ssh_update_there"),
+        Ok(Said::Answer(answer)) => {
+            let code = answer["error"]["code"].as_str().unwrap_or_default();
+            return Err(refused_there(login, "unattended", code));
         }
-        _ if answer.is_null() => None,
-        // A Mac takes a Hide only from a Mac: from any other system its
-        // automatic login would move nothing.
-        Some("macos") if takes_hide_from("macos", std::env::consts::OS) => Some(Needs::AutoLogin),
-        Some("linux") => linger_needs(&answer),
-        _ => None,
+        Err(error) => return Err(not_reached(login, "unattended", &error)),
     };
-    Ok(Move { back: false, needs })
+    let user = said["user"].as_str().map(str::to_owned);
+    let mut condition = condition_of(&system, &said, || runs_systemd(login));
+    if condition == Condition::LingerOff && asked == Asked::Switch {
+        condition = match run_hide(login, reach, &["always-on", "linger", "--json"]) {
+            Ok(Said::Answer(answer)) if answer["ok"] == true => lingers_now(&answer["value"]),
+            Ok(_) => Condition::Unknown,
+            Err(error) => return Err(not_reached(login, "linger", &error)),
+        };
+    }
+    Ok(Move { condition, user })
+}
+
+/// The rule, on what the target said of itself. `systemd` is asked only
+/// of a Linux account that does not linger.
+fn condition_of(system: &str, said: &Value, systemd: impl FnOnce() -> bool) -> Condition {
+    let unattended = said["unattended"] == true;
+    let desktop = said["desktop"].as_bool();
+    match system {
+        "macos" => match desktop {
+            None => Condition::Unknown,
+            Some(false) => Condition::SignedOut,
+            Some(true) if unattended => Condition::AutoLoginOn,
+            Some(true) => Condition::AutoLoginOff {
+                how: said["automatic_login_offered"] != false,
+            },
+        },
+        "linux" if unattended => Condition::LingerOn,
+        // Nothing in a system with no systemd starts its Hide again,
+        // whatever its `hide` answered.
+        "linux" if !systemd() => Condition::NoSystemd,
+        "linux" if desktop.is_some() => Condition::LingerOff,
+        _ => Condition::Unknown,
+    }
+}
+
+/// What asking for linger came to (`hide always-on linger`).
+fn lingers_now(value: &Value) -> Condition {
+    match (value["linger"].as_str(), value["command"].as_str()) {
+        (Some("on"), _) => Condition::LingerOn,
+        (Some("needs_administrator"), Some(command)) => Condition::LingerAdmin {
+            command: command.to_owned(),
+        },
+        _ => Condition::Unknown,
+    }
 }
 
 /// [`may_move`] for the helper device `alias` names, over a login of its
 /// own that asks nobody.
-pub fn may_move_device(reach: &Reach, alias: &str) -> Result<Move, &'static str> {
+pub fn may_move_device(reach: &Reach, alias: &str, asked: Asked) -> Result<Move, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let moves = may_move(&Ssh(&upstream), reach);
+    let moves = may_move(&Ssh(&upstream), reach, asked);
     upstream.close();
     moves
 }
@@ -706,17 +782,6 @@ pub(crate) fn runs_systemd(login: &dyn Login) -> bool {
             true
         }
     }
-}
-
-/// The command an administrator runs, when the target's answer names one.
-fn linger_needs(answer: &Value) -> Option<Needs> {
-    let value = &answer["value"];
-    (answer["ok"] == true && value["linger"] == "needs_administrator")
-        .then(|| value["command"].as_str())
-        .flatten()
-        .map(|command| Needs::Linger {
-            command: command.to_owned(),
-        })
 }
 
 /// How far a helper device's switch got on the SSH login alone.
@@ -757,6 +822,10 @@ pub struct Switch<'a> {
     /// The operator allowed a Hide to be started on a target that runs
     /// none of its own (D-45); without it such a target is only named.
     pub install: bool,
+    /// Told each step as it begins, for the row that draws the switch:
+    /// `starting`, `pairing`, then `projects` once the target admitted
+    /// this machine.
+    pub step: &'a (dyn Fn(&'static str) + Sync),
 }
 
 /// Looks at the target `alias` names and pairs with the Hide it runs, over
@@ -773,6 +842,7 @@ pub fn switch(alias: &str, switch: &Switch<'_>) -> Result<Switched, &'static str
 /// [`switch`], on a login.
 pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switched, &'static str> {
     let unreached = login.channel().not_reached();
+    (switch.step)("starting");
     let (looked, desktop, app) = match run(login, switch.reach, &["look-ssh"]) {
         Ok(said) => {
             let (desktop, app) = (desktop_of(&said), app_of(&said));
@@ -826,6 +896,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
         Looked::NotRunning { .. } => return Err("ssh_hide_not_running"),
         Looked::NotReached => return Err(unreached),
     }
+    (switch.step)("pairing");
     let accepted = accept_on(
         login,
         switch.reach,
@@ -877,6 +948,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
 /// their own.
 fn admit(login: &dyn Login, switch: &Switch<'_>, done: Switched) -> Switched {
     if (switch.admitted)(&done) && !switch.projects.is_empty() {
+        (switch.step)("projects");
         hand_projects(login, switch);
     }
     done
@@ -1214,6 +1286,7 @@ mod tests {
                 projects: &[],
                 admitted: &|_| false,
                 install: false,
+                step: &|_| {},
             },
         )
     }
@@ -1259,30 +1332,106 @@ mod tests {
         assert_eq!(mac.asked(), ["device look-ssh"]);
     }
 
-    /// Only an answer that names the command an administrator runs is a
-    /// need: an account that lingers, a system that uses no linger and an
-    /// answer this build cannot read need nothing shown (B30).
+    /// The rule's table (operator decision 2026-11-24), on what a target
+    /// says of itself: a Mac is refused only while nobody is logged in to
+    /// it and warned about while it does not log the account in by itself,
+    /// with the way to turn that on unless FileVault rules it out; a Linux
+    /// account lingers, or is asked to by the switch, and a system with no
+    /// systemd is refused whatever it said; an account with no login item
+    /// and a system this build does not switch are not switched.
     #[test]
-    fn linger_is_needed_only_with_the_command_that_turns_it_on() {
-        let answered = |value: Value| linger_needs(&json!({"ok": true, "value": value}));
+    fn the_rule_reads_each_system_by_its_own_facts() {
+        let of = |system: &str, said: Value| condition_of(system, &said, || true);
+        let mac = |unattended: bool, desktop: bool, offered: bool| json!({"unattended": unattended, "desktop": desktop, "automatic_login_offered": offered});
+        let table = [
+            (
+                of("macos", mac(true, true, true)),
+                Condition::AutoLoginOn,
+                true,
+            ),
+            (
+                of("macos", mac(false, true, true)),
+                Condition::AutoLoginOff { how: true },
+                true,
+            ),
+            (
+                of("macos", mac(false, true, false)),
+                Condition::AutoLoginOff { how: false },
+                true,
+            ),
+            // Nobody is logged in: refused, also with automatic login on.
+            (
+                of("macos", mac(false, false, true)),
+                Condition::SignedOut,
+                false,
+            ),
+            (
+                of("macos", mac(true, false, true)),
+                Condition::SignedOut,
+                false,
+            ),
+            (
+                of("macos", json!({"unattended": false})),
+                Condition::Unknown,
+                false,
+            ),
+            (
+                of("linux", json!({"unattended": true, "desktop": true})),
+                Condition::LingerOn,
+                true,
+            ),
+            (
+                of("linux", json!({"unattended": false, "desktop": true})),
+                Condition::LingerOff,
+                true,
+            ),
+            (
+                of("linux", json!({"unattended": false})),
+                Condition::Unknown,
+                false,
+            ),
+            (
+                of("freebsd", json!({"unattended": true, "desktop": true})),
+                Condition::Unknown,
+                false,
+            ),
+        ];
+        for (read, expected, may) in table {
+            assert_eq!(read, expected);
+            assert_eq!(read.may(), may, "{read:?}");
+        }
+        // No systemd is asked only of an account that does not linger.
+        let none = |said: Value| condition_of("linux", &said, || false);
         assert_eq!(
-            answered(json!({
-                "linger": "needs_administrator",
-                "command": "sudo loginctl enable-linger hy",
-            })),
-            Some(Needs::Linger {
-                command: "sudo loginctl enable-linger hy".to_owned()
-            })
+            none(json!({"unattended": false, "desktop": true})),
+            Condition::NoSystemd
         );
-        assert_eq!(answered(json!({"linger": "on"})), None);
-        assert_eq!(answered(json!({"linger": "not_used"})), None);
-        assert_eq!(answered(json!({"linger": "needs_administrator"})), None);
         assert_eq!(
-            linger_needs(&json!({"ok": false, "error": {"code": "usage"}})),
-            None
+            none(json!({"unattended": true, "desktop": true})),
+            Condition::LingerOn
         );
-        assert_eq!(Needs::AutoLogin.payload(), json!({"kind": "auto_login"}));
-        assert_eq!(Needs::Systemd.payload(), json!({"kind": "systemd"}));
+        for refused in [
+            Condition::NoSystemd,
+            Condition::Windows,
+            Condition::LingerAdmin {
+                command: "sudo loginctl enable-linger hy".to_owned(),
+            },
+        ] {
+            assert!(!refused.may(), "{refused:?}");
+        }
+        assert_eq!(
+            lingers_now(&json!({"linger": "needs_administrator", "command": "sudo loginctl enable-linger hy"})).payload(),
+            json!({"kind": "linger_admin", "command": "sudo loginctl enable-linger hy"})
+        );
+        assert_eq!(lingers_now(&json!({"linger": "on"})), Condition::LingerOn);
+        assert_eq!(
+            lingers_now(&json!({"linger": "needs_administrator"})),
+            Condition::Unknown
+        );
+        assert_eq!(
+            Condition::AutoLoginOff { how: false }.payload(),
+            json!({"kind": "auto_login_off", "how": false})
+        );
     }
 
     /// The command folder is spelled for the system that runs it, from the

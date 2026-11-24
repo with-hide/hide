@@ -517,13 +517,12 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 fields.remove("ok");
             }
             let lines = match answer["switch"].as_str() {
-                Some("left") => left_line(device, &answer["needs"]),
+                Some("left") => left_line(device, &answer["condition"]),
+                Some("held") => held_line(device, &answer),
                 Some("install_needed") => format!(
                     "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
                 ),
-                _ => format!(
-                    "Switched {device} to the Hide on its machine. Its running terminals carry on.\n"
-                ),
+                _ => switched_lines(device, &answer["condition"]),
             };
             Ok(Printed::Value(answer, lines))
         }
@@ -1217,26 +1216,56 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
 
 /// Why a switch left `device` on SSH, and the one thing that changes it
 /// (operator decision 2026-11-24): the rule every switch passes, said
-/// to the one who asked at a terminal. `needs` is what the machine said it
-/// needs (`pairing_ssh::Needs::payload`), null where nothing set there
-/// would change it or it could not be read.
-fn left_line(device: &str, needs: &Value) -> String {
-    let stays = format!(
-        "{device} is not switched and is used as before: the Hide on its machine would not be back after a restart with nobody there."
-    );
+/// to the one who asked at a terminal. `condition` is what the machine
+/// said (`pairing_ssh::Condition::payload`).
+fn left_line(device: &str, condition: &Value) -> String {
+    let stays = format!("{device} is not switched and is used as before");
     let then = format!("then run hide device switch {device} again");
-    match (needs["kind"].as_str(), needs["command"].as_str()) {
-        (Some("auto_login"), _) => {
-            format!("{stays} Turn on automatic login for that account on the Mac, {then}.\n")
+    match (condition["kind"].as_str(), condition["command"].as_str()) {
+        (Some("signed_out"), _) => {
+            format!("{stays}: nobody is logged in to that Mac. Log in there once, {then}.\n")
         }
-        (Some("linger"), Some(command)) => {
-            format!("{stays} Run {command} on that machine, {then}.\n")
-        }
-        (Some("systemd"), _) => format!(
-            "{stays} Its distribution has no systemd, so nothing starts its Hide again: turn systemd on there (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {then}.\n"
+        (Some("linger_admin"), Some(command)) => format!(
+            "{stays}: its account does not linger, so its Hide would not be back after a restart, and only an administrator turns that on. Run {command} on that machine, {then}.\n"
         ),
-        _ => format!("{stays}\n"),
+        (Some("no_systemd"), _) => format!(
+            "{stays}: it has no systemd, so nothing starts its Hide again. In a WSL distribution turn systemd on (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {then}.\n"
+        ),
+        (Some("windows"), _) => {
+            format!("{stays}: a Windows machine is not switched to its own Hide yet.\n")
+        }
+        _ => format!(
+            "{stays}: its machine did not say whether its Hide would be back after a restart.\n"
+        ),
     }
+}
+
+/// A switched device, and the one warning a switch goes on with: a Mac
+/// that does not log its account in by itself connects again after a
+/// restart only once someone logs in there.
+fn switched_lines(device: &str, condition: &Value) -> String {
+    let switched =
+        format!("Switched {device} to the Hide on its machine. Its running terminals carry on.\n");
+    match condition["kind"].as_str() {
+        Some("auto_login_off") => format!(
+            "{switched}Automatic login is off on that Mac: after it restarts, log in there once and it connects again.\n"
+        ),
+        _ => switched,
+    }
+}
+
+/// A device another computer switched first, while this one runs
+/// terminals there: who, and what to close before asking again.
+fn held_line(device: &str, answer: &Value) -> String {
+    let by = answer["by"].as_str().unwrap_or("Another computer");
+    let close = match answer["terminals"].as_u64() {
+        Some(1) => "close the 1 terminal this computer runs there".to_owned(),
+        Some(count) => format!("close the {count} terminals this computer runs there"),
+        None => "close the terminals this computer runs there".to_owned(),
+    };
+    format!(
+        "{by} switched {device} to its own Hide first, and a switch from here takes up no terminal: {close}, then run hide device switch {device} again.\n"
+    )
 }
 
 /// A paired machine: who opens whom, whether the two are connected, and the
@@ -1581,31 +1610,62 @@ mod tests {
         }
     }
 
-    /// A switch that leaves a device says why and the one thing to do,
-    /// each as its machine's system needs it; a machine nothing set there
-    /// would change gets the reason alone.
+    /// A switch says what its machine's condition means for the one who
+    /// asked: the one thing to do where the device is left, the warning a
+    /// Mac without automatic login is switched with, and what to close for
+    /// a device another computer switched first.
     #[test]
-    fn a_switch_that_leaves_a_device_says_the_one_thing_to_do() {
-        let stays = "studio is not switched and is used as before: the Hide on its machine would not be back after a restart with nobody there.";
+    fn a_switch_says_what_its_machines_condition_means() {
+        let stays = "studio is not switched and is used as before";
         let again = "then run hide device switch studio again.\n";
         assert_eq!(
-            left_line("studio", &json!({"kind": "auto_login"})),
-            format!("{stays} Turn on automatic login for that account on the Mac, {again}")
+            left_line("studio", &json!({"kind": "signed_out"})),
+            format!("{stays}: nobody is logged in to that Mac. Log in there once, {again}")
+        );
+        let admin = left_line(
+            "studio",
+            &json!({"kind": "linger_admin", "command": "sudo loginctl enable-linger me"}),
+        );
+        assert!(
+            admin.ends_with(&format!(
+                "Run sudo loginctl enable-linger me on that machine, {again}"
+            )),
+            "{admin}"
+        );
+        let systemd = left_line("studio", &json!({"kind": "no_systemd"}));
+        assert!(systemd.contains("it has no systemd"), "{systemd}");
+        assert!(systemd.ends_with(again), "{systemd}");
+        // Nothing set there changes these two: no step is named.
+        for kind in ["windows", "unknown"] {
+            let line = left_line("studio", &json!({"kind": kind}));
+            assert!(
+                line.starts_with(stays) && !line.contains("then run"),
+                "{line}"
+            );
+        }
+
+        let switched =
+            "Switched studio to the Hide on its machine. Its running terminals carry on.\n";
+        assert_eq!(
+            switched_lines("studio", &json!({"kind": "auto_login_on"})),
+            switched
         );
         assert_eq!(
-            left_line(
-                "studio",
-                &json!({"kind": "linger", "command": "sudo loginctl enable-linger me"})
-            ),
-            format!("{stays} Run sudo loginctl enable-linger me on that machine, {again}")
-        );
-        assert_eq!(
-            left_line("studio", &json!({"kind": "systemd"})),
+            switched_lines("studio", &json!({"kind": "auto_login_off", "how": true})),
             format!(
-                "{stays} Its distribution has no systemd, so nothing starts its Hide again: turn systemd on there (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {again}"
+                "{switched}Automatic login is off on that Mac: after it restarts, log in there once and it connects again.\n"
             )
         );
-        assert_eq!(left_line("studio", &Value::Null), format!("{stays}\n"));
+
+        let held = held_line("studio", &json!({"by": "laptop", "terminals": 2}));
+        assert_eq!(
+            held,
+            "laptop switched studio to its own Hide first, and a switch from here takes up no terminal: close the 2 terminals this computer runs there, then run hide device switch studio again.\n"
+        );
+        assert!(
+            held_line("studio", &json!({"by": "laptop", "terminals": null}))
+                .contains("close the terminals this computer runs there")
+        );
     }
 
     /// A sign-in failure carries no ssh line (the core leaves it out), so

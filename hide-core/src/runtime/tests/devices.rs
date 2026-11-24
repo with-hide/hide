@@ -2056,9 +2056,33 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
         Some("device_unknown")
     );
 
-    // A switch that stops before the pairing leaves the helper device.
+    // A switch that stops before the pairing leaves the helper device, and
+    // its row draws each step hided said until it says the switch ended.
+    use crate::model::DeviceSwitchStep;
+    assert_eq!(device(&runtime, "build-box-id").switch_step, None);
+    assert!(!device(&runtime, "build-box-id").switched);
+    for (said, drawn) in [
+        ("checking", DeviceSwitchStep::Checking),
+        ("starting", DeviceSwitchStep::Starting),
+        ("pairing", DeviceSwitchStep::Pairing),
+    ] {
+        dispatch(&mut runtime, "device_switch", step(said));
+        assert_eq!(
+            device(&runtime, "build-box-id").switch_step,
+            Some(drawn),
+            "{said}"
+        );
+    }
     dispatch(&mut runtime, "device_switch", step("ended"));
+    assert_eq!(device(&runtime, "build-box-id").switch_step, None);
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    // A step for a device this core does not hold is kept nowhere.
+    dispatch(
+        &mut runtime,
+        "device_switch",
+        serde_json::json!({"device_id": "nowhere", "step": "checking"}),
+    );
+    assert!(runtime.device_switch_steps.is_empty());
 
     // Paired, and not confirmed yet: still the helper's.
     let mut connecting = step("connecting");
@@ -2086,6 +2110,18 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
     assert_eq!(row.ssh_alias, None);
+    // The row says it was a device once, and goes on drawing the switch,
+    // also the step that follows the link change, until hided ends it.
+    assert!(row.switched);
+    assert_eq!(row.switch_step, Some(DeviceSwitchStep::Connecting));
+    dispatch(&mut runtime, "device_switch", step("projects"));
+    assert_eq!(
+        device(&runtime, "build-box-id").switch_step,
+        Some(DeviceSwitchStep::Projects)
+    );
+    dispatch(&mut runtime, "device_switch", step("ended"));
+    assert_eq!(device(&runtime, "build-box-id").switch_step, None);
+    assert!(device(&runtime, "build-box-id").switched);
     // Saved as it is, and read back the same.
     let stored = serde_json::to_value(&switched).unwrap();
     assert_eq!(stored["peer_switched"], true);

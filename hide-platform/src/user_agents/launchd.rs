@@ -44,6 +44,7 @@ const LOGIN_WINDOW: &str = "/Library/Preferences/com.apple.loginwindow";
 pub(super) struct Launchd {
     launchctl: PathBuf,
     defaults: PathBuf,
+    fdesetup: PathBuf,
     domain: String,
     /// The account's login name; empty when the system did not say, which
     /// is no account's name.
@@ -58,6 +59,7 @@ impl Launchd {
         Self {
             launchctl: "/bin/launchctl".into(),
             defaults: "/usr/bin/defaults".into(),
+            fdesetup: "/usr/bin/fdesetup".into(),
             domain: format!("gui/{uid}"),
             user: super::account_name().unwrap_or_default(),
         }
@@ -67,6 +69,7 @@ impl Launchd {
         Self {
             launchctl: stand_ins.join("launchctl"),
             defaults: stand_ins.join("defaults"),
+            fdesetup: stand_ins.join("fdesetup"),
             domain: "fixture".to_owned(),
             user: "fixture".to_owned(),
         }
@@ -86,6 +89,25 @@ impl Launchd {
         crate::process::run_to_end(&mut command, COMMAND_WITHIN, stop).is_ok_and(|read| {
             read.code == Some(0) && !self.user.is_empty() && read.stdout.trim() == self.user
         })
+    }
+
+    pub(super) fn account(&self) -> &str {
+        &self.user
+    }
+
+    /// Whether macOS offers automatic login on this Mac: not while
+    /// FileVault locks its disk, which asks for a password before any
+    /// account is logged in. A state that cannot be read is one that
+    /// offers it: the setting itself then says whether it does.
+    #[allow(clippy::disallowed_methods)] // env_clear: fdesetup is a macOS system tool this module alone runs, and needs nothing but the home
+    pub(super) fn offers_automatic_login(&self, home: &Path, stop: &AtomicBool) -> bool {
+        let mut command = Command::new(&self.fdesetup);
+        command
+            .arg("status")
+            .env_clear()
+            .env(crate::host::HOME_VARIABLE, home);
+        !crate::process::run_to_end(&mut command, COMMAND_WITHIN, stop)
+            .is_ok_and(|read| read.code == Some(0) && read.stdout.contains("FileVault is On"))
     }
 
     fn plist(home: &Path, label: &str) -> PathBuf {

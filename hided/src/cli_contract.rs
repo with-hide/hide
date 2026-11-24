@@ -1431,11 +1431,14 @@ pub const COMMANDS: &[Spec] = &[
     },
     // Switches an SSH device to the connection of the Hide on its machine:
     // the two are paired over the device's SSH login, and the device keeps
-    // its id, its name and its running terminals. Only a machine whose
-    // Hide would be back after a restart with nobody there is switched:
-    // `left` is one that would not, with what it needs. A device another
-    // machine switched first is switched while this machine runs no
-    // terminal there, and refused `terminals_open` while it does.
+    // its id, its name and its running terminals. The machine is read
+    // first, and the answer carries what it said as `condition`: `left` is
+    // one that is not switched (nobody logged in to a Mac, a Linux account
+    // only an administrator can make linger, no systemd, Windows), and a
+    // Mac that does not log in by itself is switched with that said. A
+    // device another machine switched first is switched while this machine
+    // runs no terminal there, and answers `held` with that machine's name
+    // and the count while it does.
     // `install_needed` is a machine that runs no Hide of its own, where
     // `--install` starts one from this machine's helper build.
     Spec {
@@ -1468,7 +1471,6 @@ pub const COMMANDS: &[Spec] = &[
             "ssh_hide_not_running",
             "wsl_not_reached",
             "wsl_unavailable",
-            "terminals_open",
             "device_already_connected",
         ],
     },

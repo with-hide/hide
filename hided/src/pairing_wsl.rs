@@ -149,15 +149,17 @@ pub fn switch(
     pairing_ssh::switch_on(&login, switch)
 }
 
-/// Whether the helper device `distro` is switched
+/// Where the helper device `distro` stands on the rule every switch passes
 /// (`pairing_ssh::may_move`), read through `wsl.exe`, which starts a
-/// distribution that is off: only a switch the operator asked for reads it.
+/// distribution that is off: the caller reads only one that runs, or one
+/// the operator asked to switch.
 pub fn may_move(
     access: &WslAccess,
     reach: &Reach,
     distro: &str,
+    asked: pairing_ssh::Asked,
 ) -> Result<pairing_ssh::Move, &'static str> {
-    pairing_ssh::may_move(&Wsl { access, distro }, reach)
+    pairing_ssh::may_move(&Wsl { access, distro }, reach, asked)
 }
 
 /// What makes the carriers of this PC's connections to its distributions.
@@ -464,6 +466,7 @@ esac
                     projects: &projects,
                     admitted: &|_| true,
                     install: false,
+                    step: &|_| {},
                 },
             )
             .unwrap_or_else(|code| panic!("{code}"))
@@ -536,6 +539,7 @@ esac
                     projects: &projects,
                     admitted: &|_| admitted,
                     install,
+                    step: &|_| {},
                 },
             )
         };
@@ -589,18 +593,18 @@ esac
         );
     }
 
-    /// The one rule (operator decision 2026-11-24) as a pressed switch of a
-    /// distribution reads it: the switch is the operator's, so it wakes a
-    /// distribution that is off, and it is run only when the distribution's
-    /// Hide is back after a restart with nobody there. What its `hide
-    /// always-on linger` says is the answer; an older `hide`, or one that
-    /// says nothing, is not known to be back. A distribution with no
-    /// systemd is left with that as the reason, whatever its `hide` said.
+    /// The one rule (operator decision 2026-11-24) as a distribution is
+    /// read: a look asks its `hide` one thing and changes nothing there, a
+    /// switch also asks an account that does not linger to, a distribution
+    /// with no systemd is refused with that as the reason whatever its
+    /// `hide` said, and one that does not answer was not read. A switch
+    /// the operator asked for wakes a distribution that is off.
     #[test]
-    fn a_distribution_is_switched_only_when_its_hide_is_back_unattended() {
+    fn a_distribution_is_read_without_change_and_asked_to_linger_only_by_a_switch() {
+        use pairing_ssh::{Asked, Condition};
         const MOVED: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/hide.log"
-[ "$1" = "always-on" ] && { cat "$HOME/linger"; exit 0; }
+[ "$1" = "always-on" ] && { cat "$HOME/$2"; exit 0; }
 case "$2" in
     look-ssh) echo '{"ok":true,"value":{"look":{"system":"linux","core":true}}}' ;;
     accept-ssh) printf '{"ok":true,"value":{"helper":"taken","accepted":{"key":"%s","device":"distro-device","name":"Ubuntu","grant":"g1","candidates":[]}}}\n' "$(cat "$HOME/key")" ;;
@@ -608,7 +612,10 @@ case "$2" in
     *) exit 2 ;;
 esac
 "#;
-        const BACK: &str = r#"{"ok":true,"value":{"linger":"on","unattended":true}}"#;
+        const LINGERS: &str =
+            r#"{"ok":true,"value":{"unattended":true,"desktop":true,"user":"me"}}"#;
+        const NOT_YET: &str =
+            r#"{"ok":true,"value":{"unattended":false,"desktop":true,"user":"me"}}"#;
         let pc = pc_with(MOVED, "linger");
         let systemd = pc.dir.path().join("systemd");
         std::fs::write(&systemd, "").unwrap();
@@ -616,69 +623,93 @@ esac
         let theirs = hide_peer::MachineKey::generate().unwrap().public();
         std::fs::write(home.join("key"), theirs.to_hex()).unwrap();
         let mine = hide_peer::MachineKey::generate().unwrap().public();
-        let may = || may_move(&pc.access, &pc.reach, "Ubuntu").unwrap();
+        let read = |asked| may_move(&pc.access, &pc.reach, "Ubuntu", asked);
         let said = || {
-            std::fs::read_to_string(home.join("hide.log"))
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
+            let log = std::fs::read_to_string(home.join("hide.log")).unwrap_or_default();
+            let _ = std::fs::remove_file(home.join("hide.log"));
+            log.lines().map(str::to_owned).collect::<Vec<_>>()
         };
-
-        // Its Hide is not back with nobody there, or does not say.
         pc.running("Ubuntu");
+
+        // It lingers: nothing more is asked, by a look or by a switch.
+        std::fs::write(home.join("unattended"), LINGERS).unwrap();
+        for asked in [Asked::Look, Asked::Switch] {
+            let moves = read(asked).unwrap();
+            assert_eq!(moves.condition, Condition::LingerOn);
+            assert_eq!(moves.user.as_deref(), Some("me"));
+        }
+        assert_eq!(said(), vec!["always-on unattended --json"; 2]);
+
+        // It does not: a look says so and asks for nothing.
+        std::fs::write(home.join("unattended"), NOT_YET).unwrap();
+        assert_eq!(read(Asked::Look).unwrap().condition, Condition::LingerOff);
+        assert_eq!(said(), ["always-on unattended --json"]);
+        // A switch asks for it, and reads what came of that.
         let command = "sudo loginctl enable-linger me";
-        let left = [
-            r#"{"ok":true,"value":{"linger":"needs_administrator","command":"sudo loginctl enable-linger me","unattended":false}}"#,
-            r#"{"ok":true,"value":{"linger":"not_used","unattended":false}}"#,
-            r#"{"ok":true,"value":{"linger":"on"}}"#,
+        for (answer, condition) in [
+            (
+                r#"{"ok":true,"value":{"linger":"on"}}"#,
+                Condition::LingerOn,
+            ),
+            (
+                r#"{"ok":true,"value":{"linger":"needs_administrator","command":"sudo loginctl enable-linger me"}}"#,
+                Condition::LingerAdmin {
+                    command: command.to_owned(),
+                },
+            ),
+            (
+                r#"{"ok":true,"value":{"linger":"not_used"}}"#,
+                Condition::Unknown,
+            ),
             // Its `loginctl` could not be run: the command failed there.
-            r#"{"ok":false,"reason":"linger: No such file or directory","unattended":true}"#,
-            "",
-        ];
-        for answer in left {
+            (
+                r#"{"ok":false,"reason":"linger: No such file or directory"}"#,
+                Condition::Unknown,
+            ),
+        ] {
             std::fs::write(home.join("linger"), answer).unwrap();
-            let moves = may();
-            assert!(!moves.back, "{answer}");
-            let administrator = answer.contains("needs_administrator");
             assert_eq!(
-                moves.needs,
-                administrator.then(|| pairing_ssh::Needs::Linger {
-                    command: command.to_owned()
-                }),
+                read(Asked::Switch).unwrap().condition,
+                condition,
+                "{answer}"
+            );
+            assert_eq!(
+                said(),
+                ["always-on unattended --json", "always-on linger --json"],
                 "{answer}"
             );
         }
-        assert_eq!(
-            said(),
-            vec!["always-on linger --json"; left.len()],
-            "a distribution that is left was asked for more than the one answer"
-        );
+
+        // An account with no login item says nothing of its login.
+        std::fs::write(
+            home.join("unattended"),
+            r#"{"ok":true,"value":{"unattended":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(read(Asked::Switch).unwrap().condition, Condition::Unknown);
 
         // No systemd: nothing starts its Hide again, which is the one
-        // reason said, whether its `hide` answered or failed.
+        // reason said, and nothing is asked for.
         std::fs::remove_file(&systemd).unwrap();
-        for answer in [left[1], left[3]] {
-            std::fs::write(home.join("linger"), answer).unwrap();
-            assert_eq!(
-                may(),
-                pairing_ssh::Move {
-                    back: false,
-                    needs: Some(pairing_ssh::Needs::Systemd)
-                },
-                "{answer}"
-            );
-        }
+        said();
+        std::fs::write(home.join("unattended"), NOT_YET).unwrap();
+        assert_eq!(read(Asked::Switch).unwrap().condition, Condition::NoSystemd);
+        assert_eq!(said(), ["always-on unattended --json"]);
         std::fs::write(&systemd, "").unwrap();
+
+        // A `hide` that says nothing this build reads was not read.
+        std::fs::write(home.join("unattended"), "").unwrap();
+        assert_eq!(read(Asked::Look), Err("ssh_update_there"));
 
         // Off, and back with nobody there once it runs: the switch the
         // operator asked for reads it and runs in it, which is what starts
         // a distribution (`wsl.exe` starts the one a command names). No
         // read of what runs stands in its way.
         pc.running("");
-        std::fs::write(home.join("linger"), BACK).unwrap();
+        std::fs::write(home.join("unattended"), LINGERS).unwrap();
         std::fs::remove_file(pc.dir.path().join("calls.log")).unwrap();
-        assert!(may().back);
+        assert!(read(Asked::Switch).unwrap().condition.may());
+        let steps = std::sync::Mutex::new(Vec::new());
         let switched = switch(
             &pc.access,
             "Ubuntu",
@@ -691,11 +722,14 @@ esac
                 projects: &[],
                 admitted: &|_| true,
                 install: true,
+                step: &|step| steps.lock().unwrap().push(step),
             },
         );
         let Ok(Switched::Paired { paired, .. }) = switched else {
             panic!("the distribution was not switched");
         };
+        // Each step is told as it begins; with no project, none is handed.
+        assert_eq!(*steps.lock().unwrap(), ["starting", "pairing"]);
         assert_eq!(paired.expect("a new pairing").accepted.key, theirs);
         assert!(
             pc.calls().iter().all(|call| !call.starts_with("--list")),

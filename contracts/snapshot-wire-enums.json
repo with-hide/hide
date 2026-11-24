@@ -87,6 +87,7 @@
   "pull_request_badge": ["merged", "closed", "review", "open"],
   "pull_request_checks": ["unknown", "none", "pending", "failed", "passing"],
   "label_end": ["working", "question", "blocked", "done", "waiting", "unfinished", "limited"],
+  "device_switch_step": ["checking", "starting", "pairing", "connecting", "projects"],
   "request_verb": ["answer", "blocked", "fix", "review", "stopped", "result", "working", "waiting", "idle"],
   "user_turn_kind": ["plan_approval", "question"],
   "ask_subject_cause": ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"],

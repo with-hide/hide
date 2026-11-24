@@ -1417,13 +1417,16 @@ impl Core {
         lock_recover(&self.runtime).device_switch_landed(device, key)
     }
 
-    /// Whether the helper device `device` lists no terminal of this
-    /// machine's, read on the connection it has: what a switch that goes
-    /// on with a folder of this machine's own asks first, since that
-    /// folder takes up none of them. An unread session is not none.
-    pub fn device_lists_no_terminal(&self, device: &str) -> bool {
-        check_owner_thread(self, "device_lists_no_terminal")
-            && lock_recover(&self.runtime).device_terminals(device) == Some(0)
+    /// How many terminals of this machine's the helper device `device`
+    /// lists, read on the connection it has: what a switch that goes on
+    /// with a folder of this machine's own asks first, since that folder
+    /// takes up none of them. None while its session is unread, which is
+    /// not known to list none.
+    pub fn device_terminals(&self, device: &str) -> Option<usize> {
+        if !check_owner_thread(self, "device_terminals") {
+            return None;
+        }
+        lock_recover(&self.runtime).device_terminals(device)
     }
 
     /// Takes the link a node that dialed this core brought (PRD

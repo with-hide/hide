@@ -289,9 +289,9 @@ enum Command {
         key: String,
         reply: Sender<Option<bool>>,
     },
-    DeviceListsNoTerminal {
+    DeviceTerminals {
         device: String,
-        reply: Sender<bool>,
+        reply: Sender<Option<usize>>,
     },
     InboundNode {
         node: String,
@@ -1411,16 +1411,16 @@ impl CoreHandle {
         }
     }
 
-    /// Whether `device` lists no terminal of this machine's; see
-    /// `Core::device_lists_no_terminal`. A core that does not answer is
-    /// not known to list none.
-    pub fn device_lists_no_terminal(&self, device: &str) -> bool {
+    /// How many terminals of this machine's `device` lists; see
+    /// `Core::device_terminals`. A core that does not answer did not read
+    /// them.
+    pub fn device_terminals(&self, device: &str) -> Option<usize> {
         let (reply, rx) = mpsc::channel();
-        let asked = self.commands.send(Command::DeviceListsNoTerminal {
+        let asked = self.commands.send(Command::DeviceTerminals {
             device: device.to_owned(),
             reply,
         });
-        asked.is_ok() && rx.recv().unwrap_or(false)
+        asked.ok().and_then(|()| rx.recv().ok().flatten())
     }
 
     /// Why a node dialing this core would be refused, before its link is
@@ -2165,8 +2165,8 @@ fn owner_loop(
             Command::DeviceSwitchSource { device, reply } => {
                 let _ = reply.send(core.device_switch_source(&device));
             }
-            Command::DeviceListsNoTerminal { device, reply } => {
-                let _ = reply.send(core.device_lists_no_terminal(&device));
+            Command::DeviceTerminals { device, reply } => {
+                let _ = reply.send(core.device_terminals(&device));
             }
             Command::DeviceSwitchLanded { device, key, reply } => {
                 let _ = reply.send(core.device_switch_landed(&device, &key));
