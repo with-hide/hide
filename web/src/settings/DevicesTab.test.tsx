@@ -65,8 +65,9 @@ it("says nothing about a healthy kit on a device row, and names the device by it
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
-  // The menu is the only control a healthy device row carries; Test is in ⋯. The row says nothing of how it is reached.
-  expect(mini.querySelectorAll("button")).toHaveLength(1);
+  // The row's own press, which opens how the device is connected, and the menu are the only controls a healthy device row carries; Test is in ⋯.
+  expect(mini.querySelectorAll("button")).toHaveLength(2);
+  expect(q('[data-device-way="mini:ssh"]')?.textContent).toBe("SSH");
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
   await openMenu(q, "mini");
   const items = [...document.querySelectorAll('[data-device-menu-content="mini"] [role="menuitem"]')].map((item) => item.textContent);

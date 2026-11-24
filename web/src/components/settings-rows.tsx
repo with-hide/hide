@@ -6,6 +6,7 @@
 import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
+import { RowOverlayButton } from "./ui/row-button";
 
 /**
  * A card whose rows are separated by hairlines, like `HideSettingsGroup`; titled unless it stands alone, like the Hide AI switch.
@@ -35,11 +36,42 @@ export function Group({ title, caption, note, action, columns, children, ...data
 }
 
 /**
+ * What opens under a row when the row is pressed: `label` names the press
+ * for a screen reader, and `body` is drawn under the row while `open`.
+ * `"none"` keeps the arrow's place empty, for a row that does not open
+ * among rows that do, so their names line up.
+ */
+export type RowFold = { open: boolean; onToggle: () => void; label: string; body: ReactNode } | "none";
+
+/**
  * A row wraps on narrow sheets; a separate value keeps its control at the first line's right edge.
  * `controlsEnd` keeps the controls at the right edge when they wrap under the label, so rows whose controls
  * stand in columns (Agents' 권한 and 켬) keep them lined up at any width.
+ * With a `fold` the whole row is one press that opens what is under it, its arrow before the label; the
+ * row's own controls and its `detail` stay pressable, and a control inside the label asks for it with `pointer-events-auto`.
  */
-export function Row({ label, children, detail, value, className, controlsEnd = false, ...data }: { label: ReactNode; children?: ReactNode; detail?: ReactNode; value?: ReactNode; className?: string; controlsEnd?: boolean } & Record<`data-${string}`, string>) {
+export function Row({ label, children, detail, value, className, controlsEnd = false, fold, ...data }: { label: ReactNode; children?: ReactNode; detail?: ReactNode; value?: ReactNode; className?: string; controlsEnd?: boolean; fold?: RowFold } & Record<`data-${string}`, string>) {
+  if (fold !== undefined) {
+    const opens = fold !== "none";
+    return (
+      <div className={className} {...data}>
+        <div className="relative px-md py-sm">
+          {opens ? <RowOverlayButton aria-label={fold.label} aria-expanded={fold.open} onClick={fold.onToggle} data-row-fold={fold.open ? "open" : "closed"} /> : null}
+          <div className={cn("flex flex-wrap items-center gap-x-md gap-y-xs", opens && "pointer-events-none relative")}>
+            <div className="flex min-w-[min(100%,var(--size-settings-control-w))] flex-1 items-start gap-sm text-subhead text-foreground">
+              <span className="flex h-lh w-(--size-icon) shrink-0 items-center">
+                {opens ? <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon) text-muted-foreground transition-transform", fold.open && "rotate-90")} /> : null}
+              </span>
+              <div className="min-w-0 flex-1">{label}</div>
+            </div>
+            {children ? <div className={cn("pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-sm", controlsEnd && "ml-auto")}>{children}</div> : null}
+          </div>
+          {detail ? <div className="relative mt-xs pl-[calc(var(--size-icon)+var(--spacing-sm))]">{detail}</div> : null}
+        </div>
+        {opens && fold.open ? <div className="pb-md pl-[calc(var(--spacing-md)+var(--size-icon)+var(--spacing-sm))] pr-md">{fold.body}</div> : null}
+      </div>
+    );
+  }
   return (
     <div className={cn("px-md py-sm", className)} {...data}>
       {value !== undefined ? <div className="flex items-start gap-md">

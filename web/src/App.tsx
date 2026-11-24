@@ -27,7 +27,7 @@ import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { PairingDialogs } from "./PairingDialogs";
 import { PeerUpdateNotice } from "./PeerUpdateNotice";
-import { DeviceMovedStrip, DeviceMoveWatch } from "./settings/DeviceSwitch";
+import { DeviceMoveWatch } from "./settings/DeviceSwitch";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
@@ -339,8 +339,6 @@ export function App() {
             <TitleRow actions={actions} />
           </RenderBoundary>
           {leftOut(["connection", <ConnectionBadge actions={actions} />])}
-          {/* Over a paired machine's screen the stage draws it, where that screen leaves room for it. */}
-          {remoteScreen === null ? leftOut(["device_moved", <DeviceMovedStrip />]) : null}
           <div className="flex min-h-0 flex-1">
             {/* A paired machine's own screen takes the sidebar's and the center's place, beside the rail (PRD device-connect-iroh B17). */}
             {remoteScreen !== null ? (

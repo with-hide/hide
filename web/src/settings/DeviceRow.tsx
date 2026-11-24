@@ -9,6 +9,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceReason, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
 import { ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
 import { DeviceSignIn } from "./SignInPrompt";
@@ -16,6 +17,8 @@ import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
 import { machineSystem } from "./agentRows";
 import { SmartAppControlHint } from "./SmartAppControlHint";
+import { DeviceWays, WayBadge } from "./DeviceWays";
+import { useDeviceSwitch } from "./switchWays";
 
 /** What a row's menu and buttons ask the tab to open or record. */
 export type DeviceRowHandlers = {
@@ -47,6 +50,11 @@ export type DeviceRowPlace = { name: string; own: boolean; windowIsNode: boolean
  * grows under it (a sign-in, a changed
  * server key, the helper's consent, a part of Hide's kit). Test, the
  * technical detail and the rename are in ⋯.
+ * A device reached over SSH or WSL says so in one word beside its name,
+ * and on this computer's own window its row opens on how it is connected
+ * (`DeviceWays`), where its machine is read once and it can be switched to
+ * that machine's own Hide; this computer's row keeps the arrow's place and
+ * does not open.
  */
 export function DeviceRow({ device, status, place, actions, handlers }: { device: Device; status: RemoteStatus | undefined; place: DeviceRowPlace; actions: Actions; handlers: DeviceRowHandlers }) {
   const { t } = useInterfaceTranslation();
@@ -61,12 +69,34 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
   const reason = reached ? deviceReason(device, status, t, corePlatform) : null;
   // One button: a sign-in the device waits on, else Retry where trying again can help.
   const retry = dialed && canRetryDevice(device, status);
+  // The connection a device reached over a login uses, which is what its row opens on.
+  const way = !reached ? null : device.wsl_distro ? "wsl" : device.ssh_alias ? "ssh" : null;
+  const open = useUiStore((s) => way !== null && s.devicesOpen.includes(device.id));
+  const windows = machineSystem(device) === "Windows";
+  const connected = device.state === "ready";
+  // Read once over the device's own login while the row is open: only a connected device, and never a Windows one, which is not switched.
+  const switching = useDeviceSwitch(device.id, actions, ownScreen && open && connected && !windows, open);
   return (
     <Row
       data-device-row={device.id}
+      fold={
+        !ownScreen
+          ? undefined
+          : way === null
+            ? "none"
+            : {
+                open,
+                onToggle: () => useUiStore.getState().toggleDeviceOpen(device.id),
+                label: t(open ? "devices.ways.close" : "devices.ways.open", { name: place.name }),
+                body: <DeviceWays state={{ deviceId: device.id, name: place.name, way, windows, connected, look: switching.look, step: device.switch_step ?? null, pressed: switching.pressed, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
+              }
+      }
       label={
         <span className="flex min-w-0 flex-col">
-          <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-xs">
+            <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
+            {way ? <WayBadge way={way} deviceId={device.id} /> : null}
+          </span>
           {system ? (
             <span className="break-words text-caption text-muted-foreground" data-device-subtitle={device.id}>
               {system}
@@ -75,7 +105,7 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
           {reason ? (
             <Note tone="warn" data-device-reason={device.id}>
               {reason}
-              {device.problem === "windows_not_started" ? <> · <SmartAppControlHint deviceId={device.id} /></> : null}
+              {device.problem === "windows_not_started" ? <> · <span className="pointer-events-auto"><SmartAppControlHint deviceId={device.id} /></span></> : null}
             </Note>
           ) : null}
         </span>

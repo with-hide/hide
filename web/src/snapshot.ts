@@ -2289,7 +2289,14 @@ export type Device = {
   peer_key?: string | null;
   /** How many of the device's terminals its move could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
   not_carried?: number | null;
+  /** The step its switch to the Hide on its machine is at while one runs (`DeviceSnapshot::switch_step`; `contracts/snapshot-wire-enums.json`: `device_switch_step`); absent otherwise and from an older daemon. */
+  switch_step?: DeviceSwitchStep | null;
+  /** It was a device reached over SSH or WSL, switched to its machine's own Hide (`DeviceSnapshot::switched`); absent for a machine paired by a link. */
+  switched?: boolean;
 };
+
+/** The steps of a device's switch, in the order hided runs them (`contracts/snapshot-wire-enums.json`: `device_switch_step`). */
+export type DeviceSwitchStep = "checking" | "starting" | "pairing" | "connecting" | "projects";
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does

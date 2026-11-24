@@ -21,6 +21,8 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { guestPaneCount, machinesWithOwnRow, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, relayTip, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { DeviceNotCarriedLine } from "./DeviceSwitch";
+import { DeviceWays, WayBadge } from "./DeviceWays";
+import { useDeviceSwitch } from "./switchWays";
 import { askForFirewallOnce, useFirewall } from "./firewall";
 import { machineSystem } from "./agentRows";
 import { PeerDetails } from "./DeviceDetails";
@@ -196,6 +198,12 @@ function ShareStep({ index, state, title, children }: { index: number; state: "d
  * Rename, Connection details and each direction's pause and removal. An ask
  * names the machine by its connection id: a device id is what a machine says
  * of itself, and two rows can say the same one.
+ * A machine that was a device reached over SSH or WSL and was switched to
+ * its own Hide (`Device.switched`) says `서버` beside its name and opens,
+ * as a device's row does, on how it is connected; a machine paired by a
+ * link has neither. While such a machine is not connected it is read once
+ * over the login it was switched through, and a Mac nobody is logged in
+ * to says that logging in connects it again.
  */
 export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRename }: { peer: Peer; request: PairRequest | undefined; actions: Actions; own: boolean; onRemove: (peer: Peer, direction: Direction) => void; onDetails: (peer: Peer) => void; onRename: (peer: Peer) => void }) {
   const { t } = useInterfaceTranslation();
@@ -209,6 +217,12 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
     const machine = s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key);
     return machine ? machineSystem(machine) : null;
   });
+  const switched = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key)?.switched === true);
+  const step = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.peer_key === peer.key)?.switch_step ?? null);
+  const open = useUiStore((s) => switched && s.devicesOpen.includes(device));
+  const server = own && switched;
+  const switching = useDeviceSwitch(device, actions, server && (open || !peer.connected), open);
+  const signedOut = !peer.connected && switching.look?.state === "read" && switching.look.condition.kind === "signed_out";
   const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
   const ask = () => {
     if (request) actions.pairing("dismiss_request", { device: named });
@@ -218,11 +232,27 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
     <Row
       data-peer-row={device}
       data-peer-state={state.key}
+      fold={
+        !own
+          ? undefined
+          : !switched
+            ? "none"
+            : {
+                open,
+                onToggle: () => useUiStore.getState().toggleDeviceOpen(device),
+                label: t(open ? "devices.ways.close" : "devices.ways.open", { name: peer.name }),
+                body: <DeviceWays state={{ deviceId: device, name: peer.name, way: "server", windows: false, connected: peer.connected, look: switching.look, step, pressed: false, onRead: switching.read, onSwitch: switching.press }} actions={actions} />,
+              }
+      }
       label={
         <span className="flex min-w-0 flex-col">
-          <span className="break-words font-semibold">{peer.name}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-xs">
+            <span className="break-words font-semibold">{peer.name}</span>
+            {switched ? <WayBadge way="server" deviceId={device} /> : null}
+          </span>
           {system ? <span className="text-caption text-muted-foreground" data-peer-system={device}>{system}</span> : null}
           {state.reason ? <Note tone="warn" data-peer-reason={device}>{t(state.reason)}</Note> : null}
+          {signedOut ? <Note tone="warn" data-device-reason={device}>{t("devices.ways.loginReconnects", { device: peer.name })}</Note> : null}
           {relayTip(peer) ? <Note data-peer-relay-tip={device}>{t("devices.relayTip")}</Note> : null}
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
           <DeviceNotCarriedLine deviceId={device} />

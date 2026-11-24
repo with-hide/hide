@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "rename";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "rename" | "look_switch" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string };
@@ -61,7 +61,27 @@ export type PairingResult = {
   link?: string;
   alias?: string;
   looked?: SshLook;
+  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said. */
+  device_id?: string;
+  condition?: SwitchCondition;
+  user?: string | null;
+  /** With `switch`: how the press ended; `held` names the computer that switched the device first and how many terminals this one runs there. */
+  switch?: "done" | "left" | "held" | "install_needed";
+  by?: string;
+  terminals?: number | null;
 };
+
+/**
+ * What a device's machine said of the rule every switch passes (hided
+ * `pairing_ssh::Condition::payload`): a Mac's automatic login and whether
+ * someone is logged in now, a Linux account's linger, and the systems that
+ * are not switched. `how` is false while FileVault keeps a Mac from
+ * offering automatic login; `command` is what an administrator runs.
+ */
+export type SwitchCondition =
+  | { kind: "auto_login_on" | "signed_out" | "linger_on" | "linger_off" | "no_systemd" | "windows" | "unknown" }
+  | { kind: "auto_login_off"; how: boolean }
+  | { kind: "linger_admin"; command: string };
 
 export type PairRequest = { key: string; state: "waiting" | "declined" | "unanswered" | "unreachable" };
 

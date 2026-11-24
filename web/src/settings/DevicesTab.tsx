@@ -111,6 +111,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
     setAddKind("hide");
     setAddStep("choose");
   }, [adding]);
+  // A row opened on how its device is connected is folded again when the tab closes, so the next opening reads its machine again.
+  useEffect(() => () => useUiStore.getState().closeDevices(), []);
   const handlers: DeviceRowHandlers = {
     onAct: () => setActedAt(Date.now()),
     onDetails: setDetails,
