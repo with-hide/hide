@@ -1027,7 +1027,7 @@ impl Runtime {
             // A device refuses a second close only while one is in flight
             // (`remote.control.in_progress`). Transmitting and awaiting the
             // topology carry deadlines; an unknown result has none and ends
-            // only with a fresh topology, so it cannot be waited out.
+            // with the device's next layout, so it cannot be waited out.
             Some(device) => {
                 let phases = self
                     .remote_operations

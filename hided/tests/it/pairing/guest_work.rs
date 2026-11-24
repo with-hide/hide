@@ -273,6 +273,47 @@ fn guest_panes(listed: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The panes of the tabs the guest's own core draws for its work on the
+/// host, by their id on the host's node: what the guest's tab list shows.
+fn guest_tabs(guest: &Machine) -> anyhow::Result<Vec<String>> {
+    let snapshot = guest.screen().snapshot()?;
+    let mut panes = Vec::new();
+    for remote in snapshot["status"]["remote"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if remote["target_id"] != HOST {
+            continue;
+        }
+        let workspaces = remote["session"]["workspaces"].as_array().into_iter();
+        for checkout in workspaces.flatten().flat_map(|workspace| {
+            workspace["checkouts"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        }) {
+            for tab in checkout["tabs"].as_array().into_iter().flatten() {
+                for pane in tab["panes"].as_array().into_iter().flatten() {
+                    panes.push(pane["device_pane_id"].as_str().unwrap().to_owned());
+                }
+            }
+        }
+    }
+    panes.sort();
+    Ok(panes)
+}
+
+/// Waits until the guest's tab list holds `wanted`'s panes alone.
+fn guest_tabs_are(guest: &Machine, what: &str, wanted: &[&str]) {
+    let mut last = Vec::new();
+    wait_within(what, WITHIN, || {
+        last = guest_tabs(guest)?;
+        Ok((last == wanted).then_some(()))
+    })
+    .unwrap_or_else(|error| panic!("{error:#}: {last:?}"));
+}
+
 /// Waits for the file a command typed into a pane leaves, and reads it.
 pub(super) fn left(file: &Path) -> String {
     wait_within(&format!("{} from the pane", file.display()), WITHIN, || {
@@ -646,6 +687,19 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
     });
     let screen = host.screen();
     let mut closing = Window::open_at(screen.port, &screen.token, "web").await;
+    // A page loaded before this machine updated sends the pane alone and
+    // still hears the error frame it was built for.
+    closing
+        .send(
+            "guest_pane_close",
+            json!({"pane_id": "guest:nobody:pane:p9"}),
+        )
+        .await;
+    closing
+        .frame("the earlier page's refusal", |frame| {
+            frame["type"] == "error" && frame["message"] == "pane_unavailable"
+        })
+        .await;
     // A window hears whether its close went: a pane it does not list is
     // refused, a listed one ends.
     let mut close = async |request: &str, pane: &str| {
@@ -671,22 +725,78 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         close("c2", &added).await,
         json!({"request_id": "c2", "ok": true})
     );
-    // A page loaded before this machine updated sends the pane alone and
-    // still hears the error frame it was built for.
-    closing
-        .send(
-            "guest_pane_close",
-            json!({"pane_id": "guest:nobody:pane:p9"}),
-        )
-        .await;
-    closing
-        .frame("the earlier page's refusal", |frame| {
-            frame["type"] == "error" && frame["message"] == "pane_unavailable"
-        })
-        .await;
     host.lists("the closed pane gone and the other kept", |listed| {
         (guest_panes(listed) == [pane.clone()]).then_some(())
     });
+    // R08: the guest's own tab of the closed pane goes with it, and the
+    // tab of the other stays. A second close of it finds nothing to end.
+    let on_host = |guest_pane: &str| {
+        guest_pane
+            .strip_prefix(&format!("guest:{GUEST}:pane:"))
+            .unwrap()
+            .to_owned()
+    };
+    guest_tabs_are(
+        &guest,
+        "the guest's tab of the closed pane gone",
+        &[local.as_str()],
+    );
+    assert_eq!(
+        close("c3", &added).await,
+        json!({"request_id": "c3", "ok": false, "code": "pane_unavailable"})
+    );
+    // R08: a pane closed on the host while the guest's Hide is away stays
+    // closed when the guest starts anew and links again: its tab does not
+    // come back, and no new shell starts in its place.
+    let third = at("hh").join("third");
+    checkout(&third);
+    guest
+        .screen()
+        .event(
+            "create_workspace",
+            json!({"device_id": host_id, "path": third, "label": "Third",
+                "initialize_git": false}),
+        )
+        .unwrap();
+    let away_pane = host.lists("the guest's third pane on its host", |listed| {
+        guest_panes(listed).into_iter().find(|id| *id != pane)
+    });
+    let mut both = [local.clone(), on_host(&away_pane)];
+    both.sort();
+    guest_tabs_are(
+        &guest,
+        "the guest's tab of its third pane",
+        &[both[0].as_str(), both[1].as_str()],
+    );
+    guest.ran(&["stop"]);
+    host.lists("the host sees its guest gone again", |listed| {
+        let peer = listed["peers"].as_array()?.first()?;
+        (peer["connected"] == false).then_some(())
+    });
+    assert_eq!(
+        close("c4", &away_pane).await,
+        json!({"request_id": "c4", "ok": true})
+    );
+    host.lists("the pane closed while its guest is away gone", |listed| {
+        (guest_panes(listed) == [pane.clone()]).then_some(())
+    });
+    guest.ran(&["connect"]);
+    guest.lists("the guest opens its host once more", |listed| {
+        let peer = listed["peers"].as_array()?.first()?;
+        (peer["connected"] == true).then_some(())
+    });
+    guest_tabs_are(
+        &guest,
+        "the tab of the pane closed while away still gone",
+        &[local.as_str()],
+    );
+    types(&guest, &on_guest, &itself("f13")).await;
+    assert_eq!(left(&at("f13")), shell);
+    assert_eq!(
+        guest_panes(&host.listed()),
+        [pane.as_str()],
+        "no new shell in the closed pane's place"
+    );
 
     // B60, B26: the host's operator takes the guest off and ends its work.
     // The pane closes with no word from the guest, the node ends, and

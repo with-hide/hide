@@ -5,7 +5,8 @@
 //! a host connection generation, target and conflict-scope ids, phase, stage,
 //! start time and absolute deadline. Transport success is never topology
 //! truth, and an expired or ambiguous mutation becomes an explicit unknown
-//! that is never resent; `docs/ARCHITECTURE.md` owns the reasons. The close
+//! that is never resent, until the device's next layout settles it, whatever
+//! that layout shows; `docs/ARCHITECTURE.md` owns the reasons. The close
 //! lifecycle itself lives beside reopen in `editor.rs`.
 
 use super::*;
@@ -280,13 +281,34 @@ enum RemoteSettle {
     FreshSession,
     /// A report that arrived earlier, read when the operation began to wait.
     HeldSession,
+    /// A report read once the operation's answer could no longer come (its
+    /// deadline passed, or it was sent on an earlier connection), whose
+    /// layout is its result whatever it shows.
+    AnswerLost,
 }
 
 impl RemoteSettle {
+    /// The diagnostic a settled operation leaves: confirmed by the engine's
+    /// layout, or settled by a later connection's layout without a check.
+    fn kind(self) -> &'static str {
+        match self {
+            Self::FreshSession | Self::HeldSession => "remote.control.topology_confirmed",
+            Self::AnswerLost => "remote.control.settled_by_layout",
+        }
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::FreshSession | Self::HeldSession => "Confirmed",
+            Self::AnswerLost => "Settled",
+        }
+    }
+
     fn source(self) -> &'static str {
         match self {
             Self::FreshSession => "fresh topology",
             Self::HeldSession => "the session received before it waited",
+            Self::AnswerLost => "the layout read after its answer was lost",
         }
     }
 }
@@ -542,11 +564,28 @@ impl Runtime {
     /// Settles the operations of `target_id` that `session`, that device's
     /// fresh report, shows the effect of. Another device's operation is not
     /// judged by it: its pane being absent here proves nothing there.
+    ///
+    /// An operation whose answer can no longer come is then settled by this
+    /// layout whatever it shows: one already `unknown` (its deadline passed,
+    /// so the next layout the device reports, this ingest's session or a
+    /// later one, is its result), and one sent on an earlier connection than
+    /// this report came on (a result of an earlier connection is dropped as
+    /// stale). The engine's layout is its result, as it is for anything drawn
+    /// ahead of the engine; nothing is resent, and the tab's line moves on.
+    /// Held as `unknown` instead, it refused every later operation of that
+    /// tab until the core started anew, which a device's core ending or being
+    /// replaced by an update left behind. A device's tab move ends by the
+    /// same rule (`settle_lost_tab_moves`).
     pub(super) fn observe_remote_operations(
         &mut self,
         target_id: &str,
         session: &RemoteSessionSnapshot,
     ) -> bool {
+        let generation = self
+            .remote_connection_generations
+            .get(target_id)
+            .copied()
+            .unwrap_or(0);
         let completed = self
             .remote_operations
             .iter()
@@ -557,7 +596,64 @@ impl Runtime {
             .filter(|(_, operation)| remote_operation_confirmed_by(operation, session))
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        self.settle_remote_operations(completed, RemoteSettle::FreshSession)
+        let mut changed = self.settle_remote_operations(completed, RemoteSettle::FreshSession);
+        let lost = self
+            .remote_operations
+            .iter()
+            .filter(|((target, _), operation)| {
+                target == target_id
+                    && (operation.phase == "unknown"
+                        || (operation.connection_generation != generation
+                            && matches!(
+                                operation.phase.as_str(),
+                                "transmitting" | "awaiting_topology"
+                            )))
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        changed |= self.settle_remote_operations(lost, RemoteSettle::AnswerLost);
+        changed |= self.settle_lost_tab_moves(target_id, generation);
+        changed
+    }
+
+    /// Ends a device's tab move whose answer can no longer come. This ingest
+    /// placed the device's strips before this (`place_device_strips`), which
+    /// lands a move the engine reported, so a move still held did not happen
+    /// in this layout: the strip keeps the engine's order and the next drag is
+    /// taken again.
+    fn settle_lost_tab_moves(&mut self, target_id: &str, generation: u64) -> bool {
+        let lost = self
+            .pending_tab_move
+            .iter()
+            .filter(|(checkout_id, pending)| {
+                // A device's checkout id is scoped to that device.
+                crate::address::device_of(checkout_id) == Some(target_id)
+                    && (pending.phase == "unknown"
+                        || (pending.connection_generation != generation
+                            && matches!(
+                                pending.phase.as_str(),
+                                "transmitting" | "awaiting_topology"
+                            )))
+            })
+            .map(|(checkout_id, _)| checkout_id.clone())
+            .collect::<Vec<_>>();
+        if lost.is_empty() {
+            return false;
+        }
+        for checkout_id in lost {
+            self.pending_tab_move.remove(&checkout_id);
+            self.push_diagnostic(
+                RemoteSettle::AnswerLost.kind(),
+                format!(
+                    "{} tab.move for {checkout_id} on {target_id} from {}",
+                    RemoteSettle::AnswerLost.verb(),
+                    RemoteSettle::AnswerLost.source()
+                ),
+            );
+        }
+        self.rebuild_tab_strips();
+        self.sync_async_operations();
+        true
     }
 
     fn settle_remote_operations(
@@ -572,9 +668,10 @@ impl Runtime {
                 changed = true;
                 scopes.push(operation.scope_id.clone());
                 self.push_diagnostic(
-                    "remote.control.topology_confirmed",
+                    via.kind(),
                     format!(
-                        "Confirmed {} for {} on {} from {}",
+                        "{} {} for {} on {} from {}",
+                        via.verb(),
                         operation.kind,
                         operation.target_id,
                         key.0,
@@ -617,11 +714,20 @@ impl Runtime {
             }
         }
         let changed = !expired.is_empty();
-        // An unknown operation waits for the device's next session, which an
-        // idle device may never send; the one already held may show the effect.
+        // The session already held may show the effect; otherwise the
+        // device's next session decides, and an idle device may never send
+        // one, so its coordinator is asked to read it again now.
         let mut settled = false;
+        let mut read_again = Vec::new();
         for key in &expired {
-            settled |= self.settle_remote_operation_from_known_session(key);
+            if self.settle_remote_operation_from_known_session(key) {
+                settled = true;
+            } else if !read_again.contains(&key.0) {
+                read_again.push(key.0.clone());
+            }
+        }
+        for target in read_again {
+            self.read_machine_again(&target);
         }
         if changed && !settled {
             self.sync_async_operations();
@@ -653,6 +759,8 @@ impl Runtime {
             format!("Remote operation {operation_id} requires fresh topology"),
         );
         if !self.settle_remote_operation_from_known_session(key) {
+            // The device's next session decides; ask for it now.
+            self.read_machine_again(&key.0);
             self.sync_async_operations();
         }
         true
