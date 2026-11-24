@@ -135,6 +135,22 @@ export function guestTabs(panes: readonly GuestPane[], pane: GuestPane): GuestPa
   return panes.filter((other) => other.deviceId === pane.deviceId && other.projectId === pane.projectId);
 }
 
+/**
+ * What stands in a closed pane's place (B10): the next tab of that work in
+ * the same place, else the one before it, else the project row it stood
+ * under, else nothing of that work. Never the Overview.
+ */
+export type AfterGuestClose = { kind: "pane"; paneId: string } | { kind: "checkout"; projectId: string; checkoutId: string } | { kind: "workspace" };
+
+export function afterGuestClose(panes: readonly GuestPane[], pane: GuestPane): AfterGuestClose {
+  const tabs = guestTabs(panes, pane);
+  const at = tabs.findIndex((tab) => tab.id === pane.id);
+  const next = tabs[at + 1] ?? (at > 0 ? tabs[at - 1] : undefined);
+  if (next) return { kind: "pane", paneId: next.id };
+  if (pane.projectId !== null && pane.checkoutId !== null) return { kind: "checkout", projectId: pane.projectId, checkoutId: pane.checkoutId };
+  return { kind: "workspace" };
+}
+
 /** Whether `id` is the address of another machine's pane on this computer. */
 export function isGuestPaneId(id: string): boolean {
   return id.startsWith("guest:");

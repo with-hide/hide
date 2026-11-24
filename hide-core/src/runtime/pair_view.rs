@@ -12,9 +12,10 @@
 //! (D-26). It ends only on ⌘., the pressed ◧ or the band's way back
 //! (`PairEnd::Left`) and when the drawn pane closes (`end_pairs_of_gone_panes`);
 //! the drawn desk's last View closing leaves it on, the pane alone (D-64). Every
-//! desk the mode leaves, by a move or its end, gets back the lane as it was
-//! before the mode drew it: open or closed, the desk shown or folded, the
-//! same View in front (D-51).
+//! desk the mode leaves, by a move or its end, folds, and the lane of a
+//! Workspace the mode leaves closes; the operator leaving also ends the zoom
+//! of the tab on screen, so leaving always shows that tab's terminals and
+//! nothing beside them (operator decision 2026-11-24, replacing D-51).
 
 use serde::Deserialize;
 
@@ -42,16 +43,11 @@ pub(super) struct PairLeft {
     pub(super) pane: String,
 }
 
-/// A desk pair view drew, with its lane as it was before the mode first
-/// drew it: whether the lane was open, whether it showed this desk, and
-/// the View in front of the desk (D-51).
+/// A desk pair view drew, which folds when the mode leaves it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PairDrawn {
     key: WorkspaceKey,
     tab: String,
-    open: bool,
-    shown: bool,
-    front: Option<String>,
 }
 
 impl PairLeft {
@@ -78,9 +74,9 @@ impl PairEnd {
         }
     }
 
-    /// The operator leaving returns the keyboard; a pane that went leaves
-    /// it.
-    fn returns_keyboard(self) -> bool {
+    /// The operator leaving returns the keyboard and ends the tab's zoom; a
+    /// pane that went leaves both, the engine ending a zoom of its own pane.
+    fn is_operators(self) -> bool {
         matches!(self, Self::Left)
     }
 }
@@ -251,13 +247,13 @@ impl Runtime {
 
     /// Draws `left` with its tab's desk, `content` in front of the desk;
     /// none leaves the desk as it is, as a pane drawn alone or a desk tab
-    /// the operator brought in front does. The desk is recorded as it is
-    /// now even for a pane drawn alone, so a View its agent opens later
-    /// leaves with the mode (D-51, D-53).
+    /// the operator brought in front does. The desk is recorded even for a
+    /// pane drawn alone, so a desk its agent stands later folds with the
+    /// mode (D-53).
     fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
         let place = Place::Tray(left.tab.clone());
-        self.restore_pair_desks(Some((&left.key, &left.tab)));
+        self.fold_pair_desks(Some((&left.key, &left.tab)));
         self.note_pair_desk(&left.key, &left.tab);
         if let Some(store) = self.workspace_views.as_mut() {
             if store.pair_desk_folded.as_ref() != Some(&left) {
@@ -302,14 +298,21 @@ impl Runtime {
         });
     }
 
-    /// Turns the mode off, everywhere (D-45); whether it was on. The screen
-    /// goes back to how it was before the mode drew it: the lane open or
-    /// closed, its desk shown or folded, the same View in front (D-51).
+    /// Turns the mode off, everywhere (D-45); whether it was on. Every desk
+    /// it drew folds and the lane closes, keeping each desk's Views; the
+    /// operator leaving also gives the keyboard back (B26) and ends the zoom
+    /// of the tab on screen, so the screen is that tab's terminals alone
+    /// (operator decision 2026-11-24, replacing D-51).
     pub(super) fn end_pair_view(&mut self, cause: PairEnd) -> bool {
         if !self.pair_mode_on() {
             return false;
         }
-        self.restore_pair_desks(None);
+        // After a restart nothing has set `pair_left` yet, and the pair the
+        // screen shows stands for it.
+        let shown = self
+            .published_pair()
+            .map(|(key, tab, pane)| PairLeft { key, tab, pane });
+        self.fold_pair_desks(None);
         let Some(store) = self.workspace_views.as_mut() else {
             return false;
         };
@@ -326,57 +329,116 @@ impl Runtime {
             "cause": cause.as_str(),
         }));
         self.persist_workspace_views();
-        if cause.returns_keyboard()
-            && let Some(left) = left
-            && let Some((key, before)) = before.filter(|(key, before)| {
+        if !cause.is_operators() {
+            return true;
+        }
+        let Some(left) = left.or(shown) else {
+            return true;
+        };
+        let returned = before
+            .filter(|(key, before)| {
                 *key == left.key
                     && *before != left.pane
                     && self.pane_tab(key, before).as_deref() == Some(left.tab.as_str())
             })
-        {
-            self.focus_tab_pane(&key, &before);
+            .map(|(_, pane)| pane);
+        if let Some(pane) = &returned {
+            self.focus_tab_pane(&left.key, pane);
         }
+        self.unzoom_tab(
+            &left.key,
+            &left.tab,
+            returned.as_deref().unwrap_or(&left.pane),
+        );
         true
     }
 
-    /// Records `tab`'s desk of `key` as pair view draws it, with how it is
-    /// now, unless it is recorded already: the state it gets back (D-51).
-    pub(super) fn note_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) {
-        let recorded = self.workspace_views.as_ref().is_none_or(|store| {
-            store
-                .pair_drawn
+    /// Ends the zoom of `tab` of `key`, on this machine or its device, by a
+    /// toggle on `pane`, the pane that keeps the keyboard, since a toggle
+    /// focuses the pane it names; a tab not zoomed is left alone. One more
+    /// geometry operation in the tab's line, as ⇧⌘↩ would send.
+    fn unzoom_tab(&mut self, key: &WorkspaceKey, tab: &str, pane: &str) {
+        if key.0 == self.node.as_str() {
+            let Some(layout) = self
+                .snapshot
+                .pane_layouts
                 .iter()
-                .any(|desk| desk.key == *key && desk.tab == tab)
-        });
-        if recorded {
+                .find(|layout| layout.tab_id == tab && layout.zoomed)
+            else {
+                return;
+            };
+            let pane_id = if layout.pane_ids().contains(&pane) {
+                pane.to_owned()
+            } else {
+                layout.focused_pane_id.clone()
+            };
+            if self.live.is_none() {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pair_view", "kind": "pair_view.unzoom_without_engine",
+                    "tab": tab, "pane": pane_id,
+                }));
+                return;
+            }
+            self.begin_pane_operation(PaneControlAction::ToggleZoom { pane_id }, None);
             return;
         }
-        let front = self
-            .view_layout_at(key, &Place::Tray(tab.to_owned()))
-            .and_then(|layout| layout.active_area().active.clone());
-        let Some(store) = self.workspace_views.as_mut() else {
+        let Some(layout) = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|remote| remote.target_id == key.0)
+            .and_then(|remote| remote.session.as_ref())
+            .and_then(|session| {
+                session
+                    .pane_layouts
+                    .iter()
+                    .find(|layout| layout.tab_id == tab && layout.zoomed)
+            })
+        else {
             return;
         };
-        let view = store.views.get(&key.0, &key.1);
-        let open = view.is_some_and(|view| view.open);
-        let shown = view
-            .and_then(|view| view.tray(tab))
-            .is_some_and(|tray| tray.shown);
-        store.pair_drawn.push(PairDrawn {
-            key: key.clone(),
-            tab: tab.to_owned(),
-            open,
-            shown,
-            front,
+        let pane_id = if layout.frames.iter().any(|frame| frame.pane_id == pane) {
+            pane.to_owned()
+        } else {
+            layout.focused_pane_id.clone()
+        };
+        self.request_remote_control(RemoteControlPayload {
+            target_id: key.0.clone(),
+            request_id: format!("pair-view-unzoom:{}:{tab}", unix_milliseconds()),
+            report_pane_focus_outcome: false,
+            focus_device: false,
+            request: RemoteControlRequest::TogglePaneZoom { pane_id },
         });
     }
 
-    /// Gives every desk pair view drew (`pair_drawn`) but the one the mode
-    /// stays on (`staying`) back the state it had before the mode drew it:
-    /// shown or folded, with the same View in front if it is still there,
-    /// so a desk the mode leaves, for another tab or Workspace or out of the
-    /// mode, is as the operator left it (D-51, D-53).
-    fn restore_pair_desks(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
+    /// Records `tab`'s desk of `key` as one pair view drew, unless it is
+    /// recorded already, so it folds when the mode leaves it.
+    pub(super) fn note_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        if store
+            .pair_drawn
+            .iter()
+            .any(|desk| desk.key == *key && desk.tab == tab)
+        {
+            return;
+        }
+        store.pair_drawn.push(PairDrawn {
+            key: key.clone(),
+            tab: tab.to_owned(),
+        });
+    }
+
+    /// Folds every desk pair view drew (`pair_drawn`) but the one the mode
+    /// stays on (`staying`), keeping its Views, and closes the lane of each
+    /// Workspace the mode is no longer in, its tool column with it: a screen
+    /// the mode leaves, for another tab or Workspace or out of the mode,
+    /// shows its terminals alone (operator decision 2026-11-24, replacing
+    /// D-51). A move inside one Workspace keeps its lane, and a tool open
+    /// in it, beside the desk the mode draws next.
+    fn fold_pair_desks(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -387,26 +449,14 @@ impl Runtime {
             });
         store.pair_drawn = kept;
         for desk in left {
-            let place = Place::Tray(desk.tab.clone());
-            if let Some(store) = self.workspace_views.as_mut()
-                && let Some(view) = store.views.get_mut(&desk.key.0, &desk.key.1)
-            {
-                view.open = desk.open;
-                if let Some(tray) = view.tray_mut(&desk.tab) {
-                    // A desk the mode emptied has nothing to show again.
-                    tray.shown = desk.shown && tray.layout.display_count() > 0;
-                }
-            }
-            let Some(front) = desk.front else {
+            let Some(view) = store.views.get_mut(&desk.key.0, &desk.key.1) else {
                 continue;
             };
-            let there = self
-                .view_layout_at(&desk.key, &place)
-                .is_some_and(|layout| layout.displays().any(|display| display.id == front));
-            if there {
-                let _ = self.change_view_layout(&desk.key, &place, |layout, stamp| {
-                    layout.focus(&front, stamp).map(|changed| ((), changed))
-                });
+            if let Some(tray) = view.tray_mut(&desk.tab) {
+                tray.shown = false;
+            }
+            if staying.is_none_or(|(key, _)| *key != desk.key) {
+                view.open = false;
             }
         }
     }

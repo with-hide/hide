@@ -646,8 +646,43 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
     });
     let screen = host.screen();
     let mut closing = Window::open_at(screen.port, &screen.token, "web").await;
+    // A window hears whether its close went: a pane it does not list is
+    // refused, a listed one ends.
+    let mut close = async |request: &str, pane: &str| {
+        closing
+            .send(
+                "guest_pane_close",
+                json!({"request_id": request, "call": {"pane_id": pane}}),
+            )
+            .await;
+        closing
+            .frame("the close's answer", |frame| {
+                frame["type"] == "guest_pane_close_result"
+                    && frame["payload"]["request_id"] == request
+            })
+            .await["payload"]
+            .clone()
+    };
+    assert_eq!(
+        close("c1", "guest:nobody:pane:p9").await,
+        json!({"request_id": "c1", "ok": false, "code": "pane_unavailable"})
+    );
+    assert_eq!(
+        close("c2", &added).await,
+        json!({"request_id": "c2", "ok": true})
+    );
+    // A page loaded before this machine updated sends the pane alone and
+    // still hears the error frame it was built for.
     closing
-        .send("guest_pane_close", json!({"pane_id": added}))
+        .send(
+            "guest_pane_close",
+            json!({"pane_id": "guest:nobody:pane:p9"}),
+        )
+        .await;
+    closing
+        .frame("the earlier page's refusal", |frame| {
+            frame["type"] == "error" && frame["message"] == "pane_unavailable"
+        })
         .await;
     host.lists("the closed pane gone and the other kept", |listed| {
         (guest_panes(listed) == [pane.clone()]).then_some(())

@@ -398,8 +398,7 @@ impl Guests {
         if !tap.panes().iter().any(|listed| listed.pane == pane) {
             return Err("pane_unavailable");
         }
-        tap.terminate(pane);
-        Ok(())
+        tap.terminate(pane)
     }
 
     /// Names and marks `guest`'s panes here as its core told them (B10),

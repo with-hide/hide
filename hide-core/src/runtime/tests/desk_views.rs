@@ -1893,10 +1893,11 @@ fn turning_focus_mode_on_counts_a_use_once_a_day() {
 
 /// D-45, B18: entering puts the pane's agent's View in front of its tab's
 /// desk; a tab switch keeps the mode, drawing the new tab's pane beside its
-/// own desk, and so does a restart. D-51: leaving gives back the lane the
-/// operator had, and D-45: off stays off everywhere.
+/// own desk, and so does a restart. Leaving closes the lane the operator had
+/// open, the desk keeping its Views (operator decision 2026-11-24, replacing
+/// D-51), and D-45: off stays off everywhere.
 #[test]
-fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_gives_the_lane_back() {
+fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_closes_the_lane() {
     let (mut runtime, checkout, directory) = setup("pair-mode");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "b.md");
@@ -1944,8 +1945,8 @@ fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_gives_the_lane_ba
     assert_eq!(drawn_pair(&runtime), None);
     assert!(!mode_on(&runtime));
     assert!(
-        lane_documents(&runtime),
-        "D-51: the desk the operator had is back"
+        !runtime.snapshot.workspace_view.as_ref().unwrap().open,
+        "the terminals alone, though the operator had the desk open"
     );
     assert_eq!(
         desk(&runtime, &directory, TABS[0]),
@@ -2094,12 +2095,12 @@ fn lane_of(runtime: &Runtime, directory: &Path, tab: &str) -> (bool, bool) {
     (view.open, view.tray(tab).is_some_and(|tray| tray.shown))
 }
 
-/// D-51: each desk pair view drew gets its lane back as it was when the
-/// mode moves on to another tab, and leaving does the same for the last
-/// one: a desk the operator had standing stands again, one the mode
-/// brought up folds.
+/// Each desk pair view drew folds when the mode moves on to another tab of
+/// the same Workspace, whose lane stays open for the desk drawn next, and
+/// leaving folds the last one and closes the lane, so neither tab shows a
+/// desk afterwards (operator decision 2026-11-24, replacing D-51).
 #[test]
-fn pair_view_gives_each_desk_it_drew_its_lane_back_as_it_moves_on() {
+fn every_desk_focus_mode_leaves_folds_and_leaving_closes_the_lane() {
     let (mut runtime, checkout, directory) = setup("pair-folds-drawn");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
@@ -2110,28 +2111,35 @@ fn pair_view_gives_each_desk_it_drew_its_lane_back_as_it_moves_on() {
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
     assert_eq!(
         lane_of(&runtime, &directory, TABS[0]),
-        (true, true),
-        "the desk left is as the operator had it"
+        (true, false),
+        "the desk left folds; the lane stays open in the same Workspace"
     );
     pair_event(&mut runtime, None);
-    assert_eq!(
-        lane_of(&runtime, &directory, TABS[1]),
-        (true, false),
-        "the desk the mode brought up folds, the lane as it was"
-    );
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (false, false));
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
-    assert!(lane_documents(&runtime), "the first desk still stands");
+    assert!(!lane_documents(&runtime), "the first desk stays folded");
+    assert_eq!(
+        desk(&runtime, &directory, TABS[0]),
+        ["a.md", "c.md"],
+        "a folded desk keeps its Views"
+    );
 }
 
-/// D-51: leaving pair view puts back the View that was in front of the
-/// desk when the mode began, and a lane that was closed stays closed.
+/// Leaving focus mode closes the whole lane, a tool open beside the desk
+/// included, and keeps in front the View the mode showed, which ⌘E brings
+/// back; a lane that was closed stays closed (operator decision 2026-11-24,
+/// replacing D-51).
 #[test]
-fn leaving_pair_view_puts_back_the_front_view_and_a_closed_lane() {
+fn leaving_focus_mode_closes_the_lane_with_its_tool_and_keeps_the_view_it_showed() {
     let (mut runtime, checkout, directory) = setup("pair-gives-back");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "c.md");
-    let before = fronts(&runtime, &directory);
-    assert_eq!(before, ["c.md"], "the operator's file in front");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["c.md"],
+        "the operator's file"
+    );
     pair_event(&mut runtime, Some("w-order:t1:p"));
     assert_eq!(
         fronts(&runtime, &directory),
@@ -2139,13 +2147,14 @@ fn leaving_pair_view_puts_back_the_front_view_and_a_closed_lane() {
         "B18: its agent's View"
     );
     pair_event(&mut runtime, None);
-    assert_eq!(
-        fronts(&runtime, &directory),
-        before,
-        "the View in front then"
-    );
-    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (true, true));
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert!(!view.open, "neither the desk nor the Explorer stands");
+    assert!(!runtime.snapshot.ui_state.right_panel_visible);
+    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (false, false));
+    assert_eq!(fronts(&runtime, &directory), ["a.md"], "the View it showed");
 
+    view_event(&mut runtime, serde_json::json!({"documents": true}));
+    assert!(lane_documents(&runtime), "⌘E stands the desk again");
     view_event(&mut runtime, serde_json::json!({"open": false}));
     pair_event(&mut runtime, Some("w-order:t1:p"));
     assert!(drawn_pair(&runtime).is_some());
@@ -2158,13 +2167,12 @@ fn leaving_pair_view_puts_back_the_front_view_and_a_closed_lane() {
 
 /// D-53: a tab switch in the mode to an agent that opened nothing draws
 /// its pane alone; the View that agent then opens stands the desk beside it
-/// with that View in front, and leaving gives the lane back as it was
-/// before the mode drew that tab (D-51), the View kept on the desk.
+/// with that View in front, and leaving folds that desk with the lane
+/// closed, the View kept on it (operator decision 2026-11-24).
 #[test]
 fn a_pane_drawn_alone_gets_its_desk_when_its_agent_opens_a_view() {
     let (mut runtime, checkout, directory) = setup("pair-alone-opens");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
-    let before = lane_of(&runtime, &directory, TABS[1]);
     pair_event(&mut runtime, Some("w-order:t1:p"));
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert!(mode_on(&runtime));
@@ -2181,7 +2189,7 @@ fn a_pane_drawn_alone_gets_its_desk_when_its_agent_opens_a_view() {
     assert_eq!(fronts(&runtime, &directory), ["b.md"], "its View in front");
 
     pair_event(&mut runtime, None);
-    assert_eq!(lane_of(&runtime, &directory, TABS[1]), before);
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (false, false));
     assert_eq!(desk(&runtime, &directory, TABS[1]), ["b.md"]);
 }
 
@@ -2454,6 +2462,95 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
         Some("w-order:t1:p"),
         "B26: the pane that held the keyboard before entering"
     );
+}
+
+/// The zoom operations waiting or sent, as (kind, pane).
+fn pane_zooms(runtime: &Runtime) -> Vec<(String, String)> {
+    runtime
+        .pane_operations
+        .values()
+        .map(|operation| (operation.kind.clone(), operation.target_id.clone()))
+        .collect()
+}
+
+/// Leaving focus mode ends the zoom of the tab on screen with one toggle on
+/// the pane that keeps the keyboard, drawn at once, so every pane of the tab
+/// is back; entering touches no zoom, and leaving a tab not zoomed sends
+/// nothing (operator decision 2026-11-24).
+#[test]
+fn leaving_focus_mode_unzooms_the_tab_on_screen() {
+    let (mut runtime, _checkout, directory) = setup("pair-unzoom");
+    // The engine's last word, zoomed, which the republish draws the
+    // unzoom over until the engine answers.
+    let zoomed = || {
+        let mut payload = split_payload(&directory);
+        payload.layouts[0].zoomed = true;
+        payload
+    };
+    runtime.ingest_session(Ok(zoomed()));
+    runtime.sync_workspace_view();
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert!(pane_zooms(&runtime).is_empty(), "entering touches no zoom");
+
+    pair_event(&mut runtime, None);
+    assert!(
+        runtime.take_republish_request(),
+        "the unzoom asks to be drawn"
+    );
+    runtime.ingest_session(Ok(zoomed()));
+    let drawn = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .pane_layouts
+            .iter()
+            .find(|layout| layout.tab_id == TABS[0])
+            .cloned()
+            .expect("the tab is drawn")
+    };
+    let tab = drawn(&runtime);
+    assert!(!tab.zoomed, "both panes drawn again");
+    assert_eq!(tab.focused_pane_id, "w-order:t1:p");
+    let sent = [("pane.zoom".to_owned(), "w-order:t1:p".to_owned())];
+    assert_eq!(pane_zooms(&runtime), sent);
+
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    pair_event(&mut runtime, None);
+    assert_eq!(pane_zooms(&runtime), sent, "an unzoomed tab sends nothing");
+}
+
+/// The same on a device: leaving asks the device to end the zoom of the
+/// tab on screen, on the pane that keeps the keyboard.
+#[test]
+fn leaving_focus_mode_on_a_device_unzooms_its_tab() {
+    let (mut runtime, key, tab, [left, _other]) = device_tab("pair-device-unzoom");
+    let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
+    session
+        .pane_layouts
+        .push(crate::model::RemotePaneLayoutSnapshot {
+            workspace_id: "remote-workspace".to_owned(),
+            tab_id: tab.clone(),
+            focused_pane_id: left.clone(),
+            zoomed: true,
+            frames: Vec::new(),
+        });
+    let store = runtime.workspace_views.as_mut().unwrap();
+    store.views.pair.on = true;
+    store.pair_left = Some(super::pair_view::PairLeft {
+        key,
+        tab,
+        pane: left.clone(),
+    });
+
+    pair_event(&mut runtime, None);
+    assert!(!runtime.pair_mode_on());
+    let asked: Vec<_> = runtime
+        .remote_operations
+        .values()
+        .map(|operation| (operation.kind.clone(), operation.target_id.clone()))
+        .collect();
+    assert_eq!(asked, [("pane.zoom".to_owned(), left)]);
 }
 
 /// The device `studio` in front, with one Agent tab of two panes and no
