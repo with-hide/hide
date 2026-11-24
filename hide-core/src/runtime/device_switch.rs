@@ -487,8 +487,9 @@ impl Runtime {
 
     /// A save of the core's state ended: every switched registration it
     /// holds takes its machine's connection when the save succeeded, and
-    /// goes back to its helper when it did not. A save taken before the switch holds no such registration and
-    /// settles nothing; the save the switch asked for follows it.
+    /// goes back to its helper when it did not. A save taken before the
+    /// switch holds no such registration and settles nothing; the save the
+    /// switch asked for follows it.
     pub(super) fn acknowledge_device_switch(
         &mut self,
         saved: &UiStateSnapshot,
