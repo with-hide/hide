@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipDelete, chipStep, mentionAt, mentionTree, outgoing, pickMention, type MentionSession } from "./deskComposer";
+import { chipDelete, chipStep, keepSent, mentionAt, mentionTree, outgoing, pickMention, sentAttachment, sentWords, traySendable, trayEntry, type MentionSession, type TrayFile } from "./deskComposer";
 
 const session = { kind: "session" as const, id: "w1:p2", name: "record-now", mark: "going" as const, agent_kind: "codex" };
 const project = { kind: "project" as const, id: "/work/herdr-ide", name: "herdr-ide" };
@@ -101,5 +101,34 @@ describe("what a Desk send carries (B49)", () => {
       text: `${PROJECT} 에 ${SESSION} 붙여 ${SESSION}`,
       mentions: [project, session],
     });
+  });
+});
+
+describe("a composer's tray (desk-2-ui B41, B42)", () => {
+  const MIB20 = 20 * 1024 * 1024;
+
+  it("takes a file of 20 MiB to read and holds one byte past it red, unread, with no thumbnail", () => {
+    expect(trayEntry({ name: "edge.bin", size: MIB20 }, "a", null)).toMatchObject({ state: "reading", read: 0 });
+    expect(trayEntry({ name: "big.png", size: MIB20 + 1 }, "b", "blob:shot")).toMatchObject({ state: "too_large", preview: null });
+  });
+
+  it("sends every file once all are read, and holds the send while one reads, is past the cap or could not be read", () => {
+    const file = (id: string, state: TrayFile["state"]): TrayFile => ({ id, name: id, size: 1, preview: null, state, read: 0 });
+    expect(traySendable([])).toEqual([]);
+    expect(traySendable([file("a", "ready"), file("b", "ready")])?.map((one) => one.id)).toEqual(["a", "b"]);
+    for (const held of ["reading", "too_large", "unreadable"] as const) expect(traySendable([file("a", "ready"), file("b", held)])).toBeNull();
+  });
+
+  it("names a sent file by the name the operator's file had, whichever machine staged it", () => {
+    const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+    expect(sentAttachment(`/Users/me/.hide/state/attachments/${stage}-0-화면 1.png`, 10)).toEqual({ name: "화면 1.png", size: 10, preview: null });
+    expect(sentAttachment(`C:\\Users\\me\\.hide\\state\\attachments\\${stage}-1-a-b.log`).name).toBe("a-b.log");
+    // A device stages a file under a name Hide makes; this window knows the file it sent under that stage.
+    expect(sentAttachment(`C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log`).name).toBe(`hide-${stage}-1.log`);
+    keepSent(`${stage}-1`, "설치 로그.log", null);
+    expect(sentAttachment(`C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log`).name).toBe("설치 로그.log");
+    expect(sentAttachment(`/home/me/notes-${stage}.md`).name).toBe(`notes-${stage}.md`);
+    expect(sentWords(`"/s/attachments/${stage}-0-x.png" 봐 줘`)).toEqual({ files: [{ name: "x.png", size: null, preview: null }], words: "봐 줘" });
+    expect(sentWords("그냥 말")).toEqual({ files: [], words: "그냥 말" });
   });
 });

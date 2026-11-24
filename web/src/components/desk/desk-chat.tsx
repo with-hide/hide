@@ -3,7 +3,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
 import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
+import type { DeskAttachment } from "../../snapshot";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
@@ -18,6 +20,7 @@ import { Hint } from "../ui/tooltip";
 import { agentProductName } from "../../agentAdapters";
 import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
+import { SentAttachments } from "./desk-composer";
 
 /**
  * Words with their mentions drawn as chips (B18, B26): a session and a
@@ -46,11 +49,17 @@ export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; on
 }
 
 /** The operator's own words, the one thing drawn as a bubble (B7, D-75). */
-export function DeskUserMessage({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+export function DeskUserMessage({ text, mentions, attachments = [], onMention }: { text: string; mentions: readonly DeskMention[]; attachments?: readonly DeskAttachment[]; onMention?: (mention: DeskMention) => void }) {
+  const files = useMemo(() => attachments.map((file) => ({ ...sentAttachment(file.path, file.bytes), name: file.name })), [attachments]);
   return (
-    <p className="max-w-(--size-pr-popover) self-end whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-item="user">
-      <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
-    </p>
+    <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
+      <SentAttachments files={files} />
+      {text ? (
+        <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">
+          <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -375,7 +384,7 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item) => (
         <li key={item.id} className="flex min-w-0 flex-col">
-          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
+          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} />
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>

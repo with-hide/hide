@@ -10,7 +10,8 @@ import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { DeskAgentBar, DeskComposer, type ComposerAttachment } from "../components/desk/desk-composer";
+import { DeskAgentBar, DeskComposer } from "../components/desk/desk-composer";
+import { sampleShot } from "../components/sample-shot";
 import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn, DeskSidebarRow } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
@@ -25,7 +26,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { askingCount, outputKindOf, threadLines, unseenOutputs, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
-import { mentionTree } from "../deskComposer";
+import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
@@ -57,6 +58,7 @@ export const DESK_SCENES = [
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
+  { state: "attachments", label: "첨부: 입력칸 타일, 20MB 넘는 파일, 올리는 중, 보낸 말 (desk-2-ui B41, B42)" },
   { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
   { state: "mission", label: "미션: 지도 + 워커 스레드 (B34)" },
@@ -111,11 +113,11 @@ function ChatHead() {
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
-function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode }) {
+function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [] }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[] }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
   return (
-    <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop} onAttach={noop} onRemoveAttachment={noop}>
+    <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} tray={sceneTray(files)} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop}>
       <DeskAgentBar agents={agents} selection={selection} open={menuOpen} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
   );
@@ -124,8 +126,19 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
+/** A tray that holds `files` as a scene sets them. */
+function sceneTray(files: readonly TrayFile[]): ComposerTray {
+  return { files, add: noop, remove: noop, outgoing: () => null, clear: noop };
+}
+
+/** A sent picture's bytes, so its bubble draws it as this window's own send would. */
+function sampleBytes(): Uint8Array {
+  const data = sampleShot();
+  return Uint8Array.from(atob(data.slice(data.indexOf(",") + 1)), (char) => char.charCodeAt(0));
+}
+
 /** A thread in the lane's tool column: its head, read as a pane's, and the thread under it. */
-function ThreadColumn({ job, model = null, updates, parts, pinned = false, conductor = null, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
+function ThreadColumn({ job, model = null, updates, parts, pinned = false, conductor = null, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", files = [] }: {
   job: DeskJob;
   model?: string | null;
   updates: Parameters<typeof threadLines>[0];
@@ -138,7 +151,7 @@ function ThreadColumn({ job, model = null, updates, parts, pinned = false, condu
   selectedOutput?: string | null;
   focused?: boolean;
   draft?: string;
-  attachments?: ComposerAttachment[];
+  files?: TrayFile[];
 }) {
   const [text, setText] = useState(draft);
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
@@ -146,7 +159,7 @@ function ThreadColumn({ job, model = null, updates, parts, pinned = false, condu
     <ThreadHead job={job} model={model} conductor={conductor} pinned={pinned} onBack={noop} onTerminal={noop} onPin={noop} onClose={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
-      composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}
+      composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
       onTerminal={noop} {...PART_ACTIONS}
     />
   </>;
@@ -284,6 +297,23 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "composer-chips":
       body = <DeskRoom pinned={false} rail={rail(false, false)} chat={chat(chipItems(now), <ChatComposer selection={CLAUDE} value={CHIP_TEXT} mentions={[CHIP_SESSION, CHIP_PROJECT]} />)} />;
       break;
+    case "attachments": {
+      // B41, B42 (Doop ⑦-b, ⑦-c): a sent message with its picture and file over the bubble; Desk's box with a picture and a file past
+      // the cap, which holds send; the session's box with a file still being read in.
+      const stage = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b-0";
+      keepSent(stage, "끊김.png", sampleBytes());
+      const sent: DeskItem[] = [{ kind: "user", id: 61, text: "이 화면이랑 로그 보고 왜 끊기는지 봐 줘", at_ms: now - 60_000, mentions: [], attachments: [
+        { name: "끊김.png", bytes: 182_000, path: `/state/attachments/${stage}-끊김.png` },
+        { name: "설치-로그.txt", bytes: 84_000, path: "/state/attachments/6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b-1-설치-로그.txt" },
+      ] }];
+      const shot: TrayFile = { id: "shot", name: "화면.png", size: 182_000, preview: sampleShot(), state: "ready", read: 182_000 };
+      const zip: TrayFile = { id: "zip", name: "전체-로그.zip", size: 31 * 1024 * 1024, preview: null, state: "too_large", read: 0 };
+      const log: TrayFile = { id: "log", name: "설치-로그.txt", size: 84_000, preview: null, state: "reading", read: 34_000 };
+      const thread = conductorThread(jobs);
+      body = <DeskRoom pinned rail={rail(true, false)} chat={chat(sent, <ChatComposer selection={CLAUDE} value="이 화면이랑 로그 보고 왜 끊기는지 봐 줘" files={[shot, zip]} />)}
+        tool={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} pinned outputs={[]} draft="이 로그도 같이 봐 줘" files={[log]} />} />;
+      break;
+    }
     case "parts": {
       const thread = conductorThread(jobs);
       body = <DeskRoom pinned rail={rail(true, false)} chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}

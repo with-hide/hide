@@ -3424,9 +3424,13 @@ export type DeskAgent = {
   efforts: DeskChoice[];
 };
 
+/** A file the operator sent to Desk's agent with a message (PRD desk-2-ui B41). */
+export type DeskAttachment = { name: string; bytes: number; path: string };
+
 /** One line of the Desk conversation. A message's text holds a mention as `@session(<id> <name>)` or `@project(<path> <name>)`. */
 export type DeskItem =
-  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[] }
+  /** `attachments` are the files sent with it, each staged at `path` on the core's machine; absent when none. */
+  | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] }
   /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
   | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }

@@ -89,6 +89,14 @@ fn safe_component(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// One staged file a commit hands on with its name (`commit_named`).
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct CommittedFile {
+    pub name: String,
+    pub bytes: u64,
+    pub path: String,
+}
+
 struct Upload {
     path: PathBuf,
     file: Option<File>,
@@ -178,7 +186,7 @@ pub struct Attachments {
 
 impl Attachments {
     pub fn new(state_dir: &Path) -> Self {
-        let dir = state_dir.join("attachments");
+        let dir = hide_kit::layout::screen_attachments(state_dir);
         // The core reads a clipboard image from its own fixed path, so hided
         // stages it exactly there (`hide-core/src/terminal_attachments.rs`).
         let clipboard_root = state_dir.join(hide_node_link::attachments::CLIPBOARD_FOLDER);
@@ -444,7 +452,35 @@ impl Attachments {
             }
             return Ok(Vec::new());
         }
-        self.commit_files(stages, MAX_FILES, None)
+        self.commit_paths(stages, MAX_FILES, None)
+    }
+
+    /// The staged files of a message to Desk's agent (PRD desk-2-ui B41), in
+    /// the order the client names them, with a batch's caps: each file's
+    /// name as the operator's file was called, its bytes and its staged path.
+    pub fn commit_named(&self, stages: &[String]) -> Result<Vec<CommittedFile>, &'static str> {
+        let files = self.commit_files(stages, MAX_FILES, None)?;
+        Ok(stages
+            .iter()
+            .zip(files)
+            .map(|(stage, (path, bytes))| {
+                let staged = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // `begin` names a stage's file `<stage>-<name>`.
+                let name = staged
+                    .strip_prefix(stage.as_str())
+                    .and_then(|rest| rest.strip_prefix('-'))
+                    .unwrap_or(&staged)
+                    .to_owned();
+                CommittedFile {
+                    name,
+                    bytes,
+                    path: path.display().to_string(),
+                }
+            })
+            .collect())
     }
 
     /// The staged paths of a phone's reply, in the order it names them, with
@@ -456,14 +492,27 @@ impl Attachments {
         connection: u64,
         stages: &[String],
     ) -> Result<Vec<String>, &'static str> {
-        self.commit_files(stages, MAX_FILES, Some(connection))
+        self.commit_paths(stages, MAX_FILES, Some(connection))
     }
 
     /// The staged paths of a drop from the file manager, in the order the
     /// client names them: the same checks as a batch of attachments, with the
     /// count cap of one drop (`hide_node_link::mutate::IMPORT_MAX_ITEMS`).
     pub fn commit_dropped(&self, stages: &[String]) -> Result<Vec<String>, &'static str> {
-        self.commit_files(stages, hide_node_link::mutate::IMPORT_MAX_ITEMS, None)
+        self.commit_paths(stages, hide_node_link::mutate::IMPORT_MAX_ITEMS, None)
+    }
+
+    fn commit_paths(
+        &self,
+        stages: &[String],
+        max_files: usize,
+        again: Option<u64>,
+    ) -> Result<Vec<String>, &'static str> {
+        Ok(self
+            .commit_files(stages, max_files, again)?
+            .into_iter()
+            .map(|(path, _)| path.display().to_string())
+            .collect())
     }
 
     /// `again` is the connection whose committed stages may be named again
@@ -473,7 +522,7 @@ impl Attachments {
         stages: &[String],
         max_files: usize,
         again: Option<u64>,
-    ) -> Result<Vec<String>, &'static str> {
+    ) -> Result<Vec<(PathBuf, u64)>, &'static str> {
         if stages.len() > max_files || stages.is_empty() {
             return Err("too_many_files");
         }
@@ -510,7 +559,7 @@ impl Attachments {
             if total > MAX_BATCH_BYTES {
                 return Err("batch_too_large");
             }
-            paths.push(path.display().to_string());
+            paths.push((path, bytes));
         }
         // Committed: the files stay for the core to read, the open stage
         // entries do not, and the files are safe from eviction for a window.
@@ -651,6 +700,48 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(std::fs::read(&paths[0]).unwrap() == vec![1, 2, 3, 4, 5]);
         assert!(paths[0].contains("r1-shot.png"));
+    }
+
+    /// A Desk message's files (PRD desk-2-ui B41) land in the folder the
+    /// layout names for a window's attachments, with the operator's own
+    /// file names and sizes beside their staged paths.
+    #[test]
+    fn a_desk_message_s_files_are_committed_with_their_names_in_the_layout_s_folder() {
+        let (dir, service) = attachments();
+        let id = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+        for (index, (name, bytes)) in [("화면 a.png", &[1u8, 2, 3][..]), ("log-1.txt", &[9u8][..])]
+            .into_iter()
+            .enumerate()
+        {
+            let stage = format!("{id}-{index}");
+            service
+                .begin(0, &stage, name, bytes.len() as u64, false)
+                .unwrap();
+            assert_eq!(service.write(&stage, bytes, true), Ok(true));
+        }
+        let files = service
+            .commit_named(&[format!("{id}-0"), format!("{id}-1")])
+            .unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| (file.name.as_str(), file.bytes))
+                .collect::<Vec<_>>(),
+            [("화면 a.png", 3), ("log-1.txt", 1)]
+        );
+        let folder = hide_kit::layout::screen_attachments(dir.path());
+        for file in &files {
+            assert_eq!(
+                std::path::Path::new(&file.path).parent(),
+                Some(folder.as_path())
+            );
+        }
+        assert_eq!(std::fs::read(&files[0].path).unwrap(), [1, 2, 3]);
+        // A commit takes open stages only: the same files cannot be named twice.
+        assert_eq!(
+            service.commit_named(&[format!("{id}-0")]),
+            Err("unknown_stage")
+        );
     }
 
     #[test]

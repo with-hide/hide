@@ -398,6 +398,7 @@ mod tests {
             text: text.into(),
             at_ms: 0,
             mentions: Vec::<DeskMention>::new(),
+            attachments: Vec::new(),
         }
     }
 

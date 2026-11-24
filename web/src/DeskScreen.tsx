@@ -22,7 +22,8 @@ import { allAgents } from "./paneAgents";
 import type { DeskKeptTab } from "./snapshot";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
-import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
+import { keepSent, mentionAt, mentionTree, outgoing, pickMention, useComposerTray } from "./deskComposer";
+import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
 import type { MentionInputHandle } from "./components/desk/mention-input";
@@ -126,8 +127,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [caret, setCaret] = useState(draft.text.length);
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
   const box = useRef<MentionInputHandle>(null);
-  // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
-  const pending = useRef<{ text: string; after: number } | null>(null);
+  // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box; its files' request, when it had files.
+  const pending = useRef<{ text: string; after: number; request: string | null } | null>(null);
+  const tray = useComposerTray();
+  const [notice, setNotice] = useState<string | null>(null);
+  const refusal = useShellStore((s) => s.composerRefusal);
   // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
   const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
 
@@ -149,8 +153,16 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text)) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
+      if (sent.request) tray.clear();
     }
   }, [items, setDraft]);
+  // hided refused the files before Desk's agent saw the message: the words and the files stay, and the line says why.
+  useEffect(() => {
+    const sent = pending.current;
+    if (!refusal || !sent?.request || refusal.request_id !== sent.request) return;
+    pending.current = null;
+    setNotice(refusalText(refusal.reason, t));
+  }, [refusal, t]);
   useEffect(() => {
     const sent = lastSent.current;
     if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
@@ -177,11 +189,19 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const send = (words = draft) => {
     if (!canSend || !items) return;
     const out = outgoing(words);
-    if (!out.text) return;
-    pending.current = { text: out.text, after: lastUserId(items) };
+    const files = tray.outgoing();
+    if (!files || (!out.text && files.length === 0)) return;
+    const stagedOrRefused = files.length > 0 ? stageDeskFiles(files.map(({ name, bytes }) => ({ name, bytes }))) : null;
+    if (stagedOrRefused && "refused" in stagedOrRefused) return setNotice(refusalText(stagedOrRefused.refused, t));
+    if (files.length > 0 && !stagedOrRefused) return;
+    const staged = stagedOrRefused;
+    // The pictures this window sent stay drawn on their bubble while the page lives.
+    if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.preview ? file.bytes : null));
+    setNotice(null);
+    pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null };
     lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
-    actions.deskSend(out.text, out.mentions);
+    actions.deskSend(out.text, out.mentions, staged);
   };
 
   // The `@` menu: open while the caret ends an `@` word Esc did not close, and something matches it.
@@ -262,7 +282,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       case "retry": {
         // 다시 시도 sends the operator's last message again, as they wrote it.
         const last = [...(now?.conversation.items ?? [])].reverse().find((item) => item.kind === "user");
-        if (last?.kind === "user") actions.deskSend(last.text, last.mentions);
+        if (last?.kind === "user") actions.deskSend(last.text, last.mentions, null, last.id);
         return;
       }
     }
@@ -303,6 +323,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       inputRef={box}
       label={t("desk.composer.label")}
       placeholder={t("desk.composer.placeholder")}
+      tray={tray}
+      notice={notice}
       answering={answering}
       held={!canSend}
       focused={menuOpen}

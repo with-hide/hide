@@ -2912,6 +2912,9 @@ fn handle_client_text(
         Some("thread_input") => {
             return Ok(ClientAction::Replies(handle_thread_input(state, &event)));
         }
+        Some("desk_send") => {
+            return Ok(ClientAction::Replies(handle_desk_send(state, &event)));
+        }
         Some("path_import") => {
             return Ok(ClientAction::Replies(handle_path_import(state, &event)));
         }
@@ -3993,6 +3996,67 @@ fn handle_thread_input(state: &AppState, event: &Value) -> Vec<Message> {
         return refuse("forward_failed");
     }
     Vec::new()
+}
+
+/// A message to Desk's agent (PRD desk-2-ui B41): the files its composer
+/// staged are committed here, where they were staged, and the core is told
+/// their names, sizes and paths with the words. hided is the only maker of
+/// `files`, so the payload is rebuilt from the fields a window may send and
+/// a window can never name a path. A refusal before the core is answered as
+/// an attachment's is, by the message's request id.
+fn handle_desk_send(state: &AppState, event: &Value) -> Vec<Message> {
+    let request_id = payload_str(event, "request_id");
+    let refuse = |reason: &str| {
+        vec![Message::Text(
+            attachment_refused(&request_id, reason).to_string().into(),
+        )]
+    };
+    let stages: Vec<String> = event
+        .pointer("/payload/stages")
+        .and_then(Value::as_array)
+        .map(|stages| {
+            stages
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let files = if stages.is_empty() {
+        Vec::new()
+    } else {
+        if !attachments::valid_request_id(&request_id) {
+            return refuse("invalid_request_id");
+        }
+        match state.attachments.commit_named(&stages) {
+            Ok(files) => files,
+            Err(reason) => return refuse(reason),
+        }
+    };
+    let send = desk_send_for_core(event, &files);
+    if let Err(error) = state
+        .core
+        .dispatch(serde_json::to_vec(&send).unwrap_or_default())
+    {
+        log_snapshot_failure("desk_send", &error);
+        return refuse("forward_failed");
+    }
+    Vec::new()
+}
+
+/// The core's `desk_send` for a window's: the words, mentions and `again`
+/// it sent, and `files` from hided's own commit only, so a path a window
+/// wrote into the event never reaches Desk's agent.
+fn desk_send_for_core(event: &Value, files: &[attachments::CommittedFile]) -> Value {
+    let mut payload = json!({
+        "text": event.pointer("/payload/text").cloned().unwrap_or(Value::Null),
+        "mentions": event.pointer("/payload/mentions").cloned().unwrap_or_else(|| json!([])),
+        "files": files,
+    });
+    if let Some(again) = event.pointer("/payload/again").and_then(Value::as_u64) {
+        payload["again"] = Value::from(again);
+    }
+    json!({"schema_version": 2, "kind": "desk_send", "payload": payload})
 }
 
 /// Opens one staged upload the client will send bytes for. The caps are
@@ -6016,6 +6080,33 @@ mod tests {
     }
 
     use super::*;
+
+    /// A Desk message's files reach the core only from hided's own commit:
+    /// a path a window wrote into `files` is dropped, and the words,
+    /// mentions and `다시 시도`'s message go on as sent (PRD desk-2-ui B41).
+    #[test]
+    fn a_desk_send_carries_only_the_files_hided_committed() {
+        let event = json!({"kind": "desk_send", "payload": {
+            "text": "look", "mentions": [{"kind": "session", "id": "p1", "name": "a"}],
+            "files": [{"name": "passwd", "bytes": 1, "path": "/etc/passwd"}], "again": 4,
+        }});
+        assert_eq!(
+            desk_send_for_core(&event, &[]),
+            json!({"schema_version": 2, "kind": "desk_send", "payload": {
+                "text": "look", "mentions": [{"kind": "session", "id": "p1", "name": "a"}],
+                "files": [], "again": 4,
+            }})
+        );
+        let staged = attachments::CommittedFile {
+            name: "shot.png".to_owned(),
+            bytes: 3,
+            path: "/state/attachments/r-0-shot.png".to_owned(),
+        };
+        assert_eq!(
+            desk_send_for_core(&event, &[staged])["payload"]["files"],
+            json!([{"name": "shot.png", "bytes": 3, "path": "/state/attachments/r-0-shot.png"}])
+        );
+    }
 
     /// A window's close of a guest's pane is answered in the shape it was
     /// asked in: the call a page makes now hears its result frame, and a

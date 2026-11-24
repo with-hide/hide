@@ -466,6 +466,10 @@ pub enum DeskItem {
         text: String,
         at_ms: u64,
         mentions: Vec<DeskMention>,
+        /// The files sent with the message, drawn on its bubble; the agent
+        /// got their paths before the words.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<DeskAttachment>,
     },
     Reply {
         id: u64,
@@ -579,11 +583,20 @@ impl DeskItem {
     /// cap.
     pub fn text_bytes(&self) -> usize {
         match self {
-            Self::User { text, mentions, .. } => {
+            Self::User {
+                text,
+                mentions,
+                attachments,
+                ..
+            } => {
                 text.len()
                     + mentions
                         .iter()
                         .map(|mention| mention.id.len() + mention.name.len())
+                        .sum::<usize>()
+                    + attachments
+                        .iter()
+                        .map(|file| file.name.len() + file.path.len())
                         .sum::<usize>()
             }
             Self::Reply { text, mentions, .. } => {
@@ -622,6 +635,16 @@ impl DeskItem {
             Self::Switch { .. } => 0,
         }
     }
+}
+
+/// A file the operator dropped, pasted or picked into Desk's composer
+/// (PRD desk-2-ui B41): its name and size as the composer showed them, and
+/// the path the window's hided staged it at, which the agent was given.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskAttachment {
+    pub name: String,
+    pub bytes: u64,
+    pub path: String,
 }
 
 /// A session or project the operator named with `@`; the message's text

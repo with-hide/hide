@@ -9,6 +9,7 @@ import {
   receiveAttachmentRefusal,
   refusalText,
   safeName,
+  stageDeskFiles,
   submitAttachments,
   submitExplorerImage,
   submitThreadInput,
@@ -210,7 +211,7 @@ describe("attachment upload", () => {
 
 describe("thread input (B29)", () => {
   beforeEach(() => {
-    useShellStore.setState({ attachmentRefusal: null, threadInputRefusal: null });
+    useShellStore.setState({ attachmentRefusal: null, composerRefusal: null });
   });
 
   it("stages each file under the input's id, then names the stages with the words", () => {
@@ -229,7 +230,7 @@ describe("thread input (B29)", () => {
     capture();
     const requestId = submitThreadInput(3, "w1:p1", "봐줘", [{ name: "a.png", bytes: new Uint8Array([1]) }])!;
     receiveAttachmentRefusal({ request_id: `${requestId}-0`, reason: "staging_full" });
-    expect(useShellStore.getState().threadInputRefusal).toEqual({ request_id: requestId, reason: "staging_full" });
+    expect(useShellStore.getState().composerRefusal).toEqual({ request_id: requestId, reason: "staging_full" });
     expect(useShellStore.getState().attachmentRefusal).toBeNull();
   });
 
@@ -238,6 +239,35 @@ describe("thread input (B29)", () => {
     const big = { name: "big.bin", bytes: new Uint8Array(21 * 1024 * 1024) };
     expect(submitThreadInput(3, "w1:p1", "", [big])).toBeNull();
     expect(events).toEqual([]);
-    expect(useShellStore.getState().threadInputRefusal?.reason).toBe("too_large");
+    expect(useShellStore.getState().composerRefusal?.reason).toBe("too_large");
+  });
+});
+
+describe("a Desk message's files (desk-2-ui B41, B42)", () => {
+  beforeEach(() => {
+    useShellStore.setState({ attachmentRefusal: null, composerRefusal: null });
+  });
+
+  it("stages each file under the message's id for desk_send to name", () => {
+    const { events, binaries } = capture();
+    const staged = stageDeskFiles([{ name: "끊김.png", bytes: new Uint8Array([1, 2, 3]) }, { name: "log.txt", bytes: new Uint8Array([4]) }]);
+    if (!staged || "refused" in staged) throw new Error("expected the files staged");
+    expect(staged.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(staged.stages).toEqual([`${staged.request_id}-0`, `${staged.request_id}-1`]);
+    expect(events).toEqual([
+      { kind: "attachment_stage", payload: { request_id: `${staged.request_id}-0`, name: "끊김.png", size: 3, clipboard: false } },
+      { kind: "attachment_stage", payload: { request_id: `${staged.request_id}-1`, name: "log.txt", size: 1, clipboard: false } },
+    ]);
+    expect(binaries.map((frame) => [...decodeFrame(frame).body])).toEqual([[1, 2, 3], [4]]);
+    receiveAttachmentRefusal({ request_id: `${staged.request_id}-1`, reason: "staging_full" });
+    expect(useShellStore.getState().composerRefusal).toEqual({ request_id: staged.request_id, reason: "staging_full" });
+  });
+
+  it("refuses a file past 20 MiB before a byte leaves the page, and takes one at 20 MiB", () => {
+    const { events } = capture();
+    expect(stageDeskFiles([{ name: "big.zip", bytes: new Uint8Array(20 * 1024 * 1024 + 1) }])).toEqual({ refused: "too_large" });
+    expect(events).toEqual([]);
+    const staged = stageDeskFiles([{ name: "edge.zip", bytes: new Uint8Array(20 * 1024 * 1024) }]);
+    expect(staged && "stages" in staged ? staged.stages : null).toHaveLength(1);
   });
 });

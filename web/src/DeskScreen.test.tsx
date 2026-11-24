@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { Blob as NodeBlob } from "node:buffer";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
+import { configureAttachments } from "./attachments";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob } from "./desk";
 import { DeskScreen, DeskSettingsPage, DeskSidebarEntry } from "./DeskScreen";
@@ -144,7 +146,30 @@ describe("Desk's room", () => {
       { kind: "notice", id: 2, notice: "turn_failed", agent: "claude", detail: null },
     ]));
     await press("[data-desk-notice-action='retry']");
-    expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo] }]);
+    // The core sends the files of message 1 with it again, when it had any.
+    expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
+  });
+
+  it("sends a dropped file's stage with the words, keeps it in the box until the conversation shows the message, and draws it on the bubble (desk-2-ui B41)", async () => {
+    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+    useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
+    await render(desk([]));
+    const file = new File([new Uint8Array([7, 8])], "install.log");
+    file.stream = () => new NodeBlob([new Uint8Array([7, 8])]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
+    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="ready"]')).not.toBeNull());
+
+    await press("[data-desk-composer-send]");
+    const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];
+    expect(message).toEqual({ text: "왜 끊기는지 봐 줘", mentions: [], request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), stages: [`${message!.request_id}-0`] });
+    expect(sent("attachment_stage")).toEqual([{ request_id: `${message!.request_id}-0`, name: "install.log", size: 2, clipboard: false }]);
+    expect(document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")).toHaveLength(1);
+
+    await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/attachments/${message!.request_id}-0-install.log` }] }]));
+    expect(document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")).toHaveLength(0);
+    expect(document.body.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("install.log");
   });
 
   it("names the agent's own reason on a failed turn when it gave one", async () => {

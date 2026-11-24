@@ -30,9 +30,10 @@ use crate::desk::{
 };
 use crate::handle::ChangeNotifier;
 use crate::model::{
-    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskCardKind,
-    DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState, DeskItem,
-    DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskReplyState, DeskSnapshot,
+    DESK_CAP_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState, DeskAttachment,
+    DeskCardKind, DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot, DeskHostState,
+    DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskReplyState,
+    DeskSnapshot,
 };
 use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
@@ -181,6 +182,15 @@ pub(super) struct SendPayload {
     text: String,
     #[serde(default)]
     mentions: Vec<DeskMention>,
+    /// The files the composer sent, staged by the window's hided, which is
+    /// the only maker of this field (`hided/src/server.rs`,
+    /// `handle_desk_send`).
+    #[serde(default)]
+    files: Vec<DeskAttachment>,
+    /// `다시 시도`: the operator's message it sends again, whose files go
+    /// with it when this send carries none.
+    #[serde(default)]
+    again: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,9 +454,39 @@ impl Runtime {
 
     fn desk_send(&mut self, payload: SendPayload) -> bool {
         let text = payload.text.trim();
-        if text.is_empty() || text.len() > MAX_MESSAGE_BYTES {
+        let files = match payload.again {
+            Some(again) if payload.files.is_empty() => self
+                .desk
+                .stored
+                .conversation
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    DeskItem::User {
+                        id, attachments, ..
+                    } if *id == again => Some(attachments.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+            _ => payload.files,
+        };
+        if (text.is_empty() && files.is_empty()) || text.len() > MAX_MESSAGE_BYTES {
             return refused("message_size");
         }
+        // The paths go before the words as a dragged file's do onto a
+        // terminal: each quoted, one space apart (`terminal_attachments`).
+        let sent = if files.is_empty() {
+            text.to_owned()
+        } else {
+            let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
+            match crate::terminal_attachments::paste_bytes(&paths, false, false)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+            {
+                Some(quoted) => format!("{quoted}{text}"),
+                None => return refused("attachments"),
+            }
+        };
         if payload.mentions.len() > MAX_MENTIONS
             || payload.mentions.iter().any(|mention| {
                 mention.id.is_empty()
@@ -465,7 +505,7 @@ impl Runtime {
         if self.desk.turn.is_some() {
             return refused("turn_under_way");
         }
-        self.desk_start_turn(agent, text.to_owned(), text.to_owned(), payload.mentions);
+        self.desk_start_turn(agent, text.to_owned(), sent, payload.mentions, files);
         true
     }
 
@@ -477,6 +517,7 @@ impl Runtime {
         shown: String,
         sent: String,
         mentions: Vec<DeskMention>,
+        attachments: Vec<DeskAttachment>,
     ) {
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
@@ -487,6 +528,7 @@ impl Runtime {
             text: shown,
             at_ms: crate::links::now_ms(),
             mentions,
+            attachments,
         });
         self.desk.next_tag += 1;
         let tag = self.desk.next_tag;
@@ -1100,7 +1142,7 @@ impl Runtime {
                     && let Some(agent) = self.selected_agent()
                 {
                     let sent = hide_desk::refusal_message(&refusal.command, &refusal.text);
-                    self.desk_start_turn(agent, refusal.text, sent, Vec::new());
+                    self.desk_start_turn(agent, refusal.text, sent, Vec::new(), Vec::new());
                 }
                 self.save_desk();
             }
@@ -2249,6 +2291,95 @@ mod tests {
         assert_eq!(desk.host.state, DeskHostState::Idle);
         assert!(event(&mut runtime, "desk_send", json!({"text": "hello"})));
         assert_eq!(sent(&received).text, "hello");
+    }
+
+    /// A file dropped into Desk's composer (PRD desk-2-ui B41): the agent
+    /// gets its staged path quoted before the words, as a file dragged onto
+    /// a terminal is typed, the bubble keeps the file's name and size and
+    /// not the path in its words, and `다시 시도` sends the same files again.
+    #[test]
+    fn files_sent_to_desk_reach_the_agent_as_quoted_paths_and_stay_on_the_bubble() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        let shot = root.path().join("attachments").join("a b.png");
+        let log = root.path().join("attachments").join("install.log");
+        let quoted = |path: &std::path::Path| {
+            let mut out = String::from("\"");
+            for c in path.display().to_string().chars() {
+                if "\\\"$`".contains(c) {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out.push('"');
+            out
+        };
+        let files = json!([
+            {"name": "a b.png", "bytes": 2048, "path": shot.display().to_string()},
+            {"name": "install.log", "bytes": 84, "path": log.display().to_string()},
+        ]);
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "  why does it drop?  ", "files": files})
+        ));
+        let send = sent(&received);
+        assert_eq!(
+            send.text,
+            format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
+        );
+        let bubble = items(&runtime)
+            .into_iter()
+            .find_map(|item| match item {
+                DeskItem::User {
+                    id,
+                    text,
+                    attachments,
+                    ..
+                } => Some((id, text, attachments)),
+                _ => None,
+            })
+            .expect("the operator's message");
+        assert_eq!(bubble.1, "why does it drop?");
+        assert_eq!(
+            bubble
+                .2
+                .iter()
+                .map(|file| (file.name.as_str(), file.bytes))
+                .collect::<Vec<_>>(),
+            [("a b.png", 2048), ("install.log", 84)]
+        );
+
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "why does it drop?", "again": bubble.0})
+        ));
+        assert_eq!(
+            sent(&received).text,
+            format!("{} {} why does it drop?", quoted(&shot), quoted(&log))
+        );
+    }
+
+    /// Files alone are a message; nothing at all is not.
+    #[test]
+    fn a_message_of_files_alone_is_sent_and_an_empty_one_is_not() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        assert!(!event(&mut runtime, "desk_send", json!({"text": "  "})));
+        let shot = root.path().join("shot.png");
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "", "files": [{"name": "shot.png", "bytes": 1, "path": shot.display().to_string()}]})
+        ));
+        assert!(sent(&received).text.ends_with("shot.png\" "));
     }
 
     #[test]

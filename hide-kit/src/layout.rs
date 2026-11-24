@@ -417,6 +417,16 @@ pub fn letter_attachments(state_dir: &Path) -> PathBuf {
     state_dir.join("letter-attachments")
 }
 
+/// Files a window's operator dropped, pasted or picked into a terminal, a
+/// session's composer or Desk's composer, staged by the hided that serves
+/// that window before the core takes their paths. Started empty on each run
+/// and bounded by count and bytes; its owner is `hided`'s `attachments`.
+pub const SCREEN_ATTACHMENTS: &str = "attachments";
+
+pub fn screen_attachments(state_dir: &Path) -> PathBuf {
+    state_dir.join(SCREEN_ATTACHMENTS)
+}
+
 /// Files the operator attached to a terminal of this machine's panes from a
 /// window on another machine, one owner-only file each, kept 24 hours (PRD
 /// wsl-device B10); its owner is that node's `hide_host::attachments`.

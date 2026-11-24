@@ -5,16 +5,13 @@ import type { DeskJob, DeskMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
+import { keepSent, useComposerTray } from "../../deskComposer";
 import { useShellStore } from "../../store";
-import { Input } from "../ui/input";
 import { threadInputHeld, threadLaunchModel, threadScreen } from "../../threadView";
-import type { ComposerAttachment } from "./desk-composer";
 import { ChevronLeftIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { LaneColumnHead } from "./desk-lane";
 import { ThreadHead, ThreadView, type ThreadConductor, type ThreadPartActions } from "./thread-view";
-
-type Attached = ComposerAttachment & { bytes: Uint8Array };
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
@@ -63,15 +60,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
   const missions = useShellStore((s) => s.rest?.missions);
   const launches = useShellStore((s) => s.rest);
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
-  const refusal = useShellStore((s) => s.threadInputRefusal);
+  const refusal = useShellStore((s) => s.composerRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
   const model = threadLaunchModel(launches, thread);
 
   const [text, setText] = useState("");
-  const [files, setFiles] = useState<Attached[]>([]);
+  const tray = useComposerTray();
   const [sent, setSent] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const picker = useRef<HTMLInputElement>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
   // The words stay in the box until the pane took them, so a refused send loses nothing.
@@ -84,7 +80,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
     setSent(null);
     if (input.state === "sent") {
       setText("");
-      setFiles([]);
+      tray.clear();
       setNotice(null);
     } else {
       setNotice(input.reason ? words(input.reason) : null);
@@ -98,16 +94,15 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
 
   const held = threadInputHeld(thread);
   const send = () => {
-    if (!thread?.pane_id || held !== null || sent) return;
+    const files = tray.outgoing();
+    if (!thread?.pane_id || held !== null || sent || !files) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request) {
+      // The bubble the record will show names these files by their stages, here and on a device.
+      files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.preview ? file.bytes : null));
       setSent(request);
       setNotice(null);
     }
-  };
-  const attach = async (picked: FileList | null) => {
-    const read = await Promise.all([...(picked ?? [])].map(async (file, index) => ({ id: `${Date.now()}-${index}-${file.name}`, name: file.name, image: file.type.startsWith("image/"), bytes: new Uint8Array(await file.arrayBuffer()) })));
-    setFiles((current) => [...current, ...read]);
   };
   // One ask per state the core shows: scroll events at the top come faster
   // than its answer, and a read that failed is asked again only after the
@@ -152,29 +147,16 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
         selectedOutput={selectedOutput}
         composer={{
           value: text,
-          attachments: files,
+          tray,
           focused,
           held: held !== null || sent !== null,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
           onChange: setText,
           onSend: send,
-          onAttach: () => picker.current?.click(),
-          onRemoveAttachment: (id) => setFiles((current) => current.filter((file) => file.id !== id)),
         }}
         onTerminal={onTerminal}
         onReachTop={reachTop}
         {...parts}
-      />
-      <Input
-        ref={picker}
-        type="file"
-        multiple
-        hidden
-        data-desk-thread-picker="true"
-        onChange={(event) => {
-          void attach(event.target.files);
-          event.target.value = "";
-        }}
       />
     </div>
   );

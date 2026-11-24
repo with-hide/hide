@@ -2723,9 +2723,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openDesk();
     },
 
-    /** One message to Desk's agent with the sessions and projects it names (B7, B18). */
-    deskSend(text: string, mentions: readonly DeskMention[]) {
-      dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })) } });
+    /**
+     * One message to Desk's agent with the sessions and projects it names
+     * (B7, B18), and the files its composer staged (`stageDeskFiles`), whose
+     * paths hided puts in; `again` is the operator's message `다시 시도`
+     * sends again, whose files the core sends with it.
+     */
+    deskSend(text: string, mentions: readonly DeskMention[], files: { request_id: string; stages: string[] } | null = null, again: number | null = null) {
+      dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })), ...(files ?? {}), ...(again === null ? {} : { again }) } });
     },
 
     /** `중지`: ends Desk's turn and nothing it started (B7). */

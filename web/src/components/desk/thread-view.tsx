@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
-import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
 import { askedOnce, threadTurns } from "../../desk";
@@ -14,7 +14,8 @@ import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Hint } from "../ui/tooltip";
 import { MentionText } from "./desk-chat";
-import { DeskComposer, type ComposerAttachment } from "./desk-composer";
+import { DeskComposer, SentAttachments } from "./desk-composer";
+import { sentWords, type ComposerTray } from "../../deskComposer";
 import { DeskMissionChip, DeskPlanChip, JobLead, JobLine, jobStateWords } from "./desk-job-card";
 import { SessionChip } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
@@ -296,11 +297,14 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
 function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
+  // The files a composer sent stand over the words, read from the quoted paths it typed before them (B41).
+  const sent = useMemo(() => sentWords(line.text), [line.text]);
   if (line.origin === "letter") return <ReceivedLine line={line} actions={actions} />;
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
-      {line.text ? <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-body leading-relaxed text-foreground [overflow-wrap:anywhere]">{line.text}</p> : null}
+      <SentAttachments files={sent.files} />
+      {sent.words ? <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-body leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p> : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
     </div>
   );
@@ -421,7 +425,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   startedByDesk?: boolean;
   outputs: readonly DeskOutput[];
   selectedOutput?: string | null;
-  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
+  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void };
   onTerminal: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
@@ -462,14 +466,12 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           value={composer.value}
           label={t("desk.thread.composerLabel", { title: job.title })}
           placeholder={t("desk.thread.placeholder")}
-          attachments={composer.attachments}
+          tray={composer.tray}
           focused={composer.focused}
           held={composer.held}
           notice={composer.notice}
           onChange={composer.onChange}
           onSend={composer.onSend}
-          onAttach={composer.onAttach}
-          onRemoveAttachment={composer.onRemoveAttachment}
         />
       </div>
     </div>
