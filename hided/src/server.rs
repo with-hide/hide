@@ -5663,12 +5663,11 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             // engine-bundle-3-core-owns D-10).
             live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
-                let state_dir = state.core.state_dir().to_path_buf();
-                let probe = Mutex::new(crate::always_on::PairedProbe::default());
-                Arc::new(move || {
-                    let paired = probe.lock().expect("paired probe").paired(&state_dir)?;
-                    Ok(holders.live_panes()? + usize::from(paired))
-                })
+                live_work(
+                    move || holders.live_panes(),
+                    state.core.state_dir().to_path_buf(),
+                    crate::always_on::PairedProbe::default(),
+                )
             },
         },
         // Mobile on with a phone paired: the phone may come back at any
@@ -5679,6 +5678,21 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
     );
     seat.mount(router(state));
     idle_task
+}
+
+/// What keeps an idle daemon: its holder panes that may still run
+/// (`live_panes`) and one for a pairing with another machine, which `probe`
+/// answers from the state folder's files only when they changed.
+fn live_work(
+    live_panes: impl Fn() -> Result<usize, String> + Send + Sync + 'static,
+    state_dir: PathBuf,
+    probe: crate::always_on::PairedProbe,
+) -> Arc<dyn Fn() -> Result<usize, String> + Send + Sync> {
+    let probe = Mutex::new(probe);
+    Arc::new(move || {
+        let paired = probe.lock().expect("paired probe").paired(&state_dir)?;
+        Ok(live_panes()? + usize::from(paired))
+    })
 }
 
 /// What decides when a daemon with no screen ends.
@@ -5905,6 +5919,48 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(3)).await;
         assert!(!running.has_ended());
         assert!(!uncounted.has_ended(), "a count that failed keeps it alive");
+    }
+
+    /// What keeps an idle daemon is its panes plus one for a pairing, and
+    /// the pairing is asked of the folder's files only when they changed.
+    #[test]
+    fn the_idle_probe_counts_panes_and_a_pairing_and_reads_the_folder_once() {
+        use std::sync::atomic::AtomicUsize;
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        let state = tempfile::tempdir().unwrap();
+        let work = super::live_work(
+            || Ok(2),
+            state.path().to_path_buf(),
+            crate::always_on::PairedProbe::reading(|dir| {
+                READS.fetch_add(1, Ordering::SeqCst);
+                crate::always_on::paired(dir)
+            }),
+        );
+        for _ in 0..3 {
+            assert_eq!(work(), Ok(2));
+        }
+        assert_eq!(
+            READS.load(Ordering::SeqCst),
+            1,
+            "an unpaired folder is read once"
+        );
+
+        let guest = hide_peer::protocol::PeerKey::from_bytes([7; 32]);
+        let now = 1_800_000_000_000;
+        let mut grants =
+            hide_peer::store::Grants::open(hide_kit::layout::peer_grants(state.path())).unwrap();
+        let grant = grants
+            .grant_pending(guest, "d1", "Laptop", hide_peer::store::Via::Link, now)
+            .unwrap();
+        grants.confirm(&guest, &grant.id, now).unwrap();
+        for _ in 0..3 {
+            assert_eq!(work(), Ok(3), "a confirmed pairing counts one more");
+        }
+        assert_eq!(
+            READS.load(Ordering::SeqCst),
+            2,
+            "a new pairing is read once"
+        );
     }
 
     #[tokio::test]
