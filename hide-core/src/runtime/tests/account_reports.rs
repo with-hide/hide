@@ -375,6 +375,39 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
     }
 }
 
+/// #2889: a `claude -p` the pane's agent runs with another account reports
+/// its own start through the pane's hooks; the pane stays in the account of
+/// the session a projection lays on its agent, and moves to another session
+/// once the engine names it as the agent's, with no report in between.
+#[test]
+fn a_nested_start_leaves_the_panes_account_until_the_engine_names_that_session() {
+    let mut runtime = listed(vec![
+        profile("p-a", "a", "/accounts/claude-a"),
+        profile("p-b", "b", "/accounts/claude-b"),
+    ]);
+    let laid = |runtime: &mut Runtime, session: &str| {
+        let mut payload = serde_json::from_value(serde_json::json!({
+            "agents": [{"pane_id": "p1", "agent": "claude", "agent_status": "idle",
+                "agent_session": {"kind": "id", "value": session}}],
+            "panes": [{"pane_id": "p1"}],
+        }))
+        .unwrap();
+        runtime.lay_hook_facts(&mut payload, str::to_owned, |pane| pane == "p1");
+    };
+    let (a, b) = (
+        AccountKey::Folder("/accounts/claude-a".to_owned()),
+        AccountKey::Folder("/accounts/claude-b".to_owned()),
+    );
+    started(&mut runtime, "p1", "s-1", Some("/accounts/claude-a"));
+    laid(&mut runtime, "s-1");
+    started(&mut runtime, "p1", "s-2", Some("/accounts/claude-b"));
+    assert_eq!(account(&runtime, "p1"), a, "the nested start");
+    laid(&mut runtime, "s-1");
+    assert_eq!(account(&runtime, "p1"), a, "the agent laid again");
+    laid(&mut runtime, "s-2");
+    assert_eq!(account(&runtime, "p1"), b, "the engine names s-2");
+}
+
 /// D-03, D-32, B16, B24: a parent the operator started by hand with an
 /// alias runs in the profile account its hook reported, and a child of the
 /// same agent it starts with no `--profile` starts there too, not in the

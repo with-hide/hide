@@ -1668,6 +1668,7 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     let unused = hide_kit::holders::Source {
         program: unused_program,
         conpty: current.conpty.clone(),
+        identity: None,
     };
     let unused_dir = folder.home.prepare(0, &unused).dir.clone();
     let unused_name = folder_name(&unused_dir);

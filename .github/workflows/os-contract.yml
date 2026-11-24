@@ -67,6 +67,29 @@ jobs:
         if: matrix.system == 'macos'
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::a_login_agent_restarts/)' --run-ignored only --no-capture
+      - name: What a login agent's run started, on the runner's real service manager
+        # hide-platform/tests/it/user_agents.rs: what a login agent's run
+        # started to outlive it, as a pane's holder is, goes on when the run
+        # ends or a core update replaces it, on this disposable runner's own
+        # launchd or systemd user manager. A hosted Linux runner has no login
+        # session, so its account's manager is started the way a server's
+        # is, by linger.
+        if: matrix.system != 'windows'
+        timeout-minutes: 5
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo loginctl enable-linger "$(id -un)"
+            manager="/run/user/$(id -u)/systemd/private"
+            for _ in $(seq 1 100); do
+              [[ -S "$manager" ]] && break
+              sleep 0.2
+            done
+            if [[ ! -S "$manager" ]]; then
+              echo "::error::the runner account's systemd user manager did not start"
+              exit 1
+            fi
+          fi
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::what_an_agents_run/)' --run-ignored only --no-capture
       - name: Lint the platform crate
         run: bash scripts/verify-cargo.sh clippy -p hide-platform --all-targets -- -D warnings
       - name: Mint the development issues token

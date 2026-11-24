@@ -258,6 +258,19 @@ class Selection(unittest.TestCase):
         self.assertEqual(set(contract["lanes"]), (set(node["lanes"]) | {"checks", "package"}) - {"repeat"})
         self.assertIn("repeat", node["lanes"])
 
+    def test_the_app_identity_contract_plans_what_hide_kit_plans_and_the_package_that_signs_with_it(self):
+        contract = plan("contracts/app-identity.json")
+        self.assertFalse(contract["full"])
+        kit = plan("hide-kit/src/app_identity.rs")
+        self.assertEqual(contract["rust_packages"], kit["rust_packages"])
+        # The desktop unit suite runs the script that reads it, and the
+        # package signs the core and the pane holder under the name it states.
+        self.assertEqual(set(contract["lanes"]), (set(kit["lanes"]) | {"checks", "package"}) - {"repeat"})
+        # Only the Mac package signs with it and reads it back.
+        for path in ("contracts/app-identity.json", "desktop/scripts/app-identity.mjs"):
+            with self.subTest(path=path):
+                self.assertTrue(pr_plan(path)["macos"]["runs"])
+
     def test_the_peer_link_contract_plans_what_the_crate_that_includes_it_plans(self):
         contract = plan("contracts/peer-link.json")
         self.assertFalse(contract["full"])
@@ -474,7 +487,7 @@ class Selection(unittest.TestCase):
 
     def test_package_helpers_need_only_checks_and_the_package_chain(self):
         for status in ("A", "M", "D"):
-            for name in ("build-identity.mjs", "device-helpers.mjs", "installers.mjs",
+            for name in ("app-identity.mjs", "build-identity.mjs", "device-helpers.mjs", "installers.mjs",
                          "macos-signing.mjs", "release-binaries.mjs", "smoke-windows-installer.mjs"):
                 with self.subTest(status=status, helper=name):
                     result = plan("desktop/scripts/" + name, status=status)
@@ -1408,6 +1421,7 @@ class MacosOnPullRequests(unittest.TestCase):
             ("hide-platform/src/user_agents/launchd.rs", {"os-contract-macos", "omp-contract"}),
             ("hide-platform/tests/it/user_agents.rs", {"os-contract-macos", "omp-contract"}),
             ("desktop/scripts/macos-signing.mjs", {"package"}),
+            ("desktop/scripts/app-identity.mjs", {"package"}),
             ("desktop/scripts/package.mjs", {"package"}),
             # No narrower rule names these, so they plan every lane and the package
             # (not `holder-restart`, which only its own paths plan).

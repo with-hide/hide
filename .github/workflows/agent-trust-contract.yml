@@ -1,6 +1,6 @@
 # The real Claude Code and Codex read the folder trust Hide records for a
-# worktree it made, on every system (docs/agent-hooks.md, Folder trust for
-# the worktrees Hide makes).
+# worktree, on every system (docs/agent-hooks.md, Folder trust for the
+# folders Hide starts agents in).
 #
 # Each leg installs the pinned Claude Code and Codex from npm into the
 # runner, then runs the two real-binary checks in a throwaway home: Codex's

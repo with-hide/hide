@@ -479,6 +479,11 @@ fn an_automations_own_folder_is_unlisted_until_the_automation_leaves_it() {
     .unwrap();
     let id = added["id"].as_str().unwrap().to_owned();
     let folder = added["folder"].as_str().unwrap().to_owned();
+    // A run's spawn trusts the agent in this folder, and in no other
+    // (docs/agent-hooks.md, Folder trust for the folders Hide starts agents
+    // in).
+    assert!(runtime.automation_in_own_folder(&id));
+    assert!(!runtime.automation_in_own_folder("missing"));
     let registration =
         crate::workspace::registration(&folder, "Issues", crate::node::TEST_NODE).unwrap();
     runtime
@@ -524,6 +529,7 @@ fn an_automations_own_folder_is_unlisted_until_the_automation_leaves_it() {
         "the folder's registration went with the automation"
     );
     assert!(!runtime.snapshot.navigator.workspaces[0].unlisted);
+    assert!(!runtime.automation_in_own_folder(&id));
 }
 
 // --- runs on workers ---------------------------------------------------

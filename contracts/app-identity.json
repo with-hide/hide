@@ -1,0 +1,13 @@
+{
+  "identifier": "me.grab.hide.desktop",
+  "name": "hide",
+  "requirement": "identifier \"me.grab.hide.desktop\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = GH6F6ZA497",
+  "usage": {
+    "NSAudioCaptureUsageDescription": "This app needs access to audio capture",
+    "NSBluetoothAlwaysUsageDescription": "This app needs access to Bluetooth",
+    "NSBluetoothPeripheralUsageDescription": "This app needs access to Bluetooth",
+    "NSCameraUsageDescription": "This app needs access to the camera",
+    "NSLocalNetworkUsageDescription": "Hide connects directly to your other computers on this network.",
+    "NSMicrophoneUsageDescription": "This app needs access to the microphone"
+  }
+}

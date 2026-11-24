@@ -2742,6 +2742,7 @@ fn the_nodes_own_holders_refuse_the_engines_typing_into_a_pane_none_runs() {
         hide_kit::holders::Source {
             program: home.path().join("hide-holder"),
             conpty: None,
+            identity: None,
         },
         Arc::clone(&reports),
     )

@@ -10,6 +10,7 @@ mod launchers;
 mod listeners;
 mod memory;
 mod path;
+mod privacy;
 mod process;
 mod programs;
 mod resident;
