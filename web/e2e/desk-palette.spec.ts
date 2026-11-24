@@ -60,6 +60,8 @@ test("⌘P on Desk with no session searches every project, and a pick opens as t
     await expect.poll(() => sent.get("desk_file") ?? 0).toBe(before + 1);
     // Desk stays the screen.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
+    await expect(page.locator("[data-desk-tab-panel]")).toBeVisible();
+    await screenshot(page, "palette-p-all-opened");
   } finally {
     daemon.stop();
     engine.stop();
@@ -86,6 +88,51 @@ test("⌘K on Desk lists the sessions, and Escape hands the screen back to Desk 
     await screenshot(page, "palette-k-desk");
     await page.keyboard.press("Escape");
     await expect(palette).toHaveCount(0);
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
+  } finally {
+    daemon.stop();
+    engine.stop();
+  }
+});
+
+test("⌘P with a session beside Desk searches its checkout and opens the file in the tab panel beside the session; ⌘↵ opens it to the side (B37)", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "desk-palette-session");
+  try {
+    const folder = path.join(engine.root, "fixture");
+    fs.mkdirSync(path.join(folder, "web", "src"), { recursive: true });
+    fs.writeFileSync(path.join(folder, "web", "src", "login-retry.ts"), "export const retry = 3;\n");
+    fs.writeFileSync(path.join(folder, "web", "src", "login-retry.test.ts"), "export {};\n");
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDeskOn(page);
+    await page.locator("[data-desk-sidebar-row]").click();
+    await page.locator(`[data-agent-open="${engine.panes[0]}"]`).click();
+    await expect(page.locator("[data-desk-room]")).toHaveAttribute("data-desk-room", "session");
+
+    await page.keyboard.press(chord("open_file"));
+    const palette = page.locator('[data-palette="Open file"]');
+    await expect(palette.locator("[data-palette-input]")).toHaveAttribute("placeholder", "Search files by name");
+    await palette.locator("[data-palette-input]").fill("login-retry");
+    await expect(palette.locator("[data-palette-row]")).toHaveCount(2);
+    await screenshot(page, "palette-p-session");
+    await page.keyboard.press("Enter");
+    await expect(palette).toHaveCount(0);
+    const panel = page.locator("[data-desk-tab-panel]");
+    await expect(panel).toBeVisible();
+    await expect(page.locator("[data-desk-tab]")).toHaveCount(1);
+    await screenshot(page, "palette-p-session-opened");
+
+    await page.keyboard.press(chord("open_file"));
+    await palette.locator("[data-palette-input]").fill("login-retry.test");
+    await expect(palette.locator("[data-palette-row]")).toHaveCount(1);
+    await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
+    await expect(palette).toHaveCount(0);
+    await expect(page.locator("[data-desk-tab]")).toHaveCount(2);
+    await screenshot(page, "palette-p-session-beside");
+    // Desk stays the screen.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
   } finally {
     daemon.stop();
