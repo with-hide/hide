@@ -1232,7 +1232,9 @@ fn left_line(device: &str, condition: &Value) -> String {
             "{stays}: it has no systemd, so nothing starts its Hide again. In a WSL distribution turn systemd on (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {then}.\n"
         ),
         (Some("windows"), _) => {
-            format!("{stays}: a Windows machine is not switched to its own Hide yet.\n")
+            format!(
+                "{stays}: a Windows machine is not switched to its own Hide yet. To use it as a server, install Hide on that PC, remove this device, then connect the two from Add device.\n"
+            )
         }
         _ => format!(
             "{stays}: its machine did not say whether its Hide would be back after a restart.\n"

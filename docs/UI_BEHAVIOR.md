@@ -3268,7 +3268,7 @@ An update switches no device, and neither does a start or a connection: nothing 
 A device row carries one outline mark beside its name for how it is reached, `SSH`, `WSL` or, once it was switched, `서버`; a computer paired by a link carries none.
 On this computer's own window a marked row opens when it is pressed, and a row opened stays open until Settings › Devices is left; any other window shows the mark and opens nothing.
 Opened, the row shows one bordered box under it: the two ways as two rows, `SSH로 바로 연결` (`WSL로 바로 연결` for a distribution) and `서버로 연결`, each with one sentence of what it is for and `지금` on the one in use; then `대신`, `서버로 연결하면 메모리, 상시 지침, 폰 연결은 그 기기에서 따로 해요`; then `조건`, what that machine was read as, with the `서버로 연결` button under it.
-A Windows device shows one line in the box's place, `SSH로 연결돼 있어요. Windows는 아직 서버로 연결할 수 없어요.`, and nothing to press.
+A Windows device shows one faint line in the box's place and nothing to press, in 1.3.0 (operator decision 2026-11-24): `Windows는 아직 버튼으로 서버로 연결할 수 없어요 · 서버로 쓰려면 그 PC에 Hide를 설치하고, 이 기기를 뺀 뒤 기기 추가에서 연결해요`; `hide device switch` leaves it with the same words ([INSTALL.md](INSTALL.md), What each system supports).
 Opening the row reads the machine once over the device's own login, an `ssh` that asks nobody, and changes nothing there (`pairing_look_switch`); the place says `확인하는 중` until it answers, what was read stays while the row is open, and opening it again reads again.
 A device that is not connected is not read and says `연결되면 확인해요`.
 What was read decides the button, in one place hided owns (`pairing_ssh::Condition`), which `hide device switch` passes too:

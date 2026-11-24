@@ -188,6 +188,7 @@ The row says what that machine needs first:
 - A Linux machine needs lingering for your user. hide turns it on when your account may; when it may not, hide shows the command an administrator runs there.
 - A WSL distribution needs systemd: set `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown`.
 - A machine whose SSH login asks for a password cannot be connected this way. Set up a key first.
+- A Windows PC cannot be connected with the button yet. To use it as a server, install hide on that PC, remove the machine here, then connect the two from **+ Add device**.
 
 Until then the machine keeps working over SSH as before, and an update switches no machine by itself.
 

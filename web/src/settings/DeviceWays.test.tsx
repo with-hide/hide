@@ -160,7 +160,7 @@ it("asks a Linux account to linger only on the press, and names the command once
 it("reads no machine it cannot switch or reach: a Windows device says so in one line, and one that is not connected waits", async () => {
   const windows = await mount([helper({ host: host("windows x86_64") })]);
   await windows.press(FOLD);
-  expect(windows.q('[data-device-ways="mini:windows"]')?.textContent).toBe("Connected over SSH. Windows cannot be connected as a server yet.");
+  expect(windows.q('[data-device-ways="mini:windows"]')?.textContent).toBe("Windows cannot be connected as a server with a button yet · to use it as a server, install Hide on that PC, remove this device, then connect from Add device");
   expect(windows.asked("pairing_look_switch")).toEqual([]);
   await windows.unmount();
   const down = await mount([helper({ state: "unavailable" })]);
