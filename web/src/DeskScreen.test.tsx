@@ -324,7 +324,7 @@ describe("Desk's room", () => {
 
     // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
     for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
-    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "m-1", title: "1.3.0" }], preview: null, active: "mission:m-1", explorer: false } })));
+    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false } })));
     expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
     // Escape runs the innermost layer the shell's Escape owner holds, as keyboard.ts does.
     const escape = () => act(async () => { useUiStore.getState().escapeLayers.at(-1)!(); });
