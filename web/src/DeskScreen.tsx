@@ -196,7 +196,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (files.length > 0 && !stagedOrRefused) return;
     const staged = stagedOrRefused;
     // The pictures this window sent stay drawn on their bubble while the page lives.
-    if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.preview ? file.bytes : null));
+    if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.image));
     setNotice(null);
     pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null };
     lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };

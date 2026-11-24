@@ -131,10 +131,10 @@ function sceneTray(files: readonly TrayFile[]): ComposerTray {
   return { files, add: noop, remove: noop, outgoing: () => null, clear: noop };
 }
 
-/** A sent picture's bytes, so its bubble draws it as this window's own send would. */
-function sampleBytes(): Uint8Array {
+/** A sent picture, so its bubble draws it as this window's own send would. */
+function samplePicture(): Blob {
   const data = sampleShot();
-  return Uint8Array.from(atob(data.slice(data.indexOf(",") + 1)), (char) => char.charCodeAt(0));
+  return new Blob([decodeURIComponent(data.slice(data.indexOf(",") + 1))], { type: "image/svg+xml" });
 }
 
 /** A thread in the lane's tool column: its head, read as a pane's, and the thread under it. */
@@ -301,7 +301,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       // B41, B42 (Doop ⑦-b, ⑦-c): a sent message with its picture and file over the bubble; Desk's box with a picture and a file past
       // the cap, which holds send; the session's box with a file still being read in.
       const stage = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b-0";
-      keepSent(stage, "끊김.png", sampleBytes());
+      keepSent(stage, "끊김.png", samplePicture());
       const sent: DeskItem[] = [{ kind: "user", id: 61, text: "이 화면이랑 로그 보고 왜 끊기는지 봐 줘", at_ms: now - 60_000, mentions: [], attachments: [
         { name: "끊김.png", bytes: 182_000, path: `/state/attachments/${stage}-끊김.png` },
         { name: "설치-로그.txt", bytes: 84_000, path: "/state/attachments/6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b-1-설치-로그.txt" },

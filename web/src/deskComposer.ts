@@ -178,8 +178,8 @@ export type ComposerTray = {
   files: readonly TrayFile[];
   add: (files: readonly File[]) => void;
   remove: (id: string) => void;
-  /** The files' names and bytes with their thumbnails, or null while the tray holds the send (`traySendable`). */
-  outgoing: () => (AttachmentInput & { preview: string | null })[] | null;
+  /** The files' names and bytes, each picture also as an image the sent bubble can draw, or null while the tray holds the send (`traySendable`). */
+  outgoing: () => (AttachmentInput & { image: Blob | null })[] | null;
   clear: () => void;
 };
 
@@ -191,7 +191,7 @@ export type ComposerTray = {
  */
 export function useComposerTray(): ComposerTray {
   const [files, setFiles] = useState<TrayFile[]>([]);
-  const bytes = useRef(new Map<string, Uint8Array>());
+  const bytes = useRef(new Map<string, { bytes: Uint8Array; type: string }>());
   const live = useRef(files);
   live.current = files;
   const release = (file: TrayFile) => {
@@ -228,7 +228,7 @@ export function useComposerTray(): ComposerTray {
       whole.set(part, at);
       at += part.byteLength;
     }
-    bytes.current.set(id, whole);
+    bytes.current.set(id, { bytes: whole, type: file.type });
     update(id, { state: "ready", read: total });
   };
   return {
@@ -242,7 +242,10 @@ export function useComposerTray(): ComposerTray {
     outgoing: () => {
       const ready = traySendable(live.current);
       if (!ready) return null;
-      return ready.map((file) => ({ name: safeName(file.name), bytes: bytes.current.get(file.id)!, preview: file.preview }));
+      return ready.map((file) => {
+        const read = bytes.current.get(file.id)!;
+        return { name: safeName(file.name), bytes: read.bytes, image: file.preview ? new Blob([read.bytes as BlobPart], { type: read.type }) : null };
+      });
     },
     clear: () => {
       live.current.forEach(release);
@@ -263,8 +266,8 @@ export function useComposerTray(): ComposerTray {
 const SENT_KEPT = 32;
 const sentFiles = new Map<string, { name: string; preview: string | null }>();
 
-export function keepSent(stage: string, name: string, image: Uint8Array | null): void {
-  sentFiles.set(stage, { name, preview: image ? URL.createObjectURL(new Blob([image as BlobPart])) : null });
+export function keepSent(stage: string, name: string, image: Blob | null): void {
+  sentFiles.set(stage, { name, preview: image ? URL.createObjectURL(image) : null });
   while (sentFiles.size > SENT_KEPT) {
     const [oldest, kept] = sentFiles.entries().next().value!;
     if (kept.preview) URL.revokeObjectURL(kept.preview);

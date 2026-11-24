@@ -99,7 +99,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
     if (request) {
       // The bubble the record will show names these files by their stages, here and on a device.
-      files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.preview ? file.bytes : null));
+      files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
       setSent(request);
       setNotice(null);
     }
