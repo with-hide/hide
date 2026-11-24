@@ -386,6 +386,15 @@ impl Runtime {
         self.automations.book.cleanups.clone()
     }
 
+    /// Whether the automation `id` runs in the folder Hide made for it
+    /// (`Folder::default`), whose agent's folder trust a run's spawn records.
+    pub(crate) fn automation_in_own_folder(&self, id: &str) -> bool {
+        self.automations
+            .book
+            .find(id)
+            .is_some_and(|automation| automation.folder.default)
+    }
+
     /// The automations the book holds, as a test reads them.
     #[cfg(test)]
     pub(super) fn automation_book(&self) -> Vec<crate::automations::Automation> {

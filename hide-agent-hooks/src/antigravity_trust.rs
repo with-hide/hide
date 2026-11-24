@@ -2,7 +2,7 @@
 //! agy loads a folder's own hook file only for a folder it trusts, so the
 //! folder Hide AI runs agy in is made with its refuse-every-tool hook file and
 //! recorded in agy's trust list through [`crate::folder_trust`], beside the
-//! worktrees Hide makes. Switching agy off takes both out.
+//! folders Hide starts agents in. Switching agy off takes both out.
 
 use std::io;
 use std::path::Path;
