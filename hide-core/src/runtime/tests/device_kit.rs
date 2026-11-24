@@ -656,15 +656,14 @@ fn a_device_gets_the_agents_this_mac_could_not_offer_on() {
 /// An answer kept from an earlier run is sent only with this Mac's agents
 /// known: a device that reports before this Mac's first pass of the run
 /// waits for that pass, so an agent the operator left off here is not read
-/// as one this Mac lacks.
+/// as one this Mac lacks. A call that fails leaves the device waiting for its
+/// own next report, not for this Mac's next pass, which Settings reads every
+/// few seconds.
 #[test]
 fn a_device_that_reports_before_this_macs_first_pass_waits_for_it() {
     use crate::model::AgentOnboarding::Done;
     use hide_kit::Availability::Available;
-    let helper = KitDevice::answering(Ok(ran(report(&[(
-        ComponentId::Cli,
-        ComponentState::Installed,
-    )]))));
+    let helper = KitDevice::answering(Err("the device went away".to_owned()));
     let shared = with_consent(Some(Arc::clone(&helper)));
     {
         let mut runtime = shared.lock().unwrap();
@@ -684,21 +683,37 @@ fn a_device_that_reports_before_this_macs_first_pass_waits_for_it() {
     settle(&shared);
     assert!(device_calls(&helper).is_empty());
 
+    let this_mac = pass_with(
+        false,
+        vec![
+            agent_report("claude-code", Available, true, ComponentState::Installed),
+            agent_report("codex", Available, false, ComponentState::Off),
+        ],
+    );
+    shared
+        .lock()
+        .unwrap()
+        .ingest_kit_report(crate::node::TEST_NODE, &this_mac);
+    settle(&shared);
+    let choice = first_run_apply(&["claude-code"], &["antigravity", "codex"]);
+    assert_eq!(device_calls(&helper), vec![choice.clone()]);
+
+    shared
+        .lock()
+        .unwrap()
+        .ingest_kit_report(crate::node::TEST_NODE, &this_mac);
+    settle(&shared);
+    assert_eq!(device_calls(&helper), vec![choice.clone()]);
+
     shared.lock().unwrap().ingest_kit_report(
-        crate::node::TEST_NODE,
+        DEVICE,
         &pass_with(
-            false,
-            vec![
-                agent_report("claude-code", Available, true, ComponentState::Installed),
-                agent_report("codex", Available, false, ComponentState::Off),
-            ],
+            true,
+            vec![agent_report("codex", Available, false, ComponentState::Off)],
         ),
     );
     settle(&shared);
-    assert_eq!(
-        device_calls(&helper),
-        vec![first_run_apply(&["claude-code"], &["antigravity", "codex"])]
-    );
+    assert_eq!(device_calls(&helper), vec![choice.clone(), choice]);
 }
 
 #[test]

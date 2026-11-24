@@ -746,6 +746,7 @@ impl Runtime {
             return false;
         }
         let here = installed(report.agents.iter().map(|a| (&a.id, a.availability)));
+        let first_listing = self.installed_here().is_none();
         let before = self.snapshot.ui_state.agent_onboarding;
         let after = if report.held_for_onboarding {
             // An Apply just pressed has its install queued here: a report that
@@ -763,8 +764,10 @@ impl Runtime {
         let opened = after == AgentOnboarding::Pending && self.open_first_run();
         if before == Some(after) {
             // An answer kept from an earlier run: a device that reported
-            // before this Mac's first pass of this run waits for it.
-            if after == AgentOnboarding::Done {
+            // before this Mac's first pass of this run waits for that pass.
+            // Only that one, since a device waits again after a call that
+            // failed, which its own next report sends again.
+            if after == AgentOnboarding::Done && first_listing {
                 self.send_first_run_choice_to_waiting_devices(&here);
             }
             if opened {
