@@ -249,6 +249,8 @@ async fn a_guest_holder_child_cannot_become_the_host_operator_without_hints() {
         login["access"]["key"] = json!("b".repeat(64));
         let mut config = configuration_at(&work);
         config["requests"] = json!([login]);
+        // The holder below keeps its image, unlike the one above.
+        config["delete_image"] = json!(false);
         std::fs::write(work.join("probe.json"), config.to_string()).unwrap();
         let outside = run(command(&probe, UNNAMED, &work));
         assert_eq!(outside[0]["ok"], true, "{outside:?}");
