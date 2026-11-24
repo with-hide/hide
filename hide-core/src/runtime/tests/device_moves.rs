@@ -3,7 +3,7 @@
 //! device is asked for, when, and what stops it from being asked again.
 //! hided runs the switch itself; the core only says a device is due.
 
-use super::device_kit::{DEVICE, KitDevice, dispatch, established, report, with_consent};
+use super::device_kit::{DEVICE, KitDevice, dispatch, established, report, settle, with_consent};
 use super::*;
 use crate::model::{DeviceSwitchState, DialedBy};
 use hide_kit::{ComponentId, ComponentState, KitReport};
@@ -34,6 +34,23 @@ fn listed(shared: &Mutex<Runtime>) {
         .ui_state
         .device_moves_due
         .insert(DialedBy::Ssh(DEVICE.to_owned()));
+}
+
+/// `DEVICE` has connected before, so it goes by its machine's id: a device
+/// a connection of this test does not name itself.
+fn named(shared: &Mutex<Runtime>) {
+    let mut runtime = shared.lock().unwrap();
+    let registration = runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .iter_mut()
+        .find(|registration| registration.id == DEVICE)
+        .expect("the device");
+    registration.origin = crate::model::LinkOrigin::Dialed {
+        ssh_alias: DEVICE.to_owned(),
+        naming: crate::model::DeviceNaming::Named,
+    };
 }
 
 fn is_listed(shared: &Mutex<Runtime>) -> bool {
@@ -132,6 +149,52 @@ fn a_device_an_earlier_build_added_is_moved_when_its_helper_connects() {
     assert_eq!(switch_of(&shared), None);
     connects(&shared, kit_in_place());
     assert_eq!(asked.count(), 3);
+}
+
+/// A connection that installs nothing itself leaves the kit to the device's
+/// worker, as every connection but a first one does: the device is asked
+/// for when that pass answers, not when a read of the kit does, and not
+/// when the pass stopped before it changed anything.
+#[test]
+fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
+    let installed = report(&[(ComponentId::Cli, ComponentState::Installed)]);
+    let shared = with_consent(Some(KitDevice::answering(Ok(installed))));
+    let asked = moved_by(&shared);
+    listed(&shared);
+    named(&shared);
+    let pass = |job: KitJob| {
+        shared.lock().unwrap().queue_device_kit(DEVICE, job);
+        settle(&shared);
+    };
+    pass(KitJob::Status);
+    assert_eq!(asked.count(), 0, "a read of the kit installed nothing");
+    pass(KitJob::Apply(hide_kit::Scope::automatic()));
+    assert_eq!(*asked.0.lock().unwrap(), [DEVICE]);
+
+    let refused = KitReport {
+        refused: Some(Box::new(hide_kit::KitRefusal {
+            cause: hide_kit::RefusalCause::Busy,
+            path: None,
+            variable: None,
+            stop: None,
+            detail: "another Hide was changing the kit".to_owned(),
+        })),
+        ..Default::default()
+    };
+    let shared = with_consent(Some(KitDevice::answering(Ok(refused))));
+    let asked = moved_by(&shared);
+    listed(&shared);
+    named(&shared);
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    settle(&shared);
+    assert_eq!(
+        asked.count(),
+        0,
+        "a pass that was refused installed nothing"
+    );
 }
 
 /// A device this build registered was never listed, one added to be

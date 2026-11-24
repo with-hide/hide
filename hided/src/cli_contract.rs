@@ -1448,9 +1448,9 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         needs_one_of: &[],
         options: &[
-            switch("--install"),
-            switch("--own-folder"),
-            switch("--keep"),
+            exclusive("--install", &["--keep"]),
+            exclusive("--own-folder", &["--keep"]),
+            exclusive("--keep", &["--install", "--own-folder"]),
             switch("--json"),
         ],
         rest: None,

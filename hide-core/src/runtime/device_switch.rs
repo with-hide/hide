@@ -271,11 +271,22 @@ impl Runtime {
         self.device_mover = Some(mover);
     }
 
-    /// The helper of `device_id` connected with this build's kit in place:
-    /// a device that is due to move is switched now, with nobody asked.
-    /// Once per connection, so a switch that stopped is tried again when
-    /// the helper next connects, and never while one runs, waits for the
-    /// operator or is being saved.
+    /// A pass that installs this build's kit on `device_id` answered: every
+    /// connection runs one, itself or on the device's kit worker, and a
+    /// repair is one too. Unless it stopped before changing anything, the
+    /// `hide` a switch runs there is this build's from here on, so a
+    /// device that is due to move is switched now.
+    pub(crate) fn kit_applied(&mut self, device_id: &str, report: &hide_kit::KitReport) {
+        if report.refused.is_none() {
+            self.move_when_ready(device_id);
+        }
+    }
+
+    /// This build's kit is in place on `device_id`: a device that is due
+    /// to move is switched now, with nobody asked. Asked for after each
+    /// such pass, so a switch that stopped is tried again when the helper
+    /// next connects, and never while one runs, waits for the operator or
+    /// is being saved.
     pub(super) fn move_when_ready(&mut self, device_id: &str) {
         let due = self
             .device_registration(device_id)

@@ -1230,17 +1230,15 @@ impl Runtime {
                     {
                         self.device_kit_pending.remove(device_id);
                     }
-                    // The `hide` a switch runs there is this build's only
-                    // once the connection's kit is in place.
-                    let kit_in_place = report.is_ok();
+                    let applied = report.clone().ok();
                     self.ingest_device_kit_answer(
                         device_id,
                         super::DeviceKitAnswer::Report(report),
                         None,
                     );
                     self.start_device_kit(device_id);
-                    if kit_in_place {
-                        self.move_when_ready(device_id);
+                    if let Some(report) = applied {
+                        self.kit_applied(device_id, &report);
                     }
                 } else {
                     self.queue_device_kit(

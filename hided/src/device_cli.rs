@@ -1193,7 +1193,17 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
                         guest_lines(guest)
                     )
                 }))
-                .chain(devices.iter().map(device_line))
+                // A paired machine's device is that machine's line above,
+                // as Settings lists it (`listedDevices` in the web shell):
+                // one machine, one line. A device that was switched to its
+                // machine's own Hide is such a device, dialed over SSH no
+                // more.
+                .chain(
+                    devices
+                        .iter()
+                        .filter(|device| !peers.iter().any(|peer| peer["id"] == device["id"]))
+                        .map(device_line),
+                )
                 .collect()
         }
         DeviceCommand::Add { .. } => format!(
@@ -1474,6 +1484,72 @@ mod tests {
         assert!(parse_words(&["add", "a", "--name"]).is_err());
         assert!(parse_words(&["list", "--name", "x"]).is_err());
         assert!(parse_words(&["add", "studio", "--socket", "/x"]).is_err());
+    }
+
+    /// The operator's decision of 2026-11-24: a device that moved to its
+    /// machine's own Hide has one row. The core still answers its device,
+    /// which serves its panes, and the list draws the paired machine alone;
+    /// a device the core dials itself keeps its own line.
+    #[test]
+    fn the_list_draws_a_switched_device_once_as_its_paired_machine() {
+        let text = draw(
+            &DeviceCommand::List,
+            &json!({
+                "devices": [
+                    {"id": "mini-id", "label": "Mac mini", "ssh_alias": null, "state": "connected"},
+                    {"id": "build-box", "label": "build-box", "ssh_alias": "build", "state": "connected"},
+                ],
+                "peers": [
+                    {"id": "mini-id", "name": "Mac mini", "connection_id": "aa", "connected": true,
+                        "path": "direct", "opens": "active"},
+                ],
+                "guest_panes": [],
+            }),
+        );
+        assert_eq!(
+            text,
+            "mini-id  Mac mini  connected · direct\n  this machine opens it: active\nbuild-box  build-box  ssh build  connected\n"
+        );
+    }
+
+    /// A switch takes what the operator allows, one answer at a time:
+    /// keeping the old connection starts nothing, so it goes with neither
+    /// an install nor a folder of this machine's own.
+    #[test]
+    fn switch_takes_one_device_and_keep_goes_with_no_other_answer() {
+        let switch = |install, own_folder, keep| {
+            Ok(DeviceCli {
+                verb: Verb::Switch {
+                    device: "studio".into(),
+                    install,
+                    own_folder,
+                    keep,
+                },
+                json: false,
+                wait: false,
+            })
+        };
+        assert_eq!(
+            parse_words(&["switch", "studio"]),
+            switch(false, false, false)
+        );
+        assert_eq!(
+            parse_words(&["switch", "studio", "--install", "--own-folder"]),
+            switch(true, true, false)
+        );
+        assert_eq!(
+            parse_words(&["switch", "--keep", "studio"]),
+            switch(false, false, true)
+        );
+        for refused in [
+            &["switch", "studio", "--keep", "--own-folder"][..],
+            &["switch", "studio", "--install", "--keep"],
+            &["switch", "studio", "--keep", "--keep"],
+            &["switch"],
+            &["list", "--keep"],
+        ] {
+            assert!(parse_words(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
