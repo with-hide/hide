@@ -337,22 +337,11 @@ impl RunResult {
     /// `automation_run_result_open`: a short token of what it shows (kind,
     /// address and a diff's group), stable while the list moves.
     pub fn key(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let kept = &self.kept;
-        let digest = Sha256::digest(
-            serde_json::to_vec(&(kept.kind, &kept.address, kept.committed))
-                .expect("a result's key is plain text"),
-        );
-        digest[..8]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        self.kept.token()
     }
 
     fn shows_same(&self, other: &Self) -> bool {
-        self.kept.kind == other.kept.kind
-            && self.kept.address == other.kept.address
-            && self.kept.committed == other.kept.committed
+        self.kept.same_view(&other.kept)
     }
 }
 

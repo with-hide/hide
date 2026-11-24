@@ -667,6 +667,32 @@ impl Runtime {
         }
     }
 
+    /// Whether the View `display_id` is a run's summary card, which is fixed
+    /// on its run's desk: it is not closed (by the window or by `hide view
+    /// close`) and does not go to another desk, and a refusal says which
+    /// (`view_layout.run_summary_refused`). Moving it inside its desk and
+    /// splitting it are the layout's own refusals (`AreaItem::pinned`).
+    pub(super) fn refuse_fixed_view(
+        &self,
+        key: &WorkspaceKey,
+        display_id: &str,
+        action: &str,
+    ) -> bool {
+        let fixed = self
+            .view_display(key, display_id)
+            .is_some_and(|display| display.is_run_summary());
+        if fixed {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas",
+                "kind": "view_layout.run_summary_refused",
+                "device": key.0,
+                "display": display_id,
+                "action": action,
+            }));
+        }
+        fixed
+    }
+
     /// Moves the View `id` of `key` onto `place` (D-20: one View, one desk),
     /// making room there first. Whether it moved.
     pub(super) fn bring_view_to(&mut self, key: &WorkspaceKey, id: &str, place: &Place) -> bool {
@@ -674,16 +700,7 @@ impl Runtime {
             Some(from) if &from != place => from,
             _ => return false,
         };
-        if self
-            .view_display(key, id)
-            .is_some_and(|display| display.is_run_summary())
-        {
-            crate::diagnostic!(serde_json::json!({
-                "component": "view_areas",
-                "kind": "view_layout.run_summary_move_refused",
-                "device": key.0,
-                "display": id,
-            }));
+        if self.refuse_fixed_view(key, id, "move") {
             return false;
         }
         if !self.make_view_room(key, place) {
@@ -2773,13 +2790,7 @@ impl Runtime {
         let Some(display) = self.view_display(key, display_id) else {
             return self.close_absent_display(key, display_id);
         };
-        if display.is_run_summary() {
-            crate::diagnostic!(serde_json::json!({
-                "component": "view_areas",
-                "kind": "view_layout.run_summary_close_refused",
-                "device": key.0,
-                "display": display_id,
-            }));
+        if self.refuse_fixed_view(key, display_id, "close") {
             return false;
         }
         let (path, kind, committed) = (display.path.clone(), display.kind, display.committed);

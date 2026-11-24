@@ -3817,3 +3817,98 @@ fn the_focus_the_window_moves_to_a_shown_runs_pane_lays_its_desk() {
         "a run the screen does not show gets no desk laid"
     );
 }
+
+/// An agent's own `hide view close` meets the same refusal as the window's
+/// close, and the summary is not among the Views it lists.
+#[test]
+fn an_agent_cannot_close_a_run_summary_and_does_not_see_it_listed() {
+    let (mut runtime, checkout, directory) = setup("run-summary-agent");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    run_shown(&mut runtime, 1, true);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "opened");
+    runtime.sync_workspace_view();
+    let summary = runtime
+        .view_displays(&key(&directory))
+        .find(|display| display.is_run_summary())
+        .expect("the card is placed")
+        .id
+        .clone();
+
+    let listed_ids = listed(&runtime, "w-order:t2:p");
+    assert_eq!(
+        listed_ids.len(),
+        1,
+        "only the agent's file is listed: {listed_ids:?}"
+    );
+    assert!(!listed_ids.contains(&summary));
+
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "w-order:t2:p", Query::Info)
+        .unwrap()
+        .context;
+    let refused = runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            "w-order:t2:p",
+            &expected,
+            &format!("{}-close-summary", unix_milliseconds()),
+            Action::Close {
+                view_id: summary.clone(),
+                expected_browser_area: None,
+            },
+            Ok(None),
+        )
+        .unwrap_err();
+    assert_eq!(refused.reason, "view_fixed");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        desk_marks(&runtime, &directory, TABS[1]),
+        ["summary", "a.md"]
+    );
+}
+
+/// A result opens only on the desk in front: with the run's tab behind
+/// another, the press is refused and nothing moves.
+#[test]
+fn a_result_of_a_run_whose_desk_is_behind_opens_nothing() {
+    let (mut runtime, _checkout, directory) = setup("run-result-behind");
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "opened");
+    runtime.sync_workspace_view();
+    let a = result_key(&runtime, 1, "a.md");
+    let before = desk_marks(&runtime, &directory, TABS[1]);
+
+    assert_eq!(
+        automation_call(
+            &mut runtime,
+            serde_json::json!({"call": "run_result_open", "id": "auto-1", "run": 1, "key": a}),
+        ),
+        Err("automation_run_desk_not_in_front".to_owned())
+    );
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), before);
+}
+
+/// A run that opens more Views than the cap while it goes keeps the newest
+/// `RESULT_CAP`, the oldest dropped first, and each once.
+#[test]
+fn a_running_run_that_opens_more_than_the_cap_keeps_the_newest() {
+    let (mut runtime, checkout, directory) = setup("run-results-cap");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    run_shown(&mut runtime, 1, true);
+    let total = crate::automations::RESULT_CAP + 3;
+    for index in 0..total {
+        let name = format!("n{index:02}.md");
+        std::fs::write(directory.join(&name), "x\n").expect("fixture");
+        control_file(&mut runtime, "w-order:t2:p", &directory, &name, &name);
+        runtime.sync_workspace_view();
+    }
+    let kept = result_names(&runtime, 1);
+    assert_eq!(kept.len(), crate::automations::RESULT_CAP);
+    assert_eq!(kept.first().map(String::as_str), Some("n03.md"));
+    assert_eq!(
+        kept.last().map(String::as_str),
+        Some(format!("n{:02}.md", total - 1).as_str())
+    );
+}

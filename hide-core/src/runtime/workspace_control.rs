@@ -839,6 +839,12 @@ impl Runtime {
                 (view_id.clone(), false, None)
             }
             Action::Close { view_id, .. } => {
+                if self.refuse_fixed_view(key, view_id, "close") {
+                    return Err(Refusal {
+                        reason: "view_fixed",
+                        next_action: "A run's summary stays on its desk; close the Views its agent opened instead",
+                    });
+                }
                 let Some(display) = self.view_display(key, view_id).cloned() else {
                     return Ok(ActionResult {
                         context: context.clone(),
@@ -1101,65 +1107,69 @@ impl Runtime {
                         .map(move |area| (in_front, layout, area))
                 })
                 .flat_map(|(in_front, layout, area)| {
-                    area.displays.iter().map(move |display| View {
-                        area_id: area.id.clone(),
-                        view_id: display.id.clone(),
-                        kind: match display.kind {
-                            DisplayKind::File => "file",
-                            DisplayKind::Diff => "diff",
-                            DisplayKind::Browser => "browser",
-                            DisplayKind::External => "external",
-                            DisplayKind::Card => "card",
-                        },
-                        // An outside file's path stays in the operator's
-                        // window; an agent reads that a View is there and
-                        // nothing of the file (PRD outside-path-in-hide D-09).
-                        target: display.url.as_ref().unwrap_or(&display.path).clone(),
-                        selected: area.active.as_deref() == Some(display.id.as_str()),
-                        active_area: in_front && layout.active_area().id == area.id,
-                        page: (display.kind == DisplayKind::Browser).then(|| {
-                            let reported = self
-                                .browser_pages
-                                .get(&(
-                                    context.device_id.clone(),
-                                    context.checkout_path.clone(),
-                                    display.id.clone(),
-                                ))
-                                .filter(|page| page.load == display.load);
-                            crate::workspace_control::BrowserPage {
-                                load: display.load,
-                                state: match reported {
-                                    None => "pending",
-                                    // The host unloaded the page (hidden and idle,
-                                    // or past its live-page cap); it loads again
-                                    // when shown or driven.
-                                    Some(page) if !page.present => "unloaded",
-                                    Some(page) if page.failure.is_some() => "failed",
-                                    Some(page) if page.loading => "loading",
-                                    Some(_) => "loaded",
-                                },
-                                failure: reported.and_then(|page| page.failure.clone()),
-                            }
-                        }),
-                        openers: display
-                            .openers
-                            .iter()
-                            .map(|opener| {
-                                let now = self.view_opener_snapshot(opener);
-                                crate::workspace_control::ViewOpener {
-                                    name: now.name,
-                                    provider: now.provider,
-                                    session: opener.resume.clone(),
-                                    pane_id: now.pane_id,
-                                    here: caller_session
-                                        .as_ref()
-                                        .is_some_and(|scope| opener.of_session(scope)),
+                    // A run's summary is the operator's page, not a View an agent can act on: it cannot be closed or moved, so it is not listed.
+                    area.displays
+                        .iter()
+                        .filter(|display| !display.is_run_summary())
+                        .map(move |display| View {
+                            area_id: area.id.clone(),
+                            view_id: display.id.clone(),
+                            kind: match display.kind {
+                                DisplayKind::File => "file",
+                                DisplayKind::Diff => "diff",
+                                DisplayKind::Browser => "browser",
+                                DisplayKind::External => "external",
+                                DisplayKind::Card => "card",
+                            },
+                            // An outside file's path stays in the operator's
+                            // window; an agent reads that a View is there and
+                            // nothing of the file (PRD outside-path-in-hide D-09).
+                            target: display.url.as_ref().unwrap_or(&display.path).clone(),
+                            selected: area.active.as_deref() == Some(display.id.as_str()),
+                            active_area: in_front && layout.active_area().id == area.id,
+                            page: (display.kind == DisplayKind::Browser).then(|| {
+                                let reported = self
+                                    .browser_pages
+                                    .get(&(
+                                        context.device_id.clone(),
+                                        context.checkout_path.clone(),
+                                        display.id.clone(),
+                                    ))
+                                    .filter(|page| page.load == display.load);
+                                crate::workspace_control::BrowserPage {
+                                    load: display.load,
+                                    state: match reported {
+                                        None => "pending",
+                                        // The host unloaded the page (hidden and idle,
+                                        // or past its live-page cap); it loads again
+                                        // when shown or driven.
+                                        Some(page) if !page.present => "unloaded",
+                                        Some(page) if page.failure.is_some() => "failed",
+                                        Some(page) if page.loading => "loading",
+                                        Some(_) => "loaded",
+                                    },
+                                    failure: reported.and_then(|page| page.failure.clone()),
                                 }
-                            })
-                            .collect(),
-                        operator: display.operator || display.openers.is_empty(),
-                        unseen: display.unseen.is_some(),
-                    })
+                            }),
+                            openers: display
+                                .openers
+                                .iter()
+                                .map(|opener| {
+                                    let now = self.view_opener_snapshot(opener);
+                                    crate::workspace_control::ViewOpener {
+                                        name: now.name,
+                                        provider: now.provider,
+                                        session: opener.resume.clone(),
+                                        pane_id: now.pane_id,
+                                        here: caller_session
+                                            .as_ref()
+                                            .is_some_and(|scope| opener.of_session(scope)),
+                                    }
+                                })
+                                .collect(),
+                            operator: display.operator || display.openers.is_empty(),
+                            unseen: display.unseen.is_some(),
+                        })
                 })
                 .collect()
         });

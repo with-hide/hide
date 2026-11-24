@@ -34,7 +34,7 @@ use crate::automations::{
     RunWorktree, SkipReason, Stored, Trigger, Unreadable, attempt_intent, open_intent, reason_code,
 };
 use crate::latest_file::{LatestFile, read_capped};
-use crate::view_layout::KeptView;
+use crate::view_layout::{DisplayKind, KeptView};
 
 /// Hide's own identity the runs start under (D-22).
 pub(crate) const AUTOMATION_ROLE: &str = "automation";
@@ -2174,9 +2174,13 @@ impl Runtime {
     /// run. The word can come before the run has a pane or a tab (a run
     /// still starting), so the pane arriving is the second moment it is laid.
     pub(super) fn lay_viewed_run_desk(&mut self, pane: &str) {
+        // At most `VIEWING_CAP` runs are shown, so the pane is asked of those only.
         let Some(key) = self
-            .run_of_pane(pane)
-            .filter(|key| self.automations.viewing.contains_key(key))
+            .automations
+            .viewing
+            .keys()
+            .find(|(id, number)| self.viewed_run_pane(id, *number).as_deref() == Some(pane))
+            .cloned()
         else {
             return;
         };
@@ -2236,6 +2240,20 @@ impl Runtime {
             super::view_areas::display_label(display),
             RESULT_ADDRESS_LIMIT,
         ) else {
+            // A View with no address to open again (an outside file, a card)
+            // is quietly not a result; one whose address is too long is said.
+            let bytes = match display.kind {
+                DisplayKind::File | DisplayKind::Diff => display.path.len(),
+                DisplayKind::Browser => display.url.as_ref().map_or(0, String::len),
+                DisplayKind::External | DisplayKind::Card => 0,
+            };
+            if bytes > RESULT_ADDRESS_LIMIT {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "automations", "kind": "automation.result_not_kept",
+                    "automation": id, "run": number, "address_bytes": bytes,
+                    "limit": RESULT_ADDRESS_LIMIT,
+                }));
+            }
             return;
         };
         // The run's own agent is the opener, found again by its pane when a

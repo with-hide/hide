@@ -414,7 +414,33 @@ pub struct KeptView {
     pub opener: Option<crate::view_feedback::Opener>,
 }
 
+/// A short stable name for `text`: the first eight bytes of its SHA-256 in
+/// hex, which a row asks for its View by (a mission's link, a run's result).
+pub fn short_token(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 impl KeptView {
+    /// Whether `other` kept the same View: the same kind and address, and
+    /// for a diff the same Changes group.
+    pub fn same_view(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.address == other.address
+            && self.committed == other.committed
+    }
+
+    /// The name a row asks for this View by, stable while its list moves.
+    pub fn token(&self) -> String {
+        short_token(&format!(
+            "{:?}\0{}\0{}",
+            self.kind, self.address, self.committed
+        ))
+    }
+
     /// What `display`, titled `label`, can be opened again from; none for
     /// an outside file, which no address names, a card, or an address past
     /// `address_limit` bytes.

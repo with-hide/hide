@@ -1131,18 +1131,10 @@ impl ViewLink {
     /// checkouts' Views with the same display id apart without saying
     /// either path, which a phone never receives.
     pub fn token(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(
-            format!(
-                "{}\0{}\0{}",
-                self.device_id, self.checkout_path, self.display_id
-            )
-            .as_bytes(),
-        );
-        digest[..8]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        crate::view_layout::short_token(&format!(
+            "{}\0{}\0{}",
+            self.device_id, self.checkout_path, self.display_id
+        ))
     }
 }
 

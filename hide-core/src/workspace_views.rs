@@ -649,13 +649,6 @@ impl WorkspaceView {
         if &from == to {
             return Some(from);
         }
-        // A run's summary card stays on the desk of the run it summarizes.
-        if self
-            .view(id)
-            .is_some_and(|display| display.is_run_summary())
-        {
-            return None;
-        }
         if let Place::Tray(tab) = to {
             self.tray_entry(tab);
         }
