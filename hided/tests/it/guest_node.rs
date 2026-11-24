@@ -469,7 +469,7 @@ fn a_windows_hosts_node_starts_a_guests_pane_that_outlives_the_node_and_ends_whe
             )
             .unwrap(),
         );
-        let _: Hello = hide_node_link::call_as(&link, Call::Hello, WITHIN).unwrap();
+        let _: Hello = hide_node_link::call_as(&*link, Call::Hello, WITHIN).unwrap();
         let panes = LinkPanes::new(
             Arc::clone(&link),
             Arc::new(|record| eprintln!("guest pane record: {record}")),
