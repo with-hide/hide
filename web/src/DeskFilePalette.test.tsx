@@ -52,7 +52,7 @@ describe("⌘P on Desk", () => {
     await act(async () => { await clientI18n.changeLanguage("en"); });
     useShellStore.setState({
       rest, desk, agents: [],
-      fileIndexAll: { query: "", files: [file("/atorni", "src/token-guard.ts"), file("/ide", "web/src/token.ts")], truncated: false, indexing: false, unavailable: [] },
+      fileIndexAll: { query: "", files: [file("/atorni", "src/token-guard.ts"), file("/ide", "web/src/token.ts")], more: false, index_truncated: false, indexing: false, unavailable: [] },
     });
     useUiStore.setState({ screen: { kind: "desk" }, deskRoom: DESK_ROOM_CLOSED, overlay: "file_palette" });
   });

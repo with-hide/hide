@@ -4037,10 +4037,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
     },
 
-    /**
-     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
-     * project Desk named last, comes first in the answer.
-     */
     /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
     askPane(deviceId: string, paneId: string) {
       dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
@@ -4057,6 +4053,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return sent === false ? null : requestId;
     },
 
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
     requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
       dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },

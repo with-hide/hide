@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeskItem } from "./desk";
-import { deskFileScope, deskTabOf, lastNamedWorkspace, projectFileRows, type DeskFileHit } from "./deskPalette";
+import { deskFileScope, deskTabOf, lastNamedWorkspace, preferredRoot, projectFileRows, type DeskFileHit } from "./deskPalette";
 import type { SearchEntry } from "./search";
 import type { Checkout, DeskMention, SnapshotRest } from "./snapshot";
 
@@ -39,6 +39,14 @@ describe("the project Desk named last", () => {
   it("is none when no line names one, or the named one is not listed", () => {
     expect(lastNamedWorkspace(rest, [user(1, [])])).toBeNull();
     expect(lastNamedWorkspace(rest, [user(1, [{ kind: "project", id: "/gone", name: "gone" }])])).toBeNull();
+  });
+});
+
+describe("the project the core is asked to put first", () => {
+  it("is the named project's path on its device, and none without one", () => {
+    expect(preferredRoot(rest, "w-ide")).toEqual({ device_id: "local", root_path: "/ide" });
+    expect(preferredRoot(rest, null)).toBeNull();
+    expect(preferredRoot(rest, "w-gone")).toBeNull();
   });
 });
 

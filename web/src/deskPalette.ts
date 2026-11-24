@@ -51,6 +51,13 @@ export function lastNamedWorkspace(rest: SnapshotRest | null, items: readonly De
   return null;
 }
 
+/** The place the core is asked to put first: the project's primary checkout, which an all-projects search reads (`file_index_all`'s `prefer`). */
+export function preferredRoot(rest: SnapshotRest | null, workspaceId: string | null): { device_id: string; root_path: string } | null {
+  if (workspaceId === null) return null;
+  const found = listedCheckouts(rest).find((row) => row.workspace.id === workspaceId);
+  return found ? { device_id: found.device, root_path: found.workspace.path } : null;
+}
+
 /** One all-projects result as its row draws it: the muted `project ›`, the file's name and its folder. */
 export type ProjectFileRow = { hit: DeskFileHit; project: string; name: string; folder: string };
 

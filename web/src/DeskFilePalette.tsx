@@ -5,7 +5,7 @@ import { readFailureText } from "./fileFailure";
 import { holdsCommandKey } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { composingKey } from "./keys";
-import { deskFileScope, lastNamedWorkspace, projectFileRows, type DeskFileHit, type ProjectFileRow } from "./deskPalette";
+import { deskFileScope, lastNamedWorkspace, preferredRoot, projectFileRows, type DeskFileHit, type ProjectFileRow } from "./deskPalette";
 import { PaletteFileRow, PaletteShell } from "./Palette";
 import { fieldLabel } from "./shortcutLabels";
 import { useShellStore } from "./store";
@@ -30,24 +30,26 @@ export function DeskFilePalette({ actions }: { actions: Actions }) {
   const [highlighted, setHighlighted] = useState("");
   const timer = useRef<number | undefined>(undefined);
 
+  const named = scope.kind === "all" ? lastNamedWorkspace(rest, items ?? []) : null;
+  const prefer = preferredRoot(rest, named);
   const answer = scope.kind === "checkout" ? checkoutAnswer : allAnswer;
   const indexing = answer?.indexing ?? false;
   const unavailable = scope.kind === "checkout" ? (checkoutAnswer?.unavailable ?? null) : null;
-  const ask = () => (scope.kind === "checkout" ? actions.requestFileIndex(scope.root, query, scope.device) : actions.requestFileIndexAll(query));
+  const ask = () => (scope.kind === "checkout" ? actions.requestFileIndex(scope.root, query, scope.device) : actions.requestFileIndexAll(query, prefer ?? undefined));
   // The query is debounced to one request, and asked again while a walk still runs, as the app's palette does.
   useEffect(() => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(ask, 120);
     return () => window.clearTimeout(timer.current);
-  }, [device, root, query, actions]);
+  }, [device, root, query, prefer?.root_path, actions]);
   useEffect(() => {
     if (!indexing) return undefined;
     const poll = window.setTimeout(ask, 250);
     return () => window.clearTimeout(poll);
-  }, [device, root, query, indexing, answer, actions]);
+  }, [device, root, query, prefer?.root_path, indexing, answer, actions]);
 
   const hits: DeskFileHit[] = scope.kind === "checkout" ? (checkoutAnswer?.files ?? []).map((file) => ({ ...file, device_id: scope.device, root_path: scope.root })) : (allAnswer?.files ?? []);
-  const groups = scope.kind === "all" ? projectFileRows(rest, hits, lastNamedWorkspace(rest, items ?? [])) : null;
+  const groups = scope.kind === "all" ? projectFileRows(rest, hits, named) : null;
   const rows: ProjectFileRow[] | null = groups ? [...groups.named, ...groups.other] : null;
   const paths = rows ? rows.map((row) => row.hit.path) : hits.map((hit) => hit.path);
   const current = hits.find((hit) => hit.path === highlighted && paths.includes(hit.path)) ?? hits.find((hit) => hit.path === paths[0]);
@@ -83,7 +85,7 @@ export function DeskFilePalette({ actions }: { actions: Actions }) {
       footer={
         <span className="flex items-center gap-md">
           <span data-palette-hint="beside">{t("documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
-          {answer?.truncated ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
+          {(scope.kind === "checkout" ? checkoutAnswer?.truncated : allAnswer?.index_truncated) ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
         </span>
       }
     >
