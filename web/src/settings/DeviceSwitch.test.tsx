@@ -92,48 +92,61 @@ it("shows the step the switch is on in place of the button, then why it stopped 
   await unmount();
 });
 
-it("asks before a later computer's switch closes its terminals, and goes on with a folder of its own only on Switch (B69)", async () => {
-  const { events, q, answer, unmount } = await mount(helper(), { panes: 3 });
-  await act(async () => { q('[data-device-switch="mini"]')?.click(); });
-  await answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+// The core holds the question on the device, whoever asked for the switch:
+// a device that moved by itself with no window open asks in the first own
+// window that shows it, with nothing pressed there.
+const HELD: Device["switch"] = { state: "held", by: "Office Mac" };
+const kept = (events: Parameters<DispatchFn>[0][]) => switches(events).map((event) => ({ own_folder: event.payload.own_folder, keep: event.payload.keep }));
+
+it("asks before a later computer's switch closes its terminals with nothing pressed, and goes on with a folder of its own only on Switch (B69)", async () => {
+  const { events, q, show, unmount } = await mount(helper({ switch: HELD }), { panes: 3 });
   const dialog = q('[data-device-switch-held="mini"]')!;
   expect(dialog.textContent).toContain("Connect Mac mini the new way?");
   expect(dialog.textContent).toContain("Office Mac switched this device to the new connection first · 3 running terminals close · AI conversations can be resumed");
+  // The question is the dialog's: the strip draws no step and no button beside it.
+  expect(q("[data-device-switch-state]")).toBeNull();
   await act(async () => { q('[data-device-switch-held-go="true"]')?.click(); });
-  expect(switches(events).map((event) => event.payload.own_folder)).toEqual([undefined, true]);
+  expect(kept(events)).toEqual([{ own_folder: true, keep: undefined }]);
+  expect(q("[data-device-switch-held]")).toBeNull();
+  // The core heard it: the switch runs, and no second question shows.
+  await show(helper({ switch: { state: "checking" } }));
   expect(q("[data-device-switch-held]")).toBeNull();
   await unmount();
 });
 
-it("leaves the device as it was when the question is cancelled, and does not ask again for the same answer (B69)", async () => {
-  const { events, q, answer, unmount } = await mount(helper());
-  await act(async () => { q('[data-device-switch="mini"]')?.click(); });
-  await answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+it("keeps the device on the old connection when the question is cancelled, and tells the core so it does not move by itself again (B69)", async () => {
+  const { events, q, show, unmount } = await mount(helper({ switch: HELD }));
   // No terminal of this computer runs there: the line names none.
   expect(q('[data-device-switch-held="mini"]')?.textContent).toContain("Office Mac switched this device to the new connection first · AI conversations can be resumed");
-  await act(async () => { (document.body.querySelector('[data-device-switch-held="mini"] button') as HTMLElement).click(); });
+  await act(async () => { (document.body.querySelector('[data-device-switch-held="mini"] [data-slot="alert-dialog-cancel"]') as HTMLElement).click(); });
   expect(q("[data-device-switch-held]")).toBeNull();
-  expect(switches(events)).toHaveLength(1);
+  expect(kept(events)).toEqual([{ own_folder: undefined, keep: true }]);
+  // The core took the question away: the row offers the switch again.
+  await show(helper());
+  expect(q("[data-device-switch-held]")).toBeNull();
+  expect(q('[data-device-switch="mini"]')).not.toBeNull();
+  await unmount();
+});
+
+it("asks nothing on a screen that is not this computer's own window (B52)", async () => {
+  const { q, unmount } = await mount(helper({ switch: HELD }), { pairing: null });
+  expect(q("[data-device-switch-held]")).toBeNull();
   await unmount();
 });
 
 it("goes on without removing a device added for its switch when the held question is answered with Switch, and removes it on Cancel (B41, B69)", async () => {
   const removed = (events: { kind: string; payload: Record<string, unknown> }[]) => events.filter((event) => event.kind === "remove_device").map((event) => event.payload.device_id);
-  const go = await mount(helper({ switch_first: true }));
-  await act(async () => { go.q('[data-device-switch="mini"]')?.click(); });
-  await go.answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+  const go = await mount(helper({ switch_first: true, switch: HELD }));
   await act(async () => { go.q('[data-device-switch-held-go="true"]')?.click(); });
   expect(go.q("[data-device-switch-held]")).toBeNull();
-  expect(switches(go.events).map((event) => event.payload.own_folder)).toEqual([undefined, true]);
+  expect(kept(go.events)).toEqual([{ own_folder: true, keep: undefined }]);
   expect(removed(go.events)).toEqual([]);
   await go.unmount();
 
-  const left = await mount(helper({ switch_first: true }));
-  await act(async () => { left.q('[data-device-switch="mini"]')?.click(); });
-  await left.answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+  const left = await mount(helper({ switch_first: true, switch: HELD }));
   await act(async () => { (document.body.querySelector('[data-device-switch-held="mini"] [data-slot="alert-dialog-cancel"]') as HTMLElement).click(); });
   expect(left.q("[data-device-switch-held]")).toBeNull();
-  expect(switches(left.events)).toHaveLength(1);
+  expect(switches(left.events)).toHaveLength(0);
   expect(removed(left.events)).toEqual(["mini"]);
   await left.unmount();
 });

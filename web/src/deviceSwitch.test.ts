@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
-import { deviceTerminalCount, installParts, SWITCH_STEPS, switchFailureKey, switchOffered, switchStep } from "./deviceSwitch";
+import { deviceTerminalCount, installParts, SWITCH_STEPS, switchDrawn, switchFailureKey, switchHeld, switchOffered, switchStep } from "./deviceSwitch";
 import type { Device, DeviceSwitch, SnapshotRest } from "./snapshot";
 
 const device = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, switchable: true, ...over });
@@ -30,9 +30,18 @@ describe("which device offers the switch (B35)", () => {
 describe("what a switch reads as (B36, B41)", () => {
   it("has a step for every state the core sends but the failed one", () => {
     const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8")) as { device_switch_state: DeviceSwitch["state"][] };
-    expect(contract.device_switch_state.filter((state) => state !== "failed")).toEqual([...SWITCH_STEPS]);
-    expect(contract.device_switch_state.map((state) => switchStep({ state }))).toEqual(["checking", "installing", "connecting", null]);
+    expect(contract.device_switch_state.filter((state) => state !== "failed" && state !== "held")).toEqual([...SWITCH_STEPS]);
+    expect(contract.device_switch_state.map((state) => switchStep({ state }))).toEqual(["checking", "installing", "connecting", null, null]);
     expect(switchStep(null)).toBeNull();
+  });
+
+  it("draws a switch that runs or stopped on the device's row, and one that waits for the operator in its question alone (B69)", () => {
+    expect([undefined, { state: "connecting" as const }, { state: "failed" as const, reason: "ssh_not_reached" }, { state: "held" as const, by: "Office Mac" }].map((state) => [switchDrawn(device({ switch: state })), switchHeld(device({ switch: state }))])).toEqual([
+      [false, false],
+      [true, false],
+      [true, false],
+      [false, true],
+    ]);
   });
 
   it("words the reasons the operator can act on, and any other as the plain failure", () => {

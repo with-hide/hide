@@ -2312,9 +2312,10 @@ export type DeviceNeeds = { kind: "auto_login" | "linger" | "open_distribution";
  * A helper device's switch to the connection of the Hide on its machine
  * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
  * the code of why a `failed` one stopped; the device is the helper's until
- * the switch lands, so a failed one changed nothing.
+ * the switch lands, so a failed one changed nothing. `held` waits for the
+ * operator: `by` is the computer that switched the device first.
  */
-export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed"; reason?: string | null };
+export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed" | "held"; reason?: string | null; by?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does

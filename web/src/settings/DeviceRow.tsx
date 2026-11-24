@@ -10,7 +10,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceReason, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
-import { switchOffered } from "../deviceSwitch";
+import { switchDrawn, switchOffered } from "../deviceSwitch";
 import { ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
 import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
@@ -68,7 +68,7 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
   // other step goes over that login; then the switch (mockup 6); then Retry.
   const canRetry = dialed && canRetryDevice(device, status);
   const signInFirst = canRetry && retrySignsIn(device.problem);
-  const switchShown = switchable && !device.switch && !signInFirst;
+  const switchShown = switchable && !switchDrawn(device) && !signInFirst;
   const retry = canRetry && (signInFirst || !switchable);
   return (
     <Row
@@ -228,7 +228,7 @@ function DeviceAttention({ device, place, actions, switchable, onAct, onAllow }:
         </Button>
       </div>
     ) : null,
-    switchable && device.switch ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
+    switchable && switchDrawn(device) ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     signIn ? <DeviceSignIn key={`sign-in-${signIn.question}`} deviceId={device.id} wait={signIn} actions={actions} /> : null,
     keyCommand ? (
       <div key="key" className="flex flex-wrap items-center gap-x-sm gap-y-xxs" data-device-problem={`${device.id}:host_key_changed`}>

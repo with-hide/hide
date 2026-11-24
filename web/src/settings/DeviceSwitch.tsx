@@ -4,7 +4,10 @@
 // the one question a later computer is asked before its switch closes
 // terminals. The device's row in Settings and the strip over the device's
 // screen draw the same parts; the core owns where a switch stands
-// (`Device.switch`) and hided what a press is answered (`pairingResult`).
+// (`Device.switch`), the question of a device another computer switched
+// first among them, since a device a build before 1.3.0 added is switched
+// with no window open; hided answers a press that would install
+// (`pairingResult`).
 
 import type { TFunction } from "i18next";
 import { SmartAppControlHint, startedSilentOnWindows } from "./SmartAppControlHint";
@@ -14,7 +17,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Note, Status } from "../components/settings-rows";
-import { deviceTerminalCount, installParts, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep, type InstallPart } from "../deviceSwitch";
+import { deviceTerminalCount, installParts, SWITCH_STEP_KEY, switchDrawn, switchFailureKey, switchHeld, switchOffered, switchStep, type InstallPart } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -35,6 +38,15 @@ export function askSwitch(actions: Actions, deviceId: string, allowed: { install
   actions.pairing("switch", { device: deviceId, request_id: `switch-${Date.now()}`, ...(allowed.install ? { install: true } : {}), ...(allowed.ownFolder ? { own_folder: true } : {}) });
 }
 
+/**
+ * The operator leaves the device on the old connection: the core takes its
+ * question away and the device no longer moves by itself (hided `Ask::Switch`
+ * with `keep`). Its row still offers the switch.
+ */
+function keepOnOldConnection(actions: Actions, deviceId: string) {
+  actions.pairing("switch", { device: deviceId, request_id: `switch-${Date.now()}`, keep: true });
+}
+
 /** The button of a device that can be switched; gone while its switch runs. */
 export function DeviceSwitchButton({ device, actions, retry = false, size }: { device: Device; actions: Actions; retry?: boolean; size?: "sm" }) {
   const { t } = useInterfaceTranslation();
@@ -52,7 +64,8 @@ export function DeviceSwitchButton({ device, actions, retry = false, size }: { d
 export function DeviceSwitchLine({ device, actions, className }: { device: Device; actions: Actions; className?: string }) {
   const { t } = useInterfaceTranslation();
   const state = device.switch ?? null;
-  if (state === null) return null;
+  // A switch that waits for the operator is its question's, not a line's.
+  if (state === null || state.state === "held") return null;
   if (state.state === "failed") {
     return (
       <div className={cn("flex flex-wrap items-center gap-x-sm gap-y-xs", className)} data-device-switch-state={`${device.id}:failed`} data-device-switch-reason={state.reason ?? ""}>
@@ -153,7 +166,7 @@ export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?
   if (!switchOffered(device)) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switch-strip={device.id}>
-      {device.switch ? (
+      {switchDrawn(device) ? (
         <DeviceSwitchLine device={device} actions={actions} className="text-caption" />
       ) : (
         <>
@@ -176,34 +189,48 @@ function ownName(devices: readonly Device[] | undefined, t: TFunction<"translati
 }
 
 /**
- * What a press is asked before it goes on. A machine that runs no Hide of
- * its own (B36, D-45): what would be put there, and `허용하고 설치` starts it.
- * A device another computer switched first (B69, D-75): this one gets a
- * folder of its own and the terminals it ran there close. Closing either
- * leaves the device as it was.
+ * What the operator is asked before a switch goes on. A machine that runs no
+ * Hide of its own, after a press (B36, D-45): what would be put there, and
+ * `허용하고 설치` starts it. A device another computer switched first (B69,
+ * D-75), whoever asked for the switch: this computer gets a folder of its
+ * own and the terminals it ran there close. Leaving either leaves the
+ * device on the old connection.
  */
 export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   useSwitchAfterAdd(actions);
   useSwitchLanded();
   useSwitchedSeen();
-  const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
+  const ownScreen = useShellStore((s) => ownWindow(s.pairing));
+  const install = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && s.pairingResult.switch === "install_needed" ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
-  // The answer stays in the store after its question was closed.
+  // The answer stays in the store after its question was closed, and a
+  // held device keeps its question until the core heard the answer.
   const [closed, setClosed] = useState<string | null>(null);
-  const deviceId = answer?.device_id;
-  if (!answer || !deviceId || !answer.request_id || answer.request_id === closed) return null;
-  const close = () => setClosed(answer.request_id ?? null);
-  // Leaving the question leaves the device as it was; one that was added
-  // for this switch is taken off again, since nothing was started on its
-  // machine and no new device stays on the old connection (B41).
-  const cancel = () => {
-    close();
-    if (devices?.find((row) => row.id === deviceId)?.switch_first) void actions.removeDevice(deviceId);
-  };
+  const [answered, setAnswered] = useState<string | null>(null);
+  const waiting = devices?.find((row) => switchHeld(row) && row.id !== answered) ?? null;
+  const stillHeld = answered !== null && (devices?.some((row) => row.id === answered && switchHeld(row)) ?? false);
+  useEffect(() => {
+    if (answered !== null && !stillHeld) setAnswered(null);
+  }, [answered, stillHeld]);
+  const asksInstall = install?.device_id != null && install.request_id != null && install.request_id !== closed;
+  // Only this computer's own window may switch a device (B52).
+  const held = ownScreen && !asksInstall ? waiting : null;
+  const deviceId = asksInstall ? install?.device_id : held?.id;
+  const count = useShellStore((s) => (deviceId ? deviceTerminalCount(s.rest, deviceId) : 0));
+  if (!deviceId) return null;
+  const added = devices?.find((row) => row.id === deviceId)?.switch_first === true;
   const name = machineName(devices, deviceId, t);
-  if (answer.switch === "install_needed") {
+  if (asksInstall && install) {
+    const close = () => setClosed(install.request_id ?? null);
+    // Leaving the question leaves the device as it was; one that was added
+    // for this switch is taken off again, since nothing was started on its
+    // machine and no new device stays on the old connection (B41).
+    const cancel = () => {
+      close();
+      if (added) void actions.removeDevice(deviceId);
+    };
+    const answer = install;
     const parts = installParts(answer.system, devices?.find((row) => row.id === deviceId)?.wsl_distro != null);
     return (
       <Dialog open onOpenChange={(next) => { if (!next) cancel(); }}>
@@ -236,11 +263,19 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
       </Dialog>
     );
   }
-  const by = answer.by ?? "";
+  const by = held?.switch?.by ?? "";
+  // Leaving the question keeps the device on the old connection, and the
+  // core remembers it: a device that would move by itself is not asked
+  // about again. One added for this switch is taken off instead (B41).
+  const cancel = () => {
+    setAnswered(deviceId);
+    if (added) void actions.removeDevice(deviceId);
+    else keepOnOldConnection(actions, deviceId);
+  };
   // The dialog closes on either button, so its close decides nothing: only
   // Cancel and Escape leave the question.
   return (
-    <AlertDialog open onOpenChange={(next) => { if (!next) close(); }}>
+    <AlertDialog open>
       <AlertDialogContent data-device-switch-held={deviceId} onEscapeKeyDown={cancel}>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("devices.switch.heldTitle", { name })}</AlertDialogTitle>
@@ -251,7 +286,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
           <AlertDialogAction
             data-device-switch-held-go="true"
             onClick={() => {
-              close();
+              setAnswered(deviceId);
               askSwitch(actions, deviceId, { ownFolder: true });
             }}
           >
@@ -273,7 +308,7 @@ function useSwitchLanded() {
   const switching = useRef(new Set<string>());
   useEffect(() => {
     for (const device of devices ?? []) {
-      if (device.switch && device.switch.state !== "failed") switching.current.add(device.id);
+      if (switchStep(device.switch) !== null) switching.current.add(device.id);
       else if (switching.current.delete(device.id) && device.peer_key != null) useUiStore.getState().markSwitched(device.id);
     }
   }, [devices]);

@@ -151,17 +151,15 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   const landed = view === "landed";
   const front = params.get("front") ?? "build-box";
   useLayoutEffect(() => {
+    // `view=held`: another computer switched the Windows PC first, and the
+    // core holds the question on the device (B69).
+    const helpers = view === "held" ? HELPERS.map((device) => (device.id === "windows-pc" ? { ...device, switch: { state: "held" as const, by: lang === "ko" ? "회사 Mac" : "Office Mac" } } : device)) : HELPERS;
     useShellStore.setState({
       connection: "live",
       pairing: pairingOf(view, lang),
-      pairingResult:
-        view === "held"
-          ? { verb: "switch", ok: true, switch: "held", by: lang === "ko" ? "회사 Mac" : "Office Mac", device_id: "windows-pc", request_id: "gallery" }
-          : view === "install"
-            ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
-            : null,
+      pairingResult: view === "install" ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" } : null,
       rest: {
-        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? updatePeers : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
+        navigator: { devices: switching ? [LOCAL, ...helpers] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? updatePeers : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
         status: { remote: (switching ? HELPERS : landed ? LANDED : []).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
         ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" },
       },

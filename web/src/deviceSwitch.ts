@@ -36,9 +36,24 @@ export const SWITCH_STEPS = ["checking", "installing", "connecting"] as const;
 
 export type SwitchStep = (typeof SWITCH_STEPS)[number];
 
-/** The step a running switch is on; null once it failed or while none runs. */
+/** The step a running switch is on; null once it failed, while it waits for the operator, or while none runs. */
 export function switchStep(state: DeviceSwitch | null | undefined): SwitchStep | null {
-  return state == null || state.state === "failed" ? null : state.state;
+  return state == null || state.state === "failed" || state.state === "held" ? null : state.state;
+}
+
+/**
+ * Whether a device's switch waits for the operator because another computer
+ * switched the device first (B69, D-75): the core holds the question on the
+ * device, whoever asked for the switch, so a device that moved by itself
+ * with no window open is asked about when one opens.
+ */
+export function switchHeld(device: Device): boolean {
+  return device.switch?.state === "held";
+}
+
+/** Whether a device's row and strip draw its switch: one that runs or stopped, not one that waits in its question. */
+export function switchDrawn(device: Device): boolean {
+  return device.switch != null && !switchHeld(device);
 }
 
 export const SWITCH_STEP_KEY: Record<SwitchStep | "done", MessageKey> = {

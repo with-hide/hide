@@ -61,8 +61,8 @@ export type PairingResult = {
   link?: string;
   alias?: string;
   looked?: SshLook;
-  /** `switch`: how the press ended, or what it asks the operator first (hided `Ask::Switch`). */
-  switch?: "done" | "held" | "install_needed";
+  /** `switch`: how the press ended, or what it asks the operator first (hided `Ask::Switch`); `held` is also drawn on the device (`Device.switch`), which is where its question is read from. */
+  switch?: "done" | "held" | "install_needed" | "kept";
   /** `switch`: the helper device the press was for. */
   device_id?: string;
   /** `switch` `held`: the computer that switched the device first. */
