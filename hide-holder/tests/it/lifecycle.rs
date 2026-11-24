@@ -521,7 +521,11 @@ fn replacing_and_removing_the_app_folder_leaves_a_running_holder_alone() {
         copy_tree(runtime, &copy);
         copy
     });
-    let installed = hide_kit::holders::Source { program, conpty };
+    let installed = hide_kit::holders::Source {
+        program,
+        conpty,
+        identity: None,
+    };
     let folder = home.prepare(current_version(), &installed);
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
     drop(folder);

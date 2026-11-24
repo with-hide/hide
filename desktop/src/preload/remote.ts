@@ -10,6 +10,21 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
+type Viewer = { language: string; name: string | null };
+
+// What the showing window calls this machine and its language, heard from
+// the start: the main process says it once the page loaded and again only
+// when it changes, which may be before the page first listens, so the last
+// one is kept for a listener that comes later.
+let viewer: Viewer | null = null;
+let viewerListener: ((viewer: Viewer) => void) | null = null;
+ipcRenderer.on(REMOTE_VIEWER_CHANNEL, (_event: IpcRendererEvent, told: unknown) => {
+  if (typeof told !== "object" || told === null) return;
+  const { language, name } = told as Record<string, unknown>;
+  if (typeof language !== "string" || (name !== null && typeof name !== "string")) return;
+  viewer = { language, name };
+  viewerListener?.(viewer);
+});
 
 contextBridge.exposeInMainWorld("hideRemote", {
   bridge: 1,
@@ -51,14 +66,11 @@ contextBridge.exposeInMainWorld("hideRemote", {
       if (typeof visible === "boolean") listener(visible);
     });
   },
-  // The main process resolved the language and checked the name the shell gave.
-  onViewer(listener: (viewer: { language: string; name: string | null }) => void): void {
-    ipcRenderer.removeAllListeners(REMOTE_VIEWER_CHANNEL);
-    ipcRenderer.on(REMOTE_VIEWER_CHANNEL, (_event: IpcRendererEvent, viewer: unknown) => {
-      if (typeof viewer !== "object" || viewer === null) return;
-      const { language, name } = viewer as Record<string, unknown>;
-      if (typeof language === "string" && (name === null || typeof name === "string")) listener({ language, name });
-    });
+  // The main process resolved the language and checked the name the shell
+  // gave; a listener hears the last one at once, then each change.
+  onViewer(listener: (viewer: Viewer) => void): void {
+    viewerListener = listener;
+    if (viewer) listener(viewer);
   },
   // The main process checked the ask's shape before it handed it here.
   onWork(listener: (work: unknown) => void): void {

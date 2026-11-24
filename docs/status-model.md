@@ -719,7 +719,7 @@ They remain separate badges or Git indicators and never select the agent status 
 Agent rows, focused-agent tab marks, pane headers, the tree popover, the ⌃Tab switcher, the close sheet, ⌘K results, the Sessions tool, the Overview and its task cards, the pull request lens, the View comment menu, the Hide AI home row and the phone draw the same mark and the same words for the same row (status-marks B20), from the core's `mark` and `status_code` (`web/src/components/status-mark.tsx` draws the six shapes in one box of one size, and an empty box for `unknown` and for a slot with no live agent).
 Working uses a fixed blue status token, independent of the user's accent color; the finished dot uses green, so running and completed work remain distinct.
 
-A read question, approval or block keeps the turn mark and its request line at `--opacity-read-status`, so an unread one stands apart from one already looked at; in the 태스크 list's 쉬는 중 it draws the hollow `!` and its line in a resting row's grey instead (operator decision 2026-11-23).
+A read question, approval or block keeps the turn mark and its request line at `--opacity-read-status`, so an unread one stands apart from one already looked at; in the 태스크 list's 쉬는 중 it draws the hollow `!`, still at `--opacity-read-status`, and its line in a resting row's grey (operator decisions 2026-11-23, 2026-11-24); every surface that draws a read turn hollow dims it the same way (`StatusMark`'s `read`).
 A blocked approval stays in Needs You and keeps full emphasis until it is answered.
 Reading is acknowledgment, not evidence that a demand was resolved.
 A read, non-blocked demand belongs to Seen unless the core places its running activity in Working; the mark still says it is the operator's turn.

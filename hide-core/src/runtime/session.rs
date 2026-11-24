@@ -2671,13 +2671,9 @@ impl Runtime {
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
             self.label_overlay.apply(payload);
-            self.local_hook_tokens = self
-                .hook_facts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .lay(payload, str::to_owned, |pane| {
-                    !crate::address::is_device_pane(pane)
-                });
+            self.local_hook_tokens = self.lay_hook_facts(payload, str::to_owned, |pane| {
+                !crate::address::is_device_pane(pane)
+            });
             // Only the pass that observed this payload lays its turns.
             if let Some(pass) = pass {
                 let node = self.node.clone();

@@ -222,8 +222,7 @@ impl Panes {
                     "the expanded request names another pane".to_owned(),
                 ));
             }
-            let version = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
-                .map_err(StartRefusal::Failed)?;
+            let version = self.prepare_folder(source).map_err(StartRefusal::Failed)?;
             let _lock = self.lock().map_err(StartRefusal::Failed)?;
             let found = self.exact_reservation(request_guard, pane, incarnation, digest)?;
             if found != current {
@@ -334,6 +333,7 @@ mod tests {
         let source = holders::Source {
             program: home.path().join("must-not-run"),
             conpty: None,
+            identity: None,
         };
         assert!(matches!(
             panes.start_reserved(
@@ -388,6 +388,7 @@ mod tests {
         let source = holders::Source {
             program: home.path().join("must-not-run"),
             conpty: None,
+            identity: None,
         };
         assert!(matches!(
             panes.start_reserved(

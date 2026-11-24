@@ -582,7 +582,7 @@ impl LaunchDialect {
     /// D-08; Claude Code 2.1.302 and Codex 0.163.0 ask the same, measured
     /// 2026-10-17, Grok 1.0.67, measured 2026-10-23, and Pi 1.0.4 in a folder
     /// with project files it loads, measured 2026-11-02; docs/agent-hooks.md,
-    /// Folder trust for the worktrees Hide makes).
+    /// Folder trust for the folders Hide starts agents in).
     pub const fn trusts_worktrees(self) -> bool {
         matches!(
             self,

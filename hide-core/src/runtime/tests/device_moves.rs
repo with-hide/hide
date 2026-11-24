@@ -281,33 +281,6 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     );
 }
 
-/// `hide device switch` asks on the device's row, as its connection
-/// attempts do; a move nobody asked for hands its login nobody to ask, so a
-/// login that would need a password, a passphrase or an answer about the
-/// server's key ends instead of waiting (PRD system-ssh-device-link B14).
-#[test]
-fn a_move_by_itself_hands_its_login_nobody_to_ask() {
-    let shared = with_consent(None);
-    connects(&shared, kit_in_place());
-    let runtime = shared.lock().unwrap();
-    let asks = |pressed: bool| match runtime
-        .device_switch_source(
-            DEVICE,
-            match pressed {
-                true => crate::SwitchBy::Operator,
-                false => crate::SwitchBy::Rule { own_folder: false },
-            },
-        )
-        .expect("a device to switch")
-        .via
-    {
-        crate::SwitchVia::Ssh { sign_in, .. } => sign_in.is_some(),
-        crate::SwitchVia::Wsl { .. } => panic!("the device is dialed over SSH"),
-    };
-    assert!(asks(true), "the operator's own switch asks on the row");
-    assert!(!asks(false), "a move by itself was given someone to ask");
-}
-
 /// The devices of one start are switched one after the other, so one may
 /// wait a while after the core said it is due. A device the operator took
 /// their consent back from in between is not switched when its turn comes,

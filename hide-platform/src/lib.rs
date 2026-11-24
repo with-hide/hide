@@ -12,6 +12,7 @@ pub mod ipc;
 pub mod listeners;
 pub mod memory;
 pub mod path;
+pub mod privacy;
 pub mod process;
 pub mod programs;
 pub mod sockets;

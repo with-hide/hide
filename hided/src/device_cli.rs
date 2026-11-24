@@ -534,28 +534,35 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
         Verb::Carry => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
-            let look = |core: bool| {
+            let look = |core: bool, runs: bool| {
                 let mut look = json!({"system": std::env::consts::OS, "core": core});
+                if runs {
+                    return look;
+                }
                 // An account with no Hide running says whether its desktop
                 // has someone logged in, which a machine reads before it
                 // starts one here (D-45, B7); left out when this system
                 // does not say.
-                let desktop = (!core)
-                    .then(|| {
-                        crate::core_install::checks::desktop_session(
-                            &env.home,
-                            &std::sync::atomic::AtomicBool::new(false),
-                        )
-                    })
-                    .flatten();
+                let desktop = crate::core_install::checks::desktop_session(
+                    &env.home,
+                    &std::sync::atomic::AtomicBool::new(false),
+                );
                 if let Some(desktop) = desktop {
                     look["desktop"] = json!(desktop);
+                }
+                // A Hide of this account's own that does not run says
+                // whether an app here opens it: one no app opens was started
+                // over a login, and the machine that switches to it starts
+                // it again. A note that cannot be read says nothing, so no
+                // machine starts a Hide over it.
+                if core && let Ok(app) = hide_kit::app::present(&env.state_dir) {
+                    look["app"] = json!(app);
                 }
                 look
             };
             match pairing(env, json!({"verb":"status"})) {
                 Ok(status) => {
-                    let mut look = look(true);
+                    let mut look = look(true, true);
                     // What the running core says of itself, which a node
                     // reads before it asks to be split from it
                     // (`pairing_ssh::core_on`); a core before 1.2.0 says
@@ -573,7 +580,10 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 // helper's `hide`), told apart by the daemon's own lock.
                 Err(Refused::Unreachable(code)) => Err(Refused::Looked {
                     code,
-                    look: look(hide_kit::layout::daemon_lock(&env.state_dir).exists()),
+                    look: look(
+                        hide_kit::layout::daemon_lock(&env.state_dir).exists(),
+                        false,
+                    ),
                 }),
                 Err(refused) => Err(refused),
             }

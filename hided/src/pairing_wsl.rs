@@ -481,7 +481,6 @@ esac
                     projects: &projects,
                     admitted: &|_| true,
                     install: false,
-                    installing: &|| panic!("a Hide that runs is not started"),
                 },
             )
             .unwrap_or_else(|code| panic!("{code}"))
@@ -557,7 +556,6 @@ esac
         std::fs::write(home.join("key"), theirs.to_hex()).unwrap();
         let mine = hide_peer::MachineKey::generate().unwrap().public();
         let projects = ["/home/me/app".to_owned()];
-        let installs = std::sync::atomic::AtomicUsize::new(0);
         let asked = |install: bool, admitted: bool| {
             move_device(
                 &pc.access,
@@ -571,9 +569,6 @@ esac
                     projects: &projects,
                     admitted: &|_| admitted,
                     install,
-                    installing: &|| {
-                        installs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    },
                 },
             )
         };
@@ -584,7 +579,6 @@ esac
                 .map(|line| line.split(' ').take(2).collect::<Vec<_>>().join(" "))
                 .collect::<Vec<_>>()
         };
-        let started = || installs.load(std::sync::atomic::Ordering::SeqCst);
 
         // Not allowed: the machine is only named, and nothing is started
         // (the first look is the one that would wake a Hide of its own).
@@ -592,10 +586,7 @@ esac
             asked(false, true),
             Ok(Switched::InstallNeeded { system }) if system == "linux"
         ));
-        assert_eq!(
-            (said(), started()),
-            (["device look-ssh"; 2].map(str::to_owned).to_vec(), 0)
-        );
+        assert_eq!(said(), ["device look-ssh"; 2]);
 
         // Allowed, and this PC did not admit the pairing (the connection
         // never confirmed it): a Hide was started and paired with, what it
@@ -607,20 +598,15 @@ esac
         assert_eq!(paired.expect("a new pairing").accepted.key, theirs);
         assert_eq!(needs, None);
         assert_eq!(
-            (said(), started()),
-            (
-                [
-                    "device look-ssh",
-                    "device look-ssh",
-                    "connect",
-                    "device look-ssh",
-                    "device accept-ssh",
-                    "always-on linger",
-                ]
-                .map(str::to_owned)
-                .to_vec(),
-                1
-            )
+            said(),
+            [
+                "device look-ssh",
+                "device look-ssh",
+                "connect",
+                "device look-ssh",
+                "device accept-ssh",
+                "always-on linger",
+            ]
         );
 
         // The next switch ends it: the Hide runs, so none is started, the
@@ -628,18 +614,13 @@ esac
         std::fs::remove_file(home.join("hide.log")).unwrap();
         assert!(matches!(asked(true, true), Ok(Switched::Paired { .. })));
         assert_eq!(
-            (said(), started()),
-            (
-                [
-                    "device look-ssh",
-                    "device look-ssh",
-                    "device accept-ssh",
-                    "device projects-ssh",
-                ]
-                .map(str::to_owned)
-                .to_vec(),
-                1
-            )
+            said(),
+            [
+                "device look-ssh",
+                "device look-ssh",
+                "device accept-ssh",
+                "device projects-ssh",
+            ]
         );
     }
 
@@ -680,7 +661,6 @@ esac
                     projects: &[],
                     admitted: &|_| true,
                     install: true,
-                    installing: &|| {},
                 },
             )
         };

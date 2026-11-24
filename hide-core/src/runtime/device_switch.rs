@@ -90,7 +90,7 @@ pub struct DeviceSwitchSource {
 /// Who asks for a device's switch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SwitchBy {
-    /// The operator, with `hide device switch`: its login may ask them.
+    /// The operator, with `hide device switch`.
     Operator,
     /// The core's rule, with nobody asked; with `own_folder`, for a device
     /// another computer switched first, which goes on with a folder of
@@ -100,13 +100,10 @@ pub enum SwitchBy {
 
 /// What hided reaches the machine a helper device is through.
 pub enum SwitchVia {
-    /// Over the SSH alias the device is dialed by.
-    Ssh {
-        alias: String,
-        /// Where the questions of the switch's SSH login go: the device's
-        /// row.
-        sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
-    },
+    /// Over the SSH alias the device is dialed by, by a login that asks
+    /// nobody: the read every switch starts with signs in without asking,
+    /// so a login that needs an answer never reaches the switch.
+    Ssh { alias: String },
     /// Through `wsl.exe`, into this PC's distribution of that name; it asks
     /// nothing.
     Wsl { distro: String },
@@ -170,10 +167,9 @@ impl Runtime {
     /// under its machine's own id, which the paired machine's device then
     /// has too, or a WSL distribution of this PC. `device` is its id, or
     /// the SSH alias or the distribution it is dialed by, which is what a
-    /// terminal knows of a device it has just added. A switch the operator
-    /// asked for (`hide device switch`) has a login that may ask them; one
-    /// the core asked for by itself asks nobody, as Hide's own connection
-    /// attempts do not (PRD system-ssh-device-link B14).
+    /// terminal knows of a device it has just added. Its login asks nobody,
+    /// whoever asked for the switch, as Hide's own connection attempts do
+    /// not (PRD system-ssh-device-link B14).
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
@@ -210,26 +206,8 @@ impl Runtime {
         {
             return Err("terminals_open");
         }
-        // The operator asked for the switch, so its login asks on the
-        // device's row, as the device's own connection attempts do (D-45).
-        // A device that never had an attempt has no row state to put a
-        // question in: its login then asks nobody.
-        let sign_in = self
-            .worker_context
-            .clone()
-            .filter(|_| pressed)
-            .zip(self.device_hosts.get(device_id))
-            .map(|(context, host)| {
-                Arc::new(super::device_sign_in::RowSignIn {
-                    context,
-                    device_id: device_id.to_owned(),
-                    generation: host.generation,
-                    wake: crate::remote::Wake::Allowed,
-                    withdrawn: Arc::default(),
-                }) as Arc<dyn hide_node_link::device::SignIn>
-            });
         let via = match registration.origin.dialed_by() {
-            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias, sign_in },
+            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias },
             Some(crate::model::DialedBy::Wsl(distro)) => SwitchVia::Wsl { distro },
             None => return Err("switch_unsupported"),
         };

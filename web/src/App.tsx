@@ -60,6 +60,7 @@ import { MissionScreen } from "./MissionScreen";
 import { AutomationScreen } from "./AutomationScreen";
 import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
+import { configureGuestCloseCalls } from "./guestCloseCall";
 import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
@@ -100,6 +101,7 @@ export function App() {
     configureFileBytes(session.dispatch);
     configureAutomationCalls(session.dispatch);
     configureAccessCalls(session.dispatch);
+    configureGuestCloseCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {

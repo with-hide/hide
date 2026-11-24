@@ -110,7 +110,7 @@ const NO_HOOK_REVIEW: Capability<SceneCase> = lacks(
 
 const NO_FOLDER_TRUST: Capability<SceneCase> = lacks(
     "The agent asks no question about trusting a folder.",
-    "docs/agent-hooks.md#folder-trust-for-the-worktrees-hide-makes",
+    "docs/agent-hooks.md#folder-trust-for-the-folders-hide-starts-agents-in",
     "A CLI version that asks whether to trust a folder.",
 );
 

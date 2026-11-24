@@ -90,3 +90,10 @@ Regenerate `peer-link.json` from that crate alone, so the keys come out in one o
 bash scripts/verify-cargo.sh build -p hide-peer-protocol --example export_contract
 target/debug/examples/export_contract > contracts/peer-link.json
 ```
+
+# App identity
+
+`app-identity.json` states the Mac app's identity as macOS's consent knows it: its bundle identifier, the name a consent window shows, every `NS…UsageDescription` sentence of its `Info.plist`, and the code requirement its consent is kept under (the designated requirement of a program signed with the Developer ID certificate under that identifier).
+`hide_kit::app_identity` compiles it into the programs, which write an identity file from it beside a core and a pane holder that run with no app above them ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-platform-layer)).
+`desktop/scripts/app-identity.mjs` reads it for the package: `package.mjs` takes the local network sentence from it, signs `hided` and `hide-holder` under the identifier in a Developer ID build, and fails when the app it built says anything else or either program does not meet the requirement.
+The usage sentences but the local network one are Electron's own; `desktop/scripts/app-identity.test.mjs` compares them with the installed Electron on a Mac, so an Electron that changes them fails there, and the file is then edited by hand to say what the app says.

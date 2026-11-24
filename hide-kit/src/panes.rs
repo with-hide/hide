@@ -109,6 +109,10 @@ const LEFTOVER_LIMIT: Duration = Duration::from_secs(5);
 /// Where diagnostics go: one JSON record each.
 pub type Sink = fn(serde_json::Value);
 
+/// What tells a holder to answer macOS's consent for itself; the holder
+/// reads it as its first argument.
+pub const ANSWER_FOR_ITSELF: &str = "--answer-for-itself";
+
 /// The holders that still run among the panes `state_dir` records, by pid,
 /// read without the records lock: a caller that only asks whose pane a
 /// process runs in neither owns the folder nor waits on the node that does.
@@ -487,7 +491,32 @@ impl Panes {
     /// Makes or finds `source`'s version folder and holds it as used until
     /// the answer is dropped, as a start does ([`holders::prepare`]).
     pub fn prepare_folder(&self, source: &holders::Source) -> Result<holders::Reservation, String> {
-        holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
+        let reservation = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)?;
+        self.say_identity(&reservation);
+        Ok(reservation)
+    }
+
+    /// Writes whose name the holder of a folder just made answers macOS's
+    /// consent under: once for a folder, and nothing for a source that names
+    /// no app.
+    fn say_identity(&self, reservation: &holders::Reservation) {
+        let Some(given) = &reservation.made else {
+            return;
+        };
+        let folder = reservation
+            .dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.emit(
+            "pane_holder.identity",
+            json!({
+                "folder": folder,
+                "state": given.state(),
+                "reason": given.reason(),
+                "detail": given.detail(),
+            }),
+        );
     }
 
     fn emit(&self, event: &str, fields: serde_json::Value) {
@@ -765,8 +794,15 @@ impl Panes {
     ) -> Result<PaneRecord, String> {
         let pane = &request.pane;
         let mut command = ResidentCommand::new(&reservation.program);
+        command.current_dir(&reservation.dir);
+        // First, where the holder looks for it before it reads anything
+        // else (`hide-holder`, `answer_for_itself`): only a holder that has
+        // the app's name answers for itself, because one that answered
+        // under its own path would be asked about once per build as now.
+        if reservation.as_app {
+            command.arg(ANSWER_FOR_ITSELF);
+        }
         command
-            .current_dir(&reservation.dir)
             .arg("--socket")
             .arg(layout::holder_socket(&self.state_dir, pane))
             .arg("--rows")

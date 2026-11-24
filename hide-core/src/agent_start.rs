@@ -237,7 +237,7 @@ pub(crate) enum StartError {
 
 /// Records, on the node that will run it, that `kind` may work in `path`, a
 /// worktree Hide made, before Hide starts it there (the agent's own folder
-/// trust: docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
+/// trust: docs/agent-hooks.md, Folder trust for the folders Hide starts agents in).
 /// Nothing is asked for a kind that never asks; a trust that cannot be
 /// recorded refuses the start with its reason, so no agent waits unseen on
 /// its trust question (PRD antigravity-first-class B20).
@@ -279,6 +279,47 @@ pub(crate) fn trust_worktree(
             adapter.label
         ),
     })
+}
+
+/// Whether `path` is a linked worktree of its repository as Git reads it on
+/// the node that runs it, for a `kind` that asks whether to trust a folder:
+/// its own Git directory is not the one every worktree of the repository
+/// shares, so it is never the repository's main checkout, whatever spelling
+/// or link names it. A kind that never asks is not asked about.
+pub(crate) fn linked_worktree(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    kind: &str,
+    path: &str,
+    timeout: Duration,
+) -> Result<bool, TrustRefusal> {
+    use hide_node_link::cleanup::RepositoryDirs;
+    let asks = hide_agent_adapter::adapter(kind)
+        .and_then(|adapter| adapter.start)
+        .and_then(hide_agent_hooks::folder_trust::Agent::of)
+        .is_some();
+    if !asks {
+        return Ok(false);
+    }
+    let unavailable = |detail: String| TrustRefusal {
+        code: "agent_trust_unavailable",
+        detail,
+    };
+    let node = node.ok_or_else(|| {
+        unavailable("the machine that runs the worktree's pane cannot be reached.".to_owned())
+    })?;
+    let dirs = crate::node_access::call_as::<Option<RepositoryDirs>>(
+        node,
+        hide_node_link::protocol::Call::Repository {
+            path: path.to_owned(),
+        },
+        timeout,
+    )
+    .map_err(|error| {
+        unavailable(format!(
+            "whether {path} is a worktree could not be read ({error})"
+        ))
+    })?;
+    Ok(dirs.is_some_and(|dirs| dirs.git_dir != dirs.common_dir))
 }
 
 /// A worktree's folder trust that could not be recorded: `code` is what a

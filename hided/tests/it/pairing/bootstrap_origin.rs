@@ -18,6 +18,10 @@ const TEST: &str =
 const ROLE: &str = "HIDE_TEST_BOOTSTRAP_ORIGIN_ROLE";
 const PROBE: &str = "probe";
 const HOLDER: &str = "holder";
+/// Linux: a process of this account whose image the kernel names to no
+/// process of the account, as the one a root sshd keeps for each login is.
+#[cfg(target_os = "linux")]
+const UNNAMED: &str = "unnamed";
 
 fn command(program: &Path, role: &str, folder: &Path) -> Command {
     let mut command = Command::new(program);
@@ -88,6 +92,24 @@ fn holder_process() {
     let folder = std::env::current_dir().unwrap();
     let answers = run(command(
         Path::new(config["probe"].as_str().unwrap()),
+        config["child"].as_str().unwrap_or(PROBE),
+        &folder,
+    ));
+    println!("BOOTSTRAP_REPLIES={}", json!(answers));
+}
+
+/// The socket peer's parent is this process, which no longer lets its own
+/// account trace it, so the kernel refuses its image path to the daemon:
+/// what a login's process under a root sshd is to the account it logged in.
+#[cfg(target_os = "linux")]
+fn unnamed_process() {
+    // SAFETY: `prctl(PR_SET_DUMPABLE, 0)` changes only this process's own
+    // flag and takes no pointer.
+    assert_eq!(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) }, 0);
+    let config = configuration();
+    let folder = std::env::current_dir().unwrap();
+    let answers = run(command(
+        Path::new(config["probe"].as_str().unwrap()),
         PROBE,
         &folder,
     ));
@@ -119,6 +141,8 @@ async fn a_guest_holder_child_cannot_become_the_host_operator_without_hints() {
     match std::env::var(ROLE) {
         Ok(role) if role == PROBE => return socket_probe(),
         Ok(role) if role == HOLDER => return holder_process(),
+        #[cfg(target_os = "linux")]
+        Ok(role) if role == UNNAMED => return unnamed_process(),
         Ok(role) => panic!("unknown bootstrap test role: {role}"),
         Err(std::env::VarError::NotPresent) => {}
         Err(error) => panic!("unreadable bootstrap test role: {error}"),
@@ -214,6 +238,30 @@ async fn a_guest_holder_child_cannot_become_the_host_operator_without_hints() {
     let outside = run(command(&probe, PROBE, &work));
     assert_eq!(outside[0]["ok"], true, "{outside:?}");
     assert_eq!(outside[0]["access"]["state"], "pending", "{outside:?}");
+    // A command that arrives over SSH descends from the process a root sshd
+    // keeps for its login, which is this account's and whose image Linux
+    // names to no process of the account. It is no holder, so the terminal
+    // above it is still an outside one; under a holder it is still a pane's.
+    #[cfg(target_os = "linux")]
+    {
+        let mut login = requests()[0].clone();
+        login["access"]["name"] = json!("login-probe");
+        login["access"]["key"] = json!("b".repeat(64));
+        let mut config = configuration_at(&work);
+        config["requests"] = json!([login]);
+        // The holder below keeps its image, unlike the one above.
+        config["delete_image"] = json!(false);
+        std::fs::write(work.join("probe.json"), config.to_string()).unwrap();
+        let outside = run(command(&probe, UNNAMED, &work));
+        assert_eq!(outside[0]["ok"], true, "{outside:?}");
+        assert_eq!(outside[0]["access"]["state"], "pending", "{outside:?}");
+        config["child"] = json!(UNNAMED);
+        std::fs::write(work.join("probe.json"), config.to_string()).unwrap();
+        let holder = helper.join("v1-fixture/alias");
+        let inside = run(command(&holder, HOLDER, &work));
+        assert_eq!(inside[0]["ok"], false, "{inside:?}");
+        assert_eq!(inside[0]["reason"], "access_from_pane", "{inside:?}");
+    }
     running.stop();
 }
 

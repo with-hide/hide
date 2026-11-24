@@ -318,6 +318,20 @@ fn desktop_of(said: &Said) -> Option<bool> {
     }
 }
 
+/// Whether the target said an app of its account opens its Hide
+/// (`hide_kit::app::present`, in its look): `None` when its answer does not
+/// say, as an older Hide's does not, or as one that could not read its
+/// note does not.
+fn app_of(said: &Said) -> Option<bool> {
+    match said {
+        Said::Answer(answer) => answer
+            .get("look")
+            .or_else(|| answer.get("value").and_then(|value| value.get("look")))
+            .and_then(|look| look["app"].as_bool()),
+        Said::NoProgram | Said::Unread => None,
+    }
+}
+
 /// Why this machine starts no Hide on a target that runs `target` (PRD
 /// device-connect-iroh D-45, B7): a Mac takes one only from a Mac, and only
 /// while someone is logged in to its desktop, where its login item runs.
@@ -771,20 +785,14 @@ pub struct Switch<'a> {
     /// The operator allowed a Hide to be started on a target that runs
     /// none of its own (D-45); without it such a target is only named.
     pub install: bool,
-    /// Called once when that start begins, for the row's step.
-    pub installing: &'a (dyn Fn() + Sync),
 }
 
 /// Looks at the target `alias` names and pairs with the Hide it runs, over
-/// one SSH login whose questions go to `press`, the device's row. A refusal
-/// is its reason code, and nothing was saved on either machine.
-pub fn switch(
-    alias: &str,
-    press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
-    switch: &Switch<'_>,
-) -> Result<Switched, &'static str> {
+/// one SSH login that asks nobody: the read every switch starts with
+/// ([`may_move_device`]) signed in without asking. A refusal is its reason
+/// code, and nothing was saved on either machine.
+pub fn switch(alias: &str, switch: &Switch<'_>) -> Result<Switched, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&switch.reach.home, alias));
-    upstream.may_ask(press);
     let done = switch_on(&Ssh(&upstream), switch);
     upstream.close();
     done
@@ -793,18 +801,24 @@ pub fn switch(
 /// [`switch`], on a login.
 pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switched, &'static str> {
     let unreached = login.channel().not_reached();
-    let (looked, desktop) = match run(login, switch.reach, &["look-ssh"]) {
+    let (looked, desktop, app) = match run(login, switch.reach, &["look-ssh"]) {
         Ok(said) => {
-            let desktop = desktop_of(&said);
-            (logged_look(login, look_of(said)), desktop)
+            let (desktop, app) = (desktop_of(&said), app_of(&said));
+            (logged_look(login, look_of(said)), desktop, app)
         }
         Err(error) => return Err(not_reached(login, "look", &error)),
     };
     let mut started = false;
-    // A target with no Hide of its own is asked nothing more when this
-    // machine may not start one there: said before the operator is asked
+    // A Hide of the account's own that stopped and that no app there opens
+    // is one a machine started over a login: a switch that ended before
+    // its pairing leaves it with nothing to keep it running, and nobody
+    // can open it there. This machine starts it again; one an app opens
+    // is the app's to open, and one that did not say is left alone.
+    let stopped = matches!(looked, Looked::NotRunning { .. }) && app == Some(false);
+    // A target this machine would start a Hide on is asked nothing more
+    // when it may not start one there: said before the operator is asked
     // to allow it, and before anything is started.
-    if looked == Looked::Absent {
+    if looked == Looked::Absent || stopped {
         let system = login
             .system()
             .map_err(|error| not_reached(login, "system", &error))?;
@@ -812,17 +826,25 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
             return Err(refusal);
         }
     }
+    // Starts the account's Hide and has it answer for the account.
+    let start = || -> Result<(), &'static str> {
+        start_core(login, switch.reach)?;
+        match look_on(login, switch.reach) {
+            Looked::Ready => Ok(()),
+            Looked::NotReached => Err(unreached),
+            _ => Err("ssh_core_not_started"),
+        }
+    };
     match looked {
         Looked::Ready => {}
         Looked::Absent if switch.install => {
-            (switch.installing)();
-            start_core(login, switch.reach)?;
-            // The core that was started answers for the account now.
-            match look_on(login, switch.reach) {
-                Looked::Ready => started = true,
-                Looked::NotReached => return Err(unreached),
-                _ => return Err("ssh_core_not_started"),
-            }
+            start()?;
+            started = true;
+        }
+        // The operator allowed a Hide there when it was first started.
+        Looked::NotRunning { .. } if stopped => {
+            start()?;
+            started = true;
         }
         Looked::Absent => {
             let system = login
@@ -1119,6 +1141,163 @@ mod tests {
                 assert_eq!(install_refusal(target, from, Some(false)), None);
             }
         }
+    }
+
+    /// A target account whose own Hide stopped, as a scripted login: it
+    /// records the words each `hide` was given, and its Hide runs once a
+    /// `hide connect` was asked.
+    struct Stopped {
+        system: &'static str,
+        /// What its look says beside the system and the core.
+        look: Value,
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Stopped {
+        fn new(system: &'static str, look: Value) -> Self {
+            Self {
+                system,
+                look,
+                asked: std::sync::Mutex::default(),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Login for Stopped {
+        fn channel(&self) -> Channel {
+            Channel::Ssh
+        }
+
+        fn name(&self) -> &str {
+            "stopped"
+        }
+
+        fn system(&self) -> Result<String, String> {
+            Ok(self.system.to_owned())
+        }
+
+        fn on(&self) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn run(&self, argv: &[String], _cap: usize, _within: Duration) -> Result<Ran, String> {
+            let words: Vec<&str> = argv
+                .iter()
+                .map(String::as_str)
+                .skip_while(|word| !matches!(*word, "device" | "connect" | "always-on"))
+                .take(2)
+                .collect();
+            let mut asked = self.asked.lock().unwrap();
+            let runs = asked.iter().any(|words| words == "connect");
+            asked.push(words.join(" "));
+            let mut look = json!({"system": self.system, "core": true});
+            let (status, answer) = match words.as_slice() {
+                ["connect"] => (0, json!({"ok":true})),
+                ["device", "look-ssh"] if runs => (0, json!({"ok":true,"value":{"look":look}})),
+                ["device", "look-ssh"] => {
+                    for (key, value) in self.look.as_object().unwrap() {
+                        look[key] = value.clone();
+                    }
+                    (
+                        1,
+                        json!({"ok":false,"error":{"code":"hide_unavailable"},"look":look}),
+                    )
+                }
+                // Another machine holds the helper's folder: the switch
+                // reached the pairing, which is all these tests follow.
+                ["device", "accept-ssh"] => (
+                    0,
+                    json!({"ok":true,"value":{"helper":"held","by":"Studio"}}),
+                ),
+                other => return Err(format!("not scripted: {other:?}")),
+            };
+            Ok(Ran {
+                status,
+                stdout: line(answer),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn first(&self, _own: &[Candidate]) -> Vec<Candidate> {
+            Vec::new()
+        }
+
+        fn install(&self, _packages: &HelperPackages, _root: &str) -> Result<String, NotInstalled> {
+            Err(NotInstalled::Failed("not scripted".to_owned()))
+        }
+    }
+
+    /// One switch on `login` that the operator did not allow a first start
+    /// for.
+    fn switch_of(login: &Stopped) -> Result<Switched, &'static str> {
+        let reach = Reach {
+            home: PathBuf::from("/nonexistent"),
+            command_folder: None,
+            hide: None,
+        };
+        let me = Me {
+            device: "this-device".to_owned(),
+            name: "This Mac".to_owned(),
+        };
+        let key = PeerKey::from_bytes([7; 32]);
+        switch_on(
+            login,
+            &Switch {
+                reach: &reach,
+                request: "req-1",
+                me: &me,
+                key: &key,
+                helper_root: Some("~/.hide/device"),
+                projects: &[],
+                admitted: &|_| false,
+                install: false,
+            },
+        )
+    }
+
+    /// A switch that ended after it started the target's Hide and before
+    /// its pairing leaves a Hide nothing keeps running and nobody can open
+    /// on a machine with no app. The next switch starts it again and goes
+    /// on to the pairing; a Hide an app there opens is left to its app, as
+    /// is one that does not say, and a Mac's is started only under the rule
+    /// its first start is held to.
+    #[test]
+    fn a_switch_starts_again_a_stopped_hide_that_no_app_opens() {
+        let stopped = Stopped::new("linux", json!({"app": false}));
+        let done = switch_of(&stopped);
+        assert!(
+            matches!(&done, Ok(Switched::HeldBy(by)) if by == "Studio"),
+            "{:?}",
+            done.err()
+        );
+        assert_eq!(
+            stopped.asked(),
+            [
+                "device look-ssh",
+                "connect",
+                "device look-ssh",
+                "device accept-ssh"
+            ]
+        );
+
+        for look in [json!({"app": true}), json!({})] {
+            let with_app = Stopped::new("linux", look);
+            let done = switch_of(&with_app);
+            assert_eq!(done.err(), Some("ssh_hide_not_running"));
+            assert_eq!(with_app.asked(), ["device look-ssh"]);
+        }
+
+        let mac = Stopped::new("macos", json!({"app": false, "desktop": false}));
+        let done = switch_of(&mac);
+        assert_eq!(
+            done.err(),
+            install_refusal("macos", std::env::consts::OS, Some(false))
+        );
+        assert_eq!(mac.asked(), ["device look-ssh"]);
     }
 
     /// Only an answer that names the command an administrator runs is a

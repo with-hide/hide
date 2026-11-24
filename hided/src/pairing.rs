@@ -1655,15 +1655,14 @@ impl Pairing {
                     projects: &projects,
                     admitted: &admitted,
                     install,
-                    installing: &|| {},
                 })
             }
         };
         let switched = match &source.via {
-            hide_core::SwitchVia::Ssh { alias, sign_in } => {
-                let (target, press) = (alias.clone(), sign_in.clone());
+            hide_core::SwitchVia::Ssh { alias } => {
+                let target = alias.clone();
                 self.ssh_dial(alias, move || {
-                    asked(&|switch| pairing_ssh::switch(&target, press.clone(), switch))
+                    asked(&|switch| pairing_ssh::switch(&target, switch))
                 })
                 .await??
             }
