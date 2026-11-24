@@ -12,6 +12,7 @@ import type { Actions } from "./actions";
 import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, namesView, openSession, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
+import { AreaEmpty } from "./AreaEmpty";
 import { DisplayEditor } from "./Editor";
 import { Button } from "./components/ui/button";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
@@ -724,12 +725,12 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
     const beside = panel.beside ? panel.tabs.find((one) => tabKey(one) === panel.beside) : undefined;
     body = beside?.kind === "file" ? (
       <div className="flex min-h-0 min-w-0 flex-1" data-desk-file-split="true">
-        <DeskFileView key={`front:${tabKey(front)}`} tab={front} side="front" actions={actions} onClose={() => set((now) => closeSide(now, "front"))} />
+        <DeskFileView key={`front:${tabKey(front)}`} tab={front} side="front" actions={deskActions} onClose={() => set((now) => closeSide(now, "front"))} />
         <div aria-hidden="true" className="w-(--size-hairline) shrink-0 bg-border" />
-        <DeskFileView key={`beside:${tabKey(beside)}`} tab={beside} side="beside" actions={actions} onClose={() => set((now) => closeSide(now, "beside"))} />
+        <DeskFileView key={`beside:${tabKey(beside)}`} tab={beside} side="beside" actions={deskActions} onClose={() => set((now) => closeSide(now, "beside"))} />
       </div>
     ) : (
-      <DeskFileView key={tabKey(front)} tab={front} side="front" actions={actions} />
+      <DeskFileView key={tabKey(front)} tab={front} side="front" actions={deskActions} />
     );
   }
   else body = <p className="m-auto px-md text-caption text-muted-foreground" data-desk-panel-empty="true">{t("desk.room.explorerEmpty")}</p>;
@@ -757,28 +758,32 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
  */
 function DeskFileView({ tab, side, actions, onClose }: { tab: Extract<DeskTab, { kind: "file" }>; side: "front" | "beside"; actions: Actions; onClose?: () => void }) {
   const { t } = useInterfaceTranslation();
+  // Plain ids, so the selectors read the same value until the catalog moves.
+  const workspaceId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.workspace ?? null);
   const checkoutId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.checkout.id ?? null);
   const held = useShellStore((s) => s.editor?.tabs.find((one) => one.kind === "file" && one.checkout_id === checkoutId && one.path === tab.path) ?? null);
   const key = `desk:${side}:${tabKey(tab)}`;
   const display = useMemo<ViewDisplaySnapshot>(
-    () => ({ id: key, tab_id: held?.id ?? null, path: tab.path, label: fileName(tab.path), kind: "file", committed: null, preview: false, state: held ? (held.unavailable_reason ? "unavailable" : "open") : "opening", reason: held?.unavailable_reason ?? null }),
+    () => ({ id: key, tab_id: held?.id ?? null, path: tab.path, label: fileName(tab.path), kind: "file", committed: null, preview: false, state: "open", reason: null }),
     [key, held, tab.path],
   );
   const workspace = useMemo(() => ({ device_id: tab.device_id, path: tab.root }), [tab.device_id, tab.root]);
+  const close = onClose ? <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" aria-label={t("desk.room.closeSide", { name: fileName(tab.path) })} data-desk-file-close={side} onClick={onClose}><XIcon /></Button> : null;
+  let body: React.ReactNode;
+  // B28: a file Desk cannot hold or read says why, never a view left loading.
+  if (!workspaceId || !checkoutId) body = <AreaEmpty state="view-unavailable" text={t("desk.room.fileNotListed", { path: tab.path })} />;
+  else if (held?.unavailable_reason) {
+    const file = { workspace_id: workspaceId, checkout_id: checkoutId, device_id: tab.device_id, path: tab.path };
+    body = (
+      <AreaEmpty state="view-unavailable" text={t("documents.view.unavailableReason", { path: tab.path, reason: held.unavailable_reason })}>
+        <Button variant="ghost" onClick={() => actions.deskFileRetry(file)} data-desk-file-retry={tab.path}>{t("common.retry")}</Button>
+      </AreaEmpty>
+    );
+  } else if (held) body = <DisplayEditor display={display} workspace={workspace} placeKey={key} actions={actions} root={tab.root} trailing={close} />;
+  else body = <p role="status" className="m-auto text-caption text-muted-foreground" data-desk-file-loading={tab.path}>{t("common.loading")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-file={tab.path} data-desk-file-side={side}>
-      {held ? (
-        <DisplayEditor
-          display={display}
-          workspace={workspace}
-          placeKey={key}
-          actions={actions}
-          root={tab.root}
-          trailing={onClose ? <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" aria-label={t("desk.room.closeSide", { name: fileName(tab.path) })} data-desk-file-close={side} onClick={onClose}><XIcon /></Button> : null}
-        />
-      ) : (
-        <p role="status" className="m-auto text-caption text-muted-foreground" data-desk-file-loading={tab.path}>{t("common.loading")}</p>
-      )}
+      {body}
     </div>
   );
 }

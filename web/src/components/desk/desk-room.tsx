@@ -121,17 +121,23 @@ const EDGE_HALF = 4;
 /** The room's width, measured as the window draws it. */
 function useRoomWidth() {
   const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [box, setBox] = useState({ width: 0, reach: 0 });
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
-    const measure = () => setWidth(Math.floor(node.getBoundingClientRect().width));
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      const next = { width: Math.floor(rect.width), reach: Math.max(0, Math.floor(rect.left)) };
+      setBox((was) => (was.width === next.width && was.reach === next.reach ? was : next));
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
+    // The sidebar folding moves the room's left edge as well as its width.
+    if (node.parentElement) observer.observe(node.parentElement);
     return () => observer.disconnect();
   }, []);
-  return [ref, width] as const;
+  return [ref, box.width, box.reach] as const;
 }
 
 /**
@@ -153,9 +159,9 @@ export function DeskRoom({ chat, session = null, panel = null, widths, onDim, on
   onWidth: (panel: "view_width" | "session_width", width: number) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const [room, available] = useRoomWidth();
+  const [room, available, reach] = useRoomWidth();
   const [guide, setGuide] = useState<number | null>(null);
-  const placed = roomWidths(available, widths, session !== null);
+  const placed = roomWidths(available, reach, widths, session !== null);
   const state = panel !== null ? "panel" : session !== null ? "session" : "closed";
   return (
     <div ref={room} className="relative flex min-h-0 min-w-0 flex-1" data-desk-room={state}>
@@ -182,7 +188,7 @@ export function DeskRoom({ chat, session = null, panel = null, widths, onDim, on
           >
             {panel}
           </section>
-          {placed.panelCovers ? null : <DeskEdge kind="view" label={t("desk.room.viewWidth")} right={placed.session} width={placed.view} min={DESK_WIDTHS.viewMin} max={Math.max(DESK_WIDTHS.viewMin, available - placed.session)} onGuide={setGuide} onLand={(width) => onWidth("view_width", width)} />}
+          {placed.panelCovers ? null : <DeskEdge kind="view" label={t("desk.room.viewWidth")} right={placed.session} width={placed.view} min={DESK_WIDTHS.viewMin} max={Math.max(DESK_WIDTHS.viewMin, placed.viewMax)} onGuide={setGuide} onLand={(width) => onWidth("view_width", width)} />}
         </>
       ) : null}
       {session !== null ? <DeskEdge kind="session" label={t("desk.room.sessionWidth")} right={0} width={placed.session} min={DESK_WIDTHS.sessionMin} max={Math.max(DESK_WIDTHS.sessionMin, available - (panel !== null ? DESK_WIDTHS.viewMin : DESK_WIDTHS.chatMin))} onGuide={setGuide} onLand={(width) => onWidth("session_width", width)} /> : null}
@@ -210,7 +216,7 @@ export function DeskTabPanel({ tabs, active, tool = null, onTab, onKeep, onClose
   const [zone, fit] = useTabStripFit(tabs.length, tabs.some((tab) => tab.id === active));
   return (
     <>
-      {tool !== null ? <div className="flex w-(--size-lane-panel-min) min-w-0 shrink-0 flex-col border-r border-border bg-sidebar" data-desk-tool-column="explorer">{tool}</div> : null}
+      {tool !== null ? <div className="flex w-(--size-tree-ideal) min-w-0 shrink-0 flex-col border-r border-border bg-sidebar" data-desk-tool-column="explorer">{tool}</div> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-(--size-tab-strip) shrink-0 items-center border-b border-border pr-xs">
           <div ref={zone} className="flex h-full min-w-0 flex-1 pl-xs">

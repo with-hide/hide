@@ -10,6 +10,14 @@
 //! or it holds unsaved work. Which tab is in front, the preview tab and a
 //! file shown twice side by side (B37) are the window's: the core holds each
 //! file's document once.
+//!
+//! `hided` owns each hold: a window sends the whole set of files its room
+//! shows (`desk_files`), at most 32 per connection, refused past that; hided
+//! keeps which connections hold each file and lets a connection's files go
+//! when it closes. The core hears one `desk_file` per window message, the
+//! files no connection held before and the files no connection holds any
+//! more, so `desk.files` is the union over the live connections, bounded by
+//! their count times 32.
 
 use serde::Deserialize;
 
@@ -17,10 +25,6 @@ use crate::model::EditorTabKind;
 use crate::runtime::documents::OpenRequestFields;
 use crate::runtime::editor::PreparedFileTab;
 use crate::runtime::{ExplorerTarget, Runtime};
-
-/// The most files Desk holds at once; one more lets the oldest go first, as
-/// the tab panel drops its oldest file tab.
-pub(crate) const MAX_DESK_FILES: usize = 32;
 
 /// A file of a registered checkout, by the ids the catalog names it with.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -31,85 +35,85 @@ pub(in crate::runtime) struct DeskFile {
     path: String,
 }
 
-/// `desk_file`: a file pressed in Desk opens, a file tab closed lets go, and
-/// leaving Desk lets every file of the window's room go in one event.
+/// `desk_file`, sent by `hided` alone: the files a window's message brought
+/// into Desk's hold and the ones it let go, applied as one event.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, tag = "action", rename_all = "snake_case")]
-pub(in crate::runtime) enum FilePayload {
-    Open {
-        workspace_id: String,
-        checkout_id: String,
-        path: String,
-        /// The device the checkout is on, which `hided` routes a device's
-        /// file by; the core reads the checkout's device from its catalog.
-        #[serde(default)]
-        #[allow(dead_code)]
-        device_id: Option<String>,
-        /// The preview file this open replaces in its tab (B36), let go in
-        /// the same event.
-        #[serde(default)]
-        replace: Option<DeskFile>,
-    },
-    Close {
-        files: Vec<DeskFile>,
-    },
+#[serde(deny_unknown_fields)]
+pub(in crate::runtime) struct FilePayload {
+    #[serde(default)]
+    open: Vec<DeskFile>,
+    #[serde(default)]
+    close: Vec<DeskFile>,
 }
+
+const NO_CHECKOUT: &str = "The file's project or checkout is no longer available";
 
 impl Runtime {
     pub(in crate::runtime) fn desk_file(&mut self, payload: FilePayload) -> bool {
-        match payload {
-            FilePayload::Open {
-                workspace_id,
-                checkout_id,
-                path,
-                device_id: _,
-                replace,
-            } => {
-                let file = DeskFile {
-                    workspace_id,
-                    checkout_id,
-                    path,
-                };
-                let changed = self.desk_file_open(file.clone());
-                match replace {
-                    Some(old) if old != file => self.desk_file_close(&old) | changed,
-                    _ => changed,
-                }
-            }
-            FilePayload::Close { files } => files
-                .iter()
-                .fold(false, |changed, file| self.desk_file_close(file) | changed),
-        }
+        let opened = payload
+            .open
+            .into_iter()
+            .fold(false, |changed, file| self.desk_file_open(file) | changed);
+        payload
+            .close
+            .iter()
+            .fold(opened, |changed, file| self.desk_file_close(file) | changed)
     }
 
     /// Opens `file`'s document without showing it in any View: an open
     /// document is shared, an unread one is read on a worker and joins the
-    /// editor as a restored one does, its tab saying why when it cannot be
-    /// read.
+    /// editor as a restored one does, and one that cannot be opened is a tab
+    /// that says why (B28), which `desk_file_retry` reads again.
     fn desk_file_open(&mut self, file: DeskFile) -> bool {
+        if !self.desk.files.contains(&file) {
+            self.desk.files.push(file.clone());
+        }
+        self.desk_file_read(&file);
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk",
+            "kind": "desk.file_open",
+            "checkout": file.checkout_id,
+            "held": self.desk.files.len(),
+        }));
+        true
+    }
+
+    /// `desk_file_retry`: reads a held file that could not be opened again,
+    /// as a View's Retry does (B16, B28).
+    pub(in crate::runtime) fn desk_file_retry(&mut self, file: DeskFile) -> bool {
+        let unavailable = self.desk.files.contains(&file)
+            && self.snapshot.editor.tabs.iter().any(|tab| {
+                tab.kind == EditorTabKind::File
+                    && tab.workspace_id == file.workspace_id
+                    && tab.checkout_id == file.checkout_id
+                    && tab.path == file.path
+                    && tab.unavailable_reason.is_some()
+            });
+        if !unavailable {
+            return false;
+        }
+        self.desk_file_read(&file);
+        true
+    }
+
+    fn desk_file_read(&mut self, file: &DeskFile) {
         if self
             .catalog_checkout(&file.workspace_id, &file.checkout_id)
             .is_none()
         {
-            self.set_error(
-                "file.invalid_context",
-                "The file's project or checkout is no longer available",
+            self.insert_unavailable_file_tab(
+                &file.workspace_id,
+                &file.checkout_id,
+                &file.path,
                 false,
+                NO_CHECKOUT.to_owned(),
             );
-            return true;
-        }
-        if !self.desk.files.contains(&file) {
-            if self.desk.files.len() >= MAX_DESK_FILES {
-                let oldest = self.desk.files[0].clone();
-                self.desk_file_close(&oldest);
-            }
-            self.desk.files.push(file.clone());
+            return;
         }
         match self.prepare_file_tab(&file.workspace_id, &file.checkout_id, &file.path) {
-            // A preview tab Desk holds is kept: no later preview replaces it.
-            Ok(PreparedFileTab::Open(tab_id)) => {
-                self.promote_editor_tab(&tab_id);
-            }
+            // An open document is shared as it is; a Workspace's preview of
+            // it stays a preview, since its retire skips what Desk holds.
+            Ok(PreparedFileTab::Open(_)) => {}
             Ok(read @ PreparedFileTab::Read { .. }) => {
                 self.insert_file_tab(
                     read,
@@ -135,18 +139,14 @@ impl Runtime {
                     placement: None,
                 },
             ),
-            Err(message) => {
-                self.desk.files.retain(|held| held != &file);
-                self.set_error("file.open_failed", message, true);
-            }
+            Err(message) => self.insert_unavailable_file_tab(
+                &file.workspace_id,
+                &file.checkout_id,
+                &file.path,
+                false,
+                message,
+            ),
         }
-        crate::diagnostic!(serde_json::json!({
-            "component": "desk",
-            "kind": "desk.file_open",
-            "checkout": file.checkout_id,
-            "held": self.desk.files.len(),
-        }));
-        true
     }
 
     /// Lets `file` go: its document closes unless a Workspace's View shows
@@ -226,16 +226,6 @@ impl Runtime {
                         desk: true,
                     })
             })
-    }
-
-    /// A file Desk's Explorer created opens as a file Desk holds, from the
-    /// same result, as the Workspace's created file opens in its View.
-    pub(in crate::runtime) fn desk_open_created(&mut self, target: &ExplorerTarget, path: &str) {
-        self.desk_file_open(DeskFile {
-            workspace_id: target.workspace_id.clone(),
-            checkout_id: target.checkout_id.clone(),
-            path: path.to_owned(),
-        });
     }
 
     /// The editor tabs of every file Desk holds whose document is open.

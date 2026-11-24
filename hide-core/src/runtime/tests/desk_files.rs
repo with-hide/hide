@@ -2,11 +2,12 @@ use super::workspace_view::{second_checkout, with_new_views};
 use super::*;
 use crate::model::ViewNodeSnapshot;
 
-// PRD desk-2-ui D-22, B19, B36: a file Desk's tab panel opens is its
-// checkout's own document, opened by one `desk_file` event that brings no
-// checkout forward and puts no display in any Workspace's View; a Workspace
-// closing its last display of it leaves it open while Desk holds it, and
-// Desk letting it go closes it unless a View shows it or it is unsaved.
+// PRD desk-2-ui D-22, B19, B28, B36: a file Desk's tab panel opens is its
+// checkout's own document, opened by the one `desk_file` event hided sends
+// for a window's message, which brings no checkout forward and puts no
+// display in any Workspace's View; a Workspace closing its last display of
+// it leaves it open while Desk holds it, and Desk letting it go closes it
+// unless a View shows it, or hands an unsaved one to its checkout's View.
 
 fn desk_runtime(name: &str) -> (Runtime, String, PathBuf) {
     let (runtime, checkout_id, directory) = strip_checkout(name);
@@ -30,11 +31,11 @@ fn desk_file(runtime: &mut Runtime, payload: serde_json::Value) {
 }
 
 fn open_payload(workspace_id: &str, checkout_id: &str, path: &Path) -> serde_json::Value {
-    serde_json::json!({"action": "open", "workspace_id": workspace_id, "checkout_id": checkout_id, "path": path.to_string_lossy()})
+    serde_json::json!({"open": [{"workspace_id": workspace_id, "checkout_id": checkout_id, "path": path.to_string_lossy()}]})
 }
 
 fn close_payload(workspace_id: &str, checkout_id: &str, path: &Path) -> serde_json::Value {
-    serde_json::json!({"action": "close", "files": [{"workspace_id": workspace_id, "checkout_id": checkout_id, "path": path.to_string_lossy()}]})
+    serde_json::json!({"close": [{"workspace_id": workspace_id, "checkout_id": checkout_id, "path": path.to_string_lossy()}]})
 }
 
 fn front(runtime: &Runtime) -> (Option<String>, Option<String>) {
@@ -142,7 +143,7 @@ fn a_workspace_closing_its_last_display_leaves_a_file_desk_holds_and_desk_lettin
 }
 
 #[test]
-fn desk_letting_go_keeps_a_file_a_view_shows_or_one_with_unsaved_work() {
+fn desk_letting_go_keeps_a_file_a_view_shows_and_hands_unsaved_work_to_its_view() {
     let (mut runtime, checkout_id, directory) = desk_runtime("desk-file-kept");
     let shared = directory.join("notes.md");
     let edited = directory.join("edited.md");
@@ -165,7 +166,7 @@ fn desk_letting_go_keeps_a_file_a_view_shows_or_one_with_unsaved_work() {
 
     desk_file(
         &mut runtime,
-        serde_json::json!({"action": "close", "files": [
+        serde_json::json!({"close": [
             {"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": shared.to_string_lossy()},
             {"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": edited.to_string_lossy()},
         ]}),
@@ -176,6 +177,43 @@ fn desk_letting_go_keeps_a_file_a_view_shows_or_one_with_unsaved_work() {
         open_tab(&runtime, &edited).is_some(),
         "it holds unsaved work"
     );
+    assert!(
+        shown(&mut runtime).contains(&edited.to_string_lossy().into_owned()),
+        "its checkout's View shows the unsaved document Desk let go"
+    );
+}
+
+/// B28: a file whose checkout is gone is a tab that says why, read again by
+/// `desk_file_retry`, never a tab left loading.
+#[test]
+fn a_file_desk_cannot_open_is_a_tab_that_says_why_and_retry_reads_it_again() {
+    let (mut runtime, _, directory) = desk_runtime("desk-file-unavailable");
+    let file = directory.join("notes.md");
+    desk_file(
+        &mut runtime,
+        open_payload("workspace:gone", "checkout:gone", &file),
+    );
+    let reason = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .editor
+            .tabs
+            .iter()
+            .find(|tab| tab.checkout_id == "checkout:gone")
+            .and_then(|tab| tab.unavailable_reason.clone())
+    };
+    assert!(reason(&runtime).is_some(), "the tab says why");
+    assert!(runtime.dispatch_json(&explorer_event(
+        "desk_file_retry",
+        serde_json::json!({"workspace_id": "workspace:gone", "checkout_id": "checkout:gone", "path": file.to_string_lossy()}),
+    )));
+    assert!(reason(&runtime).is_some(), "still gone, still said");
+
+    desk_file(
+        &mut runtime,
+        close_payload("workspace:gone", "checkout:gone", &file),
+    );
+    assert_eq!(reason(&runtime), None, "letting it go closes the tab");
 }
 
 #[test]
@@ -191,10 +229,11 @@ fn a_file_desk_opens_is_refused_while_desk_is_off() {
 }
 
 /// B35: Desk's Explorer changes its session's checkout whatever is in front,
-/// and a file it creates opens as a file Desk holds, in no View; the same
-/// change from the Workspace's tree is still refused there.
+/// and the core opens the file it creates in no View, since the window's
+/// room opens and holds it; the same change from the Workspace's tree is
+/// still refused there.
 #[test]
-fn desks_explorer_changes_its_sessions_checkout_and_its_created_file_opens_in_desk() {
+fn desks_explorer_changes_its_sessions_checkout_and_opens_its_created_file_nowhere() {
     let (mut runtime, other, _) = desk_runtime_with_other("desk-explorer");
     let before = front(&runtime);
     let root = other.to_string_lossy().into_owned();
@@ -216,15 +255,16 @@ fn desks_explorer_changes_its_sessions_checkout_and_its_created_file_opens_in_de
     let made = other.join("made.md");
     assert!(made.is_file());
     assert_eq!(front(&runtime), before, "the front checkout stays");
-    assert!(
-        open_tab(&runtime, &made).is_some(),
-        "Desk holds the created file"
+    assert_eq!(
+        open_tab(&runtime, &made),
+        None,
+        "the window's room opens it, not the core"
     );
     assert!(!shown(&mut runtime).contains(&made.to_string_lossy().into_owned()));
 }
 
-/// B36: a single press replaces the preview tab's file in one event, which
-/// lets the replaced file go.
+/// B36: a single press replaces the preview tab's file: the window's one
+/// message reaches the core as one event that opens one and lets the other go.
 #[test]
 fn a_preview_open_lets_the_file_it_replaces_go_in_the_same_event() {
     let (mut runtime, checkout_id, directory) = desk_runtime("desk-file-replace");
@@ -235,9 +275,13 @@ fn a_preview_open_lets_the_file_it_replaces_go_in_the_same_event() {
         &mut runtime,
         open_payload("workspace:order", &checkout_id, &first),
     );
-    let mut payload = open_payload("workspace:order", &checkout_id, &second);
-    payload["replace"] = serde_json::json!({"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": first.to_string_lossy()});
-    desk_file(&mut runtime, payload);
+    desk_file(
+        &mut runtime,
+        serde_json::json!({
+            "open": [{"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": second.to_string_lossy()}],
+            "close": [{"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": first.to_string_lossy()}],
+        }),
+    );
     assert_eq!(open_tab(&runtime, &first), None);
     assert!(open_tab(&runtime, &second).is_some());
 }

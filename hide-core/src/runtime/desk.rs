@@ -159,8 +159,11 @@ pub(super) enum DeskEvent {
     /// A panel width the operator dragged and let go (PRD desk-2-ui B22):
     /// one event per drag.
     Lane(LanePayload),
-    /// A file pressed or let go in the tab panel (PRD desk-2-ui B19, B36).
+    /// The files windows' rooms brought into Desk's hold and let go, from
+    /// `hided`, which owns each hold (PRD desk-2-ui B19, B36).
     File(files::FilePayload),
+    /// A held file that could not be opened, read again (B28).
+    FileRetry(files::DeskFile),
 }
 
 /// The width a drag set; the one it did not move is absent.
@@ -244,7 +247,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 14] = [
+    pub(super) const KINDS: [&'static str; 15] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -259,6 +262,7 @@ impl DeskEvent {
         "desk_output_seen",
         "desk_lane",
         "desk_file",
+        "desk_file_retry",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -280,6 +284,7 @@ impl DeskEvent {
             "desk_output_seen" => Self::OutputSeen(parse(payload)?),
             "desk_lane" => Self::Lane(parse(payload)?),
             "desk_file" => Self::File(parse(payload)?),
+            "desk_file_retry" => Self::FileRetry(parse(payload)?),
             _ => return None,
         })
     }
@@ -348,11 +353,12 @@ impl Runtime {
         );
         // A width moves only the `desk` section's lane; a file Desk holds
         // moves the editor's documents, no section of Desk's.
-        let jobs = !matches!(event, DeskEvent::Lane(_) | DeskEvent::File(_));
-        let room = room && !matches!(event, DeskEvent::File(_));
+        let file = matches!(event, DeskEvent::File(_) | DeskEvent::FileRetry(_));
+        let jobs = !file && !matches!(event, DeskEvent::Lane(_));
+        let room = room && !file;
         // An output seen moves the View's seen state, which the core keeps
         // with the View, not in Desk's store; a file held is the window's.
-        let stored = !matches!(event, DeskEvent::OutputSeen(_) | DeskEvent::File(_));
+        let stored = !file && !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
             DeskEvent::Send(payload) => {
                 // Only the Desk composer sends it.
@@ -382,6 +388,7 @@ impl Runtime {
             }
             DeskEvent::Lane(payload) => self.desk_lane(payload),
             DeskEvent::File(payload) => self.desk_file(payload),
+            DeskEvent::FileRetry(file) => self.desk_file_retry(file),
         };
         if changed {
             if stored {

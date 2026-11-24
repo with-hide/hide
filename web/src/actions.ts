@@ -96,8 +96,8 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn } from "./desk";
-import { closePanel as closeDeskPanel, closeSession as closeDeskSession, openSession as openDeskSession, openTab as openDeskTab, toggleExplorer as toggleDeskExplorer, type DeskRoomWindow, type DeskTab } from "./deskRoom";
-import { deskFileChange } from "./deskFiles";
+import { closePanel as closeDeskPanel, closeSession as closeDeskSession, openSession as openDeskSession, openTab as openDeskTab, toggleExplorer as toggleDeskExplorer, type DeskTab } from "./deskRoom";
+import type { DeskFileRef } from "./deskFiles";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -2812,7 +2812,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       if (tab.kind === "file" && !checkoutAtRoot(rest(), tab.device_id, tab.root)) return diagnostic("desk file: its checkout is not registered");
       if (ui().screen?.kind !== "desk") this.openDesk();
-      // The room's file tabs reach the core as one `desk_file` (`deskRoomFiles`).
+      // The room's file tabs reach hided as one `desk_files` set (`deskFiles.ts`).
       ui().setDeskRoom((room) => openDeskTab(room, tab, options));
     },
 
@@ -2836,18 +2836,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * The one `desk_file` a change of Desk's room sends (PRD desk-2-ui B19,
-     * B36, B37, `deskFiles.ts`): a file tab added opens its document in the
-     * core, and file tabs gone let theirs go. The room's watcher calls it.
+     * The whole set of files Desk's room shows (PRD desk-2-ui B19, B36, B37,
+     * `deskFiles.ts`): hided holds them for this window and lets them go
+     * when it leaves. The room's watcher calls it.
      */
-    deskRoomFiles(before: DeskRoomWindow, after: DeskRoomWindow) {
-      const place = (tab: { device_id: string; root: string }) => {
-        const at = checkoutAtRoot(rest(), tab.device_id, tab.root);
-        return at ? { workspace: at.workspace, checkout: at.checkout.id } : null;
-      };
-      const remote = (tab: { device_id: string }) => (tab.device_id === localDeviceId(rest()) ? undefined : tab.device_id);
-      const payload = deskFileChange(before, after, place, remote);
-      if (payload) dispatch({ schema_version: 2, kind: "desk_file", payload });
+    deskFiles(files: DeskFileRef[]) {
+      dispatch({ schema_version: 2, kind: "desk_files", payload: { files } });
+    },
+
+    /** A Desk file the core could not open, read again (B28). */
+    deskFileRetry(file: { workspace_id: string; checkout_id: string; device_id: string; path: string }) {
+      dispatch({ schema_version: 2, kind: "desk_file_retry", payload: file });
     },
 
     /**

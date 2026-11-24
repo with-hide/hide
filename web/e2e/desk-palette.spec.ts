@@ -54,10 +54,10 @@ test("⌘P on Desk with no session searches every project, and a pick opens as t
     for (const row of await rows.all()) await expect(row).toContainText("fixture ›");
     await screenshot(page, "palette-p-all-projects");
 
-    const before = sent.get("desk_file") ?? 0;
+    const before = sent.get("desk_files") ?? 0;
     await page.keyboard.press("Enter");
     await expect(palette).toHaveCount(0);
-    await expect.poll(() => sent.get("desk_file") ?? 0).toBe(before + 1);
+    await expect.poll(() => sent.get("desk_files") ?? 0).toBe(before + 1);
     // Desk stays the screen.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
     await expect(page.locator("[data-desk-tab-panel]")).toBeVisible();
