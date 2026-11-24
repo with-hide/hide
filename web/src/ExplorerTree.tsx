@@ -33,7 +33,7 @@ import {
   helperNeedsSettings,
 } from "./explorer";
 import { windowDeviceId } from "./screenMachine";
-import { changesFor, explorerContext, localDeviceId } from "./snapshot";
+import { changesFor, expandedOn, explorerContext, localDeviceId, type Checkout } from "./snapshot";
 import { fileFailureText, listingFailure, readFailureText } from "./fileFailure";
 import { useShellStore } from "./store";
 import { useUiStore, type ExplorerDraft } from "./ui";
@@ -55,7 +55,6 @@ import { composingKey } from "./keys";
 // set (`explorer.ts`). Nothing here reads the disk or runs git; a row is a pure
 // function of state that already arrived.
 
-const EMPTY_PATHS: string[] = [];
 const EMPTY_ROWS: ExplorerRow[] = [];
 
 /** The root row's creation and fold buttons show on hover and focus, and always where there is no hover; they keep their place in the layout either way, so the name never moves when they appear. */
@@ -120,16 +119,20 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** The checkout an Explorer lists when it is not the one in front: Desk's Explorer of its session's checkout (PRD desk-2-ui B35), whose `actions` are `explorerIn` that checkout. */
+export type ExplorerScope = { device: string; checkout: Checkout };
+
 /**
  * `hint` is the line under the filter and `footer` the line at the bottom,
  * which the lane's tree column fills (PRD right-lane B9, B12).
  */
-export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint?: string; footer?: string }) {
+export function ExplorerTree({ actions, hint, footer, scope }: { actions: Actions; hint?: string; footer?: string; scope?: ExplorerScope }) {
   const { t } = useInterfaceTranslation();
-  const checkout = useShellStore((s) => explorerContext(s.rest).checkout);
-  const device = useShellStore((s) => explorerContext(s.rest).device);
+  const front = useShellStore((s) => (scope ? null : explorerContext(s.rest).checkout));
+  const device = useShellStore((s) => (scope ? scope.device : explorerContext(s.rest).device));
+  const checkout = scope ? scope.checkout : front;
   const rootPath = checkout?.path ?? null;
-  const expandedPaths = useShellStore((s) => explorerContext(s.rest).expanded ?? EMPTY_PATHS);
+  const expandedPaths = useShellStore((s) => expandedOn(s.rest, device));
   const listings = useShellStore((s) => s.listings);
   // Git decorations come from the checkout's own host on either device; the
   // core drops a list read for another device before this could show it.
@@ -793,6 +796,8 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
       )}
       {menu ? (
         <ExplorerContextMenu
+          device={device}
+          scoped={scope !== undefined}
           menu={menu}
           row={rowForPath(rows, menu.path)}
           onClose={() => setMenu(null)}
@@ -894,6 +899,8 @@ function DraftRowView({
 function ExplorerContextMenu({
   menu,
   row,
+  device,
+  scoped,
   onClose,
   onOpenBeside,
   onOpenBrowser,
@@ -911,6 +918,10 @@ function ExplorerContextMenu({
 }: {
   menu: { path: string; isDirectory: boolean; x: number; y: number };
   row: ExplorerRow | null;
+  /** The device whose checkout the tree lists. */
+  device: string;
+  /** The tree lists a named checkout (`ExplorerScope`): Open to the Side opens beside in its own panel, never in a Workspace's View. */
+  scoped: boolean;
   onClose: () => void;
   /** A second, pinned display of the file beside the active View area (S7 B4). */
   onOpenBeside: (path: string) => void;
@@ -935,14 +946,14 @@ function ExplorerContextMenu({
 }) {
   const { t } = useInterfaceTranslation();
   // Read as the menu opens: the room beside the only View area (S7 B9, D-06).
-  const besideReason = besideUnavailable(workspaceViewOf(useShellStore.getState().rest)?.layout, drawnViews());
+  const besideReason = scoped ? null : besideUnavailable(workspaceViewOf(useShellStore.getState().rest)?.layout, drawnViews());
   const items = explorerMenuItems({
     isDirectory: menu.isDirectory,
     row,
     html: row !== null && isHtmlFile(row.path),
     besideReason,
     reveal: revealHost(),
-    device: explorerContext(useShellStore.getState().rest).device,
+    device,
     node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices),
     canPaste,
     chord: (id) => commandLabel(id),

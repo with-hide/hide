@@ -62,6 +62,7 @@ import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
 import { configureGuestCloseCalls } from "./guestCloseCall";
 import { OpeningStatus } from "./OpeningStatus";
+import { watchDeskRoom } from "./deskFiles";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -144,6 +145,8 @@ export function App() {
     const unsubscribeScreen = useUiStore.subscribe((state, previous) => {
       if (state.screen !== previous.screen) observeRecent(useShellStore.getState().rest, true);
     });
+    // Desk's file tabs reach the core as one `desk_file` per change of the room (`deskFiles.ts`).
+    const unwatchDeskRoom = watchDeskRoom((before, after) => actions.deskRoomFiles(before, after));
     // A failure the operator can act on is a notice rather than only a diagnostic (design 13); it is raised
     // before the rest of this subscriber runs, as it always was.
     const unsubscribeNotices = watchErrorNotices();
@@ -178,6 +181,7 @@ export function App() {
       window.removeEventListener("pointerdown", noteOperatorPointer, true);
       window.removeEventListener("keydown", endCommit, true);
       unsubscribeScreen();
+      unwatchDeskRoom();
       unsubscribeNotices();
       unsubscribe();
       keyboard();

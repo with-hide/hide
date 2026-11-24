@@ -1202,7 +1202,8 @@ Moved to a private document: `docs/desk.md` in with-hide/hide-private.
 
 Web owner: `web/src/DeskScreen.tsx`, `web/src/deskRoom.ts`, `web/src/components/desk/`, the Desk row in `web/src/components/sidebar-header.tsx`, the row click in `web/src/components/sidebar-agent-row.tsx`.
 While Settings › Labs › Desk is on, the sidebar's Desk row sits on its own line between the Overview row and the `미션` row, with the warning mark while a session Desk started asks the operator, and is drawn selected while Desk is in front; with the switch off there is no row.
-While Desk is in front, pressing an agent's row in the sidebar opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
+While Desk is in front, pressing an agent's row in the sidebar, in a project's tree or in the 태스크 tab, opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
+Every other way to an agent (an ⌥ number, a notification, another computer's show) brings its tab forward whatever screen is in front.
 What the room beside Desk holds and how it opens and closes is `docs/desk.md`'s.
 
 ## Hide AI: the Hide AI tool

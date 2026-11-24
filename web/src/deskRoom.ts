@@ -27,6 +27,8 @@ export type DeskPanel = {
   active: string | null;
   /** The Explorer's tool column at the panel's left (B35). */
   explorer: boolean;
+  /** The key of the file tab a second file view shows beside the one in front, the same file or another (⌘↵, D-23, B37); the window's, so no Workspace's layout holds it. */
+  beside: string | null;
 };
 
 export type DeskRoomWindow = {
@@ -83,9 +85,10 @@ export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
  * Explorer) replaces the italic preview tab; any other open is kept, and
  * keeping the preview stops calling it the preview.
  */
-export function openTab(room: DeskRoomWindow, tab: DeskTab, options: { preview?: boolean } = {}): DeskRoomWindow {
-  const panel = room.panel ?? { tabs: [], preview: null, active: null, explorer: false };
+export function openTab(room: DeskRoomWindow, tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}): DeskRoomWindow {
+  const panel = room.panel ?? EMPTY_PANEL;
   const key = tabKey(tab);
+  if (options.beside && tab.kind === "file") return openBeside(room, panel, tab, key);
   const present = panel.tabs.some((one) => tabKey(one) === key);
   if (present) {
     const preview = panel.preview === key && !options.preview ? null : panel.preview;
@@ -97,6 +100,30 @@ export function openTab(room: DeskRoomWindow, tab: DeskTab, options: { preview?:
     return { ...room, panel: { ...panel, tabs, preview: key, active: key } };
   }
   return { ...room, panel: { ...panel, tabs: [...panel.tabs, tab], preview: options.preview ? key : panel.preview, active: key } };
+}
+
+const EMPTY_PANEL: DeskPanel = { tabs: [], preview: null, active: null, explorer: false, beside: null };
+
+/**
+ * ⌘↵ (D-23, B37): the file opens in a second file view beside the one in
+ * front, a kept tab; the same file is shown twice. With nothing in front it
+ * is an ordinary open.
+ */
+function openBeside(room: DeskRoomWindow, panel: DeskPanel, tab: DeskTab, key: string): DeskRoomWindow {
+  const front = activeTab(panel);
+  if (!front) return openTab(room, tab);
+  const present = panel.tabs.some((one) => tabKey(one) === key);
+  const tabs = present ? panel.tabs : [...panel.tabs, tab];
+  const preview = panel.preview === key ? null : panel.preview;
+  return { ...room, panel: { ...panel, tabs, preview, active: tabKey(front), beside: key } };
+}
+
+/** A side's `✕` (B37): the view beside goes, or the one in front goes and the one beside takes its place; the tab stays. */
+export function closeSide(room: DeskRoomWindow, side: "front" | "beside"): DeskRoomWindow {
+  const panel = room.panel;
+  if (!panel?.beside) return room;
+  if (side === "beside") return { ...room, panel: { ...panel, beside: null } };
+  return { ...room, panel: { ...panel, active: panel.beside, beside: null } };
 }
 
 /** A double press on the preview tab keeps it (B36). */
@@ -119,8 +146,9 @@ export function closeTab(room: DeskRoomWindow, key: string): DeskRoomWindow {
   const tabs = panel.tabs.filter((_, at) => at !== index);
   if (tabs.length === 0 && !panel.explorer) return { ...room, panel: null };
   const next = tabs[Math.min(index, tabs.length - 1)];
-  const active = panel.active === key ? (next ? tabKey(next) : null) : panel.active;
-  return { ...room, panel: { ...panel, tabs, active, preview: panel.preview === key ? null : panel.preview } };
+  const active = panel.active === key ? (panel.beside && panel.beside !== key ? panel.beside : next ? tabKey(next) : null) : panel.active;
+  const beside = panel.beside === key || panel.beside === active ? null : panel.beside;
+  return { ...room, panel: { ...panel, tabs, active, beside, preview: panel.preview === key ? null : panel.preview } };
 }
 
 /** `✕`, Escape or a press on the dimmed outside (B21): the panel closes and the session stays open. */
@@ -136,7 +164,7 @@ export function closePanel(room: DeskRoomWindow): DeskRoomWindow {
 export function toggleExplorer(room: DeskRoomWindow): DeskRoomWindow {
   if (room.session === null) return room;
   const panel = room.panel;
-  if (!panel) return { ...room, panel: { tabs: [], preview: null, active: null, explorer: true } };
+  if (!panel) return { ...room, panel: { ...EMPTY_PANEL, explorer: true } };
   if (!panel.explorer) return { ...room, panel: { ...panel, explorer: true } };
   return panel.tabs.length === 0 ? { ...room, panel: null } : { ...room, panel: { ...panel, explorer: false } };
 }

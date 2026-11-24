@@ -364,8 +364,12 @@ export function installKeyboard(actions: Actions): () => void {
         if (editorFor(editor) && drawnViews() && keyboardCommandOwner().kind === "view") return actions.requestEditorFind();
         return actions.openFind();
       }
-      case "save_file":
-        return actions.saveFile();
+      case "save_file": {
+        // The document whose editor has the keyboard, wherever it is drawn (a View area or Desk's tab panel, PRD
+        // desk-2-ui B19); with none focused, the active one.
+        const focused = (document.activeElement as Element | null)?.closest?.("[data-editor]")?.getAttribute("data-editor") ?? null;
+        return actions.saveFile(focused ?? undefined);
+      }
       case "keep_open":
         // The same chord answers a pending close and the active preview
         // display: the confirmation is showing first, so it wins when it is.
@@ -562,6 +566,11 @@ export function installKeyboard(actions: Actions): () => void {
       const field = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
       if (ui().screen?.kind === "main" && !field?.value) {
         actions.closeOverview();
+        consume();
+      }
+      // The session beside Desk covers nothing, so it is no layer: with none open, Escape closes it (PRD desk-2-ui B6).
+      if (ui().screen?.kind === "desk" && ui().deskRoom.session !== null && !field?.value) {
+        actions.deskCloseSession();
         consume();
       }
       return;

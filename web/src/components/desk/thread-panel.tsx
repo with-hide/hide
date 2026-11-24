@@ -123,10 +123,12 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   }, [answer]);
 
   if (!job) {
-    // The thread opened from the first frame; its head waits for the card the core sends with it.
+    // The thread opened from the first frame and its card is on its way, or the session has no card any more (asleep,
+    // or its pane closed): the head and its `✕` stand either way, and a sleeping session's foot wakes it (B6, B43).
     return (
       <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread-panel={paneId ?? ""} data-desk-thread-pending="true">
-        <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>
+        {head}
+        {foot ?? <p role="status" className="p-md text-caption text-muted-foreground">{t("desk.thread.reading")}</p>}
       </div>
     );
   }

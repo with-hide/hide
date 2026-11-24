@@ -227,7 +227,7 @@ export function DocumentKeeper({ tabId, actions }: { tabId: string; actions: Act
  * and scroll it had in that document come back with it, and a preview
  * retargeted to another document starts that one at its own place.
  */
-export function DisplayEditor({ display, workspace, placeKey, actions }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions }) {
+export function DisplayEditor({ display, workspace, placeKey, actions, root, trailing }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; placeKey: string; actions: Actions; root?: string; trailing?: React.ReactNode }) {
   const tab = useShellStore((s) => editorTabFor(s.editor, display.tab_id));
   const document = useShellStore((s) => (display.tab_id ? (s.documents[display.tab_id] ?? null) : null));
   const scaleValue = useShellStore((s) => s.rest?.ui_state?.editor_text_scale);
@@ -236,7 +236,7 @@ export function DisplayEditor({ display, workspace, placeKey, actions }: { displ
   if (!tab) return <><PendingDocumentHeader display={display} actions={actions} /><Notice text={t("common.loading")} state="loading" /></>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-editor={tab.id} data-editor-kind={display.kind} data-editor-display={display.id}>
-      <EditorHeader display={display} tab={tab} document={document} actions={actions} />
+      <EditorHeader display={display} tab={tab} document={document} actions={actions} root={root} trailing={trailing} />
       {display.kind === "diff" ? (
         <DiffBody display={display} workspace={workspace} wrap={tab.wrap} scale={scale} actions={actions} />
       ) : (
@@ -302,11 +302,17 @@ function EditorHeader({
   tab,
   document,
   actions,
+  root: shownRoot,
+  trailing,
 }: {
   display: ViewDisplaySnapshot;
   tab: EditorTabSnapshot;
   document: EditorDocumentSnapshot | null;
   actions: Actions;
+  /** The checkout the path line names the file from, when it is not the one in front (Desk's file view, PRD desk-2-ui B19). */
+  root?: string;
+  /** What the header ends with, a split side's `✕` in Desk's tab panel (B37). */
+  trailing?: React.ReactNode;
 }) {
   const file = display.kind === "file";
   const isMarkdown = file && document?.document_kind === "markdown";
@@ -314,7 +320,8 @@ function EditorHeader({
   const { t } = useInterfaceTranslation();
   // A file or a diff is named from its checkout, as the Explorer names it; a path the
   // header still cannot fit loses its start, so the file name stays shown.
-  const root = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
+  const front = useShellStore((s) => (shownRoot === undefined ? (frontCheckout(s.rest)?.path ?? null) : null));
+  const root = shownRoot ?? front;
   const path = root ? relativeTo(display.path, root) : display.path;
   return (
     <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-sm border-b border-border pl-xs pr-md text-caption text-subtle-foreground" data-document-header="true">
@@ -372,6 +379,7 @@ function EditorHeader({
         </Hint>
       ) : null}
       {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
+      {trailing}
     </div>
   );
 }
