@@ -3869,6 +3869,11 @@ impl Runtime {
                 result,
             );
         }
+        // Any answer, from an earlier connection or after its deadline too,
+        // ends the creation it was sent for, so the same tab can be asked for again.
+        if let Some(key) = remote_tab_creation_key(target_id, &action) {
+            self.remote_tab_creations_in_flight.remove(&key);
+        }
         let action_kind = action.kind();
         let remote_operation_key = (target_id.to_owned(), request_id.to_owned());
         if let Some(generation) = connection_generation {
@@ -3939,9 +3944,6 @@ impl Runtime {
                 self.finish_pane_focus_request_by_id(request_id, "failed", Some(message), true);
             }
             return true;
-        }
-        if let Some(key) = remote_tab_creation_key(target_id, &action) {
-            self.remote_tab_creations_in_flight.remove(&key);
         }
         self.settle_remote_terminal_creation(target_id, &action, &result);
         self.settle_device_session_close(target_id, request_id, result.is_ok());

@@ -639,6 +639,22 @@ impl NodeTerminals {
         }
     }
 
+    /// Ends `pane` through `owned` for a close this node's core did not ask
+    /// for, and tells the core once (`Holders::end_for_host`); refused
+    /// before the node started its holders.
+    pub fn end_for_host(
+        &self,
+        owned: &dyn hide_node_link::holders::PaneHolders,
+        pane: &str,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
+        let holders = lock(&self.local).clone().ok_or_else(|| {
+            hide_node_link::holders::HolderError::Unreachable {
+                message: "this node has not started its pane holders".to_owned(),
+            }
+        })?;
+        holders.end_for_host(owned, pane)
+    }
+
     /// This node's panes that may still run, as its holders' records say;
     /// none before it started its holders.
     pub fn live_panes(&self) -> Result<Vec<String>, String> {
