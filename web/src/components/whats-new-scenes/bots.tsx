@@ -1,4 +1,4 @@
-// What's new scene for bots (1.3.0): an AI outside Hide becomes a bot the
+// What's new scene for bots (1.2.12): an AI outside Hide becomes a bot the
 // operator made. Settings › 봇 opens its make card with the name typed and the
 // owl it gets, 봇 공간 chosen, and the pointer presses 만들기; the bot waits for
 // its AI, then is connected, and its owl lands on the device rail. Beside it a

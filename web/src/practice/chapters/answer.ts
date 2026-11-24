@@ -14,7 +14,7 @@ export default chapter<AnswerModel>({
   id: "answer",
   number: 11,
   version: 1,
-  since: "1.3.0",
+  since: "1.2.12",
   world: ANSWER_WORLD,
   quest: true,
   preview: "rows",

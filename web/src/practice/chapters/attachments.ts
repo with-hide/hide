@@ -14,7 +14,7 @@ export default chapter<AttachmentsModel>({
   id: "attachments",
   number: 12,
   version: 1,
-  since: "1.3.0",
+  since: "1.2.12",
   world: ATTACHMENTS_WORLD,
   quest: true,
   preview: "rows",

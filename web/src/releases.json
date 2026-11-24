@@ -2,6 +2,256 @@
   "schema": 1,
   "versions": [
     {
+      "version": "1.2.12",
+      "date": "2026-11-25",
+      "highlights": [],
+      "changes": [
+        {
+          "kind": "change",
+          "text": {
+            "en": "Connect a Mac mini, Windows PC or Linux server that runs Hide, and its agents' work and questions come to this window.",
+            "ko": "Hide가 도는 Mac mini, Windows PC, Linux 서버를 연결하면 그 컴퓨터 에이전트의 일과 질문이 이 창에 모여요.",
+            "zh-CN": "连接运行 Hide 的 Mac mini、Windows 电脑或 Linux 服务器，它上面智能体的工作和提问都会汇集到这个窗口。",
+            "ja": "Hide が動く Mac mini、Windows PC、Linux サーバーをつなぐと、そのエージェントの作業と質問がこのウィンドウに集まります。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Answer an agent's question or approval from the phone by picking its choice, and attach photos and files to a reply.",
+            "ko": "폰에서 에이전트의 질문이나 허락 요청에 선택지를 골라 답하고, 답장에 사진과 파일을 붙일 수 있어요.",
+            "zh-CN": "在手机上选择选项来回答智能体的提问或许可请求，回复里还可以附上照片和文件。",
+            "ja": "スマホでエージェントの質問や許可の確認に選択肢を選んで答え、返信に写真やファイルを添付できます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "gitlab.com merge requests and pipelines show in the pull request list through your signed-in glab, and can be merged from their card.",
+            "ko": "로그인된 glab으로 gitlab.com 머지 리퀘스트와 파이프라인이 PR 목록에 보이고, 카드에서 머지할 수 있어요.",
+            "zh-CN": "通过已登录的 glab，gitlab.com 的合并请求和流水线会显示在 PR 列表中，并可在卡片上合并。",
+            "ja": "ログイン済みの glab で gitlab.com のマージリクエストとパイプラインが PR 一覧に表示され、カードからマージできます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A device added over SSH can be connected as a server from its row in Settings › Devices, so it keeps working while this computer is off. An update changes nothing about how a device connects.",
+            "ko": "SSH로 추가한 기기는 설정 › 기기의 그 줄에서 서버로 연결할 수 있어요. 그러면 이 컴퓨터가 꺼져도 계속 일해요. 업데이트만으로 기기의 연결 방식이 바뀌지는 않아요.",
+            "zh-CN": "通过 SSH 添加的设备，可以在 设置 › 设备 的那一行改为以服务器方式连接，这样这台电脑关机时它也能继续工作。更新本身不会改变设备的连接方式。",
+            "ja": "SSH で追加したデバイスは、設定 › デバイス のその行からサーバーとして接続できます。このコンピュータを切っても動き続けます。アップデートだけでデバイスの接続方法が変わることはありません。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Make a bot in Settings › Bots with a name and a mode, its own space or everything, and hand its AI a one-time code to join. Each bot is drawn as an owl.",
+            "ko": "설정 › 봇에서 이름과 모드(자기 공간 또는 전체)를 정해 봇을 만들고, 그 AI에게 일회용 코드를 건네면 들어와요. 봇마다 부엉이 얼굴이 생겨요.",
+            "zh-CN": "在 设置 › 机器人 中填写名称并选择模式（自己的空间或全部）来创建机器人，把一次性代码交给它的 AI 即可加入。每个机器人都有一只猫头鹰形象。",
+            "ja": "設定 › ボット で名前とモード（自分の空間かすべて）を決めてボットを作り、その AI にワンタイムコードを渡すと参加します。ボットごとにフクロウの顔がつきます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Agents on two connected computers can send each other letters.",
+            "ko": "연결된 두 컴퓨터의 에이전트끼리 편지를 주고받을 수 있어요.",
+            "zh-CN": "两台已连接电脑上的智能体可以互相发信。",
+            "ja": "つながった 2 台のコンピュータのエージェント同士で手紙をやり取りできます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Press a connected computer's tile on the rail to see and work in its own Hide from this window.",
+            "ko": "레일에서 연결된 컴퓨터의 타일을 누르면 그 컴퓨터의 Hide 화면을 이 창에서 보고 쓸 수 있어요.",
+            "zh-CN": "点按侧栏中已连接电脑的图块，就能在这个窗口里查看并操作那台电脑的 Hide。",
+            "ja": "レールでつながったコンピュータのタイルを押すと、そのコンピュータの Hide をこのウィンドウで見て操作できます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Work another computer started here shows under its project in Projects, named as that computer names it, and stays out of your Tasks.",
+            "ko": "다른 컴퓨터가 여기서 시킨 일은 태스크가 아니라 프로젝트 탭의 그 프로젝트 아래에, 그 컴퓨터가 붙인 이름으로 보여요.",
+            "zh-CN": "其他电脑在这里启动的工作不再出现在任务中，而是以那台电脑起的名字显示在 项目 里对应的项目下。",
+            "ja": "ほかのコンピュータがここで始めた作業は、タスクではなく プロジェクト のそのプロジェクトの下に、そのコンピュータが付けた名前で表示されます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Settings › Mobile is now the Phones group in Settings › Devices. Each device shows one state, and any device can be renamed.",
+            "ko": "설정 › 모바일이 설정 › 기기의 폰 묶음으로 들어갔어요. 기기마다 상태가 하나로 보이고, 어느 기기든 이름을 바꿀 수 있어요.",
+            "zh-CN": "设置 › 移动设备 已并入 设置 › 设备，成为其中的手机分组。每台设备只显示一种状态，所有设备都可以重命名。",
+            "ja": "設定 › モバイル は 設定 › デバイス のスマホのグループになりました。デバイスごとに状態が 1 つだけ表示され、どのデバイスも名前を変えられます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "The phone app has a new design: two-line rows, a one-line header on every page, and a mission's steps as a list.",
+            "ko": "폰 앱 화면이 새 디자인으로 바뀌었어요. 줄은 두 줄로, 모든 페이지 머리는 한 줄로, 미션은 단계 목록으로 보여요.",
+            "zh-CN": "手机应用换了新设计：列表行分两行，每个页面的标题栏只有一行，任务的步骤以列表显示。",
+            "ja": "スマホアプリが新しいデザインになりました。行は 2 行、どのページも見出しは 1 行、ミッションはステップの一覧で表示します。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "The phone gathers Needs You from every connected computer, and can show files outside a project, pages behind another tab and pages on another computer.",
+            "ko": "폰이 연결된 모든 컴퓨터의 내 차례를 한곳에 모으고, 프로젝트 밖 파일, 뒤에 가려진 페이지, 다른 컴퓨터의 페이지도 보여줘요.",
+            "zh-CN": "手机会汇总所有已连接电脑的“轮到你”，也能显示项目外的文件、被其他标签页挡住的页面以及其他电脑上的页面。",
+            "ja": "スマホが、つながったすべてのコンピュータの「自分の番」を 1 か所に集め、プロジェクト外のファイル、裏に隠れたページ、ほかのコンピュータのページも表示します。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A question you have read leaves Needs You and waits at the top of Resting with a dimmed mark, and an agent asking the same question again stays quiet.",
+            "ko": "읽은 질문은 내 차례에서 빠져 쉬는 중 맨 위에 흐린 표시로 기다리고, 같은 질문을 다시 묻는 에이전트는 조용히 있어요.",
+            "zh-CN": "已读的问题会离开“轮到你”，以淡化的标记停在“休息中”最上方；再次问同一个问题的智能体不会再打扰你。",
+            "ja": "読んだ質問は「自分の番」から外れ、「休憩中」のいちばん上に薄い印で待ちます。同じ質問をもう一度するエージェントは静かなままです。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Pressing a row in Needs You goes to the agent. A View's chip opens it in focus mode, with every View that agent opened as a tab beside it.",
+            "ko": "내 차례의 줄을 누르면 에이전트로 가요. 보기 칩을 누르면 집중 모드로 열리고, 그 에이전트가 연 보기가 모두 탭으로 옆에 놓여요.",
+            "zh-CN": "点按“轮到你”中的一行会转到该智能体。点按视图的标签会在专注模式中打开它，该智能体打开的所有视图都会作为标签页排在旁边。",
+            "ja": "「自分の番」の行を押すとエージェントに移ります。ビューのチップを押すと集中モードで開き、そのエージェントが開いたビューがすべてタブとして横に並びます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Leaving focus mode always shows the tab's terminals alone, and the desk has an Expand button beside its close.",
+            "ko": "집중 모드를 나가면 언제나 그 탭의 터미널만 보여요. 책상의 닫기 옆에 크게 보기 버튼이 생겼어요.",
+            "zh-CN": "退出专注模式后总是只显示该标签页的终端。桌面的关闭按钮旁新增了放大按钮。",
+            "ja": "集中モードを終えると、いつもそのタブのターミナルだけが表示されます。デスクの閉じるの横に拡大ボタンが付きました。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "An automation run keeps its summary as a first tab that never closes, with every result its agent opened.",
+            "ko": "자동화 실행 화면의 요약이 닫히지 않는 첫 탭으로 남고, 그 에이전트가 연 결과를 모두 거기서 다시 열 수 있어요.",
+            "zh-CN": "自动化运行页面的摘要会作为不会关闭的第一个标签页保留，智能体打开过的所有结果都能从这里再次打开。",
+            "ja": "自動化の実行画面の要約は閉じない最初のタブとして残り、エージェントが開いた結果はすべてそこから開き直せます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Missions and agents can wait on a pull request, its CI, a branch, another mission or a mission node.",
+            "ko": "미션과 에이전트가 PR, CI, 브랜치, 다른 미션, 미션 노드를 기다릴 수 있어요.",
+            "zh-CN": "任务和智能体可以等待某个 PR、它的 CI、某个分支、另一个任务或任务节点。",
+            "ja": "ミッションとエージェントが、PR、その CI、ブランチ、ほかのミッション、ミッションのノードを待てるようになりました。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A Mac whose Hide was once moved to another Mac becomes two connected Hides, and the old move is gone.",
+            "ko": "예전에 Hide를 다른 Mac으로 옮겼던 Mac은 서로 연결된 두 Hide가 되고, 옮기기 기능은 없어졌어요.",
+            "zh-CN": "以前把 Hide 迁移到另一台 Mac 的电脑，现在会成为两台互相连接的 Hide，迁移功能已移除。",
+            "ja": "以前 Hide を別の Mac に移した Mac は、互いにつながった 2 つの Hide になり、移動の機能はなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A Linux server used over SSH keeps working through the update, and a Windows PC can be reached over SSH.",
+            "ko": "SSH로 쓰는 Linux 서버가 업데이트한 뒤에도 그대로 동작하고, Windows PC에도 SSH로 연결할 수 있어요.",
+            "zh-CN": "通过 SSH 使用的 Linux 服务器在更新后仍能正常工作，Windows 电脑也可以通过 SSH 连接。",
+            "ja": "SSH で使っている Linux サーバーはアップデート後もそのまま動き、Windows PC にも SSH でつなげます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A terminal opened on a connected Windows PC starts, and closing another computer's terminal closes its tab on both computers.",
+            "ko": "연결된 Windows PC에서 터미널이 열리고, 다른 컴퓨터의 터미널을 닫으면 두 컴퓨터 모두에서 탭이 닫혀요.",
+            "zh-CN": "在已连接的 Windows 电脑上可以打开终端；关闭其他电脑的终端时，两台电脑上的标签页都会关闭。",
+            "ja": "つながった Windows PC でターミナルが開くようになり、ほかのコンピュータのターミナルを閉じると両方のコンピュータでタブが閉じます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "On a Mac where Hide runs without its app, Claude Code no longer stops on a macOS permission question nobody can see.",
+            "ko": "앱 없이 Hide가 도는 Mac에서 Claude Code가 아무도 볼 수 없는 macOS 권한 질문에 멈추지 않아요.",
+            "zh-CN": "在只运行 Hide 而没有打开应用的 Mac 上，Claude Code 不会再卡在没人看得到的 macOS 权限询问上。",
+            "ja": "アプリなしで Hide が動く Mac で、Claude Code が誰にも見えない macOS の許可の確認で止まらなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An agent spawned into an existing worktree or an automation's folder no longer waits on its folder trust question.",
+            "ko": "이미 있는 워크트리나 자동화 폴더에서 시작한 에이전트가 폴더 신뢰 질문에서 멈추지 않아요.",
+            "zh-CN": "在已有的工作树或自动化文件夹中启动的智能体，不会再停在“是否信任此文件夹”的询问上。",
+            "ja": "既存のワークツリーや自動化のフォルダで起動したエージェントが、フォルダを信頼するかの確認で止まらなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A woken agent resumes in its own account, even after it once ran another account's agent inside it.",
+            "ko": "깨운 에이전트가 안에서 다른 계정의 에이전트를 돌린 적이 있어도 자기 계정으로 이어서 열려요.",
+            "zh-CN": "被唤醒的智能体即使曾在内部运行过另一个账号的智能体，也会用自己的账号继续。",
+            "ja": "起こしたエージェントは、中で別アカウントのエージェントを動かしたことがあっても、自分のアカウントで再開します。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An agent installed only on a device, not on this computer, gets its skills and hooks there.",
+            "ko": "이 컴퓨터에는 없고 기기에만 설치된 에이전트도 그 기기에서 스킬과 훅을 받아요.",
+            "zh-CN": "只安装在设备上、而这台电脑没有的智能体，也会在设备上获得技能和钩子。",
+            "ja": "このコンピュータになく、デバイスにだけ入っているエージェントも、そのデバイスでスキルとフックを受け取ります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Zoom, split and close act on the pane you just clicked, and the pointer covers a whole task row.",
+            "ko": "확대, 분할, 닫기가 방금 클릭한 패널에 적용되고, 태스크 줄 전체에 손가락 포인터가 보여요.",
+            "zh-CN": "放大、拆分和关闭会作用于你刚点击的窗格，整行任务上都会显示手形指针。",
+            "ja": "拡大、分割、閉じるが今クリックしたペインに効くようになり、タスクの行全体で指のポインタが出ます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "In Safari on a phone, the page stays in place while the keyboard is up and a list keeps its scroll.",
+            "ko": "폰 Safari에서 키보드를 올려도 페이지가 밀리지 않고, 목록이 스크롤한 자리에 머물러요.",
+            "zh-CN": "在手机 Safari 中，弹出键盘时页面不再被推上去，列表也会停在滚动到的位置。",
+            "ja": "スマホの Safari で、キーボードを出してもページがずれず、一覧もスクロールした位置にとどまります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A Hide with no window open no longer reads its whole state file every five seconds.",
+            "ko": "창을 닫아 둔 Hide가 5초마다 상태 파일 전체를 읽지 않아요.",
+            "zh-CN": "没有打开窗口的 Hide 不会再每五秒读取一次整个状态文件。",
+            "ja": "ウィンドウを閉じた Hide が 5 秒ごとに状態ファイル全体を読むことはなくなりました。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A program in another computer's pane can no longer pose as you to pair devices or register a bot.",
+            "ko": "다른 컴퓨터 패널 안의 프로그램이 나인 척 기기를 짝 맺거나 봇을 등록할 수 없어요.",
+            "zh-CN": "其他电脑窗格中的程序不能再冒充你去配对设备或注册机器人。",
+            "ja": "ほかのコンピュータのペインの中のプログラムが、あなたのふりをしてデバイスをペアリングしたりボットを登録したりできなくなりました。"
+          }
+        }
+      ]
+    },
+    {
       "version": "1.2.11",
       "date": "2026-11-21",
       "highlights": [
