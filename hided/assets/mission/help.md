@@ -133,6 +133,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
     You cannot set it done yourself (`mission_wait_invalid`). A plan written with `"kind": "external"` and `"external": {…}` reads as a waiting node.
 - Every node other than a waiting one has its own finish lines in `criteria`: one to three sentences a checker can judge pass or fail (`mission_criteria_missing`, `mission_criteria_too_many`).
   Write what is true when the node is finished, never the steps to get there; a screenshot is a line only when the node needs one.
+  A change node is finished by the time its pull request merges, so a check the project runs only after the merge, on the destination (jobs its pull requests skip), is no line of that node: it stays open at the merge and is raised to you.
+  Such a check belongs to a later node that checks the destination once the work is in, such as a release check.
   Name what is checked (each cell or behaviour by its name) and by which evidence (a unit test, a real CLI journey, the real app), never "some" or "part of".
   A node that changes what a user runs has one line checked in the real app (an isolated candidate build, never the operator's); a pass in a fake environment or against a stand-in alone does not finish it.
 - Hide adds the lines it can judge itself: `check` on every change node when the plan has a `check` command, and `ci` once the node's pull request has CI on its host (GitHub's checks, a gitlab.com merge request's pipeline).
@@ -402,6 +404,7 @@ Hide looks at the mission whenever a fact it rests on arrives (a read of the pro
 
 What is not certain is raised on the node to you, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worker Hide could not wake, and a close Hide could not make.
 A raise is yours to settle, never the operator's: record the line, skip it with its reason, restart the worker, wait on purpose with a `hide mission delay` or a node `--hold`, reorder the plan, attach the pull request with `--pr`, set the node's status or drop it.
+A letter settles nothing: Hide reads only these commands, so a wait you told a worker about only in a letter leaves the raise standing, and it reaches the operator as the safety net below.
 Several nodes raised by one cause (a login that expired, a CI that is down on main) are one problem: settle it once for all of them.
 Nothing reaches the operator per node.
 When a raise, or the warning that a worker stopped (below), stands unsettled while you rest (your turn ended, you ask the operator nothing and wait on no task of your own; your workers at work do not count) and 20 minutes passed since the latest of it, your arrival and your rest, or any such stands while no Conductor holds the mission, the mission shows the operator one card for all of them, the safety net, which leads them to your terminal (or, with no Conductor, to 지휘 다시 열기); a delay, a node's hold, an open decision and a gate waiting on the operator hold it off, as they hold off a stall; a gate that asks while its node still owes other lines (its own, CI, a review) holds off nothing, and its question holds the mission only while the gate is all its node owes.
