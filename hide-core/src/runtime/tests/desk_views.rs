@@ -175,13 +175,18 @@ fn fill_unread(runtime: &mut Runtime, directory: &Path, count: usize) {
 /// `count` pages in the active area of the first tab's desk; the page
 /// `index` was looked at `index`th and the last is in front.
 fn fill_pages(runtime: &mut Runtime, directory: &Path, count: usize) {
+    fill_pages_on(runtime, directory, TABS[0], count);
+}
+
+/// `fill_pages` on the desk of the Agent tab `tab`.
+fn fill_pages_on(runtime: &mut Runtime, directory: &Path, tab: &str, count: usize) {
     let entry = runtime
         .workspace_views
         .as_mut()
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy());
-    let desk = entry.tray_entry(TABS[0]);
+    let desk = entry.tray_entry(tab);
     let area = desk.layout.active_area.clone();
     for index in 0..count {
         let page = desk
@@ -2268,6 +2273,84 @@ fn a_views_chip_brings_its_workspace_forward_into_focus_mode_with_that_view_in_f
         "the View the chip named, not the newest"
     );
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(pane));
+}
+
+/// Focus mode's desk holds every View its pane's `N views` list holds
+/// (operator decision 2026-11-24): what the agent opened while no one
+/// watched it comes off no desk behind the View the chip named, still To
+/// look at, and another agent's stays where it was.
+#[test]
+fn focus_mode_brings_every_view_its_pane_owns_onto_the_desk() {
+    let (mut runtime, _checkout, directory) = setup("pair-all-views");
+    let pane = "w-order:t2:p";
+    for (name, suffix) in [("a.md", "own-a"), ("b.md", "own-b"), ("c.md", "own-c")] {
+        control_file(&mut runtime, pane, &directory, name, suffix);
+    }
+    control_file(&mut runtime, "w-order:t3:p", &directory, "d.md", "other-d");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        shelf(&runtime, &directory),
+        ["a.md", "b.md", "c.md", "d.md"],
+        "opened while no one watched"
+    );
+
+    let named = display_id(&runtime, &directory, "b.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": pane, "display_id": named}),
+    ));
+
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], pane)));
+    let mut held = desk(&runtime, &directory, TABS[1]);
+    held.sort();
+    assert_eq!(held, ["a.md", "b.md", "c.md"], "the pane's own Views");
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["b.md"],
+        "the named one in front"
+    );
+    assert_eq!(shelf(&runtime, &directory), ["d.md"], "another agent's");
+    assert!(unseen(&runtime, &directory, "a.md"));
+    assert!(unseen(&runtime, &directory, "c.md"));
+}
+
+/// The pane's other Views fill only the room the desk has, newest first:
+/// none of the desk's Views is taken off for them, and the rest stay in
+/// the pane's list.
+#[test]
+fn focus_mode_brings_the_panes_views_only_into_the_room_the_desk_has() {
+    let (mut runtime, _checkout, directory) = setup("pair-all-views-room");
+    let pane = "w-order:t2:p";
+    fill_pages_on(&mut runtime, &directory, TABS[1], MAX_VIEW_DISPLAYS - 2);
+    for (name, suffix) in [("a.md", "room-a"), ("b.md", "room-b"), ("c.md", "room-c")] {
+        control_file(&mut runtime, pane, &directory, name, suffix);
+    }
+    runtime.sync_workspace_view();
+
+    let named = display_id(&runtime, &directory, "a.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": pane, "display_id": named}),
+    ));
+
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    let held = desk(&runtime, &directory, TABS[1]);
+    assert_eq!(held.len(), MAX_VIEW_DISPLAYS);
+    assert_eq!(
+        held.iter()
+            .filter(|name| name.starts_with("https://"))
+            .count(),
+        MAX_VIEW_DISPLAYS - 2,
+        "every page the desk held stays"
+    );
+    assert!(held.iter().any(|name| name == "a.md"), "the named one");
+    assert!(
+        held.iter().any(|name| name == "c.md"),
+        "the newest of the rest"
+    );
+    assert_eq!(shelf(&runtime, &directory), ["b.md"], "no room left");
+    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
 }
 
 /// The desk tab the published snapshot shows in front.

@@ -3,9 +3,9 @@
 //! divider's ratio (`PairMode`). While it is on, the pane the operator is on
 //! is drawn on the left: beside its tab's desk, with the View its agent
 //! opened in front (the View named, else its unseen View, else its last
-//! View, B17, B18), or alone at the body's full width while its agent has
-//! no View to show (a shell, an agent that opened none), and beside the
-//! desk once its agent opens one (D-53). Going to another pane by any way (a
+//! View, B17, B18) and the rest of its Views behind it, or alone at the
+//! body's full width while its agent has no View to show (a shell, an agent
+//! that opened none), and beside the desk once its agent opens one (D-53). Going to another pane by any way (a
 //! pane chord, the sidebar, a tab switch) takes the mode with it
 //! (`follow_pair_focus`, `follow_pair_look`). The engine's layout, zoom and
 //! focus are not touched, and the shell draws the pane's terminal over them
@@ -246,12 +246,14 @@ impl Runtime {
     }
 
     /// Draws `left` with its tab's desk, `content` in front of the desk;
-    /// none leaves the desk as it is, as a pane drawn alone or a desk tab
-    /// the operator brought in front does. The desk is recorded even for a
-    /// pane drawn alone, so a desk its agent stands later folds with the
-    /// mode (D-53).
+    /// none leaves the front as it is, as a pane drawn alone or a desk tab
+    /// the operator brought in front does. Every other View the pane owns
+    /// comes onto the desk behind it (`bring_pair_views`). The desk is
+    /// recorded even for a pane drawn alone, so a desk its agent stands
+    /// later folds with the mode (D-53).
     fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
+        let pane = left.pane.clone();
         let place = Place::Tray(left.tab.clone());
         self.fold_pair_desks(Some((&left.key, &left.tab)));
         self.note_pair_desk(&left.key, &left.tab);
@@ -262,19 +264,47 @@ impl Runtime {
             store.pair_left = Some(left);
             store.generation += 1;
         }
-        let Some(id) = content else {
-            return;
-        };
-        if self.view_place(&key, &id).as_ref() != Some(&place)
-            && !self.bring_view_to(&key, &id, &place)
-        {
-            let error = crate::view_layout::LayoutError::DisplayLimit;
-            self.set_error(error.kind(), error.message(), false);
-            return;
+        if let Some(id) = content {
+            if self.view_place(&key, &id).as_ref() != Some(&place)
+                && !self.bring_view_to(&key, &id, &place)
+            {
+                let error = crate::view_layout::LayoutError::DisplayLimit;
+                self.set_error(error.kind(), error.message(), false);
+                return;
+            }
+            let _ = self.change_view_layout(&key, &place, |layout, stamp| {
+                layout.focus(&id, stamp).map(|changed| ((), changed))
+            });
         }
-        let _ = self.change_view_layout(&key, &place, |layout, stamp| {
-            layout.focus(&id, stamp).map(|changed| ((), changed))
-        });
+        self.bring_pair_views(&key, &place, &pane);
+    }
+
+    /// Every View `pane` owns (`owner_pane_of`, the rule its `N views` list
+    /// and the strip read) that sits on no desk or on another tab's comes
+    /// onto `place` behind the tab in front, so the strip beside the pane
+    /// lists what its `N views` list does, each one not looked at with its
+    /// `볼 것` mark (operator decision 2026-11-24). Newest first and only
+    /// while the desk has room: none is taken off the desk for them, and
+    /// what does not fit stays in the list. A run's summary card stays on
+    /// its run's desk.
+    fn bring_pair_views(&mut self, key: &WorkspaceKey, place: &Place, pane: &str) {
+        let sessions = self.live_sessions();
+        let mut owned: Vec<(u64, String)> = self
+            .view_displays(key)
+            .filter(|display| !display.is_run_summary())
+            .filter(|display| self.owner_pane_of(display, None, &sessions).as_deref() == Some(pane))
+            .map(|display| (display.opened_stamp, display.id.clone()))
+            .collect();
+        owned.sort_by_key(|(opened, _)| std::cmp::Reverse(*opened));
+        for (_, id) in owned {
+            if self.view_place(key, &id).as_ref() == Some(place) {
+                continue;
+            }
+            if self.views_at(key, place) >= crate::view_layout::MAX_VIEW_DISPLAYS {
+                break;
+            }
+            self.bring_view_to(key, &id, place);
+        }
     }
 
     /// Gives the keyboard to `pane`, on this machine or on its device,
