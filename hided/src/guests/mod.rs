@@ -2504,10 +2504,20 @@ mod tests {
             HelperPackages::new(None, crate::cli::RELEASE),
             None,
         );
-        assert_eq!(
-            guests.take_helper(&guest, spelled, |_| true),
-            HelperFolder::Taken
-        );
+        // What the switch left: the record that this machine took the
+        // helper's folder over (`Guests::take_helper`).
+        atomic::write_file(
+            &layout::device_node_guest(home.path()),
+            &serde_json::to_vec(&layout::HelperGuest {
+                key: guest.to_hex(),
+                root: helper_root.clone(),
+                panes: None,
+            })
+            .unwrap(),
+            Access::Private,
+        )
+        .unwrap();
+        assert_eq!(guests.helper_holder(), Some(guest));
         // This test is the tap of the node the stand-in says is ready, in
         // the helper's folder.
         let taps = ipc::LocalListener::bind(&node_dir.join(launch::TAP_ENDPOINT)).unwrap();
