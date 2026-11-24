@@ -25,6 +25,16 @@ use hide_platform::process::OwnedChild;
 use serde_json::json;
 use tokio::sync::watch;
 
+/// Starts a guest's node as this daemon's child: it ends with this daemon,
+/// as every child it starts does unless that child is a pane holder, which
+/// leaves (D-77 (6)). The node's work is to start the guest's holders
+/// ([`hide_platform::process::start_resident`]), so on Windows its job lets
+/// a resident leave; a job that let none leave refused every holder, and no
+/// terminal a paired computer opened on a Windows host ever started.
+pub fn start(command: &mut Command) -> std::io::Result<OwnedChild> {
+    OwnedChild::spawn_letting_residents_leave(command)
+}
+
 /// Where a guest's node stands, as its guest is told.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -624,7 +634,7 @@ impl GuestNode {
         // operator's: it starts with the open-file limit this daemon started
         // with, raises its own, and gives its holders that one back.
         hide_platform::process::keep_starting_open_file_limit(&mut command);
-        let mut child = match OwnedChild::spawn(&mut command) {
+        let mut child = match start(&mut command) {
             Ok(child) => child,
             Err(error) => {
                 return Exit::Crashed(format!(

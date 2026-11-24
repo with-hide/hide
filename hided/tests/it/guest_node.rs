@@ -4,8 +4,11 @@
 //! and its exit codes, which are all the host build knows of it
 //! (`hide_peer::protocol::launch`).
 //!
-//! What a pane does under a guest's node needs the built pane holder and
-//! is the two-core journey's; nothing here starts one.
+//! Every node here is started as the host starts one
+//! (`hided::guests::node::start`). What a pane does under a guest's node
+//! needs the built pane holder: the two-core journey's on Unix, and on
+//! Windows the one ignored test below, which the `windows check` lane runs
+//! with the holder built.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -35,7 +38,10 @@ fn short_root() -> tempfile::TempDir {
 }
 
 fn hided(home: &Path) -> Command {
-    let program = Path::new(env!("CARGO_BIN_EXE_hided"));
+    hided_at(Path::new(env!("CARGO_BIN_EXE_hided")), home)
+}
+
+fn hided_at(program: &Path, home: &Path) -> Command {
     // A new build's first start is slow on macOS and Windows; it starts
     // once before a test waits on it (rule 8).
     crate::stand_ins::ready_with_args(program, &["node", "--version"]);
@@ -67,11 +73,17 @@ struct Node {
 impl Node {
     /// Starts a node over `<root>/n`; its ready line is not read yet.
     fn start(root: &Path) -> Self {
+        Self::start_from(root, Path::new(env!("CARGO_BIN_EXE_hided")))
+    }
+
+    /// [`Node::start`] of the `hided` at `program`, as the host starts a
+    /// guest's node.
+    fn start_from(root: &Path, program: &Path) -> Self {
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let dir = root.join(launch::NODE_SIDE);
-        let mut child = OwnedChild::spawn(
-            hided(&home)
+        let mut child = hided::guests::node::start(
+            hided_at(program, &home)
                 .args(launch::ARGUMENTS)
                 .arg(&dir)
                 .stdin(Stdio::piped())
@@ -370,4 +382,164 @@ fn a_folder_whose_endpoints_would_not_fit_a_socket_address_is_refused() {
     .unwrap();
     assert_eq!(status.code(), Some(launch::EXIT_FOLDER_REFUSED));
     assert!(!dir.join(launch::LINK_ENDPOINT).exists());
+}
+
+/// The node's folder of programs as a guest's build lays it out on a Windows
+/// host: this build's `hided.exe` and `hide.exe`, the built pane holder and
+/// its pinned ConPTY runtime in `holder-conpty`, from which the node takes
+/// its holders' version folder.
+#[cfg(windows)]
+fn windows_build(folder: &Path) -> PathBuf {
+    let variable =
+        |name: &str| PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("set {name}")));
+    std::fs::create_dir_all(folder.join(hide_kit::holders::CONPTY_SOURCE)).unwrap();
+    let built = Path::new(env!("CARGO_BIN_EXE_hided")).parent().unwrap();
+    for program in ["hided.exe", "hide.exe"] {
+        std::fs::copy(built.join(program), folder.join(program)).unwrap();
+    }
+    std::fs::copy(
+        variable("HIDE_TEST_HOLDER_BIN"),
+        folder.join(hide_kit::holders::program_name()),
+    )
+    .unwrap();
+    let conpty = variable("HIDE_HOLDER_CONPTY");
+    let mut folders = vec![PathBuf::new()];
+    while let Some(relative) = folders.pop() {
+        for entry in std::fs::read_dir(conpty.join(&relative)).unwrap() {
+            let entry = entry.unwrap();
+            let relative = relative.join(entry.file_name());
+            let target = folder
+                .join(hide_kit::holders::CONPTY_SOURCE)
+                .join(&relative);
+            if entry.file_type().unwrap().is_dir() {
+                std::fs::create_dir_all(&target).unwrap();
+                folders.push(relative);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    folder.join("hided.exe")
+}
+
+#[cfg(windows)]
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
+    let deadline = std::time::Instant::now() + WITHIN;
+    loop {
+        if let Some(value) = ready() {
+            return value;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// D-77 (6) on a Windows host: the node its host started starts a guest's
+/// pane, takes its input, and the pane outlives that node, which ends with
+/// its owner, as a node a host lost or started again; a later node finds
+/// the same pane, and closing it ends its program. Before the host let a
+/// resident leave its node's job, every pane a paired computer opened on a
+/// Windows host was refused (`this process's job does not let a process
+/// leave it`), on the operator's laptop on 2026-11-24.
+#[cfg(windows)]
+#[test]
+#[ignore = "the built pane holder and its ConPTY runtime; set HIDE_TEST_HOLDER_BIN and HIDE_HOLDER_CONPTY"]
+fn a_windows_hosts_node_starts_a_guests_pane_that_outlives_the_node_and_ends_when_closed() {
+    use std::sync::Arc;
+
+    use hide_node_link::NodeLink;
+    use hide_node_link::holders::{HolderStart, PaneHolders, PaneInput};
+    use hide_node_link::link_panes::LinkPanes;
+
+    const PANE: &str = "guest-pane";
+    let root = short_root();
+    let program = windows_build(&root.path().join("p"));
+    let linked = |node: &Node| {
+        let stream = LocalStream::connect(&node.dir.join(launch::LINK_ENDPOINT)).unwrap();
+        let link: Arc<dyn NodeLink> = Arc::new(
+            hide_node::ssh::host::over_local_stream(
+                "guest:windows",
+                stream,
+                None,
+                Box::new(|_| {}),
+            )
+            .unwrap(),
+        );
+        let _: Hello = hide_node_link::call_as(&link, Call::Hello, WITHIN).unwrap();
+        let panes = LinkPanes::new(
+            Arc::clone(&link),
+            Arc::new(|record| eprintln!("guest pane record: {record}")),
+        );
+        (link, panes)
+    };
+    let screen = |panes: &LinkPanes| panes.read(PANE, 40).map(|(text, _)| text).ok();
+
+    let first = Node::start_from(root.path(), &program);
+    first.ready();
+    let node = first.child.id();
+    let (link, panes) = linked(&first);
+    let start = HolderStart {
+        pane: PANE.to_owned(),
+        program: Some(vec![
+            "cmd.exe".to_owned(),
+            "/d".to_owned(),
+            "/k".to_owned(),
+            "echo guest_pane_up".to_owned(),
+        ]),
+        cwd: hide_platform::path::to_wire(root.path()).unwrap(),
+        env: Vec::new(),
+        rows: 24,
+        cols: 100,
+        notice: None,
+    };
+    // As the host's core starts a pane: a number, its reservation, its
+    // start, then the number retired.
+    let request = panes.request().unwrap();
+    panes
+        .reserve(&start, None, request)
+        .and_then(|reserved| panes.start_reserved(&start, reserved, request))
+        .unwrap_or_else(|error| panic!("the guest's pane did not start: {error:?}"));
+    panes.retire(request).unwrap();
+    let proof = panes.proof(PANE).unwrap();
+    wait_for("the pane's first output", || {
+        screen(&panes)?.contains("guest_pane_up").then_some(())
+    });
+    panes
+        .input(PANE, PaneInput::Bytes(b"echo typed_%OS%\r".to_vec()))
+        .unwrap();
+    wait_for("the pane's answer to what was typed", || {
+        screen(&panes)?.contains("typed_Windows_NT").then_some(())
+    });
+
+    // The node ends with its owner, as when the host ends or starts it
+    // again; the pane's holder left the node's job and keeps its program.
+    drop(panes);
+    drop(link);
+    drop(first);
+    wait_for("the node's end", || {
+        (!hide_platform::process::is_alive(node)).then_some(())
+    });
+    assert_eq!(
+        hide_platform::process::start_time(proof.program).ok(),
+        Some(proof.started),
+        "the pane's program ended with its node"
+    );
+
+    let second = Node::start_from(root.path(), &program);
+    second.ready();
+    let (link, panes) = linked(&second);
+    let recovery = panes.recovered(WITHIN).unwrap();
+    assert_eq!(recovery.present, [PANE.to_owned()], "{recovery:?}");
+    assert_eq!(panes.proof(PANE).unwrap(), proof);
+    panes.terminate(PANE).unwrap();
+    wait_for("the closed pane's program to end", || {
+        (hide_platform::process::start_time(proof.program).ok() != Some(proof.started))
+            .then_some(())
+    });
+    drop(panes);
+    drop(link);
 }
