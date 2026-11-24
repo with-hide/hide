@@ -320,11 +320,17 @@ if (platform === "darwin") {
   if (signing.mode !== "adhoc" && !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signed)) throw new Error(`the notification permission helper is not signed under the hardened runtime: ${signed.trim()}`);
   // The programs that answer consent as the app outside it meet the
   // requirement the app's consent is kept under; one that does not would be
-  // asked about under the path of each build, as before 1.3.0.
+  // asked about under the path of each build, as before 1.3.0. A release
+  // fails on it. A local identity may be another certificate (Apple
+  // Development), which the requirement refuses by design: that build is
+  // made, its programs keep their own names, and one line says so.
   if (signing.mode !== "adhoc") {
     for (const name of SIGNED_AS_APP) {
       const met = spawnSync("/usr/bin/codesign", ["--verify", "-R", `=${APP_IDENTITY.requirement}`, path.join(bundledResources, name)], { encoding: "utf8" });
-      if (met.status !== 0) throw new Error(`${name} does not meet the app's code requirement (contracts/app-identity.json): ${met.stderr.trim()}`);
+      if (met.status === 0) continue;
+      const refusal = `${name} does not meet the app's code requirement (contracts/app-identity.json): ${met.stderr.trim()}`;
+      if (signing.mode === "developer-id") throw new Error(refusal);
+      console.log(`package: ${refusal}; outside the app it answers macOS consent under its own name`);
     }
   }
   // Apple notarizes the checked bundle before any installer wraps it.
