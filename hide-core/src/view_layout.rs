@@ -294,6 +294,16 @@ pub struct Display {
 }
 
 impl Display {
+    /// Whether this is the card an automation's run keeps first on its desk
+    /// (`DetailItem::AutomationRun`): fixed there, never closed, moved off
+    /// the desk, shelved or stored.
+    pub fn is_run_summary(&self) -> bool {
+        matches!(
+            self.card,
+            Some(crate::model::DetailItem::AutomationRun { .. })
+        )
+    }
+
     /// A shell-owned new-tab page; no native page exists until navigation.
     pub fn is_new_tab(&self) -> bool {
         self.kind == DisplayKind::Browser && self.url.is_none()
@@ -380,6 +390,69 @@ impl Display {
     }
 }
 
+/// The longest page or file name a [`KeptView`] keeps; a row shows far fewer.
+pub const KEPT_LABEL_LIMIT: usize = 256;
+
+/// What a View was when something linked it, so a row keeps it after the
+/// View closes and opens it again from here: a decision's link on a mission
+/// (`missions::ViewLink::kept`) and a result of an automation's run
+/// (`automations::RunResult`) are the same record, its kind, name and
+/// address. The address limit is the owner's: what it is willing to keep.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeptView {
+    pub kind: DisplayKind,
+    pub label: String,
+    /// A file's or a diff's path, or a page's address.
+    pub address: String,
+    /// The Changes group a diff compares against.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub committed: bool,
+    /// The agent that had it open when it was linked, which the View opened
+    /// again is stamped with, so it is listed in that agent's 볼 것 as
+    /// before; none for the operator's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<crate::view_feedback::Opener>,
+}
+
+impl KeptView {
+    /// What `display`, titled `label`, can be opened again from; none for
+    /// an outside file, which no address names, a card, or an address past
+    /// `address_limit` bytes.
+    pub fn of(display: &Display, label: String, address_limit: usize) -> Option<Self> {
+        let address = match display.kind {
+            DisplayKind::File | DisplayKind::Diff => display.path.clone(),
+            DisplayKind::Browser => display.url.clone()?,
+            // A card names no View to open again: its owner's own screen does.
+            DisplayKind::External | DisplayKind::Card => return None,
+        };
+        if address.is_empty() || address.len() > address_limit {
+            return None;
+        }
+        Some(Self {
+            kind: display.kind,
+            label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
+            address,
+            committed: display.committed.unwrap_or(false),
+            opener: display.opener.clone(),
+        })
+    }
+
+    /// Whether `display` shows what this kept: the same document, or the
+    /// same page address.
+    pub fn shown_by(&self, display: &Display) -> bool {
+        match self.kind {
+            DisplayKind::Browser => {
+                display.kind == DisplayKind::Browser
+                    && display.url.as_deref() == Some(self.address.as_str())
+            }
+            DisplayKind::File | DisplayKind::Diff => {
+                display.shows(&self.address, self.kind, Some(self.committed))
+            }
+            DisplayKind::External | DisplayKind::Card => false,
+        }
+    }
+}
+
 impl AreaItem for Display {
     const LIMITS: TreeLimits = TreeLimits {
         areas: MAX_VIEW_AREAS,
@@ -404,6 +477,9 @@ impl AreaItem for Display {
     }
     fn same_content(&self, other: &Self) -> bool {
         self.shows(&other.path, other.kind, other.committed)
+    }
+    fn pinned(&self) -> bool {
+        self.is_run_summary()
     }
     fn repair_area(items: &mut [Self], active: Option<&str>, notes: &mut Vec<String>) {
         let mut groups = 0;
@@ -616,6 +692,26 @@ impl Layout {
             operator: true,
             ..self.new_display("", DisplayKind::Card, None, false)
         }
+    }
+
+    /// Takes every run summary card out, as the stored file wants the tree:
+    /// the core places the card again when the run's screen shows the run,
+    /// so it is never written. Returns how many went.
+    pub fn remove_run_summaries(&mut self) -> usize {
+        let gone: Vec<String> = self
+            .displays()
+            .filter(|display| display.is_run_summary())
+            .map(|display| display.id.clone())
+            .collect();
+        for id in &gone {
+            self.remove(id);
+        }
+        gone.len()
+    }
+
+    /// Whether the desk holds a View other than a run's summary card.
+    pub fn holds_views_beyond_run_summary(&self) -> bool {
+        self.displays().any(|display| !display.is_run_summary())
     }
 
     /// Takes every external display out, as the stored file and a host that
@@ -1176,5 +1272,78 @@ mod tests {
         );
         let plain = layout.display(&id(&layout, "plain")).unwrap();
         assert!(plain.operator && plain.openers.is_empty());
+    }
+
+    fn summary_of(layout: &mut Layout) -> Display {
+        layout.new_card_display(crate::model::DetailItem::AutomationRun {
+            automation: "a1".into(),
+            run: 1,
+        })
+    }
+
+    /// Operator choice 2026-11-24: a run's summary card is first in its area
+    /// and in front only on an empty desk, stays where it was placed whatever
+    /// is moved or split around it, and is never stored with the desk.
+    #[test]
+    fn a_run_summary_card_leads_its_area_and_stays_where_it_was_placed() {
+        let mut layout = with_files(&["a", "b"]);
+        let summary = summary_of(&mut layout);
+        let summary_id = summary.id.clone();
+        let a = id(&layout, "a");
+        layout.prepend("a1", summary).unwrap();
+        assert_eq!(
+            names(&layout),
+            vec![vec!["".to_owned(), "a".to_owned(), "b".to_owned()]]
+        );
+        assert_ne!(
+            layout.area("a1").unwrap().active.as_deref(),
+            Some(summary_id.as_str()),
+            "a desk with a View in front keeps it in front"
+        );
+        assert!(layout.holds_views_beyond_run_summary());
+
+        assert_eq!(layout.move_display(&summary_id, "a1", 2, 5), Ok(false));
+        assert_eq!(
+            layout.split(&summary_id, "a1", Edge::Right, 6),
+            Err(LayoutError::NothingToSplit)
+        );
+        layout.split(&a, "a1", Edge::Right, 7).unwrap();
+        assert_eq!(layout.area_of(&summary_id).unwrap().id, "a1");
+
+        let mut empty = Layout::default();
+        let only = summary_of(&mut empty);
+        let only_id = only.id.clone();
+        empty.prepend("a1", only).unwrap();
+        assert_eq!(
+            empty.area("a1").unwrap().active.as_deref(),
+            Some(only_id.as_str())
+        );
+        assert!(!empty.holds_views_beyond_run_summary());
+
+        assert_eq!(layout.remove_run_summaries(), 1);
+        assert!(layout.display(&summary_id).is_none());
+        assert_eq!(layout.display_count(), 2);
+    }
+
+    /// What a link or a result keeps of a View is its address, cut where its
+    /// owner says: a longer address, an outside file and a card keep nothing.
+    #[test]
+    fn a_kept_view_keeps_an_address_within_the_owners_limit_only() {
+        let mut layout = Layout::default();
+        let file = layout.new_display("/repo/notes.md", DisplayKind::File, None, false);
+        let page = layout.new_browser_display("https://example.test/report", 0);
+        let card = summary_of(&mut layout);
+        let kept = KeptView::of(&file, "notes.md".into(), 64).unwrap();
+        assert_eq!(
+            (kept.kind, kept.address.as_str()),
+            (DisplayKind::File, "/repo/notes.md")
+        );
+        assert!(kept.shown_by(&file) && !kept.shown_by(&page));
+        assert!(KeptView::of(&file, "notes.md".into(), 8).is_none());
+        let page_kept = KeptView::of(&page, "report".into(), 64).unwrap();
+        assert!(page_kept.shown_by(&page));
+        assert!(KeptView::of(&card, String::new(), 64).is_none());
+        let long = KeptView::of(&file, "n".repeat(KEPT_LABEL_LIMIT + 10), 64).unwrap();
+        assert_eq!(long.label.chars().count(), KEPT_LABEL_LIMIT);
     }
 }

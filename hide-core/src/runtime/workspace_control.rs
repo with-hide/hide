@@ -450,7 +450,10 @@ impl Runtime {
                 Place::Shelf => false,
             };
             let kept = (!in_view || !lane_call(&action)).then(|| self.keep_front(&key));
-            let calls_lane = in_view && lane_call(&action);
+            // A run's desk is drawn by the automation screen, which no lane
+            // state opens or closes, so an open there leaves the lane alone.
+            let run_desk = matches!(&place, Place::Tray(tab) if self.viewed_run_tab(&key, tab));
+            let calls_lane = in_view && lane_call(&action) && !run_desk;
             let mut applied = self.apply_workspace_action(
                 &key, &place, &context, pane_id, request_id, &action, material,
             );
@@ -945,14 +948,16 @@ impl Runtime {
 
     /// Whether the operator sees `tab`'s tray when a tab lands on it: as
     /// focus mode draws it beside the tab's pane, else while the lane is
-    /// open (PRD lane-desk-pair-view B2, D-53).
+    /// open (PRD lane-desk-pair-view B2, D-53), or while the automation
+    /// screen shows the run whose terminal is in that tab, which draws its
+    /// desk beside it (`drawn_tray_layout`; operator choice 2026-11-24).
     pub(super) fn tray_in_view(&self, key: &(String, String), tab: &str) -> bool {
         self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
             self.workspace_views
                 .as_ref()
                 .and_then(|store| store.views.get(&key.0, &key.1))
                 .is_some_and(|view| view.open)
-        })
+        }) || self.viewed_run_tab(key, tab)
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of

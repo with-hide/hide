@@ -175,6 +175,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("automation_resume", Screen),
     ("automation_run", Screen),
     ("automation_run_open", Screen),
+    ("automation_run_result_open", Screen),
     ("automation_run_stop", Screen),
     ("automation_run_viewing", Screen),
     ("automation_seen", Screen),

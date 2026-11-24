@@ -1088,7 +1088,7 @@ impl Question {
 pub const VIEW_LINK_LIMIT: usize = 16;
 /// The longest `decide --show` value: a View id, or a path the CLI opens as
 /// a View before the core sees it.
-const SHOW_LIMIT: usize = 4096;
+pub(crate) const SHOW_LIMIT: usize = 4096;
 
 /// A View a decision shows the operator to look at, by the checkout that
 /// holds it: a link is a fact recorded when the View was opened or named,
@@ -1117,68 +1117,7 @@ pub struct ViewLink {
     /// Conductor's own link, on a link recorded before it was kept, and for
     /// a View no address can open again (an outside file's grant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kept: Option<KeptView>,
-}
-
-/// The longest page or file name a link keeps; a row shows far fewer.
-const KEPT_LABEL_LIMIT: usize = 256;
-
-/// A linked View's kind, name and address, as the decision linked it.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct KeptView {
-    pub kind: crate::view_layout::DisplayKind,
-    pub label: String,
-    /// A file's or a diff's path, or a page's address.
-    pub address: String,
-    /// The Changes group a diff compares against.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub committed: bool,
-    /// The agent that had it open when the decision linked it, which the
-    /// View opened again is stamped with, so it is listed in that agent's
-    /// 볼 것 as before; none for the operator's own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opener: Option<crate::view_feedback::Opener>,
-}
-
-impl KeptView {
-    /// What `display`, titled `label`, can be opened again from; none for
-    /// an outside file, which no address names, or an address past
-    /// [`SHOW_LIMIT`].
-    pub fn of(display: &crate::view_layout::Display, label: String) -> Option<Self> {
-        use crate::view_layout::DisplayKind;
-        let address = match display.kind {
-            DisplayKind::File | DisplayKind::Diff => display.path.clone(),
-            DisplayKind::Browser => display.url.clone()?,
-            // A card names no View to open again: the mission's own map does.
-            DisplayKind::External | DisplayKind::Card => return None,
-        };
-        if address.is_empty() || address.len() > SHOW_LIMIT {
-            return None;
-        }
-        Some(Self {
-            kind: display.kind,
-            label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
-            address,
-            committed: display.committed.unwrap_or(false),
-            opener: display.opener.clone(),
-        })
-    }
-
-    /// Whether `display` shows what this kept: the same document, or the
-    /// same page address.
-    pub fn shown_by(&self, display: &crate::view_layout::Display) -> bool {
-        use crate::view_layout::DisplayKind;
-        match self.kind {
-            DisplayKind::Browser => {
-                display.kind == DisplayKind::Browser
-                    && display.url.as_deref() == Some(self.address.as_str())
-            }
-            DisplayKind::File | DisplayKind::Diff => {
-                display.shows(&self.address, self.kind, Some(self.committed))
-            }
-            DisplayKind::External | DisplayKind::Card => false,
-        }
-    }
+    pub kept: Option<crate::view_layout::KeptView>,
 }
 
 impl ViewLink {
@@ -6795,7 +6734,7 @@ pub(crate) mod tests {
         assert_eq!(read.kept, None);
         assert_eq!(serde_json::to_value(&read).unwrap(), recorded);
         let kept = ViewLink {
-            kept: Some(KeptView {
+            kept: Some(crate::view_layout::KeptView {
                 kind: crate::view_layout::DisplayKind::Diff,
                 label: "a.rs".into(),
                 address: "/repo/a.rs".into(),

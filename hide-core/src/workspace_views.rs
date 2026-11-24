@@ -649,6 +649,13 @@ impl WorkspaceView {
         if &from == to {
             return Some(from);
         }
+        // A run's summary card stays on the desk of the run it summarizes.
+        if self
+            .view(id)
+            .is_some_and(|display| display.is_run_summary())
+        {
+            return None;
+        }
         if let Place::Tray(tab) = to {
             self.tray_entry(tab);
         }
@@ -734,6 +741,11 @@ impl WorkspaceView {
         let tray = self.trays.remove(index);
         let heir = if heir == tab { PENDING_TRAY } else { heir };
         for display in tray.layout.displays().cloned().collect::<Vec<_>>() {
+            // A run's summary card is the run's alone: it is made again
+            // where the run is shown, never inherited or shelved.
+            if display.is_run_summary() {
+                continue;
+            }
             if !display.operator && !display.openers.is_empty() {
                 self.shelve_or_drop(display, &mut retired);
                 continue;
@@ -1206,6 +1218,14 @@ fn settle(
         if external > 0 {
             notes.push(format!("{external} outside-file views had no grant"));
         }
+        // No build writes a run's summary card either: the core places it.
+        let summaries: usize = view
+            .layouts_mut()
+            .map(|layout| layout.remove_run_summaries())
+            .sum();
+        if summaries > 0 {
+            notes.push(format!("{summaries} run summary cards were stored"));
+        }
         for layout in view.layouts_mut() {
             notes.extend(layout.repair());
             notes.extend(remove_cardless(layout));
@@ -1339,10 +1359,13 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
         .map_err(|_| "Workspace view state directory could not be prepared".to_owned())?;
     // An outside file's tab lives as long as the desktop host's grant, which
     // ends with the app: it is never written (PRD outside-path-in-hide D-07).
+    // A run's summary card is the core's to place where the run is shown, so
+    // it is never written either.
     let kept: Vec<WorkspaceView>;
     let workspaces = if views.workspaces.iter().any(|view| {
-        view.views()
-            .any(|display| display.kind == crate::view_layout::DisplayKind::External)
+        view.views().any(|display| {
+            display.kind == crate::view_layout::DisplayKind::External || display.is_run_summary()
+        })
     }) {
         kept = views
             .workspaces
@@ -1351,6 +1374,7 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
             .map(|mut view| {
                 for layout in view.layouts_mut() {
                     layout.remove_external(|_| false);
+                    layout.remove_run_summaries();
                 }
                 view
             })

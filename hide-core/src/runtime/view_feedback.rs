@@ -360,7 +360,9 @@ impl Runtime {
         if agent {
             self.mark_view_unseen(key, view_id);
             if let Caller::Pane(pane) = Caller::parse(caller_id) {
-                self.link_mission_view(key, view_id, pane, super::memory::now_ms());
+                let now = super::memory::now_ms();
+                self.link_mission_view(key, view_id, pane, now);
+                self.record_run_result(key, view_id, pane, now);
             }
         }
     }

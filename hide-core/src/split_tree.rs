@@ -24,6 +24,11 @@ pub trait AreaItem: Clone {
     fn set_focus_stamp(&mut self, stamp: u64);
     fn keep_open(&mut self);
     fn same_content(&self, other: &Self) -> bool;
+    /// Whether the item stays where it was placed: a move or a split of it
+    /// changes nothing (a run's summary card, fixed first on its desk).
+    fn pinned(&self) -> bool {
+        false
+    }
     fn repair_area(items: &mut [Self], active: Option<&str>, notes: &mut Vec<String>);
 }
 
@@ -456,6 +461,21 @@ impl<I: AreaItem> SplitTree<I> {
         Ok(())
     }
 
+    /// Adds `display` at the start of `area_id` without moving the focus:
+    /// the area shows it only when it had nothing to show.
+    pub fn prepend(&mut self, area_id: &str, display: I) -> Result<(), LayoutError> {
+        self.check_room()?;
+        let area = self
+            .root
+            .area_mut(area_id)
+            .ok_or_else(|| LayoutError::UnknownArea(area_id.to_owned()))?;
+        if area.active.is_none() {
+            area.active = Some(display.id().to_owned());
+        }
+        area.displays.insert(0, display);
+        Ok(())
+    }
+
     /// Takes a display out. Its area shows its most recently focused
     /// remaining display; an area left empty collapses and its sibling takes
     /// the space, except the last area, which stays empty (B10).
@@ -583,6 +603,13 @@ impl<I: AreaItem> SplitTree<I> {
         let source = self
             .area_of(display_id)
             .ok_or_else(|| LayoutError::UnknownDisplay(display_id.to_owned()))?;
+        if source
+            .displays
+            .iter()
+            .any(|item| item.id() == display_id && item.pinned())
+        {
+            return Ok(false);
+        }
         let source_id = source.id.clone();
         let from = source
             .displays
@@ -640,10 +667,14 @@ impl<I: AreaItem> SplitTree<I> {
             .ok_or_else(|| LayoutError::UnknownDisplay(display_id.to_owned()))?;
         let source_id = source.id.clone();
         let alone = source.displays.len() == 1;
+        let pinned = source
+            .displays
+            .iter()
+            .any(|item| item.id() == display_id && item.pinned());
         if self.area(area_id).is_none() {
             return Err(LayoutError::UnknownArea(area_id.to_owned()));
         }
-        if source_id == area_id && alone {
+        if pinned || (source_id == area_id && alone) {
             return Err(LayoutError::NothingToSplit);
         }
         let mut next = self.clone();

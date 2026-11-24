@@ -38,13 +38,27 @@ use super::Runtime;
 use super::workspace_view::WorkspaceKey;
 use crate::delivery::Actor;
 use crate::missions::{
-    KeptView, Mission, MissionNode, NodeStatus, VIEW_LINK_LIMIT, ViewLink, WakeEvent,
+    Mission, MissionNode, NodeStatus, SHOW_LIMIT, VIEW_LINK_LIMIT, ViewLink, WakeEvent,
     push_view_link,
 };
-use crate::view_layout::{Display, DisplayKind};
+use crate::view_layout::{Display, DisplayKind, KeptView};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
+
+/// Why a row's View did not open (`Runtime::open_kept_view`), which each
+/// owner words with its own codes.
+pub(super) enum KeptOpenRefusal {
+    /// The row's checkout is not registered any more.
+    CheckoutGone,
+    /// The View is closed and what it was was not kept, or cannot be opened
+    /// again from an address (an outside file, a card).
+    NotKept,
+    /// A page was refused, by the layout's own reason.
+    Page(&'static str),
+    /// The open was asked and left no View, and none is on its way.
+    Refused,
+}
 /// The reopen requests whose outcome is kept for the press that sent them:
 /// four times the phones a Mac pairs (hided's `MAX_PHONES`), each sending one
 /// press at a time, and the oldest that ended goes first, so a press still
@@ -495,13 +509,94 @@ impl Runtime {
     /// The open View a decision's `link` stands for: the one it names, else
     /// one showing what it kept.
     fn linked_display(&self, link: &ViewLink) -> Option<&Display> {
-        let key = (link.device_id.clone(), link.checkout_path.clone());
-        self.view_display(&key, &link.display_id).or_else(|| {
-            let kept = link.kept.as_ref()?;
-            self.view_displays(&key)
-                .filter(|display| kept.shown_by(display))
-                .max_by_key(|display| display.last_focused_unix_ms)
-        })
+        let place = (link.device_id.clone(), link.checkout_path.clone());
+        self.kept_display(&place, Some(&link.display_id), link.kept.as_ref())
+    }
+
+    /// The open View of the checkout `place` that `display_id` names, else
+    /// the one showing what `kept` kept (the most recently looked at).
+    fn kept_display(
+        &self,
+        place: &WorkspaceKey,
+        display_id: Option<&str>,
+        kept: Option<&KeptView>,
+    ) -> Option<&Display> {
+        display_id
+            .and_then(|id| self.view_display(place, id))
+            .or_else(|| {
+                let kept = kept?;
+                self.view_displays(place)
+                    .filter(|display| kept.shown_by(display))
+                    .max_by_key(|display| display.last_focused_unix_ms)
+            })
+    }
+
+    /// Brings a View a row names in front in the checkout `place`, brought
+    /// forward with its device, at once or once that device's engine has
+    /// brought it forward (`reveal_in_checkout`): the open View `display_id`
+    /// names, else one showing what `kept` kept, else the View opened again
+    /// from `kept`, as the View of `kept.opener` if it has one. One opening
+    /// serves a mission's decision and an automation's run result. Whether it
+    /// is open now.
+    pub(super) fn open_kept_view(
+        &mut self,
+        place: &WorkspaceKey,
+        display_id: Option<&str>,
+        kept: Option<&KeptView>,
+    ) -> Result<bool, KeptOpenRefusal> {
+        let (workspace_id, checkout_id) = self
+            .agent_workspace_ids(place)
+            .ok_or(KeptOpenRefusal::CheckoutGone)?;
+        if let Some(display_id) = self
+            .kept_display(place, display_id, kept)
+            .map(|display| display.id.clone())
+        {
+            self.reveal_in_checkout(super::session::FrontReveal::Display {
+                workspace_id,
+                checkout_id,
+                display_id,
+            });
+            return Ok(true);
+        }
+        let kept = kept.cloned().ok_or(KeptOpenRefusal::NotKept)?;
+        match kept.kind {
+            DisplayKind::File => {
+                self.reveal_path(super::events::RevealPathPayload {
+                    path: kept.address.clone(),
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
+                    is_directory: false,
+                    opener_pane: None,
+                    kept_opener: kept.opener.clone(),
+                });
+            }
+            DisplayKind::Browser => {
+                self.place_browser_as(&kept.address, place.clone(), kept.opener.clone())
+                    .map_err(KeptOpenRefusal::Page)?;
+            }
+            DisplayKind::Diff => {
+                self.reveal_in_checkout(super::session::FrontReveal::Diff {
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
+                    path: kept.address.clone(),
+                    committed: kept.committed,
+                    opener: kept.opener.clone(),
+                });
+            }
+            DisplayKind::External | DisplayKind::Card => return Err(KeptOpenRefusal::NotKept),
+        }
+        // Not open now, it opens only while its file's read or its device's
+        // front is still to come; otherwise the reveal was refused as it was
+        // asked (a display cap, a checkout it cannot read from, a file that
+        // could not be read).
+        let open = self.kept_display(place, display_id, Some(&kept)).is_some();
+        let waits = self.reveal_waits_on(&place.0)
+            || (kept.kind == DisplayKind::File
+                && self.document_open_pending(&workspace_id, &checkout_id, &kept.address));
+        if !open && !waits {
+            return Err(KeptOpenRefusal::Refused);
+        }
+        Ok(open)
     }
 
     /// The operator pressed a row of `owner` on mission `id`
@@ -509,9 +604,7 @@ impl Runtime {
     /// naming its link by `view` (`ViewLink::token`): an open View takes
     /// its area, and a closed one
     /// opens again from what the link kept, as the View of the agent that
-    /// had it open, if one did. Either is shown in its checkout brought
-    /// forward with its device, at once or once that device's engine has
-    /// brought it forward (`reveal_in_checkout`). Whether it is open now.
+    /// had it open, if one did (`open_kept_view`). Whether it is open now.
     fn reopen_linked_view(
         &mut self,
         id: &str,
@@ -529,61 +622,20 @@ impl Runtime {
             .cloned()
             .ok_or("mission_view_unknown")?;
         let place = (link.device_id.clone(), link.checkout_path.clone());
-        let (workspace_id, checkout_id) = self
-            .agent_workspace_ids(&place)
-            .ok_or("mission_view_checkout_gone")?;
-        if let Some(display_id) = self.linked_display(&link).map(|display| display.id.clone()) {
-            self.reveal_in_checkout(super::session::FrontReveal::Display {
-                workspace_id,
-                checkout_id,
-                display_id,
-            });
-            return Ok((link, true));
-        }
-        let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
-        match kept.kind {
-            DisplayKind::File => {
-                self.reveal_path(super::events::RevealPathPayload {
-                    path: kept.address.clone(),
-                    workspace_id: workspace_id.clone(),
-                    checkout_id: checkout_id.clone(),
-                    is_directory: false,
-                    opener_pane: None,
-                    kept_opener: kept.opener,
-                });
-            }
-            DisplayKind::Browser => {
-                self.place_browser_as(&kept.address, place, kept.opener)
-                    .map_err(|refusal| {
-                        crate::diagnostic!(json!({
-                            "component": "missions", "kind": "mission.view_reopen_page_refused",
-                            "mission": id, "owner": owner, "refusal": refusal,
-                        }));
-                        "mission_view_open_refused"
-                    })?;
-            }
-            DisplayKind::Diff => {
-                self.reveal_in_checkout(super::session::FrontReveal::Diff {
-                    workspace_id: workspace_id.clone(),
-                    checkout_id: checkout_id.clone(),
-                    path: kept.address.clone(),
-                    committed: kept.committed,
-                    opener: kept.opener,
-                });
-            }
-            DisplayKind::External | DisplayKind::Card => return Err("mission_view_not_kept"),
-        }
-        // Not open now, it opens only while its file's read or its device's
-        // front is still to come; otherwise the reveal was refused as it was
-        // asked (a display cap, a checkout it cannot read from, a file that
-        // could not be read).
-        let open = self.linked_display(&link).is_some();
-        let waits = self.reveal_waits_on(&link.device_id)
-            || (kept.kind == DisplayKind::File
-                && self.document_open_pending(&workspace_id, &checkout_id, &kept.address));
-        if !open && !waits {
-            return Err("mission_view_open_refused");
-        }
+        let open = self
+            .open_kept_view(&place, Some(&link.display_id), link.kept.as_ref())
+            .map_err(|refusal| match refusal {
+                KeptOpenRefusal::CheckoutGone => "mission_view_checkout_gone",
+                KeptOpenRefusal::NotKept => "mission_view_not_kept",
+                KeptOpenRefusal::Page(refusal) => {
+                    crate::diagnostic!(json!({
+                        "component": "missions", "kind": "mission.view_reopen_page_refused",
+                        "mission": id, "owner": owner, "refusal": refusal,
+                    }));
+                    "mission_view_open_refused"
+                }
+                KeptOpenRefusal::Refused => "mission_view_open_refused",
+            })?;
         Ok((link, open))
     }
 
@@ -834,7 +886,11 @@ impl Runtime {
 /// What a decision's link keeps of `display`: its kind, its name as its tab
 /// says it and its address.
 fn kept_of(display: &Display) -> Option<KeptView> {
-    KeptView::of(display, super::view_areas::display_label(display))
+    KeptView::of(
+        display,
+        super::view_areas::display_label(display),
+        SHOW_LIMIT,
+    )
 }
 
 #[cfg(test)]

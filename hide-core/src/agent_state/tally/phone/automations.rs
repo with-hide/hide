@@ -259,6 +259,7 @@ mod tests {
             seen: false,
             spend: None,
             answer: None,
+            results: Vec::new(),
         })
     }
 
