@@ -889,6 +889,8 @@ The hold records the three default-on agents off explicitly, whether or not they
 An explicit agent choice in the same pass wins over the hold, and any explicit choice (a scope that names an agent, which the first-run answer always does, naming the unchosen default agents off) clears the mark; an existing install, a record without the field, is never held.
 The mark lives in the same record as the choices, so it outlasts a quit between the hold and the answer, and `held_for_onboarding` in the report reads it on every pass.
 The core follows it (`ui_state.agent_onboarding`), applies the answer to this Mac and to every device whose own record waits, and sends the saved choice once per run to a device that reports waiting later; one that still waits afterwards is logged, not asked again on every report.
+The answer names only the agents installed on this Mac, which the step offered a switch for, so a device gets it with each agent this Mac lacks and the device has added on, and each agent the operator left off here off (`Runtime::send_first_run_choice`).
+It is sent once this Mac's pass of the run has listed its agents, so a device that reports first, before that pass, waits for it rather than reading every agent as one this Mac lacks.
 The same step reopened from Help > Set up Hide, once the question is answered, sends only the agents whose switch it changed, as Settings > Agents does, so it never rewrites an agent the operator left alone.
 
 Claude Code and Codex are the agents the kit has always had a hook for; OpenCode has Hide's plugin, Pi and omp Hide's extension, and agy (the Antigravity CLI) Hide's block in its `hooks.json`.
