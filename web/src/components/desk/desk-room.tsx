@@ -210,7 +210,7 @@ export function DeskTabPanel({ tabs, active, tool = null, onTab, onKeep, onClose
   const [zone, fit] = useTabStripFit(tabs.length, tabs.some((tab) => tab.id === active));
   return (
     <>
-      {tool !== null ? <div className="flex w-(--size-lane-panel-min) min-w-0 shrink-0 flex-col border-r border-border bg-sidebar" data-desk-tool-column="explorer">{tool}</div> : null}
+      {tool !== null ? <div className="flex w-(--size-tree-ideal) min-w-0 shrink-0 flex-col border-r border-border bg-sidebar" data-desk-tool-column="explorer">{tool}</div> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-(--size-tab-strip) shrink-0 items-center border-b border-border pr-xs">
           <div ref={zone} className="flex h-full min-w-0 flex-1 pl-xs">
