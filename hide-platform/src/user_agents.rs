@@ -163,6 +163,21 @@ impl UserAgents {
         }
     }
 
+    /// Whether the account's agents run after the machine starts with
+    /// nobody at it: a systemd account that lingers, and a Mac that logs
+    /// this account in by itself (automatic login). Task Scheduler's tasks
+    /// run at a logon, which nobody there makes, and a setting that cannot
+    /// be read is not known to be on: both are `false`. It only reads;
+    /// [`Self::linger`] is what turns linger on.
+    pub fn unattended(&self, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
+        match &self.system {
+            System::Launchd(launchd) => Ok(launchd.logs_in_by_itself(home, stop)),
+            System::Systemd(systemd) => systemd.lingers(home, stop),
+            System::TaskScheduler(_) => Ok(false),
+            System::None(reason) => Err(unsupported(reason)),
+        }
+    }
+
     /// Installs `agent` for `home`'s account, which starts it now and at
     /// each login, and starts it again after any exit while `marker`
     /// exists; one installed already under its label is replaced, which

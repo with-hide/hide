@@ -976,17 +976,6 @@ pub enum PaneFindRoute {
     Bar,
 }
 
-/// A device an Add over SSH, or of a WSL distribution, did not add
-/// (`NavigatorSnapshot::device_not_added`).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeviceNotAddedSnapshot {
-    /// The name the operator gave it.
-    pub label: String,
-    /// Why its switch stopped, as the code a device row's failed switch
-    /// carries (`DeviceSwitchSnapshot::reason`).
-    pub reason: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NavigatorSnapshot {
     pub agent_scope: crate::agent_state::Scope,
@@ -1002,12 +991,6 @@ pub struct NavigatorSnapshot {
     pub focused_workspace_id: Option<String>,
     pub focused_checkout_id: Option<String>,
     pub devices: Vec<DeviceSnapshot>,
-    /// The device the last Add over SSH did not add, with why (PRD
-    /// device-connect-iroh B41): its first switch stopped before anything
-    /// was started on that machine, and no device is left on the helper.
-    /// One at most, until the next device is added.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_not_added: Option<DeviceNotAddedSnapshot>,
     /// The machines this one is paired with over the peer connection, both
     /// directions of each pair, as hided last told the core (PRD
     /// device-connect-iroh D-72). Beside `devices`, not among them: a paired
@@ -1180,31 +1163,18 @@ pub struct DeviceSnapshot {
     /// device-connect-iroh D-72): the machine has one row in Settings, its
     /// pairing's, and this device serves its rail tile and its panes.
     pub peer_key: Option<String>,
-    /// Where the device's switch to its machine's own connection stands
-    /// (PRD device-connect-iroh B36, B41); `None` when none was asked for
-    /// or it finished.
-    pub switch: Option<DeviceSwitchSnapshot>,
-    /// What the Hide this core started on the device's machine over SSH
-    /// still needs from the operator to stay reachable (PRD
-    /// device-connect-iroh B30), as that machine said when it was started;
-    /// kept while this core runs.
+    /// What the device's machine needs from the operator before its own
+    /// Hide is back after a restart with nobody there (PRD
+    /// device-connect-iroh B30), as that machine said: for a helper device,
+    /// what keeps it from moving to its machine's own connection by
+    /// itself; for a machine's device, what the Hide started there still
+    /// needs. Kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs: Option<DeviceNeedsSnapshot>,
-    /// Whether the device can be switched to its machine's own connection
-    /// (PRD device-connect-iroh B35, [`LinkOrigin::switches`]): the one
-    /// rule the row's `바꾸기` and `hide device switch` both follow.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub switchable: bool,
     /// How many of the device's terminals its switch could not take up
     /// again and closed (B36), kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_carried: Option<u32>,
-    /// Added over SSH, or as a WSL distribution, to be switched at once
-    /// (B41): its switch is asked when it first connects, and it is not
-    /// left on the helper when that switch stops before anything was
-    /// started on its machine.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub switch_first: bool,
 }
 
 /// What a machine's Hide, reached over SSH or `wsl.exe`, needs to stay
@@ -1248,37 +1218,6 @@ pub enum DeviceNeeds {
     /// distribution runs, so after Windows restarts it is back only once
     /// the operator opens the distribution.
     OpenDistribution,
-}
-
-/// A helper device's switch to the connection of the Hide on its machine,
-/// as its row draws it: the step under way, or why the last one stopped.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeviceSwitchSnapshot {
-    pub state: DeviceSwitchState,
-    /// Why a `failed` switch stopped: a code the shell words, the pairing's
-    /// refusal codes among them.
-    pub reason: Option<String>,
-    /// With `held`: the computer that switched the device first, as the
-    /// device's machine names it.
-    pub by: Option<String>,
-}
-
-/// `contracts/snapshot-wire-enums.json`: `device_switch_state`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeviceSwitchState {
-    /// The machine is asked what it has.
-    Checking,
-    /// A Hide is being put on the machine.
-    Installing,
-    /// The two machines are paired and the connection is being opened.
-    Connecting,
-    /// The switch stopped; the device is used as before.
-    Failed,
-    /// Another computer switched the device first: the switch waits for
-    /// the operator, who goes on with a folder of this computer's own or
-    /// keeps the device on the old connection (D-75, B69).
-    Held,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -5435,18 +5374,6 @@ pub struct UiStateSnapshot {
     /// before it still owes it. The store owns it.
     #[serde(default, skip_serializing)]
     pub device_switch_opens: BTreeSet<String>,
-    /// The helper devices a build before 1.3.0 registered that have not
-    /// moved to their machine's own connection, by what each is dialed by,
-    /// since an SSH device's id changes at its first connection: each is
-    /// switched by itself when its helper connects
-    /// (`runtime::device_switch`, PRD device-connect-iroh D-49 as the
-    /// operator changed it on 2026-11-24). An entry goes when its device is
-    /// switched or removed, or when the operator keeps it on the old
-    /// connection; a device this build registers is never listed. The store
-    /// owns it, and fills it once from the registrations a store without it
-    /// holds.
-    #[serde(default, skip_serializing)]
-    pub device_moves_due: BTreeSet<DialedBy>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -6345,7 +6272,6 @@ impl Default for UiStateSnapshot {
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
             device_switch_opens: BTreeSet::new(),
-            device_moves_due: BTreeSet::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
@@ -6476,11 +6402,8 @@ impl DeviceNaming {
 }
 
 /// What the core dials a helper device by, whatever its id: an SSH alias
-/// or a WSL distribution of this PC ([`LinkOrigin::dialed_by`]). The store
-/// spells it `{"ssh": "<alias>"}` or `{"wsl": "<distribution>"}`
-/// (`UiStateSnapshot::device_moves_due`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// or a WSL distribution of this PC ([`LinkOrigin::dialed_by`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DialedBy {
     Ssh(String),
     Wsl(String),
@@ -8977,7 +8900,6 @@ impl Snapshot {
                     options.machine_name.as_deref(),
                     None,
                 )],
-                device_not_added: None,
                 peers: Vec::new(),
                 guest_panes: Vec::new(),
                 peer_work: Vec::new(),
@@ -11858,25 +11780,6 @@ mod wire_enum_tests {
             &problems.map(DeviceProblem::code),
         );
         checked.insert("device_problem");
-
-        let switch_states = [
-            DeviceSwitchState::Checking,
-            DeviceSwitchState::Installing,
-            DeviceSwitchState::Connecting,
-            DeviceSwitchState::Failed,
-            DeviceSwitchState::Held,
-        ];
-        for variant in switch_states {
-            match variant {
-                DeviceSwitchState::Checking
-                | DeviceSwitchState::Installing
-                | DeviceSwitchState::Connecting
-                | DeviceSwitchState::Failed
-                | DeviceSwitchState::Held => {}
-            }
-        }
-        assert_wire(&contract, "device_switch_state", &switch_states);
-        checked.insert("device_switch_state");
 
         let needs = [
             DeviceNeeds::AutoLogin,

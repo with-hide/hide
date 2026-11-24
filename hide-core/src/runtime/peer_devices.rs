@@ -185,6 +185,27 @@ impl Runtime {
                             || registration.origin.peer_key() == Some(machine.key.as_str())
                     });
             let Some(index) = registered else {
+                // A distribution of this PC that is a helper device already
+                // is that machine (its own Hide names itself by another
+                // id): a switch that paired and stopped before the device
+                // took the connection left it so. No second device is
+                // registered; the next switch of the helper takes it.
+                let helper = machine.wsl.as_deref().and_then(|distro| {
+                    self.snapshot
+                        .ui_state
+                        .device_registrations
+                        .iter()
+                        .find(|registration| registration.origin.wsl_distro() == Some(distro))
+                });
+                if let Some(helper) = helper {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "peer_devices",
+                        "kind": "peer_device.id_taken",
+                        "target": machine.device_id,
+                        "held_by": helper.id,
+                    }));
+                    continue;
+                }
                 changed |= self.register_peer_device(machine);
                 continue;
             };

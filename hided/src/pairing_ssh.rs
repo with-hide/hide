@@ -611,29 +611,78 @@ impl Needs {
 
 /// What the target's Hide needs. A WSL distribution with no systemd says
 /// so whoever started its Hide, since nothing there starts it again. For a
-/// Hide this switch `started` the rest is read from the system it runs on,
-/// and on Linux from its own `hide always-on linger`, which turns linger
-/// on when the account may. A target that does not answer needs nothing
-/// this machine can name; the switch goes on either way.
+/// Hide this switch `started` the rest is what the target says of itself
+/// ([`may_move`]): nothing when its Hide is back with nobody there, else
+/// what its system asks for. The switch goes on either way.
 fn needs_of(login: &dyn Login, reach: &Reach, started: bool) -> Option<Needs> {
     if login.channel() == Channel::Wsl && !runs_systemd(login) {
         return Some(Needs::OpenDistribution);
     }
-    if !started {
-        return None;
+    started.then(|| may_move(login, reach).needs).flatten()
+}
+
+/// Whether a helper device moves to its machine's own Hide by itself, and
+/// what its operator does when it does not.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Move {
+    /// The account's Hide is back after a restart with nobody at the
+    /// machine: the device is moved.
+    pub back: bool,
+    /// What the operator turns on for that, where something does: a Mac's
+    /// automatic login, or the command a Linux administrator runs. None
+    /// for a machine that is moved, and for one nothing here would move.
+    pub needs: Option<Needs>,
+}
+
+/// The one rule of a move nobody pressed for (operator decision
+/// 2026-11-24): a helper device moves only when its machine's own Hide is
+/// back after a restart with nobody there, since the SSH login it is
+/// dialed by reaches such a machine and its own Hide is there only where
+/// its login item runs then. Asked of the target in its own
+/// `hide always-on linger`: where the account lingers (Linux, which that
+/// turns on when the account may: only asking says whether it may), or the
+/// machine logs it in by itself (a Mac's automatic login). The call starts
+/// no Hide and saves nothing of this machine's. A target that does not
+/// answer, or whose `hide` does not say, is not known to be back and is
+/// left on its login.
+pub(crate) fn may_move(login: &dyn Login, reach: &Reach) -> Move {
+    let answer = match run_hide(login, reach, &["always-on", "linger", "--json"]) {
+        Ok(Said::Answer(answer)) if answer["ok"] == true => answer,
+        Ok(_) => return Move::default(),
+        Err(error) => {
+            not_reached(login, "linger", &error);
+            return Move::default();
+        }
+    };
+    if answer["value"]["unattended"] == true {
+        return Move {
+            back: true,
+            needs: None,
+        };
     }
-    match login.system().ok()?.as_str() {
-        "macos" => Some(Needs::AutoLogin),
-        "linux" => match run_hide(login, reach, &["always-on", "linger", "--json"]) {
-            Ok(Said::Answer(answer)) => linger_needs(&answer),
-            Ok(_) => None,
-            Err(error) => {
-                not_reached(login, "linger", &error);
-                None
-            }
-        },
+    hide_core::diagnostic!(serde_json::json!({
+        "component": "pairing",
+        "kind": "pairing.device_left",
+        "alias": login.name(),
+        "reason": "not_back_unattended",
+    }));
+    let needs = match login.system().ok().as_deref() {
+        // A Mac takes a Hide only from a Mac ([`install_refusal`]): from
+        // any other system its automatic login would move nothing.
+        Some("macos") if std::env::consts::OS == "macos" => Some(Needs::AutoLogin),
+        Some("linux") => linger_needs(&answer),
         _ => None,
-    }
+    };
+    Move { back: false, needs }
+}
+
+/// [`may_move`] for the helper device `alias` names, over a login of its
+/// own that asks nobody.
+pub fn may_move_device(reach: &Reach, alias: &str) -> Move {
+    let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
+    let moves = may_move(&Ssh(&upstream), reach);
+    upstream.close();
+    moves
 }
 
 /// Whether the target was started by systemd, by the folder systemd itself

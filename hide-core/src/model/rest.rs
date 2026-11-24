@@ -138,7 +138,6 @@ section!(whole NavigatorSections, NavigatorSnapshot, s, {
     focused_workspace_id: Option<String> => s.focused_workspace_id,
     focused_checkout_id: Option<String> => s.focused_checkout_id,
     devices: Vec<DeviceSnapshot> => s.devices,
-    device_not_added: Option<DeviceNotAddedSnapshot> => s.device_not_added,
     peers: Vec<crate::peer_machines::PeerMachine> => s.peers,
     guest_panes: Vec<crate::guest_panes::GuestPanes> => s.guest_panes,
     peer_work: Vec<crate::peer_work::PeerWork> => s.peer_work,

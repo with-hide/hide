@@ -2303,7 +2303,7 @@ const PANE: &str = "remote:studio:pane:w1:p1";
 
 /// The device's engine session showing one pane in front, as its session sync
 /// would publish it.
-fn session_with_pane() -> RemoteSessionSnapshot {
+pub(super) fn session_with_pane() -> RemoteSessionSnapshot {
     let pane_id = PANE;
     let workspace_id = "remote:studio:workspace:w1";
     let checkout_id = "remote:studio:checkout:w1";
@@ -2404,7 +2404,7 @@ fn installed() -> KitReport {
     report(&[(ComponentId::Cli, ComponentState::Installed)])
 }
 
-fn live_session() -> RemoteSessionSnapshot {
+pub(super) fn live_session() -> RemoteSessionSnapshot {
     RemoteSessionSnapshot {
         workspaces: Vec::new(),
         agents: Vec::new(),

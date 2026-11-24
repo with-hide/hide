@@ -7021,29 +7021,7 @@
             "command": "device switch",
             "options": [
                 {
-                    "conflicts": [
-                        "--keep"
-                    ],
                     "name": "--install",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--keep"
-                    ],
-                    "name": "--own-folder",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--install",
-                        "--own-folder"
-                    ],
-                    "name": "--keep",
                     "required": false,
                     "requires": [],
                     "value": null
@@ -9811,7 +9789,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:9976a0f6e96c9c8b8031968f0f585c57034a6cca1b92f817be5acdfacf11fc8d",
+    "digest": "sha256:c44b9ac43387df5f50a99913e2241cc8857d4880af54760dfa3943b7b2d7ad09",
     "envelopes": {
         "access": {
             "answer": "value",

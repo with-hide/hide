@@ -1,21 +1,29 @@
-//! A helper device a build before 1.3.0 added moves to the connection of
-//! its machine's own Hide by itself (`Runtime::move_when_ready`): which
-//! device is asked for, when, and what stops it from being asked again.
-//! hided runs the switch itself; the core only says a device is due.
+//! A helper device moves to the connection of its machine's own Hide by
+//! itself (`runtime::device_switch`): which device is asked for, when, what
+//! its row says while it stays, and that a device another computer switched
+//! first moves only once it lists no terminal. hided looks at the machine
+//! and runs the switch; the core says a device is due and changes its link.
 
-use super::device_kit::{DEVICE, KitDevice, dispatch, established, report, settle, with_consent};
+use super::device_kit::{
+    DEVICE, KitDevice, dispatch, established, live_session, report, session_with_pane, settle,
+    with_consent,
+};
 use super::*;
-use crate::model::{DeviceSwitchState, DialedBy};
+use crate::model::{DeviceNeeds, LinkOrigin};
 use hide_kit::{ComponentId, ComponentState, KitReport};
 use std::sync::{Arc, Mutex};
 
-/// The daemon's mover: the devices the core said are due, in order.
+/// The daemon's mover: the devices the core said are due, in order, each
+/// with whether it goes on with a folder of this computer's own.
 #[derive(Default)]
-struct Asked(Mutex<Vec<String>>);
+struct Asked(Mutex<Vec<(String, bool)>>);
 
 impl crate::DeviceMover for Asked {
-    fn due(&self, device_id: &str) {
-        self.0.lock().unwrap().push(device_id.to_owned());
+    fn due(&self, device_id: &str, own_folder: bool) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((device_id.to_owned(), own_folder));
     }
 }
 
@@ -23,17 +31,10 @@ impl Asked {
     fn count(&self) -> usize {
         self.0.lock().unwrap().len()
     }
-}
 
-/// A store an earlier build wrote listed `DEVICE` when this build read it.
-fn listed(shared: &Mutex<Runtime>) {
-    shared
-        .lock()
-        .unwrap()
-        .snapshot
-        .ui_state
-        .device_moves_due
-        .insert(DialedBy::Ssh(DEVICE.to_owned()));
+    fn last(&self) -> Option<bool> {
+        self.0.lock().unwrap().last().map(|(_, own)| *own)
+    }
 }
 
 /// `DEVICE` has connected before, so it goes by its machine's id: a device
@@ -47,20 +48,10 @@ fn named(shared: &Mutex<Runtime>) {
         .iter_mut()
         .find(|registration| registration.id == DEVICE)
         .expect("the device");
-    registration.origin = crate::model::LinkOrigin::Dialed {
+    registration.origin = LinkOrigin::Dialed {
         ssh_alias: DEVICE.to_owned(),
         naming: crate::model::DeviceNaming::Named,
     };
-}
-
-fn is_listed(shared: &Mutex<Runtime>) -> bool {
-    shared
-        .lock()
-        .unwrap()
-        .snapshot
-        .ui_state
-        .device_moves_due
-        .contains(&DialedBy::Ssh(DEVICE.to_owned()))
 }
 
 /// The device's helper connects, the link it had before dropped, with what
@@ -93,7 +84,8 @@ fn step(shared: &Mutex<Runtime>, step: serde_json::Value) {
     dispatch(shared, "device_switch", payload);
 }
 
-fn switch_of(shared: &Mutex<Runtime>) -> Option<crate::model::DeviceSwitchSnapshot> {
+/// What the device's row says its machine needs.
+fn needs_of(shared: &Mutex<Runtime>) -> Option<(DeviceNeeds, Option<String>)> {
     shared
         .lock()
         .unwrap()
@@ -103,8 +95,17 @@ fn switch_of(shared: &Mutex<Runtime>) -> Option<crate::model::DeviceSwitchSnapsh
         .iter()
         .find(|device| device.id == DEVICE)
         .expect("the device's row")
-        .switch
+        .needs
         .clone()
+        .map(|needs| (needs.kind, needs.command))
+}
+
+fn is_helper(shared: &Mutex<Runtime>) -> bool {
+    shared
+        .lock()
+        .unwrap()
+        .device_registration(DEVICE)
+        .is_some_and(|registration| registration.origin.dials_helper())
 }
 
 fn moved_by(shared: &Mutex<Runtime>) -> Arc<Asked> {
@@ -116,39 +117,124 @@ fn moved_by(shared: &Mutex<Runtime>) -> Arc<Asked> {
     asked
 }
 
-/// The operator's decision of 2026-11-24: a device an earlier build added
-/// over SSH moves once its helper connects with this build's kit in place,
-/// with nothing pressed. It is asked for once per connection: not again
-/// while its switch runs, again at the next connection after one stopped
-/// (principle 11: the same intent, retried, starts no second switch).
+/// The device's session is read, listing one terminal or none.
+fn lists(shared: &Mutex<Runtime>, terminal: bool) {
+    let session = match terminal {
+        true => session_with_pane(),
+        false => live_session(),
+    };
+    shared
+        .lock()
+        .unwrap()
+        .ingest_remote_session(DEVICE, Ok(session));
+}
+
+/// The machine `DEVICE` is, paired and active under `key`.
+fn paired(shared: &Mutex<Runtime>, key: &str, device_id: &str) {
+    dispatch(
+        shared,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": device_id, "name": "Studio",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]}),
+    );
+}
+
+/// The one rule (operator decision 2026-11-24), for a device an earlier
+/// build added and one added now alike: every device the core dials, on
+/// which the operator let this machine's programs run, is looked at once
+/// its helper connects with this build's kit in place, with nothing
+/// pressed. A device hided left as it is, or whose move stopped, is looked
+/// at again at the next connection, and one whose switch is landing is not
+/// asked for a second time (principle 11: the same intent, retried, starts
+/// no second switch).
 #[test]
-fn a_device_an_earlier_build_added_is_moved_when_its_helper_connects() {
+fn a_device_is_looked_at_for_its_move_each_time_its_helper_connects() {
     let shared = with_consent(None);
     let asked = moved_by(&shared);
-    listed(&shared);
 
     connects(&shared, kit_in_place());
-    assert_eq!(*asked.0.lock().unwrap(), [DEVICE]);
+    assert_eq!(*asked.0.lock().unwrap(), [(DEVICE.to_owned(), false)]);
 
-    // Its switch runs: a link that drops and returns starts no second one.
-    step(&shared, serde_json::json!({"step": "checking"}));
-    connects(&shared, kit_in_place());
-    assert_eq!(asked.count(), 1);
-
-    // It stopped, and the row says why: the next connection tries again.
-    step(
-        &shared,
-        serde_json::json!({"step": "failed", "reason": "ssh_not_reached"}),
-    );
-    assert!(is_listed(&shared), "a switch that stopped is still due");
+    // Left as it is: looked at again.
+    step(&shared, serde_json::json!({"step": "looked"}));
     connects(&shared, kit_in_place());
     assert_eq!(asked.count(), 2);
 
-    // hided found nothing to say (no login was free): asked again as well.
+    // Its machine is paired and the connection is being opened: a link
+    // that drops and returns starts no second switch.
+    step(
+        &shared,
+        serde_json::json!({"step": "connecting", "key": "ab".repeat(32)}),
+    );
+    connects(&shared, kit_in_place());
+    assert_eq!(asked.count(), 2);
+
+    // It stopped: the device is as it was, and the next connection tries
+    // again.
     step(&shared, serde_json::json!({"step": "ended"}));
-    assert_eq!(switch_of(&shared), None);
+    assert!(is_helper(&shared));
     connects(&shared, kit_in_place());
     assert_eq!(asked.count(), 3);
+}
+
+/// What a device that stays needs is its row's one line, as hided read it
+/// from the machine: a Mac's automatic login, or the command a Linux
+/// administrator runs. A device that is moved, or that nothing the
+/// operator does would move (a Windows machine), shows none, and the line
+/// goes at the look that finds the setting on.
+#[test]
+fn a_device_that_stays_says_what_its_machine_needs_and_nothing_else() {
+    let shared = with_consent(None);
+    assert_eq!(needs_of(&shared), None);
+
+    step(
+        &shared,
+        serde_json::json!({"step": "looked", "needs": {"kind": "auto_login"}}),
+    );
+    assert_eq!(needs_of(&shared), Some((DeviceNeeds::AutoLogin, None)));
+
+    let command = "sudo loginctl enable-linger me";
+    step(
+        &shared,
+        serde_json::json!({"step": "looked", "needs": {"kind": "linger", "command": command}}),
+    );
+    assert_eq!(
+        needs_of(&shared),
+        Some((DeviceNeeds::Linger, Some(command.to_owned())))
+    );
+
+    // Spelled as no row can draw it: not taken.
+    step(
+        &shared,
+        serde_json::json!({"step": "looked", "needs": {"kind": "linger"}}),
+    );
+    assert!(needs_of(&shared).is_some());
+
+    step(&shared, serde_json::json!({"step": "looked"}));
+    assert_eq!(needs_of(&shared), None);
+}
+
+/// A move the core itself stops, after hided paired the machine, leaves the
+/// device on its helper with nothing on its row and is asked for again at
+/// the next connection: here another device is that machine's already.
+#[test]
+fn a_move_the_core_stops_leaves_the_device_as_it_was() {
+    let key = "ab".repeat(32);
+    let shared = with_consent(None);
+    let asked = moved_by(&shared);
+    connects(&shared, kit_in_place());
+    paired(&shared, &key, "another-device");
+    step(
+        &shared,
+        serde_json::json!({"step": "connecting", "key": key}),
+    );
+    assert!(is_helper(&shared));
+    assert_eq!(needs_of(&shared), None);
+    connects(&shared, kit_in_place());
+    assert_eq!(asked.count(), 2);
 }
 
 /// A connection that installs nothing itself leaves the kit to the device's
@@ -160,7 +246,6 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     let installed = report(&[(ComponentId::Cli, ComponentState::Installed)]);
     let shared = with_consent(Some(KitDevice::answering(Ok(installed))));
     let asked = moved_by(&shared);
-    listed(&shared);
     named(&shared);
     let pass = |job: KitJob| {
         shared.lock().unwrap().queue_device_kit(DEVICE, job);
@@ -169,7 +254,7 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     pass(KitJob::Status);
     assert_eq!(asked.count(), 0, "a read of the kit installed nothing");
     pass(KitJob::Apply(hide_kit::Scope::automatic()));
-    assert_eq!(*asked.0.lock().unwrap(), [DEVICE]);
+    assert_eq!(*asked.0.lock().unwrap(), [(DEVICE.to_owned(), false)]);
 
     let refused = KitReport {
         refused: Some(Box::new(hide_kit::KitRefusal {
@@ -183,7 +268,6 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     };
     let shared = with_consent(Some(KitDevice::answering(Ok(refused))));
     let asked = moved_by(&shared);
-    listed(&shared);
     named(&shared);
     shared
         .lock()
@@ -197,8 +281,8 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     );
 }
 
-/// The operator's press asks on the device's row, as its connection
-/// attempts do; a move nobody pressed hands its login nobody to ask, so a
+/// `hide device switch` asks on the device's row, as its connection
+/// attempts do; a move nobody asked for hands its login nobody to ask, so a
 /// login that would need a password, a passphrase or an answer about the
 /// server's key ends instead of waiting (PRD system-ssh-device-link B14).
 #[test]
@@ -214,91 +298,133 @@ fn a_move_by_itself_hands_its_login_nobody_to_ask() {
         crate::SwitchVia::Ssh { sign_in, .. } => sign_in.is_some(),
         crate::SwitchVia::Wsl { .. } => panic!("the device is dialed over SSH"),
     };
-    assert!(asks(true), "a press asks on the device's row");
+    assert!(asks(true), "the operator's own switch asks on the row");
     assert!(!asks(false), "a move by itself was given someone to ask");
 }
 
-/// A device this build registered was never listed, one added to be
-/// switched has its own press under way, and a connection whose kit did
-/// not go in left an older `hide` on the machine: none is asked for.
+/// The devices of one start are switched one after the other, so one may
+/// wait a while after the core said it is due. A device the operator took
+/// their consent back from in between is not switched when its turn comes,
+/// and none is asked for without it.
 #[test]
-fn a_device_that_is_not_due_or_not_ready_is_left_on_its_helper() {
-    // Registered by this build: a store this build wrote lists nothing.
+fn a_device_without_the_operators_consent_is_not_moved() {
+    let due = |shared: &Mutex<Runtime>| {
+        shared
+            .lock()
+            .unwrap()
+            .device_switch_source(DEVICE, false)
+            .map(|_| ())
+    };
     let shared = with_consent(None);
     let asked = moved_by(&shared);
     connects(&shared, kit_in_place());
-    assert_eq!(asked.count(), 0);
+    assert_eq!(asked.count(), 1);
+    assert_eq!(due(&shared), Ok(()));
+    shared.lock().unwrap().set_host_consent(DEVICE, false);
+    assert_eq!(due(&shared), Err("switch_not_due"));
+    // Their own switch is theirs to ask for.
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .device_switch_source(DEVICE, true)
+            .is_ok()
+    );
+}
 
-    // Listed, and its kit pass failed.
-    listed(&shared);
+/// A pass may end without this build's `hide` on the machine (its command
+/// folder could not be written, or holds a copy that is not this build's),
+/// or not answer at all: the older `hide` there would run the switch, so
+/// the device waits for a pass that puts this build's in.
+#[test]
+fn a_device_whose_hide_is_not_this_build_s_is_not_moved() {
+    for state in [ComponentState::Outdated, ComponentState::Failed] {
+        let shared = with_consent(None);
+        let asked = moved_by(&shared);
+        connects(&shared, Ok(report(&[(ComponentId::Cli, state)])));
+        assert_eq!(asked.count(), 0, "{state:?}");
+        connects(&shared, kit_in_place());
+        assert_eq!(asked.count(), 1, "{state:?}");
+    }
+    let shared = with_consent(None);
+    let asked = moved_by(&shared);
     connects(&shared, Err("the device did not answer".to_owned()));
-    assert_eq!(asked.count(), 0);
-    assert!(is_listed(&shared));
-
-    // Listed, and the operator just added it again to switch it.
-    shared
-        .lock()
-        .unwrap()
-        .device_fresh_adds
-        .insert(DialedBy::Ssh(DEVICE.to_owned()));
-    connects(&shared, kit_in_place());
     assert_eq!(asked.count(), 0);
 }
 
-/// Another computer switched the device first (B69): the question stays on
-/// the device, naming that computer, until the operator answers, and no
-/// connection asks for the switch meanwhile. Keeping the old connection is
-/// saved: the device is not moved by itself again, in this run or the next.
+/// Another computer switched the device first (D-75), so its helper folder
+/// and the terminals in it are that computer's to carry on: this one moves
+/// with a folder of its own, which takes up none of them. Nobody is asked.
+/// The device stays on its helper while it lists a terminal, or while its
+/// session has not been read, and is asked for the moment it lists none.
 #[test]
-fn a_held_device_waits_for_the_operator_and_a_kept_one_is_not_moved_again() {
+fn a_device_another_computer_moved_first_moves_once_it_lists_no_terminal() {
     let shared = with_consent(None);
     let asked = moved_by(&shared);
-    listed(&shared);
     connects(&shared, kit_in_place());
     assert_eq!(asked.count(), 1);
 
-    step(
-        &shared,
-        serde_json::json!({"step": "held", "by": "Office Mac"}),
-    );
-    let held = switch_of(&shared).expect("the question on the device");
-    assert_eq!(
-        (held.state, held.by.as_deref(), held.reason),
-        (DeviceSwitchState::Held, Some("Office Mac"), None)
-    );
-    connects(&shared, kit_in_place());
-    assert_eq!(asked.count(), 1, "a held device was asked for again");
+    // Its session is not read yet: not known to list none.
+    step(&shared, serde_json::json!({"step": "held"}));
+    assert_eq!(asked.count(), 1);
+    assert_eq!(needs_of(&shared), None, "a waiting device says nothing");
 
-    step(&shared, serde_json::json!({"step": "kept"}));
-    assert_eq!(switch_of(&shared), None);
-    assert!(!is_listed(&shared));
-    connects(&shared, kit_in_place());
-    assert_eq!(asked.count(), 1, "a kept device was moved");
-    // The next start reads the same answer.
-    wait_for("the store written", || {
-        let runtime = shared.lock().unwrap();
-        !runtime.state_save_active && !runtime.state_save_pending
-    });
-    let path = shared.lock().unwrap().state_path.clone();
-    let (stored, _, _) = crate::persistence::load(&path);
-    assert!(stored.device_moves_due.is_empty());
-    assert_eq!(stored.device_registrations.len(), 1);
+    // A terminal runs there: it waits, however often the session is read.
+    lists(&shared, true);
+    lists(&shared, true);
+    assert_eq!(asked.count(), 1);
+
+    // The last one closed: asked for now, once, with its own folder.
+    lists(&shared, false);
+    assert_eq!((asked.count(), asked.last()), (2, Some(true)));
+    lists(&shared, false);
+    assert_eq!(asked.count(), 2, "a read after the ask asked again");
+
+    // A device that already lists none when hided finds it held is asked
+    // for at once.
+    step(&shared, serde_json::json!({"step": "held"}));
+    assert_eq!((asked.count(), asked.last()), (3, Some(true)));
 }
 
-/// A name the other machine sent is drawn on this one, so hided cleans it
-/// before it says the step (`hide_peer::link::clean_name`). A step that
-/// still carries one too long to be a computer's name, or with control
-/// characters, is refused whole: nothing of it is drawn.
+/// No switch closes a terminal: a terminal opened on the device between the
+/// ask and the pairing keeps the device on its helper, where that terminal
+/// runs, and the move is taken up again once it has closed.
 #[test]
-fn a_held_step_with_a_name_that_cannot_be_shown_is_refused() {
+fn a_terminal_opened_while_its_move_ran_keeps_the_device_on_its_helper() {
+    let key = "ab".repeat(32);
     let shared = with_consent(None);
-    for by in ["a\u{1b}[31mb".to_owned(), "x".repeat(4_096)] {
-        step(&shared, serde_json::json!({"step": "held", "by": by}));
-        assert_eq!(switch_of(&shared), None);
-    }
+    named(&shared);
+    let asked = moved_by(&shared);
+    connects(&shared, kit_in_place());
+    lists(&shared, false);
     step(&shared, serde_json::json!({"step": "held"}));
-    let held = switch_of(&shared).expect("the question on the device");
-    assert_eq!((held.state, held.by), (DeviceSwitchState::Held, None));
+    assert_eq!((asked.count(), asked.last()), (2, Some(true)));
+
+    lists(&shared, true);
+    paired(&shared, &key, DEVICE);
+    let connecting = serde_json::json!({"step": "connecting", "key": key, "own_folder": true});
+    step(&shared, connecting.clone());
+    assert!(is_helper(&shared), "a switch closed a terminal");
+
+    // It closed: asked for again, and this time the device takes its
+    // machine's connection.
+    lists(&shared, false);
+    assert_eq!((asked.count(), asked.last()), (3, Some(true)));
+    step(&shared, connecting);
+    assert!(!is_helper(&shared));
+
+    // A switch that keeps the helper's folder carries the terminals on,
+    // and waits for none of them.
+    let shared = with_consent(None);
+    named(&shared);
+    connects(&shared, kit_in_place());
+    lists(&shared, true);
+    paired(&shared, &key, DEVICE);
+    step(
+        &shared,
+        serde_json::json!({"step": "connecting", "key": key}),
+    );
+    assert!(!is_helper(&shared));
 }
 
 /// The daemon hands its mover in after the core has started: a device that
@@ -306,24 +432,29 @@ fn a_held_step_with_a_name_that_cannot_be_shown_is_refused() {
 #[test]
 fn a_device_ready_before_the_daemon_listens_is_asked_for_when_it_does() {
     let shared = with_consent(None);
-    listed(&shared);
     connects(&shared, kit_in_place());
     let asked = moved_by(&shared);
-    assert_eq!(*asked.0.lock().unwrap(), [DEVICE]);
+    assert_eq!(*asked.0.lock().unwrap(), [(DEVICE.to_owned(), false)]);
     let again = moved_by(&shared);
     assert_eq!(again.count(), 0);
 }
 
-/// A removed device is due no more: one added again under the same alias
-/// by this build is this build's, and stays on its helper.
+/// A removed device waits for nothing: one added again under the same
+/// alias is a new device, looked at when its own helper connects.
 #[test]
-fn a_removed_device_is_not_moved_when_it_is_added_again() {
+fn a_removed_device_is_not_asked_for_when_its_session_is_read() {
     let shared = with_consent(None);
-    listed(&shared);
+    let asked = moved_by(&shared);
+    connects(&shared, kit_in_place());
+    lists(&shared, true);
+    step(&shared, serde_json::json!({"step": "held"}));
     dispatch(
         &shared,
         "remove_device",
         serde_json::json!({ "device_id": DEVICE }),
     );
-    assert!(!is_listed(&shared));
+    let runtime = shared.lock().unwrap();
+    assert!(runtime.device_moves_held.is_empty());
+    assert!(runtime.device_moves_ready.is_empty());
+    assert_eq!(asked.count(), 1);
 }

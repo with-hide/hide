@@ -1356,33 +1356,31 @@ pub struct Runtime {
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
-    /// Each helper device's switch to its machine's own connection, while
-    /// one is under way or stopped (`device_switch`). Never saved: a switch
-    /// is one press of the operator, asked again after a restart.
+    /// Each helper device whose switch paired its machine and waits for
+    /// that machine's grant to be active (`device_switch`). Never saved: a
+    /// switch is asked again when the device's helper next connects.
     device_switches: HashMap<String, device_switch::DeviceSwitch>,
     /// Devices whose registration was rewritten to their machine's
     /// connection and is not saved yet; each takes that connection once a
     /// save holds it (`device_switch`).
     device_switch_saving: HashMap<String, device_switch::SwitchSaving>,
-    /// What the Hide a switch started on a device's machine still needs
+    /// What each device's machine needs from the operator
     /// (`DeviceSnapshot::needs`), by device; an entry goes with its device.
     device_needs: HashMap<String, crate::model::DeviceNeedsSnapshot>,
     /// How many terminals each device's switch could not take up again
     /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
     /// device.
     device_not_carried: HashMap<String, u32>,
-    /// The devices added to be switched at once whose switch has not
-    /// landed (`RegisterDevicePayload::switch_first`), by the alias or the
-    /// distribution each is dialed by, since an SSH device's id changes at
-    /// its first connection. Never saved: after a restart it is a helper
-    /// device like any other.
-    device_fresh_adds: HashSet<crate::model::DialedBy>,
     /// What switches a device by itself, which the daemon hands in at its
     /// start (`device_switch::DeviceMover`).
     device_mover: Option<Arc<dyn device_switch::DeviceMover>>,
     /// The devices due to move whose helper connected before the daemon
     /// handed its mover in; at most one entry for each registered device.
     device_moves_ready: BTreeSet<String>,
+    /// The devices another computer switched first, which move once they
+    /// list no terminal of this computer's (`device_switch`); at most one
+    /// entry for each registered device, gone with it.
+    device_moves_held: HashSet<String>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2558,9 +2556,9 @@ impl Runtime {
             device_switch_saving: HashMap::new(),
             device_needs: HashMap::new(),
             device_not_carried: HashMap::new(),
-            device_fresh_adds: HashSet::new(),
             device_mover: None,
             device_moves_ready: BTreeSet::new(),
+            device_moves_held: HashSet::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

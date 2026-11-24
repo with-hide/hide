@@ -149,6 +149,33 @@ pub fn switch(
     pairing_ssh::switch_on(&login, switch)
 }
 
+/// A switch nobody pressed for found its distribution off, and asked it
+/// nothing (B43).
+pub const OFF: &str = "wsl_off";
+
+/// Whether the helper device `distro` moves with nobody pressing for it
+/// (`pairing_ssh::may_move`). A distribution that is off is asked nothing,
+/// since any command run in it would start it (B43), and is not moved.
+pub fn may_move(access: &WslAccess, reach: &Reach, distro: &str) -> pairing_ssh::Move {
+    if !matches!(access.runs(distro), Ok(true)) {
+        return pairing_ssh::Move::default();
+    }
+    pairing_ssh::may_move(&Wsl { access, distro }, reach)
+}
+
+/// [`switch`] nobody pressed for: a distribution that went off since it
+/// was looked at ([`may_move`]) is asked nothing (B43).
+pub fn move_device(
+    access: &WslAccess,
+    distro: &str,
+    switch: &Switch<'_>,
+) -> Result<Switched, &'static str> {
+    if !matches!(access.runs(distro), Ok(true)) {
+        return Err(OFF);
+    }
+    self::switch(access, distro, switch)
+}
+
 /// What makes the carriers of this PC's connections to its distributions.
 pub struct Carriers {
     access: WslAccess,
@@ -495,6 +522,95 @@ esac
             panic!("the distribution's Hide did not pair");
         };
         assert_eq!(needs, None);
+    }
+
+    /// The operator's decision of 2026-11-24, and the rule of what moves
+    /// with nobody asked: a distribution that is off is asked nothing, one
+    /// whose Hide is not back after a restart with nobody there is asked
+    /// that one question and left as it is, and one whose Hide is back is
+    /// switched. What its `hide always-on linger` says is the answer; an
+    /// older `hide`, or one that says nothing, is not known to be back.
+    #[test]
+    fn a_distribution_moves_by_itself_only_when_it_runs_and_its_hide_is_back_unattended() {
+        const MOVED: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/hide.log"
+[ "$1" = "always-on" ] && { cat "$HOME/linger"; exit 0; }
+case "$2" in
+    look-ssh) echo '{"ok":true,"value":{"look":{"system":"linux","core":true}}}' ;;
+    accept-ssh) printf '{"ok":true,"value":{"helper":"taken","accepted":{"key":"%s","device":"distro-device","name":"Ubuntu","grant":"g1","candidates":[]}}}\n' "$(cat "$HOME/key")" ;;
+    projects-ssh) echo '{"ok":true,"value":{"projects":0}}' ;;
+    *) exit 2 ;;
+esac
+"#;
+        let pc = pc_with(MOVED, "linger");
+        std::fs::write(pc.dir.path().join("systemd"), "").unwrap();
+        let home = pc.dir.path().join("home");
+        let theirs = hide_peer::MachineKey::generate().unwrap().public();
+        std::fs::write(home.join("key"), theirs.to_hex()).unwrap();
+        let mine = hide_peer::MachineKey::generate().unwrap().public();
+        let moved = || {
+            move_device(
+                &pc.access,
+                "Ubuntu",
+                &Switch {
+                    reach: &pc.reach,
+                    request: "req-1",
+                    me: &me(),
+                    key: &mine,
+                    helper_root: Some("~/.hide/device"),
+                    projects: &[],
+                    admitted: &|_| true,
+                    install: true,
+                    installing: &|| {},
+                },
+            )
+        };
+        let may = || may_move(&pc.access, &pc.reach, "Ubuntu");
+        let said = || {
+            std::fs::read_to_string(home.join("hide.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+
+        // Off: nothing is run in it, by the look or by the switch.
+        pc.running("");
+        assert_eq!(may(), pairing_ssh::Move::default());
+        assert_eq!(moved().err(), Some(OFF));
+        assert_eq!(pc.calls(), ["--list --running --quiet"; 2]);
+        assert!(said().is_empty());
+
+        // On, and its Hide is not back with nobody there, or does not say.
+        pc.running("Ubuntu");
+        let left = [
+            r#"{"ok":true,"value":{"linger":"needs_administrator","command":"sudo loginctl enable-linger me","unattended":false}}"#,
+            r#"{"ok":true,"value":{"linger":"not_used","unattended":false}}"#,
+            r#"{"ok":true,"value":{"linger":"on"}}"#,
+            "",
+        ];
+        for answer in left {
+            std::fs::write(home.join("linger"), answer).unwrap();
+            assert!(!may().back, "{answer}");
+        }
+        assert_eq!(
+            said(),
+            vec!["always-on linger --json"; left.len()],
+            "a distribution that is left was asked for more than the one answer"
+        );
+
+        // Back with nobody there: it may move, and is switched as a press
+        // switches it.
+        std::fs::write(
+            home.join("linger"),
+            r#"{"ok":true,"value":{"linger":"on","unattended":true}}"#,
+        )
+        .unwrap();
+        assert!(may().back);
+        let Ok(Switched::Paired { paired, .. }) = moved() else {
+            panic!("the distribution was not switched");
+        };
+        assert_eq!(paired.expect("a new pairing").accepted.key, theirs);
     }
 
     /// A distribution's own Hide that stopped with it is started by the

@@ -920,7 +920,7 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         );
         let row = device_row(&fixture.snapshot()?)?;
         ensure!(
-            row["peer_key"].is_null() && row["switch"].is_null(),
+            row["peer_key"].is_null(),
             "a switch that asked first changed the device: {row}"
         );
         ensure!(
@@ -1021,10 +1021,7 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
                             row["target_id"] == fixture::DEVICE && row["state"] == "connected"
                         })
                     });
-                Ok(
-                    (row["peer_key"].is_string() && row["switch"].is_null() && connected)
-                        .then_some(()),
-                )
+                Ok((row["peer_key"].is_string() && connected).then_some(()))
             })?;
             let snapshot = fixture.snapshot()?;
             let row = device_row(&snapshot)?;
@@ -1163,17 +1160,21 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
 }
 
 /// The operator's decision of 2026-11-24 (mission remote-1-3-0 R03, R04,
-/// R11): a device a build before 1.3.0 added over SSH moves to its
-/// machine's own Hide when this build starts, with nothing pressed, no
-/// install question and no window open. The core reads a store with no
-/// list of the devices still to move as an earlier build's, connects the
-/// device's helper as before, and the switch that `hide device switch
-/// --install` runs is run by the daemon itself. The device keeps its name,
-/// its project and its running terminal, and is one row, in the snapshot
-/// and in `hide device list`, across another start of the core.
+/// R05, R11): each time a device's helper connects and its kit pass
+/// answers, the daemon looks at the device by itself, with nothing pressed
+/// and no window open, and moves it only when its machine's own Hide would
+/// be back after a restart with nobody there. The fixture's account has no
+/// login item of the system's (its HOME is not the account's own), so its
+/// device is left as it is: nothing is started there, its terminal runs
+/// on, and the next connection looks again. A device that is off is not
+/// looked at. `hide device switch --install` then moves it, and it keeps
+/// its name, its project and its running terminal and is one row, in the
+/// snapshot and in `hide device list`, across another start of the core.
+/// The move itself with nothing pressed is `pairing_wsl`'s
+/// `a_distribution_moves_by_itself_only_when_it_runs_and_its_hide_is_back_unattended`.
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
-fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_pressed()
+fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_connection()
 -> Result<()> {
     Fixture::journey(|fixture| {
         let stand_in = |fixture: &mut Fixture| -> Result<String> {
@@ -1197,61 +1198,73 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
                 .filter(|row| row["kind"] == kind)
                 .collect())
         };
-        let moved = |fixture: &Fixture| said(fixture, "pairing.moved_by_itself");
-        // The devices the core's store still has to move.
-        let due = |fixture: &Fixture| -> Result<Value> {
-            let store = fixture.state.join(hide_core::node_migration::CORE_STATE);
-            let store: Value = serde_json::from_slice(&fixture::read(&store)?)?;
-            Ok(store["device_moves_due"].clone())
+        let looks = |fixture: &Fixture| said(fixture, "pairing.moved_by_itself");
+        // Every look so far left the device where it was.
+        let left = |fixture: &Fixture, row: &Value| -> Result<()> {
+            ensure!(
+                looks(fixture)?
+                    .iter()
+                    .all(|look| look["device"] == fixture::DEVICE && look["ended"] == "left"),
+                "what the daemon said of its looks: {:?}",
+                looks(fixture)?
+            );
+            ensure!(
+                row["peer_key"].is_null(),
+                "a device that was left was moved: {row}"
+            );
+            ensure!(
+                !state.join("hided.json").exists(),
+                "a Hide was started on a device that was left"
+            );
+            Ok(())
         };
 
-        // This build added the device, so it is this build's: it connected
-        // and its kit went in, and it stays on its helper.
+        // Nothing is pressed: the device this build added connected, its
+        // kit pass answered, and the daemon looked at it. Its Hide would
+        // not be back with nobody there, so it is left.
+        let first = fixture::wait_within(
+            "the daemon to look at the device by itself",
+            SWITCH_WITHIN + fixture::READY_BOUND,
+            || Ok(Some(looks(fixture)?.len()).filter(|count| *count > 0)),
+        )?;
         ensure!(
-            due(fixture)? == serde_json::json!([]),
-            "a device this build added is listed to move: {}",
-            due(fixture)?
+            !said(fixture, "pairing.device_left")?.is_empty(),
+            "the daemon did not say why it left the device"
         );
-        let row = device_row(&fixture.snapshot()?)?;
+        left(fixture, &device_row(&fixture.snapshot()?)?)?;
         ensure!(
-            row["peer_key"].is_null() && row["switch"].is_null() && moved(fixture)?.is_empty(),
-            "a device this build added was moved: {row}"
+            stand_in(fixture)? == before,
+            "the terminal of a device that was left did not carry on"
         );
 
         // The build this core's node runs from on that machine, as that
         // machine's Hide would place it (`shipped::place_guest_build`).
         let programs = fixture.hide.parent().context("the staged build")?;
         crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
-        // The same state folder as an earlier build left it: its store
-        // says nothing about which devices are still to move. The device
-        // is off when this build first starts (mission remote-1-3-0 R05):
-        // the core lists it and does not reach it, so nothing is asked of
-        // its machine and nothing is started there.
+        // The device is off when the core next starts: the core lists it
+        // and does not reach it, so nothing is asked of its machine.
         let retries = said(fixture, "host.retry_scheduled")?.len();
         fixture.ssh.online(false)?;
-        fixture.restart_core(|store| {
-            store
-                .as_object_mut()
-                .context("the core's store")?
-                .remove("device_moves_due")
-                .context("this build wrote no list of the devices to move")?;
-            Ok(())
-        })?;
+        fixture.restart_core(|_| Ok(()))?;
         wait_for("a connection attempt that did not reach the device", || {
             Ok((said(fixture, "host.retry_scheduled")?.len() > retries).then_some(()))
         })?;
-        let row = device_row(&fixture.snapshot()?)?;
         ensure!(
-            row["peer_key"].is_null() && row["switch"].is_null() && moved(fixture)?.is_empty(),
-            "a device that was not reached was moved: {row}"
+            looks(fixture)?.len() == first,
+            "a device that was not reached was looked at: {:?}",
+            looks(fixture)?
         );
-        ensure!(
-            !state.join("hided.json").exists(),
-            "a Hide was started on a device that was not reached"
-        );
-        // It is back: the helper's link returns, and with it the move.
+        left(fixture, &device_row(&fixture.snapshot()?)?)?;
+        // It is back: the helper's link returns, and with it the look,
+        // which reads the machine again and leaves it again.
         fixture.ssh.online(true)?;
         fixture.reconnect_device()?;
+        fixture::wait_within(
+            "the daemon to look again at the device's next connection",
+            SWITCH_WITHIN + fixture::READY_BOUND,
+            || Ok((looks(fixture)?.len() > first).then_some(())),
+        )?;
+        left(fixture, &device_row(&fixture.snapshot()?)?)?;
 
         let on_its_machines_connection = |fixture: &Fixture| -> Result<Option<Value>> {
             let snapshot = fixture.snapshot()?;
@@ -1264,10 +1277,7 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
                         row["target_id"] == fixture::DEVICE && row["state"] == "connected"
                     })
                 });
-            Ok(
-                (row["peer_key"].is_string() && row["switch"].is_null() && connected)
-                    .then_some(snapshot),
-            )
+            Ok((row["peer_key"].is_string() && connected).then_some(snapshot))
         };
         // One row for the machine: one device, one paired machine, and one
         // line of `hide device list`.
@@ -1308,22 +1318,25 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
         };
 
         let journey = (|| -> Result<()> {
-            // Nothing is pressed: the device's helper connects, its kit
-            // pass answers, and the daemon switches it.
+            ensure!(
+                stand_in(fixture)? == before,
+                "the terminal of a device that was left twice did not carry on"
+            );
+
+            // `hide device switch` moves it, as it moves any device.
+            let (ok, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
+            ensure!(
+                ok && answer["value"]["switch"] == "done",
+                "the switch: {answer}"
+            );
             let snapshot = fixture::wait_within(
-                "the device moved to its machine's connection by itself",
+                "the device on its machine's connection",
                 SWITCH_WITHIN + fixture::READY_BOUND,
                 || on_its_machines_connection(fixture),
             )?;
             ensure!(
                 state.join("hided.json").exists(),
-                "no Hide of the account's own runs after the move"
-            );
-            let said = moved(fixture)?;
-            ensure!(
-                matches!(said.as_slice(), [row] if row["device"] == fixture::DEVICE
-                    && row["ended"] == "done"),
-                "what the daemon said it moved: {said:?}"
+                "no Hide of the account's own runs after the switch"
             );
             one_row(fixture, &snapshot)?;
             // The terminal carried on: the program in it ran before.
@@ -1337,23 +1350,17 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
                 row["not_carried"].is_null(),
                 "the move says it could not take a terminal up: {row}"
             );
-            // The same save that made it the machine's device took it off
-            // the devices still to move.
-            wait_for("the store without the moved device", || {
-                Ok((due(fixture)? == serde_json::json!([])).then_some(()))
-            })?;
-
-            // The next start finds one machine, already moved: it moves
-            // nothing and adds no second row.
+            // The next start finds one machine, already moved: it looks
+            // at nothing and adds no second row.
             fixture.restart_core(|_| Ok(()))?;
             let snapshot = wait_for("the moved device after another start", || {
                 on_its_machines_connection(fixture)
             })?;
             one_row(fixture, &snapshot)?;
             ensure!(
-                moved(fixture)?.len() == 1,
-                "the device was moved again: {:?}",
-                moved(fixture)?
+                looks(fixture)?.iter().all(|look| look["ended"] == "left"),
+                "a machine that already moved was moved again: {:?}",
+                looks(fixture)?
             );
             ensure!(
                 stand_in(fixture)? == before,
@@ -1361,7 +1368,7 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
             );
             Ok(())
         })();
-        // The Hide the move started on the account is this journey's to
+        // The Hide the switch started on the account is this journey's to
         // end, and so is the terminal that Hide opened for the project it
         // was handed: the fixture owns only what it started itself.
         let mut stop = account.command(&fixture.remote.hide);

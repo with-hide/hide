@@ -2500,9 +2500,7 @@ mod tests {
 
     /// The fields of the core state that hold no machine id, no engine id and
     /// no digest of one: the operator's own appearance and layout choices,
-    /// whichever machine runs the core, and the devices due to move by
-    /// themselves, which are named by how they are dialed (an SSH alias, a
-    /// WSL distribution) and never by an id.
+    /// whichever machine runs the core.
     const CORE_STATE_NAMES_NO_MACHINE: &[&str] = &[
         "schema_version",
         "left_sidebar_visible",
@@ -2543,7 +2541,6 @@ mod tests {
         "issue_settings",
         "conductor_settings",
         "agent_start",
-        "device_moves_due",
     ];
 
     /// A core state gains a field often, and a field that names a machine

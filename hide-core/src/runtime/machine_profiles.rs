@@ -401,7 +401,7 @@ impl Runtime {
                 registration
             }
             // The press is the install consent, as Add device's is (B2).
-            (None, Some(distro)) => match self.register_wsl_device(distro, true, false) {
+            (None, Some(distro)) => match self.register_wsl_device(distro, true) {
                 Ok(registration) => registration,
                 Err(refusal) => {
                     self.set_error(refusal.code, refusal.message, false);
@@ -418,7 +418,6 @@ impl Runtime {
                     ssh_alias: profile.target.clone(),
                     wsl_distro: None,
                     host_consent: true,
-                    switch_first: false,
                 }) {
                     Ok(id) => {
                         let registrations = &self.snapshot.ui_state.device_registrations;

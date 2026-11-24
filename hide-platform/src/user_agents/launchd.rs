@@ -36,11 +36,18 @@ const BOOTOUT_IN_PROGRESS: i32 = 36;
 /// `bootout`'s exit when another `bootout` already began the teardown that
 /// has not finished (`EALREADY`, "Operation already in progress").
 const BOOTOUT_ALREADY_IN_PROGRESS: i32 = 37;
+/// The login window's preferences, where macOS keeps the account it logs
+/// in by itself when the Mac starts (`autoLoginUser`).
+const LOGIN_WINDOW: &str = "/Library/Preferences/com.apple.loginwindow";
 
 #[derive(Clone, Debug)]
 pub(super) struct Launchd {
     launchctl: PathBuf,
+    defaults: PathBuf,
     domain: String,
+    /// The account's login name; empty when the system did not say, which
+    /// is no account's name.
+    user: String,
 }
 
 impl Launchd {
@@ -50,15 +57,35 @@ impl Launchd {
         let uid = unsafe { libc::getuid() };
         Self {
             launchctl: "/bin/launchctl".into(),
+            defaults: "/usr/bin/defaults".into(),
             domain: format!("gui/{uid}"),
+            user: super::account_name().unwrap_or_default(),
         }
     }
 
     pub(super) fn fixture(stand_ins: &Path) -> Self {
         Self {
             launchctl: stand_ins.join("launchctl"),
+            defaults: stand_ins.join("defaults"),
             domain: "fixture".to_owned(),
+            user: "fixture".to_owned(),
         }
+    }
+
+    /// Whether macOS logs this account in when the Mac starts (automatic
+    /// login), so its GUI session, and the agents in it, are there with
+    /// nobody at the Mac. A setting that is absent or cannot be read is
+    /// one that is off.
+    #[allow(clippy::disallowed_methods)] // env_clear: defaults is a macOS system tool this module alone runs, and needs nothing but the home
+    pub(super) fn logs_in_by_itself(&self, home: &Path, stop: &AtomicBool) -> bool {
+        let mut command = Command::new(&self.defaults);
+        command
+            .args(["read", LOGIN_WINDOW, "autoLoginUser"])
+            .env_clear()
+            .env(crate::host::HOME_VARIABLE, home);
+        crate::process::run_to_end(&mut command, COMMAND_WITHIN, stop).is_ok_and(|read| {
+            read.code == Some(0) && !self.user.is_empty() && read.stdout.trim() == self.user
+        })
     }
 
     fn plist(home: &Path, label: &str) -> PathBuf {

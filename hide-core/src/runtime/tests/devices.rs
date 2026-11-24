@@ -1763,6 +1763,83 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
     }
 }
 
+/// A switch of a distribution that paired and then stopped (the app closed
+/// while it connected, or the connection was confirmed after the wait
+/// ended) leaves a paired machine and a helper device that are one
+/// distribution under two ids. The machine becomes no second device: the
+/// helper's next switch takes its connection, under the id and name it had.
+#[test]
+fn a_distribution_paired_before_its_switch_landed_becomes_no_second_device() {
+    use crate::model::LinkOrigin;
+    let mut runtime = runtime();
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let key = "cd".repeat(32);
+    let helper = runtime
+        .register_wsl_device("Ubuntu", true)
+        .expect("the distribution");
+    let devices = runtime.snapshot.ui_state.device_registrations.len();
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "distribution-own-id", "name": "DESKTOP-PC",
+            "opens": "active", "opened_by": null, "connected": true, "path": "direct",
+            "reason": null, "update": null, "wsl": "Ubuntu",
+        }]}),
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.device_registrations.len(),
+        devices,
+        "the distribution's Hide became a second device"
+    );
+    assert_eq!(runtime.device_registration(&helper.id), Some(&helper));
+
+    // The next switch finds the pairing in place and takes it.
+    dispatch(
+        &mut runtime,
+        "device_switch",
+        serde_json::json!({"device_id": helper.id, "step": "connecting", "key": key}),
+    );
+    let switched = runtime.device_registration(&helper.id).expect("the device");
+    assert_eq!(
+        switched.origin,
+        LinkOrigin::Peer {
+            key: key.clone(),
+            switched: true
+        }
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.device_registrations.len(),
+        devices
+    );
+
+    // Another distribution's Hide is a device of its own, as before.
+    let other = "ef".repeat(32);
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [
+            {
+                "key": key, "device_id": "distribution-own-id", "name": "DESKTOP-PC",
+                "opens": "active", "opened_by": null, "connected": true, "path": "direct",
+                "reason": null, "update": null, "wsl": "Ubuntu",
+            },
+            {
+                "key": other, "device_id": "debian-own-id", "name": "DESKTOP-PC",
+                "opens": "active", "opened_by": null, "connected": true, "path": "direct",
+                "reason": null, "update": null, "wsl": "Debian",
+            },
+        ]}),
+    );
+    assert!(runtime.device_registration("debian-own-id").is_some());
+}
+
 /// The WSL step of every released state folder (PRD device-connect-iroh
 /// D-27, D-49, B36): a WSL distribution added as a helper device on the
 /// upgraded store is switched through `wsl.exe`, named by its id or by its
@@ -1804,7 +1881,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         );
         // The release's own PC adds its distribution, with a project in it.
         let helper = runtime
-            .register_wsl_device("Ubuntu", true, false)
+            .register_wsl_device("Ubuntu", true)
             .unwrap_or_else(|refusal| panic!("{tag}: the distribution was refused: {refusal:?}"));
         runtime.snapshot.ui_state.workspace_registrations.push(
             crate::model::WorkspaceRegistration {
@@ -1910,13 +1987,13 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
 }
 
 /// A helper device is switched to its machine's own connection under the
-/// registration it has (PRD device-connect-iroh D-49, B36, B41): the steps
-/// hided says are drawn on its row, a switch that stops leaves the helper
-/// as it was with the reason, and once the paired machine's grant is active
-/// the same id and name go on over that machine's connection.
+/// registration it has (PRD device-connect-iroh D-49, B36): a switch that
+/// stops leaves the helper as it was with nothing on its row, and once the
+/// paired machine's grant is active the same id and name go on over that
+/// machine's connection.
 #[test]
 fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
-    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
     let mut runtime = runtime();
     let key = "ab".repeat(32);
     let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
@@ -1979,24 +2056,8 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
         Some("device_unknown")
     );
 
-    // Each step is drawn on the device's row.
-    for (said, drawn) in [
-        ("checking", DeviceSwitchState::Checking),
-        ("installing", DeviceSwitchState::Installing),
-    ] {
-        assert!(dispatch(&mut runtime, "device_switch", step(said)));
-        let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
-        assert_eq!((switch.state, switch.reason), (drawn, None), "{said}");
-    }
-
-    // A switch that stops before the pairing leaves the helper device, with
-    // the reason (B41).
-    let mut failed = step("failed");
-    failed["reason"] = serde_json::json!("ssh_not_reached");
-    dispatch(&mut runtime, "device_switch", failed);
-    let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
-    assert_eq!(switch.state, DeviceSwitchState::Failed);
-    assert_eq!(switch.reason.as_deref(), Some("ssh_not_reached"));
+    // A switch that stops before the pairing leaves the helper device.
+    dispatch(&mut runtime, "device_switch", step("ended"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
 
     // Paired, and not confirmed yet: still the helper's. The switch started
@@ -2008,11 +2069,8 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     unspelled["needs"] = serde_json::json!({"kind": "linger"});
     dispatch(&mut runtime, "device_switch", unspelled);
     assert_eq!(
-        device(&runtime, "build-box-id")
-            .switch
-            .as_ref()
-            .map(|switch| switch.state),
-        Some(DeviceSwitchState::Failed),
+        runtime.switching_to(&key),
+        None,
         "a step that names a linger without its command was taken"
     );
     connecting["needs"] = serde_json::json!({
@@ -2022,13 +2080,7 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     assert_eq!(device(&runtime, "build-box-id").needs, None);
     dispatch(&mut runtime, "peer_machines", machines("confirming"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
-    assert_eq!(
-        device(&runtime, "build-box-id")
-            .switch
-            .as_ref()
-            .map(|switch| switch.state),
-        Some(DeviceSwitchState::Connecting)
-    );
+    assert_eq!(runtime.switching_to(&key).as_deref(), Some("build-box-id"));
 
     // The grant is active: the same registration is that machine's device.
     dispatch(&mut runtime, "peer_machines", machines("active"));
@@ -2047,7 +2099,7 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
-    assert_eq!((row.ssh_alias.as_deref(), &row.switch), (None, &None));
+    assert_eq!(row.ssh_alias, None);
     // What that machine's Hide still needs is on the row from then on.
     let needs = row.needs.clone().expect("what the machine's Hide needs");
     assert_eq!(
@@ -2112,10 +2164,10 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
             .switched()
     );
 
-    // A step that names no key, or a reason that is not a code, is refused.
+    // A step that names no key, or a need no row can draw, is refused.
     for bad in [
         serde_json::json!({"device_id": "build-box-id", "step": "connecting"}),
-        serde_json::json!({"device_id": "build-box-id", "step": "failed", "reason": "No such host"}),
+        serde_json::json!({"device_id": "build-box-id", "step": "looked", "needs": {"kind": "linger"}}),
         serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": "zz"}),
     ] {
         let before = runtime.snapshot.ui_state.device_registrations.clone();
@@ -2286,110 +2338,13 @@ fn a_switch_names_no_more_projects_than_its_machine_takes() {
     assert_eq!(source.projects, first);
 }
 
-/// A device added over SSH is added to be switched (B41, review of #2682):
-/// when that switch stops with nothing started on its machine, the device
-/// is taken off again and one line says why; once a Hide was started there
-/// or a grant saved, it stays a helper device with its reason and a retry.
-/// A helper device that was there before stays either way.
-#[test]
-fn a_device_added_for_its_switch_is_taken_off_when_the_switch_started_nothing() {
-    use crate::model::DeviceSwitchState;
-    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
-        let event = serde_json::to_vec(&serde_json::json!({
-            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
-        }))
-        .expect("event");
-        runtime.dispatch_json(&event)
-    };
-    let add = |runtime: &mut Runtime, alias: &str, switch_first: bool| {
-        runtime
-            .register_device(events::RegisterDevicePayload {
-                label: alias.to_owned(),
-                ssh_alias: alias.to_owned(),
-                wsl_distro: None,
-                host_consent: true,
-                switch_first,
-            })
-            .unwrap_or_else(|refusal| panic!("not registered: {}", refusal.code))
-    };
-    let failed = |device: &str, clean: bool| {
-        serde_json::json!({
-            "device_id": device, "step": "failed", "reason": "ssh_mac_signed_out", "clean": clean,
-        })
-    };
-
-    // Stopped before anything was started there: not added, with why.
-    let mut runtime = runtime();
-    let lab = add(&mut runtime, "lab", true);
-    assert!(device(&runtime, &lab).switch_first);
-    dispatch(&mut runtime, "device_switch", failed(&lab, true));
-    assert_eq!(runtime.device_registration(&lab), None);
-    let line = runtime.snapshot.navigator.device_not_added.clone();
-    assert_eq!(
-        line.map(|line| (line.label, line.reason)),
-        Some(("lab".to_owned(), "ssh_mac_signed_out".to_owned()))
-    );
-    // The next Add takes the line away.
-    let again = add(&mut runtime, "lab", true);
-    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
-
-    // A Hide was started there, or a grant saved: it stays, as a helper
-    // device like any other from then on (B41).
-    dispatch(&mut runtime, "device_switch", failed(&again, false));
-    let row = device(&runtime, &again);
-    assert_eq!(
-        row.switch.as_ref().map(|switch| switch.state),
-        Some(DeviceSwitchState::Failed)
-    );
-    assert!(!row.switch_first);
-    dispatch(&mut runtime, "device_switch", failed(&again, true));
-    assert!(runtime.device_registration(&again).is_some());
-    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
-
-    // A WSL distribution added for its switch goes the same way (D-27):
-    // it is remembered by its distribution, and offers the switch.
-    let distribution = runtime
-        .register_device(events::RegisterDevicePayload {
-            label: String::new(),
-            ssh_alias: String::new(),
-            wsl_distro: Some("Ubuntu".to_owned()),
-            host_consent: true,
-            switch_first: true,
-        })
-        .unwrap_or_else(|refusal| panic!("not registered: {}", refusal.code));
-    let row = device(&runtime, &distribution);
-    assert!(row.switch_first && row.switchable);
-    dispatch(
-        &mut runtime,
-        "device_switch",
-        serde_json::json!({
-            "device_id": distribution, "step": "failed", "reason": "wsl_not_reached", "clean": true,
-        }),
-    );
-    assert_eq!(runtime.device_registration(&distribution), None);
-    assert_eq!(
-        runtime
-            .snapshot
-            .navigator
-            .device_not_added
-            .as_ref()
-            .map(|line| line.reason.as_str()),
-        Some("wsl_not_reached")
-    );
-
-    // A device that was not added for a switch is never taken off.
-    let older = add(&mut runtime, "older", false);
-    dispatch(&mut runtime, "device_switch", failed(&older, true));
-    assert!(runtime.device_registration(&older).is_some());
-}
-
 /// The link changes only after the switched registration is saved (review
 /// of #2682): a core that ended between the two would read the helper
 /// registration again and dial a folder its machine's own Hide already
 /// holds.
 #[test]
 fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
-    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
     let mut runtime = runtime();
     let terminals = record_terminals(&mut runtime);
     let key = "ab".repeat(32);
@@ -2415,13 +2370,6 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
         });
     runtime.rebuild_device_rows();
     let helper = runtime.device_registration("build-box-id").unwrap().clone();
-    // An earlier build added it, so it is due to move by itself.
-    let due = crate::model::DialedBy::Ssh("build-box".to_owned());
-    runtime
-        .snapshot
-        .ui_state
-        .device_moves_due
-        .insert(due.clone());
     dispatch(
         &mut runtime,
         "peer_machines",
@@ -2444,29 +2392,20 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
     dispatch(&mut runtime, "device_switch", connecting.clone());
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     let row = device(&runtime, "build-box-id");
-    let switch = row.switch.clone().expect("why the switch stopped");
-    assert_eq!(
-        (switch.state, switch.reason.as_deref()),
-        (DeviceSwitchState::Failed, Some("switch_not_saved"))
-    );
     assert_eq!((row.peer_key.as_deref(), &row.needs), (None, &None));
     assert_eq!(terminals.devices(), before, "the helper's link was touched");
-    assert!(
-        runtime.snapshot.ui_state.device_moves_due.contains(&due),
-        "a switch that was not saved is still due"
+    assert_eq!(
+        runtime.switching_to(&key),
+        None,
+        "the stopped switch waits on"
     );
 
-    // Pressed again once the store can be written, it lands (B41).
+    // Asked again once the store can be written, it lands.
     runtime.state_path = store;
     dispatch(&mut runtime, "device_switch", connecting);
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
-    assert_eq!(row.switch, None);
     assert!(row.needs.is_some());
-    // It moved: the same save took it off the devices still to move.
-    assert!(!runtime.snapshot.ui_state.device_moves_due.contains(&due));
-    let (stored, _, _) = crate::persistence::load(&runtime.state_path);
-    assert!(stored.device_moves_due.is_empty());
     // Only now is the helper's link let go.
     assert!(
         terminals.devices().len() > before.len()

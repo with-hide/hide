@@ -1,53 +1,60 @@
 //! A helper device's switch to the connection of the Hide on its machine
-//! (PRD device-connect-iroh D-49, B35, B36, B41).
+//! (PRD device-connect-iroh D-49, B36).
+//!
+//! One rule decides it (operator decision 2026-11-24): a device the core
+//! dials over SSH, or a WSL distribution of this PC, moves by itself when
+//! nothing is lost by it and its machine's own Hide is back after a restart
+//! with nobody there; any other is used over its helper as before. Nothing
+//! on the screen asks for a switch or tells its steps.
 //!
 //! The steps run in hided, which reaches the machine over the device's SSH
-//! login, or through `wsl.exe` when the device is a WSL distribution of
-//! this PC (D-27), has a Hide put there when it has none and pairs the two. The
-//! core hears each step as a `device_switch` event, sent by the daemon
-//! only: it draws the step on the device's row and, once the paired
-//! machine's grant is active, changes the registration's link in place.
-//! The device keeps its id and its name, and so its engine folder, its
-//! projects, its tabs and every record that names it; only the transport
-//! under it is made again. Until that moment the registration is the
+//! login, or through `wsl.exe` (D-27), has a Hide put there when it has
+//! none and pairs the two. Each time a device's helper connected and this
+//! build's `hide` is in place there, the core asks the daemon for its
+//! switch ([`DeviceMover`]); hided looks first whether the machine comes
+//! back by itself and says what it still needs when it does not, which the
+//! device's row shows as one faint line. Once the paired machine's grant is
+//! active the core changes the registration's link in place: the device
+//! keeps its id and its name, and so its engine folder, its projects, its
+//! tabs and every record that names it. Until then the registration is the
 //! helper's and its link is untouched, so a switch that stops leaves the
-//! device as it was, with the reason on its row.
+//! device as it was and only the log says why.
 //!
-//! A helper device a build before 1.3.0 registered is switched without a
-//! press (operator decision 2026-11-24): the store lists it
-//! (`UiStateSnapshot::device_moves_due`), and each time its helper connects
-//! the core asks the daemon for its switch ([`DeviceMover`]). The switch is
-//! the one a press runs; it asks the operator only when another computer
-//! switched the device first ([`DeviceSwitchState::Held`]).
+//! A device another computer switched first keeps its helper folder for
+//! that computer, so this one goes on with a folder of its own, which
+//! takes up none of the terminals it ran there: the core asks for that
+//! switch only once the device lists no terminal, and refuses the link
+//! change if one opened meanwhile. No switch closes a terminal.
 
 use serde::Deserialize;
 
 use super::devices::Retiring;
 use super::*;
-use crate::model::{DeviceSwitchSnapshot, DeviceSwitchState, LinkOrigin};
+use crate::model::LinkOrigin;
 
 /// Where one device's switch stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DeviceSwitch {
-    state: DeviceSwitchState,
-    reason: Option<String>,
-    /// The connection key of the machine the device is, known from the
-    /// pairing on: the grant that becomes active under it takes the device.
-    key: Option<String>,
+    /// The connection key of the machine the device is: the grant that
+    /// becomes active under it takes the device.
+    key: String,
     /// What the Hide this switch started on the machine still needs, which
     /// the device's row says once it is that machine's.
     needs: Option<crate::model::DeviceNeedsSnapshot>,
-    /// While `Held`: the computer that switched the device first.
-    by: Option<String>,
+    /// The switch goes on with a folder of this computer's own, which
+    /// takes up no terminal the helper ran: it lands only on a device that
+    /// lists none.
+    own_folder: bool,
 }
 
 /// What switches a helper device by itself: the daemon, which hands one in
 /// at its start (`Core::set_device_mover`). A core without one switches a
-/// device only when the operator asks.
+/// device only when `hide device switch` asks.
 pub trait DeviceMover: Send + Sync {
-    /// The helper of `device_id` connected and the device is due to move.
-    /// Called under the core's lock: it only signals.
-    fn due(&self, device_id: &str);
+    /// The device `device_id` is due to move; with `own_folder`, another
+    /// computer switched it first and it lists no terminal of this
+    /// computer's. Called under the core's lock: it only signals.
+    fn due(&self, device_id: &str, own_folder: bool);
 }
 
 /// A registration rewritten to its machine's connection whose save is not
@@ -59,9 +66,6 @@ pub(super) struct SwitchSaving {
     /// What the Hide the switch started there still needs, which the
     /// device's row says once it is that machine's.
     needs: Option<crate::model::DeviceNeedsSnapshot>,
-    /// Whether the device was due to move by itself, which a save that
-    /// fails gives back.
-    due: bool,
 }
 
 /// What a helper device is switched from: how the core reaches it, and
@@ -109,39 +113,29 @@ pub(super) struct DeviceSwitchPayload {
     /// With `connecting`: the paired machine's connection key.
     #[serde(default)]
     pub(super) key: Option<String>,
-    /// With `failed`: why, as a code.
-    #[serde(default)]
-    pub(super) reason: Option<String>,
-    /// With `held`: the computer that switched the device first, as the
-    /// device's machine names it.
-    #[serde(default)]
-    pub(super) by: Option<String>,
+    /// With `looked`: what the device's machine needs before it is moved,
+    /// none when it is moved or nothing the operator does would move it.
     /// With `connecting`: what the Hide this switch started there still
     /// needs to stay reachable (B30).
     #[serde(default)]
     pub(super) needs: Option<crate::model::DeviceNeedsSnapshot>,
-    /// With `failed`: the switch started nothing on the device's machine
-    /// and no grant was saved there, so a device added for this switch can
-    /// be taken off again (B41).
+    /// With `connecting`: the switch goes on with a folder of this
+    /// computer's own.
     #[serde(default)]
-    pub(super) clean: bool,
+    pub(super) own_folder: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SwitchStep {
-    Checking,
-    Installing,
-    Connecting,
-    Failed,
-    /// Another computer switched the device first: the operator is asked
-    /// before this computer goes on with a folder of its own (D-75).
+    /// hided looked whether the device moves by itself.
+    Looked,
+    /// Another computer switched the device first (D-75): it is moved with
+    /// a folder of this computer's own once it lists no terminal.
     Held,
-    /// The operator keeps the device on the old connection: it no longer
-    /// moves by itself, and no step shows.
-    Kept,
-    /// The switch is over with nothing to show: the operator was asked
-    /// something first, or cancelled.
+    /// The two machines are paired and the connection is being opened.
+    Connecting,
+    /// The switch is over and the device was not switched.
     Ended,
 }
 
@@ -151,26 +145,11 @@ impl DeviceSwitchPayload {
             .key
             .as_deref()
             .is_none_or(crate::model::peer_key_is_spelled);
-        let reason_plain = self.reason.as_deref().is_none_or(|reason| {
-            !reason.is_empty()
-                && reason.len() <= 64
-                && reason
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-        });
         let needs_spelled = self
             .needs
             .as_ref()
             .is_none_or(crate::model::DeviceNeedsSnapshot::valid);
-        // Another machine's name for a computer, shown as text.
-        let by_shown = self.by.as_deref().is_none_or(|by| {
-            by.len() <= crate::peer_machines::MAX_NAME_BYTES && !by.chars().any(char::is_control)
-        });
-        key_spelled
-            && reason_plain
-            && needs_spelled
-            && by_shown
-            && (self.step != SwitchStep::Connecting || self.key.is_some())
+        key_spelled && needs_spelled && (self.step != SwitchStep::Connecting || self.key.is_some())
     }
 }
 
@@ -181,9 +160,9 @@ impl Runtime {
     /// has too, or a WSL distribution of this PC. `device` is its id, or
     /// the SSH alias or the distribution it is dialed by, which is what a
     /// terminal knows of a device it has just added. `pressed` is a switch
-    /// the operator asked for, whose login may ask them; one the core
-    /// asked for by itself asks nobody, as Hide's own connection attempts
-    /// do not (PRD system-ssh-device-link B14).
+    /// the operator asked for (`hide device switch`), whose login may ask
+    /// them; one the core asked for by itself asks nobody, as Hide's own
+    /// connection attempts do not (PRD system-ssh-device-link B14).
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
@@ -206,10 +185,15 @@ impl Runtime {
         if !registration.origin.switches() {
             return Err("switch_unsupported");
         }
-        // The operator's press on the device's row started the switch, so
-        // its login asks there, as the device's own connection attempts do
-        // (D-45). A device that never had an attempt has no row state to
-        // put a question in: its login then asks nobody.
+        // Asked by the core a while ago, and run now: the operator may have
+        // taken their consent back in between.
+        if !pressed && !self.due_to_move(device_id) {
+            return Err("switch_not_due");
+        }
+        // The operator asked for the switch, so its login asks on the
+        // device's row, as the device's own connection attempts do (D-45).
+        // A device that never had an attempt has no row state to put a
+        // question in: its login then asks nobody.
         let sign_in = self
             .worker_context
             .clone()
@@ -250,68 +234,66 @@ impl Runtime {
         })
     }
 
-    /// The switch of `device_id` as its row draws it.
-    pub(super) fn device_switch_snapshot(&self, device_id: &str) -> Option<DeviceSwitchSnapshot> {
-        self.device_switches
-            .get(device_id)
-            .map(|switch| DeviceSwitchSnapshot {
-                state: switch.state,
-                reason: switch.reason.clone(),
-                by: switch.by.clone(),
-            })
-    }
-
     /// Gives the core what switches a device by itself, once, at the
     /// daemon's start; the devices whose helper connected before it are
     /// asked for now.
     pub(crate) fn set_device_mover(&mut self, mover: Arc<dyn DeviceMover>) {
         for device in std::mem::take(&mut self.device_moves_ready) {
-            mover.due(&device);
+            mover.due(&device, false);
         }
         self.device_mover = Some(mover);
     }
 
     /// A pass that installs this build's kit on `device_id` answered: every
     /// connection runs one, itself or on the device's kit worker, and a
-    /// repair is one too. Unless it stopped before changing anything, the
-    /// `hide` a switch runs there is this build's from here on, so a
-    /// device that is due to move is switched now.
+    /// repair is one too. Once it says this build's `hide` is in place
+    /// there, which a pass that was refused or could not write it does not,
+    /// the `hide` a switch runs is this build's, so a device that is due to
+    /// move is switched now.
     pub(crate) fn kit_applied(&mut self, device_id: &str, report: &hide_kit::KitReport) {
-        if report.refused.is_none() {
+        let hide_in_place = report.components.iter().any(|component| {
+            component.id == hide_kit::ComponentId::Cli
+                && component.state == hide_kit::ComponentState::Installed
+        });
+        if hide_in_place {
             self.move_when_ready(device_id);
         }
     }
 
-    /// This build's kit is in place on `device_id`: a device that is due
-    /// to move is switched now, with nobody asked. Asked for after each
-    /// such pass, so a switch that stopped is tried again when the helper
-    /// next connects, and never while one runs, waits for the operator or
-    /// is being saved.
-    pub(super) fn move_when_ready(&mut self, device_id: &str) {
-        let due = self
-            .device_registration(device_id)
-            .filter(|registration| {
+    /// Whether `device_id` is looked at for a move by itself: a device the
+    /// core dials itself, on which the operator let this machine's programs
+    /// run. Read when its helper connects and again when hided takes its
+    /// switch up.
+    fn due_to_move(&self, device_id: &str) -> bool {
+        self.device_registration(device_id)
+            .is_some_and(|registration| {
                 registration.origin.switches() && registration.host_consent.is_some()
             })
-            .and_then(|registration| registration.origin.dialed_by())
-            .is_some_and(|by| {
-                self.snapshot.ui_state.device_moves_due.contains(&by)
-                    && !self.device_fresh_adds.contains(&by)
-            });
-        let stopped = self
-            .device_switches
-            .get(device_id)
-            .is_none_or(|switch| switch.state == DeviceSwitchState::Failed);
-        if !due || !stopped || self.device_switch_saving.contains_key(device_id) {
+    }
+
+    /// This build's kit is in place on `device_id`: hided is asked to look
+    /// at the device and switch it, with nobody asked. Asked for after each
+    /// such pass, so a device that was left as it is, or whose move
+    /// stopped, is looked at again when its helper next connects; never
+    /// while its switch is landing.
+    pub(super) fn move_when_ready(&mut self, device_id: &str) {
+        let landing = self.device_switches.contains_key(device_id)
+            || self.device_switch_saving.contains_key(device_id);
+        if landing || !self.due_to_move(device_id) {
             return;
         }
+        self.ask_move(device_id, false);
+    }
+
+    fn ask_move(&mut self, device_id: &str, own_folder: bool) {
         crate::diagnostic!(serde_json::json!({
             "component": "device_switch",
             "kind": "device_switch.due",
             "target": device_id,
+            "own_folder": own_folder,
         }));
         match &self.device_mover {
-            Some(mover) => mover.due(device_id),
+            Some(mover) => mover.due(device_id, own_folder),
             // The daemon has not handed its mover in yet: asked then.
             None => {
                 self.device_moves_ready.insert(device_id.to_owned());
@@ -319,31 +301,43 @@ impl Runtime {
         }
     }
 
-    /// The operator keeps `device_id` on the old connection: it moves by
-    /// itself no more, and what its switch waited on is gone. Saved, so a
-    /// restart does not ask again; the row's own button still switches it.
-    fn keep_device_on_helper(&mut self, device_id: &str) -> bool {
-        let listed = self
-            .device_registration(device_id)
-            .and_then(|registration| registration.origin.dialed_by())
-            .is_some_and(|by| self.snapshot.ui_state.device_moves_due.remove(&by));
-        if listed {
-            self.persist_current_ui_state();
-            crate::diagnostic!(serde_json::json!({
-                "component": "device_switch",
-                "kind": "device_switch.kept",
-                "target": device_id,
-            }));
+    /// How many terminals `device_id` lists, or none while the core has
+    /// not read its session on the connection it has: what a switch with a
+    /// folder of this computer's own would not take up.
+    fn device_terminals(&self, device_id: &str) -> Option<usize> {
+        let connected = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == device_id && status.state == "connected");
+        self.device_raw_sessions
+            .get(device_id)
+            .filter(|_| connected)
+            .map(|session| super::remote_live_pane_ids(session).len())
+    }
+
+    /// The session of `device_id` was read: a device that waits for its
+    /// terminals to close before it moves (`SwitchStep::Held`) is asked for
+    /// once it lists none. One set lookup for each read, and nothing more
+    /// for a device that does not wait.
+    pub(super) fn move_when_closed(&mut self, device_id: &str) {
+        if !self.device_moves_held.contains(device_id)
+            || self.device_terminals(device_id) != Some(0)
+        {
+            return;
         }
-        let dropped = self.device_switches.remove(device_id).is_some();
-        dropped && self.refresh_device_snapshots()
+        self.device_moves_held.remove(device_id);
+        if self.due_to_move(device_id) {
+            self.ask_move(device_id, true);
+        }
     }
 
     /// The helper device that is being switched to the machine under `key`.
     pub(super) fn switching_to(&self, key: &str) -> Option<String> {
         self.device_switches
             .iter()
-            .find(|(_, switch)| switch.key.as_deref() == Some(key))
+            .find(|(_, switch)| switch.key == key)
             .map(|(device, _)| device.clone())
     }
 
@@ -361,63 +355,41 @@ impl Runtime {
             let dropped = self.device_switches.remove(&device_id).is_some();
             return dropped && self.refresh_device_snapshots();
         }
-        // A device added over SSH, or as a WSL distribution, to be switched
-        // is not left on the helper
-        // when that switch stops with nothing started on its machine (B41):
-        // it is taken off again, and one line says why. Past that point its
-        // machine runs a Hide from the helper's folder, or holds a grant
-        // that may still become active, so it stays, with its reason and a
-        // retry, like any helper device.
-        if payload.step == SwitchStep::Failed {
-            let fresh = self
-                .device_registration(&device_id)
-                .and_then(|registration| registration.origin.dialed_by())
-                .filter(|by| self.device_fresh_adds.contains(by));
-            if let Some(by) = fresh {
-                self.device_fresh_adds.remove(&by);
-                if payload.clean {
-                    return self.take_off_fresh_add(&device_id, payload.reason.as_deref());
-                }
+        let key = match payload.step {
+            SwitchStep::Looked => {
+                // What the machine needs before it moves is the row's one
+                // line; a device that moves, or that nothing the operator
+                // does would move, shows none.
+                let changed = match payload.needs {
+                    Some(needs) => {
+                        self.device_needs.insert(device_id.clone(), needs.clone()) != Some(needs)
+                    }
+                    None => self.device_needs.remove(&device_id).is_some(),
+                };
+                return changed && self.refresh_device_snapshots();
             }
-        }
-        let state = match payload.step {
+            SwitchStep::Held => {
+                self.device_moves_held.insert(device_id.clone());
+                self.move_when_closed(&device_id);
+                return false;
+            }
             SwitchStep::Ended => {
-                let dropped = self.device_switches.remove(&device_id).is_some();
-                return dropped && self.refresh_device_snapshots();
+                self.device_switches.remove(&device_id);
+                return false;
             }
-            SwitchStep::Kept => return self.keep_device_on_helper(&device_id),
-            SwitchStep::Held => DeviceSwitchState::Held,
-            SwitchStep::Checking => DeviceSwitchState::Checking,
-            SwitchStep::Installing => DeviceSwitchState::Installing,
-            SwitchStep::Connecting => DeviceSwitchState::Connecting,
-            SwitchStep::Failed => DeviceSwitchState::Failed,
+            SwitchStep::Connecting => payload.key.unwrap_or_default(),
         };
-        let key = payload
-            .key
-            .filter(|_| payload.step == SwitchStep::Connecting);
         self.device_switches.insert(
             device_id.clone(),
             DeviceSwitch {
-                state,
-                reason: payload
-                    .reason
-                    .filter(|_| payload.step == SwitchStep::Failed),
                 key: key.clone(),
-                needs: payload
-                    .needs
-                    .filter(|_| payload.step == SwitchStep::Connecting),
-                by: payload.by.filter(|_| payload.step == SwitchStep::Held),
+                needs: payload.needs,
+                own_folder: payload.own_folder,
             },
         );
         // A machine that was paired before the switch was asked for is
         // active already: no change of the paired machines will say so.
-        if let Some(key) = key
-            && self.peer_opens(&key)
-        {
-            self.switch_device_link(&device_id, &key);
-        }
-        self.refresh_device_snapshots();
-        true
+        self.peer_opens(&key) && self.switch_device_link(&device_id, &key)
     }
 
     /// The paired machine under `key` may be opened: the helper device
@@ -437,6 +409,18 @@ impl Runtime {
         // Rewritten already and waiting for its save: the paired machines
         // changing again meanwhile asks for nothing more.
         if self.device_switch_saving.contains_key(device_id) {
+            return false;
+        }
+        // A folder of this computer's own takes up no terminal the helper
+        // ran: a device that lists one, or whose session is not read, waits
+        // on as a helper device until it lists none.
+        let own_folder = self
+            .device_switches
+            .get(device_id)
+            .is_some_and(|switch| switch.own_folder);
+        if own_folder && self.device_terminals(device_id) != Some(0) {
+            self.device_moves_held.insert(device_id.to_owned());
+            self.not_moved(device_id, "terminals_open");
             return false;
         }
         let taken = self
@@ -462,8 +446,8 @@ impl Runtime {
                 "target": device_id,
                 "key_taken": taken,
             }));
-            self.fail_device_switch(device_id, "device_already_connected");
-            return self.refresh_device_snapshots();
+            self.not_moved(device_id, "device_already_connected");
+            return false;
         };
         let was = std::mem::replace(
             &mut registration.origin,
@@ -479,18 +463,12 @@ impl Runtime {
             .device_switches
             .get_mut(device_id)
             .and_then(|switch| switch.needs.take());
-        // Switched: it is no longer due to move, in the save that holds
-        // the rewrite.
-        let due = was
-            .dialed_by()
-            .is_some_and(|by| self.snapshot.ui_state.device_moves_due.remove(&by));
         self.device_switch_saving.insert(
             device_id.to_owned(),
             SwitchSaving {
                 key: key.to_owned(),
                 was,
                 needs,
-                due,
             },
         );
         // Its first open on the new connection closes the panes that
@@ -509,8 +487,7 @@ impl Runtime {
 
     /// A save of the core's state ended: every switched registration it
     /// holds takes its machine's connection when the save succeeded, and
-    /// goes back to its helper, with the reason on its row, when it did
-    /// not. A save taken before the switch holds no such registration and
+    /// goes back to its helper when it did not. A save taken before the switch holds no such registration and
     /// settles nothing; the save the switch asked for follows it.
     pub(super) fn acknowledge_device_switch(
         &mut self,
@@ -560,12 +537,13 @@ impl Runtime {
             return false;
         };
         self.device_switches.remove(device_id);
-        if let Some(by) = saving.was.dialed_by() {
-            self.device_fresh_adds.remove(&by);
-        }
-        if let Some(needs) = saving.needs {
-            self.device_needs.insert(device_id.to_owned(), needs);
-        }
+        self.device_moves_held.remove(device_id);
+        // The line that said what the device needed before it moved goes;
+        // what the Hide this switch started still needs takes its place.
+        match saving.needs {
+            Some(needs) => self.device_needs.insert(device_id.to_owned(), needs),
+            None => self.device_needs.remove(device_id),
+        };
         self.rebuild_device_rows();
         let focused_device = self.look.front().map(str::to_owned);
         let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
@@ -591,8 +569,9 @@ impl Runtime {
     }
 
     /// The save that held `device_id`'s switched registration failed: the
-    /// registration is the helper's again, as the store still has it, its
-    /// link was never touched, and its row says why (B41).
+    /// registration is the helper's again, as the store still has it, and
+    /// its link was never touched. The next connection of its helper asks
+    /// for the move again.
     fn undo_device_switch(&mut self, device_id: &str, saving: SwitchSaving) -> bool {
         let Some(registration) =
             self.snapshot
@@ -609,11 +588,6 @@ impl Runtime {
         if saving.was == LinkOrigin::Inbound {
             registration.host_consent = None;
         }
-        if saving.due
-            && let Some(by) = saving.was.dialed_by()
-        {
-            self.snapshot.ui_state.device_moves_due.insert(by);
-        }
         registration.origin = saving.was;
         self.snapshot.ui_state.device_switch_opens.remove(device_id);
         crate::diagnostic!(serde_json::json!({
@@ -621,7 +595,7 @@ impl Runtime {
             "kind": "device_switch.not_saved",
             "target": device_id,
         }));
-        self.fail_device_switch(device_id, "switch_not_saved");
+        self.not_moved(device_id, "switch_not_saved");
         self.rebuild_device_rows();
         self.refresh_device_snapshots();
         true
@@ -689,45 +663,16 @@ impl Runtime {
         true
     }
 
-    /// Takes the device `device_id`, added over SSH for a switch that
-    /// stopped before it started anything on its machine, off again, and
-    /// keeps the one line that says why.
-    fn take_off_fresh_add(&mut self, device_id: &str, reason: Option<&str>) -> bool {
-        let Some(label) = self
-            .device_registration(device_id)
-            .map(|registration| registration.label.clone())
-        else {
-            return false;
-        };
-        if let Err(refusal) = self.remove_device(device_id) {
-            crate::diagnostic!(serde_json::json!({
-                "component": "device_switch",
-                "kind": "device_switch.fresh_add_not_removed",
-                "target": device_id,
-                "code": refusal.code,
-            }));
-            // It stays a helper device, with its reason.
-            self.fail_device_switch(device_id, reason.unwrap_or("switch_failed"));
-            return self.refresh_device_snapshots();
-        }
-        self.snapshot.navigator.device_not_added = Some(crate::model::DeviceNotAddedSnapshot {
-            label,
-            reason: reason.unwrap_or("switch_failed").to_owned(),
-        });
-        true
-    }
-
-    /// The switch of `device_id` stopped for `reason`, which its row says.
-    fn fail_device_switch(&mut self, device_id: &str, reason: &str) {
-        self.device_switches.insert(
-            device_id.to_owned(),
-            DeviceSwitch {
-                state: DeviceSwitchState::Failed,
-                reason: Some(reason.to_owned()),
-                key: None,
-                needs: None,
-                by: None,
-            },
-        );
+    /// The switch of `device_id` stopped in the core for `reason`: the
+    /// device stays on its helper with nothing on its row, the log says
+    /// why, and its helper's next connection asks for the move again.
+    fn not_moved(&mut self, device_id: &str, reason: &str) {
+        self.device_switches.remove(device_id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "device_switch",
+            "kind": "device_switch.not_moved",
+            "target": device_id,
+            "reason": reason,
+        }));
     }
 }

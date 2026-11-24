@@ -45,6 +45,12 @@ pub struct PeerMachine {
     /// Which of the two has to update before they connect again, or where
     /// this machine's update of the Hide it started there stands.
     pub update: Option<PeerUpdate>,
+    /// The WSL distribution of this PC it is, when this PC reaches it
+    /// through `wsl.exe`: its own Hide names itself by an id that is not
+    /// the one the distribution's device has here, so this is what says
+    /// the two are one machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl: Option<String>,
 }
 
 /// Where the direction "this machine opens it" stands.
@@ -142,6 +148,10 @@ pub fn valid(machines: &[PeerMachine]) -> bool {
                 && shown(&machine.name, MAX_NAME_BYTES)
                 && (machine.opens.is_some() || machine.opened_by.is_some())
                 && (machine.connected || machine.path.is_none())
+                && machine
+                    .wsl
+                    .as_deref()
+                    .is_none_or(|distro| shown(distro, MAX_NAME_BYTES))
         })
 }
 
@@ -176,6 +186,7 @@ mod tests {
             path: Some(PeerPath::Direct),
             reason: None,
             update: None,
+            wsl: None,
         }
     }
 
@@ -184,7 +195,7 @@ mod tests {
         assert!(valid(&[machine('a'), machine('b')]));
         assert!(valid(&[]));
         type Break = fn(&mut PeerMachine);
-        let broken: [(&str, Break); 7] = [
+        let broken: [(&str, Break); 8] = [
             ("a key that is not a key", |m| m.key = "A".repeat(64)),
             ("a short key", |m| m.key.truncate(16)),
             ("a device id that could name a pane", |m| {
@@ -194,6 +205,9 @@ mod tests {
             ("a name with a line break", |m| m.name = "a\nb".into()),
             ("paired in neither direction", |m| m.opens = None),
             ("a path with no connection", |m| m.connected = false),
+            ("a distribution with no name", |m| {
+                m.wsl = Some(String::new())
+            }),
         ];
         for (what, change) in broken {
             let mut one = machine('a');

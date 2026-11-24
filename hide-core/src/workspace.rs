@@ -63,11 +63,8 @@ pub fn local_device(
         machine_name: machine_name.map(str::to_owned),
         dials_in: false,
         peer_key: None,
-        switch: None,
         needs: None,
-        switchable: false,
         not_carried: None,
-        switch_first: false,
     }
 }
 
@@ -107,11 +104,8 @@ pub fn devices(
                 machine_name: None,
                 dials_in: registration.origin == crate::model::LinkOrigin::Inbound,
                 peer_key: registration.origin.peer_key().map(str::to_owned),
-                switch: None,
                 needs: None,
-                switchable: registration.origin.switches(),
                 not_carried: None,
-                switch_first: false,
             });
         }
     }

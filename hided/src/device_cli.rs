@@ -21,7 +21,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 /// Every verb a person types, which `hide --help` and the agent guide list.
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder | --keep] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -112,14 +112,10 @@ pub enum Verb {
     },
     /// An SSH device switched to the connection of the Hide on its machine
     /// (D-49). `install` starts a Hide on a machine that runs none of its
-    /// own (D-45); `own_folder` goes on after another machine switched the
-    /// device first (D-75), and `keep` leaves it on the old connection,
-    /// which a device that would move by itself then no longer does.
+    /// own (D-45).
     Switch {
         device: String,
         install: bool,
-        own_folder: bool,
-        keep: bool,
     },
     /// What a machine about to pair over SSH runs on its target first: it
     /// changes nothing and says whether a Hide of the target's own runs
@@ -171,8 +167,6 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut json = false;
     let mut wait = false;
     let mut wsl = false;
-    let mut own_folder = false;
-    let mut keep = false;
     let mut install = false;
     let mut helper = None;
     let mut projects = Vec::new();
@@ -190,15 +184,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 wait = true;
                 continue;
             }
-            "--own-folder" if verb == Some("switch") && !own_folder && !keep => {
-                own_folder = true;
-                continue;
-            }
-            "--keep" if verb == Some("switch") && !keep && !own_folder && !install => {
-                keep = true;
-                continue;
-            }
-            "--install" if verb == Some("switch") && !install && !keep => {
+            "--install" if verb == Some("switch") && !install => {
                 install = true;
                 continue;
             }
@@ -303,8 +289,6 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("switch"), [device]) => Verb::Switch {
             device: named(device)?,
             install,
-            own_folder,
-            keep,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
         (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
@@ -516,17 +500,9 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             ),
             Err(refused) => Err(refused),
         },
-        Verb::Switch {
-            device,
-            install,
-            own_folder,
-            keep,
-        } => {
+        Verb::Switch { device, install } => {
             operators(env)?;
-            let ask = json!({
-                "verb":"switch","device":device,"own_folder":own_folder,"install":install,
-                "keep":keep,
-            });
+            let ask = json!({"verb":"switch","device":device,"install":install});
             let mut answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
                 .map_err(Refused::Unreachable)?;
             if answer["ok"] != true {
@@ -542,17 +518,14 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             }
             let lines = match answer["switch"].as_str() {
                 Some("held") => format!(
-                    "{} switched {device} first, and its terminals there carry on. Run hide device switch {device} --own-folder to go on: the terminals this machine ran there close, and their AI conversations can be resumed. Run hide device switch {device} --keep to leave it on the old connection.\n",
+                    "{} switched {device} first, and its terminals there carry on. Hide switches {device} by itself once every terminal this machine runs there is closed.\n",
                     answer["by"].as_str().unwrap_or("Another computer"),
-                ),
-                Some("kept") => format!(
-                    "{device} stays on the old connection. Run hide device switch {device} to switch it.\n"
                 ),
                 Some("install_needed") => format!(
                     "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
                 ),
                 _ => format!(
-                    "Switched {device} to the new connection. Its running terminals carry on.\n"
+                    "Switched {device} to the Hide on its machine. Its running terminals carry on.\n"
                 ),
             };
             Ok(Printed::Value(answer, lines))
@@ -815,13 +788,13 @@ fn add_alias(
         ),
         _ => {}
     }
-    // An SSH device is the old connection: the line says how it becomes the
-    // machine's own Hide, which the operator allows by running it (B41).
+    // The line says how an SSH device becomes its machine's own Hide: by
+    // itself when that machine can take it, or by the operator's command.
     match core(env, command, wait)? {
         Printed::Value(value, lines) => Ok(Printed::Value(
             value,
             format!(
-                "{lines}{alias} is on the old connection. Once it is connected, run hide device switch {alias} --install to start Hide there and connect the two as Hides.\n"
+                "{lines}{alias} is used over SSH. Hide connects the two as Hides by itself once the Hide on that machine would be back after a restart with nobody there; hide device switch {alias} --install does it now.\n"
             ),
         )),
         printed => Ok(printed),
@@ -1195,13 +1168,14 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
                 }))
                 // A paired machine's device is that machine's line above,
                 // as Settings lists it (`listedDevices` in the web shell):
-                // one machine, one line. A device that was switched to its
-                // machine's own Hide is such a device, dialed over SSH no
-                // more.
+                // one machine, one line, whatever id each goes by. A device
+                // that was switched to its machine's own Hide is such a
+                // device; one the core still dials itself keeps its line,
+                // beside its machine's when that is paired too.
                 .chain(
                     devices
                         .iter()
-                        .filter(|device| !peers.iter().any(|peer| peer["id"] == device["id"]))
+                        .filter(|device| device["connection_id"].is_null())
                         .map(device_line),
                 )
                 .collect()
@@ -1488,68 +1462,52 @@ mod tests {
 
     /// The operator's decision of 2026-11-24: a device that moved to its
     /// machine's own Hide has one row. The core still answers its device,
-    /// which serves its panes, and the list draws the paired machine alone;
-    /// a device the core dials itself keeps its own line.
+    /// which serves its panes, and the list draws the paired machine alone,
+    /// whatever id each goes by (a distribution's own Hide names itself by
+    /// another). A device the core still dials itself keeps its line with
+    /// what it waits on, beside its machine's when that is paired too.
     #[test]
-    fn the_list_draws_a_switched_device_once_as_its_paired_machine() {
+    fn the_list_draws_a_paired_machines_device_once_and_a_dialed_one_on_its_own_line() {
         let text = draw(
             &DeviceCommand::List,
             &json!({
                 "devices": [
-                    {"id": "mini-id", "label": "Mac mini", "ssh_alias": null, "state": "connected"},
-                    {"id": "build-box", "label": "build-box", "ssh_alias": "build", "state": "connected"},
+                    {"id": "wsl-ubuntu-1a2b", "label": "WSL Ubuntu", "ssh_alias": null,
+                        "connection_id": "aa", "state": "connected"},
+                    {"id": "build-id", "label": "build-box", "ssh_alias": "build",
+                        "connection_id": null, "state": "waiting_for_you",
+                        "waits_on": {"kind": "sign_in", "input": "secret"},
+                        "next_action": "Answer on the device's row"},
                 ],
                 "peers": [
-                    {"id": "mini-id", "name": "Mac mini", "connection_id": "aa", "connected": true,
-                        "path": "direct", "opens": "active"},
+                    {"id": "distribution-own-id", "name": "WSL Ubuntu", "connection_id": "aa",
+                        "connected": true, "path": "direct", "opens": "active"},
+                    {"id": "build-id", "name": "build-box", "connection_id": "bb",
+                        "connected": false, "path": null, "opens": "active"},
                 ],
                 "guest_panes": [],
             }),
         );
+        let lines: Vec<&str> = text.lines().collect();
         assert_eq!(
-            text,
-            "mini-id  Mac mini  connected · direct\n  this machine opens it: active\nbuild-box  build-box  ssh build  connected\n"
+            lines
+                .iter()
+                .filter(|line| line.contains("WSL Ubuntu"))
+                .count(),
+            1,
+            "{text}"
         );
-    }
-
-    /// A switch takes what the operator allows, one answer at a time:
-    /// keeping the old connection starts nothing, so it goes with neither
-    /// an install nor a folder of this machine's own.
-    #[test]
-    fn switch_takes_one_device_and_keep_goes_with_no_other_answer() {
-        let switch = |install, own_folder, keep| {
-            Ok(DeviceCli {
-                verb: Verb::Switch {
-                    device: "studio".into(),
-                    install,
-                    own_folder,
-                    keep,
-                },
-                json: false,
-                wait: false,
-            })
-        };
-        assert_eq!(
-            parse_words(&["switch", "studio"]),
-            switch(false, false, false)
+        assert!(
+            lines[0].starts_with("distribution-own-id  WSL Ubuntu"),
+            "{text}"
         );
-        assert_eq!(
-            parse_words(&["switch", "studio", "--install", "--own-folder"]),
-            switch(true, true, false)
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("build-id  build-box  ssh build")),
+            "{text}"
         );
-        assert_eq!(
-            parse_words(&["switch", "--keep", "studio"]),
-            switch(false, false, true)
-        );
-        for refused in [
-            &["switch", "studio", "--keep", "--own-folder"][..],
-            &["switch", "studio", "--install", "--keep"],
-            &["switch", "studio", "--keep", "--keep"],
-            &["switch"],
-            &["list", "--keep"],
-        ] {
-            assert!(parse_words(refused).is_err(), "{refused:?}");
-        }
+        assert!(text.contains("waits on sign in (secret)"), "{text}");
     }
 
     #[test]

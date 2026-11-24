@@ -333,13 +333,6 @@ pub(super) struct RegisterDevicePayload {
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
     pub(super) host_consent: bool,
-    /// The device is added to be switched to its machine's own connection
-    /// at once, as every Add over SSH or of a WSL distribution is (PRD
-    /// device-connect-iroh B41): it
-    /// is not left on the helper when that switch stops before anything
-    /// was started there.
-    #[serde(default)]
-    pub(super) switch_first: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4834,7 +4827,6 @@ impl Runtime {
                     pane_completions: current.pane_completions,
                     pane_launches: current.pane_launches,
                     device_switch_opens: current.device_switch_opens,
-                    device_moves_due: current.device_moves_due,
                     request_verbs: current.request_verbs,
                     // `agent_sleep_set` owns the setting and the core owns
                     // the sleep records; a shared save carries both through.

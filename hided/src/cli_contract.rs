@@ -1432,11 +1432,10 @@ pub const COMMANDS: &[Spec] = &[
     // Switches an SSH device to the connection of the Hide on its machine:
     // the two are paired over the device's SSH login, and the device keeps
     // its id, its name and its running terminals. `held` names the machine
-    // that switched it first; `--own-folder` goes on without its terminals.
+    // that switched it first: the device is then switched by itself once
+    // this machine runs no terminal there.
     // `install_needed` is a machine that runs no Hide of its own, where
-    // `--install` starts one from this machine's helper build. `--keep`
-    // leaves the device on the old connection, so one a build before 1.3.0
-    // registered no longer moves by itself.
+    // `--install` starts one from this machine's helper build.
     Spec {
         words: &["device", "switch"],
         arguments: &[Arg {
@@ -1447,12 +1446,7 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[
-            exclusive("--install", &["--keep"]),
-            exclusive("--own-folder", &["--keep"]),
-            exclusive("--keep", &["--install", "--own-folder"]),
-            switch("--json"),
-        ],
+        options: &[switch("--install"), switch("--json")],
         rest: None,
         answers: &["device_switched"],
         refusals: &[
