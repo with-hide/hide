@@ -178,6 +178,21 @@ The machine's row in Settings > Devices says what to do: **Sign in**, check a ch
 **Test** runs the SSH, authentication, protocol, PTY and Git stages one after another and names the first one that needs attention.
 What ssh asks, such as a password or a key's passphrase, is answered on the machine's row; hide does not store, log or copy an answer.
 
+### A Mac over SSH works only while this computer is on
+
+A machine you add over SSH is used through this computer, so the work on it goes on only while this computer is on and connected.
+hide moves such a machine to a connection of its own, by itself, once the hide it starts there can come back after a restart with nobody at that machine.
+On a Mac that needs automatic login, because macOS starts your programs only after you log in.
+
+1. On that Mac, open **System Settings**, then **Users & Groups**.
+2. Set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
+
+The next time that Mac connects, hide moves it, and the line under it in Settings > Devices goes away.
+Until then the Mac keeps working over SSH as before.
+
+A Linux machine shows a command under its name instead, when hide could not turn on lingering for your user by itself.
+Run that command there once, and the next connection moves it.
+
 ### The phone says "The code expired"
 
 The QR code works for five minutes, and one phone uses it once.
