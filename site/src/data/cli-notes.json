@@ -605,7 +605,7 @@
     "example": "hide device rename mac-mini \"Studio Mac\""
   },
   "device switch": {
-    "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals, so it works without this computer. Only a machine whose Hide would be back after a restart with nobody there is switched; any other stays on SSH with the one thing to change in the answer. --install starts a Hide there when that machine runs none. A device another computer switched first is switched once this machine runs no terminal there.",
+    "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals, so it works without this computer. A Mac without automatic login is switched with a note that it needs one login after a restart; a Mac nobody is logged in to, a Linux account that cannot linger and a system with no systemd stay on SSH with the one thing to change in the answer. --install starts a Hide there when that machine runs none. A device another computer switched first is switched once this machine runs no terminal there.",
     "example": "hide device switch mini --install"
   },
   "phone pair": {

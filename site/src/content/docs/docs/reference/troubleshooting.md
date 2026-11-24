@@ -181,14 +181,14 @@ What ssh asks, such as a password or a key's passphrase, is answered on the mach
 ### A machine over SSH works only while this computer is on
 
 A machine you add over SSH is used through this computer, so the work on it goes on only while this computer is on and connected.
-To let it work on its own, connect the two as hides: once the machine is connected, run `hide device switch <name> --install` in a terminal on this computer.
-hide switches a machine only when the hide it starts there comes back after a restart with nobody at that machine, and otherwise says the one thing to change:
+To let it work on its own, connect the two as hides: open Settings > Devices, press the machine's row, and press **Connect as a server**. In a terminal, `hide device switch <name> --install` does the same.
+The row says what that machine needs first:
 
-- A Mac needs automatic login, because macOS starts your programs only after you log in. Open **System Settings**, then **Users & Groups**, and set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
-- A Linux machine needs lingering for your user. hide turns it on when your account may; when it may not, hide prints the command an administrator runs there.
+- A Mac needs someone logged in to its desktop. With automatic login off it still connects, and after that Mac restarts you log in to it once before it connects again. To skip that, open **System Settings**, then **Users & Groups**, and set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
+- A Linux machine needs lingering for your user. hide turns it on when your account may; when it may not, hide shows the command an administrator runs there.
 - A WSL distribution needs systemd: set `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown`.
+- A machine whose SSH login asks for a password cannot be connected this way. Set up a key first.
 
-Then run the command again.
 Until then the machine keeps working over SSH as before, and an update switches no machine by itself.
 
 ### The phone says "The code expired"
