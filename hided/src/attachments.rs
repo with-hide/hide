@@ -197,7 +197,7 @@ fn keep_newest(dir: &Path, fresh: &[PathBuf], count: usize, bytes: u64) {
             Some((metadata.modified().ok()?, metadata.len(), entry.path()))
         })
         .collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by_key(|(modified, _, _)| *modified);
     let mut left = files.len();
     let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
     for (_, size, path) in files {

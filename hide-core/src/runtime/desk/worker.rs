@@ -77,9 +77,10 @@ pub(super) struct Send {
     pub effort: Option<String>,
     /// Where Settings › Labs › Desk puts each task's work (B19).
     pub placement: hide_desk::Placement,
-    /// The files `text` names (PRD desk-2-ui B41), each looked for before
-    /// the agent is asked.
+    /// The files `text` names (PRD desk-2-ui B41), each looked for on
+    /// `node`, the core's own, before the agent is asked.
     pub files: Vec<String>,
+    pub node: Option<Arc<dyn crate::node_access::NodeLink>>,
 }
 
 /// What the worker tells the runtime.
@@ -405,10 +406,8 @@ impl Worker {
     }
 
     fn send(&mut self, send: Send) {
-        if send
-            .files
-            .iter()
-            .any(|path| !std::path::Path::new(path).is_file())
+        if let Some(node) = &send.node
+            && files_gone(node.as_ref(), &send.files)
         {
             self.report(Report::AttachmentsGone { tag: send.tag });
             self.report(Report::TurnEnded {
@@ -958,6 +957,35 @@ enum Look {
     Install,
 }
 
+/// Whether the node that holds Desk's files says one of `files` is gone,
+/// which Desk's folder does past its cap (`hided/src/attachments.rs`). A
+/// node that does not answer proves nothing, and the message goes.
+fn files_gone(node: &dyn crate::node_access::NodeLink, files: &[String]) -> bool {
+    let paths: Vec<String> = files
+        .iter()
+        .map(|file| hide_platform::path::to_wire_lossy(std::path::Path::new(file)))
+        .collect();
+    match crate::node_access::call_as::<hide_node_link::catalog::PathFacts>(
+        node,
+        hide_node_link::protocol::Call::PathFacts {
+            paths: paths.clone(),
+        },
+        std::time::Duration::from_secs(5),
+    ) {
+        Ok(facts) => paths
+            .iter()
+            .any(|path| facts.paths.get(path).is_none_or(|fact| !fact.exists)),
+        Err(error) => {
+            crate::diagnostic!(json!({
+                "component": "desk",
+                "kind": "desk.attachments_unchecked",
+                "error": error.to_string(),
+            }));
+            false
+        }
+    }
+}
+
 /// Looks at `adapter` with the account's Node (`node`), whether a CLI is on
 /// the account's `PATH` and whether an adapter is installed.
 fn look(
@@ -1012,6 +1040,55 @@ fn hide_program() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node that answers `Call::PathFacts` with `exists` for each path, or
+    /// does not answer.
+    struct Facts(Option<Vec<(&'static str, bool)>>);
+
+    impl crate::node_access::NodeLink for Facts {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            assert!(matches!(
+                call,
+                hide_node_link::protocol::Call::PathFacts { .. }
+            ));
+            let Some(facts) = &self.0 else {
+                return Err(crate::node_access::LinkError::Unknown("timed out".into()));
+            };
+            let paths: serde_json::Map<String, Value> = facts
+                .iter()
+                .map(|(path, exists)| {
+                    (
+                        (*path).to_owned(),
+                        json!({"comparison": path, "exists": exists}),
+                    )
+                })
+                .collect();
+            Ok(json!({"paths": paths, "repositories": {}}).into())
+        }
+    }
+
+    #[test]
+    fn a_desk_file_the_node_says_is_gone_stops_the_message_and_a_silent_node_does_not() {
+        let files = [
+            "/state/desk-attachments/a.png".to_owned(),
+            "/state/desk-attachments/b.log".to_owned(),
+        ];
+        let both = Facts(Some(vec![
+            ("/state/desk-attachments/a.png", true),
+            ("/state/desk-attachments/b.log", true),
+        ]));
+        assert!(!files_gone(&both, &files));
+        let one_gone = Facts(Some(vec![
+            ("/state/desk-attachments/a.png", true),
+            ("/state/desk-attachments/b.log", false),
+        ]));
+        assert!(files_gone(&one_gone, &files));
+        assert!(!files_gone(&Facts(None), &files));
+    }
 
     fn looked(
         node: Result<(), InstallError>,

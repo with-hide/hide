@@ -519,7 +519,8 @@ impl Runtime {
         mentions: Vec<DeskMention>,
         attachments: Vec<DeskAttachment>,
     ) {
-        let files = attachments.iter().map(|file| file.path.clone()).collect();
+        let files: Vec<String> = attachments.iter().map(|file| file.path.clone()).collect();
+        let node = (!files.is_empty()).then(|| self.own_node());
         let carried = (!self.desk.host.open)
             .then(|| self.desk.stored.conversation.carried())
             .flatten();
@@ -564,6 +565,7 @@ impl Runtime {
                 DeskLocation::Checkout => hide_desk::Placement::Checkout,
             },
             files,
+            node,
         }));
         self.desk.host.state = Some(if self.desk.host.open {
             DeskHostState::Thinking
