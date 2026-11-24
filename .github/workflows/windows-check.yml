@@ -337,6 +337,16 @@ jobs:
           # repeat lane calls too (docs/TESTING.md, "The repeat lane").
           . scripts/prepare-ignored-tests.sh
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
+      - name: A paired computer's node on this Windows host and the panes it starts
+        # hided/tests/it/guest_node.rs (PRD device-connect-iroh D-77): the
+        # node's launch contract, and its ignored Windows test, which starts
+        # a guest's pane from the node the host started, types into it and
+        # keeps it past the node's end, with the built holder and its ConPTY.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          . scripts/prepare-ignored-tests.sh
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^guest_node::/)' --run-ignored all --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its
