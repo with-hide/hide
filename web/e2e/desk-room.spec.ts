@@ -132,7 +132,7 @@ test("⌘J goes from the session beside Desk to its Agent tab and back to Desk w
   }
 });
 
-test("the session's Explorer opens a file in the tab panel as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B35, B36) @platform", async ({ page }) => {
+test("the session's Explorer opens a file in the tab panel as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B28, B35, B36) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-file");
   try {
@@ -154,6 +154,20 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
     // Desk is still in front, and the Workspace's View never showed the file.
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
     await expect(page.locator('[data-view-area] [data-editor-path]')).toHaveCount(0);
+
+    // B28: a file the core cannot read says why, and 다시 시도 reads it once it can.
+    // A mode bit locks a file only for an account that is not root, on a system that has them.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      const locked = path.join(path.dirname(file), "locked.md");
+      fs.writeFileSync(locked, "unlocked\n");
+      fs.chmodSync(locked, 0o000);
+      await page.locator('[data-desk-tab-panel] [data-explorer-row$="/locked.md"]').dblclick();
+      const retry = page.locator('[data-desk-file-retry$="/locked.md"]');
+      await expect(retry).toBeVisible();
+      fs.chmodSync(locked, 0o644);
+      await retry.click();
+      await expect(page.locator('[data-desk-file$="/locked.md"] [data-editor-body] .cm-content')).toContainText("unlocked");
+    }
   } finally {
     desk.daemon.stop();
     desk.engine.stop();

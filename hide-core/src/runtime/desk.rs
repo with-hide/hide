@@ -163,7 +163,7 @@ pub(super) enum DeskEvent {
     /// `hided`, which owns each hold (PRD desk-2-ui B19, B36).
     File(files::FilePayload),
     /// A held file that could not be opened, read again (B28).
-    FileRetry(files::DeskFile),
+    FileRetry(files::RetryPayload),
 }
 
 /// The width a drag set; the one it did not move is absent.
@@ -334,7 +334,10 @@ impl Runtime {
         // installed refuses it: the phone's 볼 것 sends the same event for a
         // View it showed (PRD mobile-companion-ui D-15).
         let view_seen = matches!(event, DeskEvent::OutputSeen(_));
-        if !view_seen {
+        // Letting a file go always lands, so a Desk switched off holds
+        // nothing a window let go; `desk_file` opens nothing while it is off.
+        let file_holds = matches!(event, DeskEvent::File(_));
+        if !view_seen && !file_holds {
             if self.desk.worker.is_none() {
                 return refused("desk_unavailable");
             }
@@ -388,7 +391,7 @@ impl Runtime {
             }
             DeskEvent::Lane(payload) => self.desk_lane(payload),
             DeskEvent::File(payload) => self.desk_file(payload),
-            DeskEvent::FileRetry(file) => self.desk_file_retry(file),
+            DeskEvent::FileRetry(payload) => self.desk_file_retry(payload.into()),
         };
         if changed {
             if stored {
