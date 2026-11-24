@@ -482,6 +482,10 @@ fn a_windows_hosts_node_starts_a_guests_pane_that_outlives_the_node_and_ends_whe
     first.ready();
     let node = first.child.id();
     let (link, panes) = linked(&first);
+    // As the host's core does first on a link: recovery names the panes
+    // the node already holds (none yet) and makes it their owner.
+    let recovery = panes.recovered(WITHIN).unwrap();
+    assert!(recovery.present.is_empty(), "{recovery:?}");
     let start = HolderStart {
         pane: PANE.to_owned(),
         program: Some(vec![
