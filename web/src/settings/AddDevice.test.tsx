@@ -96,6 +96,34 @@ it("connects to a Host whose own Hide runs, and installs nothing there (PRD devi
   await unmount();
 });
 
+it("adds a Host whose own Hide runs as an SSH device when asked to, and leaves that Hide as it is (operator decision 2026-11-24)", async () => {
+  const { events, q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  // Nothing to choose until the Host said it runs a Hide.
+  expect(q("[data-add-device-over-ssh]")).toBeNull();
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  expect(q("[data-add-device-over-ssh]")?.textContent).toBe("Add over SSH");
+  await act(async () => { q("[data-add-device-over-ssh]")?.click(); });
+  // The form of a Host with no Hide: a name to give and what Hide installs there.
+  expect((q("[data-device-label]") as HTMLInputElement).value).toBe("lab");
+  expect(q('[data-add-device-advanced="true"]')).not.toBeNull();
+  expect(q("[data-add-device-over-ssh]")).toBeNull();
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => event.payload)).toEqual([{ label: "lab", ssh_alias: "lab", host_consent: true }]);
+  // Nothing pairs with the Hide there, and nothing stops it.
+  expect(sent(events, "pairing_pair_ssh")).toHaveLength(0);
+  await unmount();
+  // The choice is one Host's: another Host that runs a Hide offers Connect again.
+  const other = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { other.q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await other.answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  await act(async () => { other.q("[data-add-device-over-ssh]")?.click(); });
+  await act(async () => { other.q('[data-ssh-host="studio"] [role="radio"]')?.click(); });
+  await other.answer("look_ssh", { ok: true, alias: "studio", looked: { state: "ready" } });
+  expect(other.q('[data-add-device="connect"]')?.textContent).toBe("Connect");
+  await other.unmount();
+});
+
 it("waits for the Host's own answer before it adds, so a machine that runs Hide is never added as a helper device meanwhile (B7)", async () => {
   const { events, q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });

@@ -86,6 +86,8 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   // refused), and the pairing a press started.
   const [look, setLook] = useState<{ alias: string; request: string; answered: boolean; looked: SshLook | null } | null>(null);
   const [pairing, setPairing] = useState<{ request: string; refused: string | null } | null>(null);
+  // The Host whose own Hide the operator chose not to connect to: it is added as an SSH device, as a Host with no Hide is.
+  const [overSsh, setOverSsh] = useState<string | null>(null);
   useEffect(() => {
     if (!answered?.request_id) return;
     if ((answered.verb === "look_ssh" || answered.verb === "look_wsl") && answered.request_id === look?.request && !look.answered) {
@@ -117,8 +119,11 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.ssh_alias === submitted.alias)) : false;
   const looked = look !== null && look.alias === chosen ? look.looked : null;
   const lookLine = sshLookLine(looked);
-  // The chosen Host runs its own Hide: the press connects, and installs nothing.
-  const connects = looked?.state === "ready";
+  // The chosen Host runs its own Hide: the press connects, and installs
+  // nothing, unless the operator asked to add it over SSH all the same,
+  // which leaves that Hide as it is.
+  const hasHide = looked?.state === "ready";
+  const connects = hasHide && overSsh !== chosen;
   const connecting = pairing !== null && pairing.refused === null;
   const pending = (submitted !== null && !added && error === null) || connecting;
   // Until the Host answered, a press would add a machine that runs its own
@@ -128,6 +133,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const choose = (next: string) => {
     setAlias(next);
     setPairing(null);
+    setOverSsh(null);
     const picked = chosenDistro(next);
     // The name follows the Host until the person writes their own; a
     // distribution's is the core's.
@@ -215,7 +221,12 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
         </Disclosure>
       </Group>
       )}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-md">
+        {connects && !connecting ? (
+          <Button variant="text" onClick={() => setOverSsh(chosen)} data-add-device-over-ssh="true">
+            {t("pairing.add.overSsh")}
+          </Button>
+        ) : null}
         <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
           {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("common.add")}
         </Button>
