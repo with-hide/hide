@@ -49,8 +49,8 @@ fn main() {
     let told = std::env::var_os(hided::env::HIDE_PANES_ANSWER_AS_APP).is_some();
     // SAFETY: as above, nothing else runs yet in this process.
     unsafe { std::env::remove_var(hided::env::HIDE_PANES_ANSWER_AS_APP) };
-    if told || matches!(role, Role::CoreLogin(_)) {
-        hided::login_item::name_panes();
+    if let Some(app) = hided::login_item::pane_identity(matches!(role, Role::CoreLogin(_)), told) {
+        hide_node::terminal::holder::answer_consent_as(app);
     }
     // Taken before daemon-role work, as every cooperative child takes it: a
     // starter that passes an owner channel (the web e2e fixture) ends this

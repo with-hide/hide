@@ -51,6 +51,7 @@ fn a_system_without_consent_per_program_gives_nothing_and_starts_nothing_again()
     );
     assert_eq!(names(dir.path()), ["program"]);
     assert!(!privacy::has_identity_file(&program));
+    assert!(!privacy::keeps_consent_per_program());
     let refused = privacy::answer_for_itself(&program, &[]);
     assert!(
         matches!(refused, privacy::NotAnswering::NotMacos),
@@ -98,7 +99,13 @@ mod macos {
         signed_program(&program);
         assert!(!privacy::has_identity_file(&program));
 
-        assert_eq!(privacy::give(&program, &identity(MET)), Given::Shared);
+        assert!(privacy::keeps_consent_per_program());
+        let given = privacy::give(&program, &identity(MET));
+        assert_eq!(given, Given::Shared);
+        assert_eq!(
+            (given.state(), given.reason(), given.detail()),
+            ("shared", None, None)
+        );
         assert_eq!(names(dir.path()), ["Info.plist", "hide-holder"]);
         assert!(privacy::has_identity_file(&program));
         let file = dir.path().join(privacy::IDENTITY_FILE);
@@ -124,9 +131,11 @@ mod macos {
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("hide-holder");
         signed_program(&program);
+        let given = privacy::give(&program, &identity(UNMET));
+        assert_eq!(given, Given::Own(Refusal::RequirementNotMet));
         assert_eq!(
-            privacy::give(&program, &identity(UNMET)),
-            Given::Own(Refusal::RequirementNotMet)
+            (given.state(), given.reason(), given.detail()),
+            ("own", Some("requirement_not_met"), None)
         );
         assert_eq!(names(dir.path()), ["hide-holder"]);
         // And an unsigned file, which is no program of the app's either.

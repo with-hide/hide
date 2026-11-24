@@ -597,8 +597,10 @@ impl GuestNode {
         }
     }
 
-    /// One run of the node: started, read until its output ends, reaped.
-    fn run(&self, program: &Path) -> Exit {
+    /// The node's command: `program` with the login's variables, this
+    /// node's folders, and, when this daemon's panes answer macOS's consent
+    /// as the app (`as_app`), the word that the node's do too.
+    fn command(&self, program: &Path, as_app: bool) -> Command {
         let mut command = Command::new(program);
         // The node is another build's Hide: it gets the login's variables
         // and none of this daemon's own.
@@ -614,14 +616,24 @@ impl GuestNode {
         }
         // No app is above a node this daemon starts when none is above the
         // daemon: its panes answer macOS's consent as this daemon's do.
-        if crate::login_item::panes_named() {
+        if as_app {
             command.env(crate::env::HIDE_PANES_ANSWER_AS_APP, "1");
         }
         command
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .args(launch::ARGUMENTS)
-            .arg(&self.node_dir)
+            .arg(&self.node_dir);
+        command
+    }
+
+    /// One run of the node: started, read until its output ends, reaped.
+    fn run(&self, program: &Path) -> Exit {
+        let mut command = self.command(
+            program,
+            hide_node::terminal::holder::answers_consent_as_app(),
+        );
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -796,6 +808,33 @@ impl GuestNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A guest's node has no app above it when its daemon has none: it is
+    /// told by one variable, and only then. The node is started with the
+    /// login's variables, so a daemon that was told never hands the word on
+    /// by inheritance.
+    #[test]
+    fn a_node_is_told_its_panes_answer_as_the_app_only_by_a_daemon_whose_own_do() {
+        let node = GuestNode::new(
+            PeerKey::from_hex(&"07".repeat(32)).unwrap(),
+            PathBuf::from("node"),
+            PathBuf::from("home"),
+            None,
+        );
+        let told = |as_app: bool| {
+            node.command(Path::new("hided"), as_app)
+                .get_envs()
+                .find(|(key, _)| *key == crate::env::HIDE_PANES_ANSWER_AS_APP)
+                .map(|(_, value)| value.map(|value| value.to_os_string()))
+        };
+        assert_eq!(told(true), Some(Some("1".into())));
+        // Not set, or taken out with the rest of this daemon's variables.
+        assert!(
+            matches!(told(false), None | Some(None)),
+            "{:?}",
+            told(false)
+        );
+    }
 
     #[test]
     fn a_node_is_left_stopped_after_its_sixth_crash_in_ten_minutes_and_not_for_older_ones() {

@@ -104,6 +104,39 @@ impl Given {
     pub fn is_shared(&self) -> bool {
         matches!(self, Self::Shared)
     }
+
+    /// A fixed word for a log line: `shared`, or `own`.
+    pub fn state(&self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Own(_) => "own",
+        }
+    }
+
+    /// Why the program keeps its own name ([`Refusal::reason`]), when it
+    /// does.
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Shared => None,
+            Self::Own(refusal) => Some(refusal.reason()),
+        }
+    }
+
+    /// What the system said about it ([`Refusal::detail`]).
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Shared => None,
+            Self::Own(refusal) => refusal.detail(),
+        }
+    }
+}
+
+/// Whether this system keeps consent per program, so that a program with no
+/// app above it has a name of its own to be asked under. The one place that
+/// says which system that is: where it is false a caller names no app, and
+/// nothing of a pane's start differs from a system that never heard of this.
+pub const fn keeps_consent_per_program() -> bool {
+    cfg!(target_os = "macos")
 }
 
 /// Whether an identity file is beside `program`. One look at the folder; it

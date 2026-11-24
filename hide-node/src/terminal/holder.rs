@@ -680,6 +680,12 @@ pub fn answer_consent_as(app: hide_platform::privacy::Identity<'static>) {
     let _ = ANSWERS_AS.set(app);
 }
 
+/// Whether this process was told an app ([`answer_consent_as`]), which a
+/// daemon tells a guest's node it starts in turn.
+pub fn answers_consent_as_app() -> bool {
+    ANSWERS_AS.get().is_some()
+}
+
 /// Where a node's holder panes live: the home whose version folders the
 /// holders are copied into, and the state folder that keeps their records.
 #[derive(Clone, Copy, Debug)]

@@ -41,7 +41,6 @@ use hide_holder_protocol::{
     ClientMessage, CloseReason, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError,
     PROTOCOL_VERSION, Size, Theme, read_holder, write_client,
 };
-use hide_platform::privacy::Given;
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -509,13 +508,14 @@ impl Panes {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let (state, reason, detail) = match given {
-            Given::Shared => ("shared", None, None),
-            Given::Own(refusal) => ("own", Some(refusal.reason()), refusal.detail()),
-        };
         self.emit(
             "pane_holder.identity",
-            json!({ "folder": folder, "state": state, "reason": reason, "detail": detail }),
+            json!({
+                "folder": folder,
+                "state": given.state(),
+                "reason": given.reason(),
+                "detail": given.detail(),
+            }),
         );
     }
 
