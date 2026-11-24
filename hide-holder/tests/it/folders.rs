@@ -51,7 +51,7 @@ fn a_holder_replaced_on_disk_starts_from_a_folder_named_for_its_new_bytes() {
         "v7-8d15435a7997d6fb"
     };
     assert_eq!(name_of(&first.dir), always);
-    assert!(first.given.is_none());
+    assert!(!first.as_app && first.made.is_none());
     drop(first);
 
     let replacement = home.path().join("holder-source.new");

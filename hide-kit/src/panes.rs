@@ -344,10 +344,6 @@ pub struct Panes {
     sink: Sink,
     /// The version folder names this process took (`holders::prepare`).
     names: holders::VersionNames,
-    /// The folder whose holder's name was last written to the diagnostics
-    /// (`pane_holder.identity`), so it is said once per folder and not for
-    /// every pane.
-    identity_said: Mutex<Option<String>>,
     /// Incarnations this process took from the folder's file and has not
     /// given yet ([`Panes::next_incarnation`]).
     incarnations: Mutex<std::ops::Range<u64>>,
@@ -373,7 +369,6 @@ impl Panes {
             boot,
             sink,
             names: holders::VersionNames::default(),
-            identity_said: Mutex::new(None),
             incarnations: Mutex::new(0..0),
         };
         Ok(panes)
@@ -502,10 +497,11 @@ impl Panes {
         Ok(reservation)
     }
 
-    /// Writes whose name `reservation`'s holder answers macOS's consent
-    /// under, once per folder: a source that names no app says nothing.
+    /// Writes whose name the holder of a folder just made answers macOS's
+    /// consent under: once for a folder, and nothing for a source that names
+    /// no app.
     fn say_identity(&self, reservation: &holders::Reservation) {
-        let Some(given) = &reservation.given else {
+        let Some(given) = &reservation.made else {
             return;
         };
         let folder = reservation
@@ -513,16 +509,6 @@ impl Panes {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        {
-            let mut said = self
-                .identity_said
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if said.as_deref() == Some(folder.as_str()) {
-                return;
-            }
-            *said = Some(folder.clone());
-        }
         let (state, reason, detail) = match given {
             Given::Shared => ("shared", None, None),
             Given::Own(refusal) => ("own", Some(refusal.reason()), refusal.detail()),
@@ -813,7 +799,7 @@ impl Panes {
         // else (`hide-holder`, `answer_for_itself`): only a holder that has
         // the app's name answers for itself, because one that answered
         // under its own path would be asked about once per build as now.
-        if reservation.given.as_ref().is_some_and(Given::is_shared) {
+        if reservation.as_app {
             command.arg(ANSWER_FOR_ITSELF);
         }
         command

@@ -237,10 +237,12 @@ impl VersionNames {
 pub struct Reservation {
     pub dir: PathBuf,
     pub program: PathBuf,
-    /// Whose name the folder's holder answers macOS's consent under, when
-    /// the source named an app: a holder is told to answer for itself only
-    /// where this is [`Given::Shared`].
-    pub given: Option<Given>,
+    /// Whether the folder's holder has the name of the app its source
+    /// named: only such a holder is told to answer for itself.
+    pub as_app: bool,
+    /// What the system said of the holder when this call made the folder
+    /// for a source that names an app; `None` for a folder found.
+    pub made: Option<Given>,
     _lock: Lock,
 }
 
@@ -268,22 +270,18 @@ pub fn prepare(
         .name(version, source)
         .map_err(|error| format!("the holder's files could not be read: {error}"))?;
     let dir = layout::holder_dir(home, &name);
-    if !is_finished(&dir, &name) {
-        make(&root, &dir, &name, source)?;
-    }
+    let made = if is_finished(&dir, &name) {
+        None
+    } else {
+        make(&root, &dir, &name, source)?
+    };
     let program = dir.join(program_name());
-    // Asked on every start: a folder whose identity file could not be
-    // written when it was made gets it now. With the file there this reads
-    // it, and a holder the system refused is not asked about again in this
-    // process (`privacy::give`).
-    let given = source
-        .identity
-        .as_ref()
-        .map(|identity| privacy::give(&program, identity));
     Ok(Reservation {
+        // The folder's name takes the identity, so a file here is its.
+        as_app: source.identity.is_some() && privacy::has_identity_file(&program),
         program,
         dir,
-        given,
+        made,
         _lock: lock,
     })
 }
@@ -295,28 +293,32 @@ pub fn is_finished(dir: &Path, name: &str) -> bool {
         && dir.join(program_name()).is_file()
 }
 
-fn make(root: &Path, dir: &Path, name: &str, source: &Source) -> Result<(), String> {
+/// Makes the folder; answers what the system said of its holder when the
+/// source names an app.
+fn make(root: &Path, dir: &Path, name: &str, source: &Source) -> Result<Option<Given>, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let staging = root.join(format!(
         ".staging-{name}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let made = copy(source, &staging, name).and_then(|()| {
-        hide_platform::fs::atomic::rename_no_replace_path(&staging, dir).or_else(|error| {
-            // Another prepare made it first: theirs is the same content.
-            if error.kind() == io::ErrorKind::AlreadyExists && is_finished(dir, name) {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+    let made = copy(source, &staging, name).and_then(|given| {
+        hide_platform::fs::atomic::rename_no_replace_path(&staging, dir)
+            .or_else(|error| {
+                // Another prepare made it first: theirs is the same content.
+                if error.kind() == io::ErrorKind::AlreadyExists && is_finished(dir, name) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            })
+            .map(|()| given)
     });
     let _ = fs::remove_dir_all(&staging);
     made.map_err(|error| format!("{} could not be made: {error}", dir.display()))
 }
 
-fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<()> {
+fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<Option<Given>> {
     hide_platform::fs::private::create_dir(staging)?;
     for (relative, from) in files(source)? {
         let to = staging.join(&relative);
@@ -333,12 +335,15 @@ fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<()> {
             fs::set_permissions(&to, permissions)?;
         }
     }
-    // Here, so the folder appears under its name with the file in it. What
-    // was given is asked again where the folder is reserved (`prepare`).
-    if let Some(identity) = &source.identity {
-        privacy::give(&staging.join(program_name()), identity);
-    }
-    fs::write(staging.join(MARKER), name)
+    // Here and only here: the folder appears under its name with the file
+    // in it, before any holder runs from it, and the system is asked once
+    // for a build, not once for a pane.
+    let given = source
+        .identity
+        .as_ref()
+        .map(|identity| privacy::give(&staging.join(program_name()), identity));
+    fs::write(staging.join(MARKER), name)?;
+    Ok(given)
 }
 
 /// Locks the root's lock file in `mode`, waiting up to [`LOCK_WAIT`];

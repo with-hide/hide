@@ -117,10 +117,6 @@ mod macos {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&read.stdout).trim(), IDENTIFIER);
-
-        // Asked again, with the file in place: the same answer and file.
-        assert_eq!(privacy::give(&program, &identity(MET)), Given::Shared);
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
     }
 
     #[test]
@@ -142,37 +138,6 @@ mod macos {
             Given::Own(Refusal::RequirementNotMet)
         );
         assert_eq!(names(unsigned.parent().unwrap()), ["hided"]);
-    }
-
-    #[test]
-    fn a_program_inside_an_app_is_left_to_the_app() {
-        let dir = tempfile::tempdir().unwrap();
-        let program = dir
-            .path()
-            .join("hide.app")
-            .join("Contents")
-            .join("Resources")
-            .join("hided");
-        signed_program(&program);
-        assert_eq!(
-            privacy::give(&program, &identity(MET)),
-            Given::Own(Refusal::InsideApp)
-        );
-        assert_eq!(names(program.parent().unwrap()), ["hided"]);
-    }
-
-    #[test]
-    fn another_identity_file_beside_the_program_is_left_as_it_is() {
-        let dir = tempfile::tempdir().unwrap();
-        let program = dir.path().join("hided");
-        signed_program(&program);
-        let file = dir.path().join(privacy::IDENTITY_FILE);
-        std::fs::write(&file, "someone else's").unwrap();
-        assert_eq!(
-            privacy::give(&program, &identity(MET)),
-            Given::Own(Refusal::AnotherIdentity)
-        );
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "someone else's");
     }
 
     #[test]

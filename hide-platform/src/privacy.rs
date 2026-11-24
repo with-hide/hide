@@ -12,7 +12,8 @@
 //! instead, so one answer serves every build:
 //!
 //! - [`give`] puts an identity file beside a program, which makes its folder
-//!   a bundle of the app's identifier. It does so only for a program that
+//!   a bundle of the app's identifier, for the starts of it that follow. It
+//!   does so only for a program that
 //!   meets the app's own code requirement, because a program that claimed
 //!   the name without meeting it would, on the user's next answer, replace
 //!   the record the app's consent is kept under.
@@ -63,13 +64,9 @@ pub enum Refusal {
     /// A macOS older than [`VERIFIED_FROM_MACOS`], or one whose version
     /// could not be read; the text is what was read.
     OsUnverified(String),
-    /// The program sits inside an app bundle, which already names it.
-    InsideApp,
     /// The system says the program does not meet the app's requirement: a
     /// development or locally signed build.
     RequirementNotMet,
-    /// Another identity file is beside the program.
-    AnotherIdentity,
     /// The requirement could not be checked, or the file not written.
     Failed(String),
 }
@@ -80,9 +77,7 @@ impl Refusal {
         match self {
             Self::NotMacos => "not_macos",
             Self::OsUnverified(_) => "os_unverified",
-            Self::InsideApp => "inside_app",
             Self::RequirementNotMet => "requirement_not_met",
-            Self::AnotherIdentity => "another_identity",
             Self::Failed(_) => "failed",
         }
     }
@@ -111,8 +106,8 @@ impl Given {
     }
 }
 
-/// Whether [`give`] left an identity file beside `program`. One look at the
-/// folder; it says nothing about whose identity the file is.
+/// Whether an identity file is beside `program`. One look at the folder; it
+/// says nothing about whose identity the file is.
 pub fn has_identity_file(program: &Path) -> bool {
     program
         .parent()
@@ -121,12 +116,14 @@ pub fn has_identity_file(program: &Path) -> bool {
 
 /// Puts `identity`'s file beside `program` when the system says the program
 /// meets the app's requirement, and answers whose name the program answers
-/// under. The file already there is left as it is; asked again, the answer is
-/// the same. A refusal writes nothing.
+/// under. A refusal writes nothing.
 ///
-/// The requirement is checked by the system's own `codesign`, once per
-/// program in this process, and before the file is written: with the file in
-/// place `codesign` reads the folder as a bundle whose seal is missing.
+/// It is for a program whose folder no identity file is in yet
+/// ([`has_identity_file`]), called once before the program is started from
+/// there: the system's own `codesign` checks the requirement by reading the
+/// whole program, and with an identity file in place it would read the
+/// folder as a bundle whose seal is missing. A program that already runs
+/// keeps the name it started with.
 pub fn give(program: &Path, identity: &Identity<'_>) -> Given {
     imp::give(program, identity)
 }
@@ -230,14 +227,11 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use std::collections::HashMap;
     use std::ffi::{CStr, CString};
     use std::io;
     use std::os::unix::ffi::OsStrExt;
-    use std::path::PathBuf;
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
-    use std::sync::{LazyLock, Mutex, PoisonError};
     use std::time::Duration;
 
     use super::*;
@@ -245,19 +239,8 @@ mod imp {
     const CODESIGN: &str = "/usr/bin/codesign";
 
     /// How long the requirement check may take: `codesign` hashes the whole
-    /// program, about two seconds for the largest one on a quiet machine.
+    /// program, a fraction of a second for a pane holder.
     const CHECK_LIMIT: Duration = Duration::from_secs(60);
-
-    /// The most answers kept. A process asks about its own program and one
-    /// holder program per build, so the cap is reached only by a caller that
-    /// asks about ever new paths; the answers are dropped whole then.
-    const JUDGED_CAP: usize = 64;
-
-    type Judged = HashMap<(PathBuf, String), Result<bool, String>>;
-
-    /// What `codesign` said of each program against each requirement, so a
-    /// build it refuses is not asked about again for every pane.
-    static JUDGED: LazyLock<Mutex<Judged>> = LazyLock::new(Mutex::default);
 
     pub(super) fn give(program: &Path, identity: &Identity<'_>) -> Given {
         match macos_major() {
@@ -265,61 +248,30 @@ mod imp {
             Ok(major) => return Given::Own(Refusal::OsUnverified(format!("macOS {major}"))),
             Err(error) => return Given::Own(Refusal::OsUnverified(error.to_string())),
         }
-        if program
-            .ancestors()
-            .skip(1)
-            .any(|dir| dir.extension().is_some_and(|extension| extension == "app"))
-        {
-            return Given::Own(Refusal::InsideApp);
-        }
         let Some(dir) = program.parent() else {
             return Given::Own(Refusal::Failed(format!(
                 "{} has no folder",
                 program.display()
             )));
         };
-        let file = dir.join(IDENTITY_FILE);
-        let wanted = identity_file(program, identity);
-        match std::fs::read(&file) {
-            Ok(found) if found == wanted => return Given::Shared,
-            Ok(_) => return Given::Own(Refusal::AnotherIdentity),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Given::Own(Refusal::Failed(format!("{}: {error}", file.display())));
-            }
-        }
         match meets(program, identity.requirement) {
             Ok(true) => {}
             Ok(false) => return Given::Own(Refusal::RequirementNotMet),
             Err(error) => return Given::Own(Refusal::Failed(error)),
         }
-        match crate::fs::atomic::write_file(&file, &wanted, crate::fs::Access::Private) {
+        let file = dir.join(IDENTITY_FILE);
+        match crate::fs::atomic::write_file(
+            &file,
+            &identity_file(program, identity),
+            crate::fs::Access::Private,
+        ) {
             Ok(_) => Given::Shared,
             Err(error) => Given::Own(Refusal::Failed(format!("{}: {error}", file.display()))),
         }
     }
 
-    /// Whether the system says `program` meets `requirement`, asked once per
-    /// program and requirement in this process.
+    /// Whether the system says `program` meets `requirement`.
     fn meets(program: &Path, requirement: &str) -> Result<bool, String> {
-        let key = (program.to_path_buf(), requirement.to_owned());
-        if let Some(known) = JUDGED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&key)
-        {
-            return known.clone();
-        }
-        let answer = ask_codesign(program, requirement);
-        let mut judged = JUDGED.lock().unwrap_or_else(PoisonError::into_inner);
-        if judged.len() >= JUDGED_CAP {
-            judged.clear();
-        }
-        judged.insert(key, answer.clone());
-        answer
-    }
-
-    fn ask_codesign(program: &Path, requirement: &str) -> Result<bool, String> {
         let mut command = Command::new(CODESIGN);
         command
             .arg("--verify")
