@@ -226,6 +226,99 @@ fn a_moved_core_keeps_its_item_while_its_node_still_dials_it() {
     assert!(!machine.installed() && !machine.kept());
 }
 
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `paired`, counted: how often a probe went to the files to decide.
+fn counted(state_dir: &Path) -> Result<bool, String> {
+    READS.with(|reads| reads.set(reads.get() + 1));
+    paired(state_dir)
+}
+
+fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+fn host(state: hide_peer::store::KnownState) -> hide_peer::store::Host {
+    hide_peer::store::Host {
+        key: guest(),
+        device: "d2".to_owned(),
+        name: "Mac".to_owned(),
+        chosen_name: None,
+        grant: "g".to_owned(),
+        state,
+        candidates: Vec::new(),
+        started: None,
+    }
+}
+
+/// An idle daemon asks whether the folder is paired every few seconds: while
+/// none of the files that decide it changed it gives the last answer without
+/// going to them again, and a pairing made or ended in either direction (the
+/// grants this machine gives, the hosts it is a guest of), or a moved core's
+/// node coming or going, is read on the next ask with the answer `paired`
+/// gives.
+#[test]
+fn an_idle_probe_reads_the_pairing_files_only_when_they_change() {
+    use hide_peer::store::{Known, KnownState};
+    let machine = Machine::new();
+    let mut probe = PairedProbe::reading(counted);
+    let mut ask = |expected: bool, reads_so_far: usize, why: &str| {
+        for _ in 0..3 {
+            let answer = probe.paired(&machine.state).unwrap();
+            assert_eq!(answer, expected, "{why}");
+            assert_eq!(answer, paired(&machine.state).unwrap(), "{why}");
+        }
+        assert_eq!(reads(), reads_so_far, "{why}");
+    };
+
+    ask(false, 1, "an unchanged folder is read once");
+
+    machine.pair();
+    ask(true, 2, "a grant is read when it is confirmed");
+    machine.unpair();
+    ask(false, 3, "a grant is read when it ends");
+
+    let mut known = Known::open(hide_kit::layout::peer_known(&machine.state)).unwrap();
+    known.put(host(KnownState::Active)).unwrap();
+    ask(true, 4, "a host is read when this machine is its guest");
+    known.set_state(&guest(), KnownState::Unpaired).unwrap();
+    ask(
+        false,
+        5,
+        "a host is read when it holds this machine no more",
+    );
+    known.put(host(KnownState::PausedByMe)).unwrap();
+    ask(true, 6, "a paused host is a pairing");
+    known.remove(&guest()).unwrap();
+    ask(false, 7, "a removed host is read as none");
+
+    std::fs::write(
+        machine.state.join(hide_core::node_migration::CORE_STATE),
+        serde_json::json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "device_registrations": [{"id": "macbook", "label": "MacBook", "inbound": true}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    ask(true, 8, "a moved core's node is read when it appears");
+}
+
+/// A look that fails is asked again, never remembered as an answer.
+#[test]
+fn an_idle_probe_does_not_remember_a_failed_read() {
+    let state = tempfile::tempdir().unwrap();
+    let mut probe = PairedProbe::reading(|_| Err("unreadable".to_owned()));
+    assert!(probe.paired(state.path()).is_err());
+    let mut probe = PairedProbe::default();
+    assert!(!probe.paired(state.path()).unwrap());
+}
+
 /// The first pairing's item is put in by the core running on the folder,
 /// which nothing stops: the item's core only waits on the folder's lock
 /// (S1). On Windows the item's start once ended the running core by its
