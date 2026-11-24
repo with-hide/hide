@@ -388,6 +388,9 @@ pub fn next_action(code: &str) -> &'static str {
         "switch_not_moved" => {
             "The two machines were paired and the device did not take the new connection; it is used as before. Try the switch again"
         }
+        "switch_cut" => {
+            "The login to that machine ended during the switch; the device is used as before. Try the switch again"
+        }
         "switch_running" => "This device's switch is already running",
         "ssh_core_not_started" => {
             "Hide could not be started on that machine; the device is used as before. Try the switch again, or open Hide there"
@@ -507,6 +510,17 @@ pub(crate) const SWITCH_CONNECTS_WITHIN: Duration = Duration::from_secs(90);
 
 /// The most requests remembered; the oldest is dropped first.
 const SSH_REQUESTS: usize = 16;
+
+/// What a switch's steps answer once the read that decided the switch
+/// signed in without asking: a login that does not carry a step from then
+/// on was cut midway, which the next press carries, never a login that
+/// asks for a password, which only that read can say.
+fn cut_midway(code: &'static str) -> &'static str {
+    match code {
+        "ssh_not_reached" | "wsl_not_reached" => "switch_cut",
+        code => code,
+    }
+}
 
 /// The name a distribution's pairing request is kept under beside the SSH
 /// aliases': no alias holds a space.
@@ -1551,7 +1565,10 @@ impl Pairing {
             own_folder,
             install,
         };
-        let mut answer = self.switch(service, peers, source, asked(false)).await?;
+        let mut answer = self
+            .switch(service, peers, source, asked(false))
+            .await
+            .map_err(cut_midway)?;
         if answer["switch"] == "held" {
             let (core, listed) = (Arc::clone(&self.core), device.to_owned());
             let open = tokio::task::spawn_blocking(move || core.device_terminals(&listed))
@@ -1563,7 +1580,10 @@ impl Pairing {
                 answer["terminals"] = json!(open);
                 return Ok(answer);
             }
-            answer = self.switch(service, peers, source, asked(true)).await?;
+            answer = self
+                .switch(service, peers, source, asked(true))
+                .await
+                .map_err(cut_midway)?;
         }
         // What the one who asked is told of the machine it switched: a
         // Mac that does not log in by itself is switched with that said.
@@ -2587,6 +2607,20 @@ mod tests {
         for code in switch.refusals {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }
+    }
+
+    /// A login that ends after the read that decided a switch, as when its
+    /// sshd is cut while the target accepts the pairing, answers the cut
+    /// the next press carries, never the login that asks for a password
+    /// the read alone can say; every other refusal is kept as it came.
+    #[test]
+    fn a_login_cut_during_a_switch_is_not_a_login_that_asks() {
+        assert_eq!(cut_midway("ssh_not_reached"), "switch_cut");
+        assert_eq!(cut_midway("wsl_not_reached"), "switch_cut");
+        for code in ["ssh_core_not_started", "switch_not_connected", "ssh_mac_signed_out"] {
+            assert_eq!(cut_midway(code), code);
+        }
+        assert!(next_action("switch_cut").contains("Try the switch again"));
     }
 
     /// One raise runs for a machine at a time, a build already tried is

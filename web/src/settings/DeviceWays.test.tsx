@@ -201,6 +201,23 @@ it("says why a press did not switch the device and offers it again", async () =>
   await unmount();
 });
 
+it("ends a press whose login was cut or did not sign in as a failed press to retry, never as the password line only the row's read says", async () => {
+  const { q, asked, answer, press, unmount } = await mount([helper({ host: host("linux x86_64") })]);
+  await press(FOLD);
+  await answer("look_switch", { condition: { kind: "linger_off" } });
+  // The login ended while the machine accepted the pairing, and then the retry's own read did not sign in.
+  for (const reason of ["switch_cut", "ssh_not_reached"]) {
+    await press(SWITCH);
+    await answer("switch", { ok: false, reason });
+    expect(q('[data-device-switch-outcome="mini:failed"]')?.textContent).toContain("The Hide on Mac mini could not be connected · try again");
+    expect(q('[data-device-condition-kind="password"]')).toBeNull();
+    expect(q(SWITCH)?.textContent).toBe("Retry");
+  }
+  expect(asked("pairing_switch")).toHaveLength(2);
+  expect(q('[data-device-way="mini:ssh"]')).not.toBeNull();
+  await unmount();
+});
+
 it("ends a press nothing answered as one that failed, when the daemon went away or the daemon's own bound passed", async () => {
   const { q, answer, press, unmount } = await mount([helper()]);
   await press(FOLD);
