@@ -1539,15 +1539,35 @@ impl Holders {
         *self.ends.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(ended);
     }
 
-    /// Tells the watch of [`Holders::watch_ends`] that `pane` ended, for a
-    /// close its engine did not ask for: a host's window ending a guest's
-    /// pane in the guest's node (PRD device-connect-iroh D-74). The engine
-    /// owns the pane and closes it, its tab with it when it was the last,
-    /// as it closes a pane whose program exited; a [`Holders::terminate`]
-    /// the engine asked for tells nothing, since the engine removes that
-    /// pane itself.
-    pub fn tell_ended(&self, pane: &str) {
+    /// Ends `pane` for a close its engine did not ask for, a host's window
+    /// ending a guest's pane in the guest's node (PRD device-connect-iroh
+    /// D-74), through `panes`, the ownership these holders are asked by,
+    /// and then tells the watch of [`Holders::watch_ends`] once that it
+    /// ended: the engine owns the pane and closes it, its tab with it when
+    /// it was the last, as it closes a pane whose program exited. The one
+    /// place the two closes part: a [`PaneHolders::terminate`] the engine
+    /// asks for tells nothing, since the engine removes that pane itself,
+    /// and neither does a close refused here or one of a pane that had
+    /// already ended (`pane_ended`), so a second close tells no second end.
+    ///
+    /// [`PaneHolders::terminate`]: hide_node_link::holders::PaneHolders::terminate
+    pub fn end_for_host(
+        &self,
+        panes: &dyn hide_node_link::holders::PaneHolders,
+        pane: &str,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
+        if self
+            .record(pane)
+            .is_ok_and(|record| record.is_some_and(|record| record.phase == Phase::Ended))
+        {
+            return Err(hide_node_link::holders::HolderError::Refused {
+                code: "pane_ended".to_owned(),
+                message: format!("pane {pane} has already ended"),
+            });
+        }
+        panes.terminate(pane)?;
         self.ends.tell(pane);
+        Ok(())
     }
 
     /// Tells `sink` each holder pane's facts from now on, and at once the

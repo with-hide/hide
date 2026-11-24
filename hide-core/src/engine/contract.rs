@@ -396,6 +396,21 @@ fn built_node(
     std::sync::Arc<hide_node::Local>,
     std::sync::Arc<hide_node::terminal::Service>,
 ) {
+    let (node, service, _) = built_node_and_holders(home, state_dir, shell);
+    (node, service)
+}
+
+/// [`built_node`] with the holders it started, for what the node asks of
+/// them itself.
+fn built_node_and_holders(
+    home: &std::path::Path,
+    state_dir: &std::path::Path,
+    shell: Vec<std::ffi::OsString>,
+) -> (
+    std::sync::Arc<hide_node::Local>,
+    std::sync::Arc<hide_node::terminal::Service>,
+    std::sync::Arc<hide_node::terminal::holder::Holders>,
+) {
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -439,6 +454,7 @@ fn built_node(
     (
         Arc::new(hide_node::Local::new(Some(home.to_owned())).with_panes(panes)),
         terminals.service,
+        holders,
     )
 }
 
@@ -683,6 +699,89 @@ impl Drop for RecordedProcesses {
             }
         }
     }
+}
+
+/// A pane its node ends for a host's window (a guest's pane its host's
+/// operator closes, PRD device-connect-iroh D-74) is told to the engine's
+/// end watch once, and one the engine ends is not, as
+/// `PaneHolders::watch_ends` says, read through the link the engine asks
+/// its node by: the engine closes the first and its tab as it closes a pane
+/// whose program exited, and never hears of the second, which it removed
+/// itself. A second close of the first is refused and tells nothing, and a
+/// pane no one closed runs on.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+#[allow(clippy::disallowed_methods)] // polls the watch, bounded by a deadline
+fn a_pane_its_node_ends_for_a_host_is_told_ended_once_and_one_its_engine_ends_is_not() {
+    use std::sync::{Arc, Mutex};
+
+    let (_root, [home, state_dir, folder]) = holder_root();
+    let _processes = RecordedProcesses(state_dir.clone());
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let (node, _service, holders) = built_node_and_holders(&home, &state_dir, contract_shell());
+    let linked = super::own::link_panes(node);
+    linked
+        .recovered(Duration::from_secs(120))
+        .expect("the test acquires pane ownership");
+    let engine = super::own::OwnEngine::new(Arc::clone(&linked));
+    let told = Arc::new(Mutex::new(Vec::<String>::new()));
+    {
+        let told = Arc::clone(&told);
+        linked.watch_ends(Arc::new(move |pane: &str| {
+            told.lock().unwrap().push(pane.to_owned());
+        }));
+    }
+    let (workspace, _tab, by_engine) = engine
+        .create_workspace(WAIT, &folder, "ends", true, BTreeMap::new())
+        .unwrap();
+    let (_host_tab, by_host) = engine
+        .create_tab(WAIT, &workspace, &folder, "host", false, BTreeMap::new())
+        .unwrap();
+    let (_last_tab, last) = engine
+        .create_tab(WAIT, &workspace, &folder, "last", false, BTreeMap::new())
+        .unwrap();
+    let (_kept_tab, kept) = engine
+        .create_tab(WAIT, &workspace, &folder, "kept", false, BTreeMap::new())
+        .unwrap();
+    for pane in [&by_engine, &by_host, &last, &kept] {
+        prompted(&engine, pane);
+    }
+    let heard = |what: &str, wanted: &[&str]| {
+        let deadline = Instant::now() + SHOWN_WITHIN;
+        loop {
+            let now = told.lock().unwrap().clone();
+            if now == wanted {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what}: heard {now:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    engine.close_pane(WAIT, &by_engine).unwrap();
+    holders
+        .end_for_host(linked.as_ref(), &by_host)
+        .expect("the node ends the pane for its host");
+    let again = holders.end_for_host(linked.as_ref(), &by_host);
+    assert!(
+        matches!(&again, Err(hide_node_link::holders::HolderError::Refused { code, .. }) if code == "pane_ended"),
+        "{again:?}"
+    );
+    // The watch hears in order: the last pane's end, told after the rest,
+    // is heard after anything they told.
+    holders
+        .end_for_host(linked.as_ref(), &last)
+        .expect("the node ends the last pane for its host");
+    heard(
+        "one end for each pane its node ended for the host, none for the engine's",
+        &[by_host.as_str(), last.as_str()],
+    );
+    prompted(&engine, &kept);
+    let left: Vec<String> = panes(&engine).into_iter().map(|(pane, _)| pane).collect();
+    assert!(left.contains(&kept), "{left:?}");
+    assert!(!left.contains(&by_engine), "{left:?}");
+    engine.stop();
+    let _ = linked.terminate(&kept);
 }
 
 /// What a daemon on the core's own engine finds after the machine went

@@ -156,7 +156,8 @@ pub struct RecoverablePane {
     pub incarnation: u64,
 }
 
-/// Told the id of a pane whose program exited on its own
+/// Told the id of a pane whose program exited on its own, or that its node
+/// ended for a close its engine did not ask for
 /// ([`PaneHolders::watch_ends`]).
 pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -616,8 +617,10 @@ pub trait PaneHolders: Send + Sync {
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
     /// Tells `ended`, from now on, the id of each pane whose program exits
     /// on its own while the node holds its screen, so the engine closes it
-    /// when its program ends. A pane ended by
-    /// [`PaneHolders::terminate`] is not told.
+    /// when its program ends, and of each pane the node ended for a close
+    /// the engine did not ask for (a host's window ending a guest's pane,
+    /// `hide_node::terminal::holder::Holders::end_for_host`), told once. A
+    /// pane ended by [`PaneHolders::terminate`] is not told.
     fn watch_ends(&self, ended: PaneEnded);
     /// Tells `sink`, from now on, each pane's facts whenever they change,
     /// for every pane the node starts or found running, whether or not a

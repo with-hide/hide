@@ -336,12 +336,11 @@ pub fn run(dir: &str) -> ! {
             // it and its tab. A guest not linked now hears it from the
             // pane's record when it links again (`HolderRecovery::closed`).
             Box::new(move |pane| {
-                match owned.terminate(pane) {
-                    Ok(()) => told.tell_ended(pane),
-                    Err(error) => record(
+                if let Err(error) = told.end_for_host(owned.as_ref(), pane) {
+                    record(
                         "guest_node.terminate_failed",
                         json!({"pane": pane, "error": format!("{error:?}")}),
-                    ),
+                    );
                 }
                 life.look();
             }),
