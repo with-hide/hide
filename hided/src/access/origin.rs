@@ -75,7 +75,10 @@ fn unread(step: &'static str, pid: u32, error: &std::io::Error) -> &'static str 
 /// home's holders, which this account starts from its own files and so
 /// always reads, and the walk goes on to its parent, whose account and
 /// birth it still has to read. A pane's program that takes that right from
-/// itself is walked past the same way, to the holder above it.
+/// itself is walked past the same way, to the holder above it. The rule is
+/// the same on every system and is reached on Linux alone: macOS names a
+/// process's image to any account, and on Windows the right that names the
+/// image is the one the account and the birth need, which refuse first.
 fn image_read(pid: u32, read: std::io::Result<PathBuf>) -> Result<Option<PathBuf>, &'static str> {
     match read {
         Ok(image) => canonical(&image)

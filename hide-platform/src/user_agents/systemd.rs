@@ -3,11 +3,11 @@
 //! user manager starts it when it starts: at the account's first login, or
 //! at boot once the account lingers ([`Systemd::linger`]). It is restarted
 //! ten seconds after any exit while its marker file exists, and an exit with
-//! the marker gone leaves it stopped: systemd reads a unit's conditions
-//! (`ConditionPathExists=`) when it starts the unit and not when it restarts
-//! it, so the unit asks for the marker again before each run
-//! (`ExecCondition=`). `systemctl --user` and `loginctl` are the commands
-//! that change it.
+//! the marker gone leaves it stopped: the unit asks for the marker before
+//! each run (`ExecCondition=`), a first start and a restart alike, where a
+//! unit's own conditions (`ConditionPathExists=`) are read at a start and
+//! not at a restart. `systemctl --user` and `loginctl` are the commands that
+//! change it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -270,7 +270,9 @@ impl Systemd {
     /// again; a running process is left running until it exits. The manager
     /// is told to read its units again only when it runs nothing of this
     /// one: it ends a run by the unit it last read, and reads a unit whose
-    /// file is gone as one whose end ends everything its run started.
+    /// file is gone as one whose end ends everything its run started. That
+    /// holds until something else has the manager read again while the
+    /// forgotten run goes on, which this cannot prevent.
     pub(super) fn forget(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         let mut removed = false;
         for path in [Self::wanted_link(home, label), Self::unit_file(home, label)] {
@@ -377,8 +379,8 @@ fn login_name() -> String {
 }
 
 /// `agent`'s unit: started with the account's manager, restarted ten
-/// seconds after any exit while `marker` exists (`ExecCondition=`, since a
-/// restart reads no `ConditionPathExists=`), and stopped within
+/// seconds after any exit while `marker` exists (`ExecCondition=`, which
+/// is asked before every run), and stopped within
 /// [`STOP_WITHIN_SECS`]. A stop, and the end of its program, ends that
 /// program alone (`KillMode=process`): what it started to outlive it
 /// ([`crate::process::start_resident`]) stays in the unit's control group,
@@ -403,7 +405,6 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
     format!(
         "[Unit]\n\
          Description={label}\n\
-         ConditionPathExists={marker}\n\
          StartLimitIntervalSec=0\n\
          \n\
          [Service]\n\
@@ -420,7 +421,6 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
          [Install]\n\
          WantedBy=default.target\n",
         label = escape_specifiers(agent.label),
-        marker = escape_path(&marker.to_string_lossy()),
     )
 }
 
@@ -492,10 +492,6 @@ mod tests {
             unit.contains(
                 "ExecStart=\"/home/example/a b/.hide/core/0123/hided\" \"core-login\" \"--state-dir\" \"/home/example/a%%b/$$x\\\"y\"\n"
             ),
-            "{unit}"
-        );
-        assert!(
-            unit.contains("ConditionPathExists=/home/example/a b/state/keep-alive\n"),
             "{unit}"
         );
         assert!(

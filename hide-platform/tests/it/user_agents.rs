@@ -363,7 +363,10 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
     let unit =
         std::fs::read_to_string(home.join(".config/systemd/user/example.agent.service")).unwrap();
     assert!(
-        unit.contains(&format!("ConditionPathExists={}\n", marker.display())),
+        unit.contains(&format!(
+            "ExecCondition=/bin/sh -c \"test -e \\\"$$1\\\"\" sh \"{}\"\n",
+            marker.display()
+        )),
         "{unit}"
     );
     assert!(
@@ -730,8 +733,10 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
     };
     #[allow(clippy::disallowed_methods)] // a bounded poll of another process
     let run = |nth: usize| -> (u32, u32) {
-        // Either manager holds a restart back ten seconds.
-        let deadline = Instant::now() + Duration::from_secs(40);
+        // Either manager holds a restart back ten seconds. The bound stays
+        // well inside a resident's own life (`resident::ROLE_LIFE`), which
+        // the checks below rest on across two of these waits.
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if let Some(run) = runs().get(nth - 1) {
                 return *run;
