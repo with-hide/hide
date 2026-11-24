@@ -5036,7 +5036,7 @@ impl Runtime {
                 // `explorer.created_not_opened` rides the finished slot and the
                 // tree keeps the created file (B10 pattern).
                 if operation.kind == files::ExplorerOperationKind::FileCreate && target.desk {
-                    self.desk_open_created(&target, &destination);
+                    self.desk_open_created(target, &destination);
                 } else if operation.kind == files::ExplorerOperationKind::FileCreate {
                     match self.prepare_file_tab(
                         &target.workspace_id,
