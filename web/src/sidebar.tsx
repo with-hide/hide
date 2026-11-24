@@ -754,7 +754,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       depth={0}
       ask={agent.state.needs_you}
       selected={agent.pane_id === context.focusRowPane}
-      onOpen={(id, how) => context.actions.openListedAgent(id, how)}
+      onOpen={(id, how) => context.actions.openSidebarRow(id, how)}
       onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
@@ -1783,7 +1783,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             tree={tree}
             remote={remote}
             selected={agent.pane_id === context.focusRowPane}
-            onOpen={depth === 0 || !parent ? (id, how) => context.actions.openListedAgent(id, how) : (id, how) => (context.actions.rowOpensBesideDesk(how) ? context.actions.openDeskSession(id) : context.actions.followRelation(parent.pane_id, id, agent.identity_label))}
+            onOpen={depth === 0 || !parent ? (id, how) => context.actions.openSidebarRow(id, how) : (id, how) => (context.actions.rowOpensBesideDesk(how) ? context.actions.openDeskSession(id) : context.actions.followRelation(parent.pane_id, id, agent.identity_label))}
             onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
             inset={inset}
             // A tree row is one line with no branch (B14); the popover names a differing branch.

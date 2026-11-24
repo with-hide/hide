@@ -197,7 +197,7 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
       value={current ? hitKey(current) : ""}
       onValue={setHighlighted}
       onKeyDown={(event) => {
-        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4); on Desk it keeps it as a tab of the tab panel.
+        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file beside the active View area (S7 B4); on Desk it opens it to the side in the tab panel.
         if (event.key !== "Enter" || !holdsCommandKey(event) || composingKey(event) || !current) return;
         event.preventDefault();
         event.stopPropagation();
@@ -209,7 +209,7 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
       }}
       footer={
         <span className="flex items-center gap-md">
-          <span data-palette-hint="beside">{besideReason ?? t(desk ? "documents.keepTab" : "documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
+          <span data-palette-hint="beside">{besideReason ?? t("documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
           {(scope?.kind === "all" ? allRead?.index_truncated : checkoutAnswer?.truncated) ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
           {allRead?.more ? <span data-palette-state="more">{t("documents.moreMatches", { count: 80 })}</span> : null}
           {skipped > 0 ? <span data-palette-state="skipped">{t("documents.projectsUnavailable", { count: skipped })}</span> : null}

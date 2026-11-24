@@ -1788,6 +1788,43 @@ async fn the_file_index_of_every_project_answers_each_match_with_its_project() {
     running.stop();
 }
 
+/// A window's ask of an agent (PRD desk-2-ui B14) reaches the phone's ask
+/// rules from the socket and is answered on that connection: a pane no agent
+/// runs in reads no ask and a choice there is refused, nothing typed.
+#[tokio::test]
+async fn a_windows_ask_and_choice_are_answered_on_its_own_socket() {
+    let (_dir, env) = test_env(true);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+    let pane = json!({"device_id": "no-such-device", "pane_id": "w1:p1"});
+
+    let asked = send_event_expecting(&mut socket, "pane_ask", pane.clone(), |frame| {
+        frame["type"] == "pane_ask"
+    })
+    .await;
+    assert_eq!(
+        asked["payload"],
+        json!({"device_id": "no-such-device", "pane_id": "w1:p1", "ask": null, "reason": "gone"})
+    );
+
+    let mut press = pane;
+    press.as_object_mut().unwrap().extend(
+        json!({"request_id": "r1", "choice": "allow", "ask": {"kind": "permission", "turn": "5"}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let answered = send_event_expecting(&mut socket, "pane_choice", press, |frame| {
+        frame["type"] == "pane_choice_result"
+    })
+    .await;
+    assert_eq!(
+        answered["payload"],
+        json!({"request_id": "r1", "ok": false, "reason": "gone"})
+    );
+    running.stop();
+}
+
 #[tokio::test]
 async fn browser_socket_cannot_start_a_host_file_handler() {
     let (dir, mut env) = test_env(true);

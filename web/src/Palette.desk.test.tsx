@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { DESK_ROOM_CLOSED, activeTab } from "./deskRoom";
+import { DESK_ROOM_CLOSED, activeTab, openTab, type DeskRoomWindow } from "./deskRoom";
 import { clientI18n } from "./i18n/translator";
 import { Palette } from "./Palette";
 import type { Checkout, DeskSection, SnapshotRest } from "./snapshot";
@@ -14,7 +14,7 @@ import type { DispatchFn } from "./ws";
 
 // Expected answers are PRD desk-2-ui D-23, B37, B38: ⌘P on Desk searches the
 // session's checkout or every project, ↵ opens the file in the tab panel as a
-// preview, ⌘↵ (Ctrl+Enter off macOS) keeps it as a tab, and the Explorer
+// preview, ⌘↵ (Ctrl+Enter off macOS) opens it to the side in the panel, and the Explorer
 // column is left as it was.
 
 Element.prototype.scrollIntoView = () => {};
@@ -33,6 +33,9 @@ const desk = {
   settings: { enabled: true },
   conversation: { generation: 1, dropped: 0, items: [{ kind: "user", id: 1, text: "", at_ms: 1, mentions: [{ kind: "project", id: "/ide", name: "herdr-ide" }] }] },
 } as unknown as DeskSection;
+
+/** A room whose tab panel already shows a file, so ⌘↵ has one to open the second view beside. */
+const showing: DeskRoomWindow = openTab(DESK_ROOM_CLOSED, { kind: "file", device_id: "local", root: "/atorni", path: "/atorni/src/token-guard.ts" });
 
 describe("⌘P on Desk", () => {
   let container: HTMLDivElement;
@@ -92,36 +95,34 @@ describe("⌘P on Desk", () => {
     expect([...document.querySelectorAll("[data-palette-group]")].map((group) => group.getAttribute("data-palette-group"))).toEqual(["named", "other"]);
   });
 
-  it("opens the highlighted file in the tab panel as the preview on ↵ and keeps it as a tab on ⌘↵, leaving the Explorer column alone", async () => {
+  it("opens the highlighted file in the tab panel as the preview on ↵ and to the side on ⌘↵, leaving the Explorer column alone", async () => {
     await open(two());
     await press({});
     let room = useUiStore.getState().deskRoom;
     expect(activeTab(room.panel)).toEqual({ kind: "file", device_id: "local", root: "/ide", path: "/ide/web/src/token.ts" });
     expect(room.panel?.preview).toBe("file:local:/ide:/ide/web/src/token.ts");
     expect(room.panel?.explorer).toBe(false);
-    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: true });
     expect(useUiStore.getState().overlay).toBe("none");
 
     useUiStore.setState({ overlay: "file_palette" });
     await open(two());
     await press({ metaKey: true });
     room = useUiStore.getState().deskRoom;
-    expect(room.panel?.tabs).toHaveLength(1);
+    // The same file again, as a second view the window holds: the file in front stays and no Workspace's layout gets a view.
+    expect(room.panel?.beside).toBe("file:local:/ide:/ide/web/src/token.ts");
     expect(room.panel?.preview).toBeNull();
-    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: false });
-    expect(sent.at(-1)?.payload).not.toHaveProperty("beside");
+    expect(sent.some((event) => event.kind === "file_open")).toBe(false);
   });
 
-  it("keeps a file on the system's own command key: ⌘ on macOS, Ctrl elsewhere, and the other key alone is a plain ↵", async () => {
-    const keeps = () => sent.filter((event) => event.kind === "file_open").map((event) => (event.payload as { preview: boolean }).preview);
+  it("opens a file to the side on the system's own command key: ⌘ on macOS, Ctrl elsewhere, and the other key alone is a plain ↵", async () => {
+    const sides = () => useUiStore.getState().deskRoom.panel?.beside != null;
     for (const [platform, held, other] of [["MacIntel", { metaKey: true }, { ctrlKey: true }], ["Win32", { ctrlKey: true }, { metaKey: true }]] as const) {
       system(platform);
-      sent = [];
-      for (const [init, keep] of [[held, true], [other, false]] as const) {
-        useUiStore.setState({ overlay: "file_palette", deskRoom: DESK_ROOM_CLOSED });
+      for (const [init, beside] of [[held, true], [other, false]] as const) {
+        useUiStore.setState({ overlay: "file_palette", deskRoom: showing });
         await open(two());
         await press(init);
-        expect(keeps().at(-1)).toBe(!keep);
+        expect(sides()).toBe(beside);
         await act(async () => root.unmount());
         root = createRoot(container);
       }
@@ -136,7 +137,7 @@ describe("⌘P on Desk", () => {
   });
 
   it("opens the file of the highlighted row when two devices hold the same path", async () => {
-    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }] }, status: { remote: [{ target_id: "mini", session: { workspaces: [workspace(checkout("ide2", "/ide", "p-mini"), "herdr-ide")] } }] } } as unknown as SnapshotRest });
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }] }, status: { remote: [{ target_id: "mini", session: { workspaces: [{ ...workspace(checkout("ide2", "/ide", "p-mini"), "herdr-ide"), device_id: "mini" }] } }] } } as unknown as SnapshotRest });
     await open(all([file("/ide", "a.ts"), { ...file("/ide", "a.ts"), device_id: "mini" }]));
     // Move the highlight to the second row, which is the device's.
     await act(async () => document.querySelector("[data-palette-input]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));

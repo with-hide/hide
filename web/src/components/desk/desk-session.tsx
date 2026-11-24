@@ -1,4 +1,4 @@
-import { FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob, DeskOutput } from "../../desk";
@@ -6,13 +6,16 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { PaneHeadChildren, PanePrChip } from "../../PaneHeaderBand";
 import { PaneWorkChip } from "../../PaneMissionChip";
-import { AncestorPath } from "../../PaneRelations";
+import { AncestorPath, usePaneMenu } from "../../PaneRelations";
 import type { AgentRow, PaneRow, SleepingSession } from "../../snapshot";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Hint } from "../ui/tooltip";
 import { AskCardView } from "../../mobile/AskCard";
 import { JobLead, OutputsChip } from "./desk-job-card";
+import { AgentMark } from "../../AgentMark";
+import { StatusMark } from "../status-mark";
 
 /**
  * The second line's chips in one line (PRD desk-2-ui B8): as many as fit,
@@ -21,41 +24,63 @@ import { JobLead, OutputsChip } from "./desk-job-card";
  * what counts.
  */
 export function FoldingChips({ children }: { children: ReactNode }) {
+  const { t } = useInterfaceTranslation();
   const items = Children.toArray(children).filter(Boolean);
   const row = useRef<HTMLDivElement>(null);
-  const [shown, setShown] = useState(items.length);
+  // Where the row folds, as an index into `items`, and how many drawn chips fold there: a chip with nothing to say
+  // draws nothing and is neither measured nor counted.
+  const [fold, setFold] = useState({ cut: items.length, hidden: 0 });
   useLayoutEffect(() => {
     const node = row.current;
-    if (!node) return;
+    if (!node) return undefined;
     const measure = () => {
       const room = node.getBoundingClientRect().width;
       const cells = Array.from(node.querySelectorAll<HTMLElement>(":scope > [data-desk-chip-cell]"));
+      const drawn = cells.filter((cell) => cell.childElementCount > 0);
       // `+n` takes a chip's room of its own when anything folds.
       const more = node.querySelector<HTMLElement>(":scope > [data-desk-chip-more]")?.getBoundingClientRect().width ?? 0;
       let used = 0;
-      let fit = 0;
-      for (const [index, cell] of cells.entries()) {
+      let cut = cells.length;
+      for (const [index, cell] of drawn.entries()) {
         const width = cell.getBoundingClientRect().width + (index > 0 ? GAP : 0);
-        const reserve = index < cells.length - 1 ? more + GAP : 0;
-        if (used + width + reserve > room) break;
+        const reserve = index < drawn.length - 1 ? more + GAP : 0;
+        if (used + width + reserve > room) {
+          cut = cells.indexOf(cell);
+          break;
+        }
         used += width;
-        fit += 1;
       }
-      setShown((now) => (now === fit ? now : fit));
+      const hidden = drawn.filter((cell) => cells.indexOf(cell) >= cut).length;
+      setFold((now) => (now.cut === cut && now.hidden === hidden ? now : { cut, hidden }));
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
+    // The row's width moves the fold, and so does a chip whose content arrives after the row was drawn.
+    const resized = new ResizeObserver(measure);
+    resized.observe(node);
+    for (const cell of node.querySelectorAll(":scope > [data-desk-chip-cell]")) resized.observe(cell);
+    const changed = new MutationObserver(measure);
+    changed.observe(node, { childList: true, subtree: true });
+    return () => {
+      resized.disconnect();
+      changed.disconnect();
+    };
   }, [items.length]);
-  const hidden = items.length - shown;
+  const hidden = fold.hidden;
   return (
-    <div ref={row} className="flex min-w-0 flex-1 items-center gap-xs overflow-hidden" data-desk-session-chips={items.length}>
-      {items.map((item, index) => (
-        // A folded chip keeps its place to be measured, out of sight and out of reach.
-        <span key={index} className={cn("flex shrink-0 items-center", index >= shown && "invisible absolute")} aria-hidden={index >= shown || undefined} data-desk-chip-cell="true">{item}</span>
-      ))}
-      <span className={cn("shrink-0 text-micro text-muted-foreground", hidden > 0 ? "" : "invisible absolute")} data-desk-chip-more={hidden}>+{hidden}</span>
+    <div ref={row} className="flex min-w-0 flex-1 items-center gap-xs overflow-hidden" data-desk-session-chips="true">
+      {items.map((item, index) => {
+        const out = index >= fold.cut;
+        // A folded chip keeps its place to be measured, out of sight and out of reach; an empty one takes no room.
+        return <span key={index} className={cn("flex shrink-0 items-center empty:hidden", out && "invisible absolute")} aria-hidden={out || undefined} data-desk-chip-cell="true">{item}</span>;
+      })}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="sm" className={cn("h-(--size-control-compact) shrink-0 px-xxs text-micro font-normal text-muted-foreground", hidden > 0 ? "" : "invisible absolute")} aria-label={t("desk.room.moreChips", { count: hidden })} tabIndex={hidden > 0 ? undefined : -1} data-desk-chip-more={hidden}>+{hidden}</Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="flex w-auto flex-col items-start gap-xs p-xs" data-desk-chip-folded="true">
+          {items.slice(fold.cut).map((item, index) => <span key={index} className="flex items-center empty:hidden">{item}</span>)}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -73,9 +98,12 @@ const GAP = 4;
  * folds into `+n`: the work chip (the plan's, or the mission chip on a
  * Conductor), what it opened, and its PR; no model.
  */
-export function SessionHead({ paneId, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onClose }: {
   paneId: string;
-  job: DeskJob;
+  /** The session's work name, kept by the panel when its row and card are gone. */
+  title: string;
+  /** The core's card of the session, absent before it arrives and once its row is gone (PRD desk-2-ui B6, B43). */
+  job: DeskJob | null;
   row: AgentRow | null;
   pane: PaneRow | null;
   machine: string | null;
@@ -93,11 +121,11 @@ export function SessionHead({ paneId, job, row, pane, machine, disconnected, sle
   onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const title = row?.identity_label ?? job.title;
+  const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
   return (
-    <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={job.state}>
+    <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={sleeping ? "sleeping" : (job?.state ?? "pending")}>
       <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
-        {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : <JobLead job={job} />}
+        {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
         <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
           {pane ? <AncestorPath pane={pane} actions={deskActions} /> : null}
           <Hint label={title} reveals>
@@ -121,6 +149,7 @@ export function SessionHead({ paneId, job, row, pane, machine, disconnected, sle
             </Button>
           </Hint>
         )}
+        {pane && !sleeping ? <SessionPaneMenu pane={pane} title={title} actions={deskActions} /> : null}
         <Hint label={t("desk.room.closeSession")}>
           <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
         </Hint>
@@ -130,7 +159,7 @@ export function SessionHead({ paneId, job, row, pane, machine, disconnected, sle
         {disconnected ? <span className="shrink-0 text-caption text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
         <FoldingChips>
           {sleeping ? null : <PaneWorkChip paneId={paneId} actions={deskActions} />}
-          {job.outputs.length ? <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} /> : null}
+          {job?.outputs.length ? <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} /> : null}
           {sleeping ? null : <PanePrChip paneId={paneId} actions={deskActions} />}
         </FoldingChips>
       </div>
@@ -208,5 +237,34 @@ export function SessionSleepingFoot({ title, session, onWake }: { title: string;
       <span className="min-w-0 flex-1 truncate text-subtle-foreground">{title}</span>
       {session?.wake_available ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={() => onWake(session.sleep_id)}>{t("panes.sleep.wake")}</Button> : null}
     </div>
+  );
+}
+
+/**
+ * The head's `⋯` (PRD desk-2-ui B6, Doop ②): the pane head's own menu for
+ * the session's pane, with Desk's opens, so a relative opens beside Desk.
+ */
+function SessionPaneMenu({ pane, title, actions }: { pane: PaneRow; title: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const menu = usePaneMenu(pane, title, actions);
+  return (
+    <>
+      <Hint label={t("panes.actions", { name: title })}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0 text-muted-foreground"
+          aria-haspopup="menu"
+          data-desk-session-menu={pane.id}
+          onClick={(event) => {
+            const button = event.currentTarget.getBoundingClientRect();
+            menu.openAt(button.left, button.bottom);
+          }}
+        >
+          <EllipsisIcon />
+        </Button>
+      </Hint>
+      {menu.menu}
+    </>
   );
 }

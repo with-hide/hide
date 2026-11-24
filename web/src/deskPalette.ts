@@ -6,9 +6,8 @@
 
 import type { DeskItem } from "./desk";
 import type { DeskTab } from "./deskRoom";
-import { checkoutAtRoot, checkoutOfPaneIn, listedCheckouts } from "./navigation";
 import { groupEntries, type SearchEntry, type SearchSection } from "./search";
-import type { SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, type SnapshotRest } from "./snapshot";
 
 /** A file a ⌘P answer names, with the checkout it is in. */
 export type DeskFileHit = { device_id: string; root_path: string; path: string; relative_path: string };
@@ -22,7 +21,7 @@ export type DeskFileScope = { kind: "checkout"; device: string; root: string } |
  */
 export function deskFileScope(rest: SnapshotRest | null, session: string | null): DeskFileScope {
   if (session === null) return { kind: "all" };
-  const found = checkoutOfPaneIn(rest, session);
+  const found = checkoutOfPane(rest, session);
   return found ? { kind: "checkout", device: found.device, root: found.checkout.path } : { kind: "all" };
 }
 
@@ -32,9 +31,9 @@ export function deskFileScope(rest: SnapshotRest | null, session: string | null)
  * the `@` menu by its primary checkout's path, a session by its pane.
  */
 export function lastNamedWorkspace(rest: SnapshotRest | null, items: readonly DeskItem[]): string | null {
-  const rows = listedCheckouts(rest);
-  const ofProject = (id: string) => rows.find((row) => row.workspace.id === id || row.workspace.path === id || row.workspace.checkouts.some((checkout) => checkout.path === id))?.workspace.id ?? null;
-  const ofPane = (pane: string) => checkoutOfPaneIn(rest, pane)?.workspace.id ?? null;
+  const projects = catalogWorkspaces(rest);
+  const ofProject = (id: string) => projects.find((project) => project.id === id || project.path === id || project.checkouts.some((checkout) => checkout.path === id))?.id ?? null;
+  const ofPane = (pane: string) => checkoutOfPane(rest, pane)?.workspace ?? null;
   for (const item of [...items].reverse()) {
     if (item.kind === "user") {
       for (const mention of [...item.mentions].reverse()) {
@@ -54,8 +53,8 @@ export function lastNamedWorkspace(rest: SnapshotRest | null, items: readonly De
 /** The place the core is asked to put first: the project's primary checkout, which an all-projects search reads (`file_index_all`'s `prefer`). */
 export function preferredRoot(rest: SnapshotRest | null, workspaceId: string | null): { device_id: string; root_path: string } | null {
   if (workspaceId === null) return null;
-  const found = listedCheckouts(rest).find((row) => row.workspace.id === workspaceId);
-  return found ? { device_id: found.device, root_path: found.workspace.path } : null;
+  const found = catalogWorkspaces(rest).find((project) => project.id === workspaceId);
+  return found ? { device_id: found.device_id, root_path: found.path } : null;
 }
 
 /** One all-projects result as its row draws it: the muted `project ›`, the file's name and its folder. */
@@ -67,14 +66,16 @@ export type ProjectFileRow = { hit: DeskFileHit; project: string; name: string; 
  * checkout that is no longer listed is left out, since nothing could open it.
  */
 export function projectFileRows(rest: SnapshotRest | null, files: readonly DeskFileHit[], named: string | null): { named: ProjectFileRow[]; other: ProjectFileRow[] } {
+  const projects = catalogWorkspaces(rest);
   const first: ProjectFileRow[] = [];
   const other: ProjectFileRow[] = [];
   for (const hit of files) {
     const place = checkoutAtRoot(rest, hit.device_id, hit.root_path);
-    if (!place) continue;
+    const project = place ? projects.find((one) => one.id === place.workspace) : null;
+    if (!place || !project) continue;
     const parts = hit.relative_path.split("/");
-    const row = { hit, project: place.workspace.label, name: parts.at(-1) ?? hit.relative_path, folder: parts.slice(0, -1).join("/") };
-    (place.workspace.id === named ? first : other).push(row);
+    const row = { hit, project: project.label, name: parts.at(-1) ?? hit.relative_path, folder: parts.slice(0, -1).join("/") };
+    (project.id === named ? first : other).push(row);
   }
   return { named: first, other };
 }

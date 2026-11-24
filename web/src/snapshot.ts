@@ -4219,6 +4219,35 @@ export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
 }
 
+/** A listed checkout with its project and its machine (PRD desk-2-ui B19, B35, B37). */
+export type CheckoutPlace = { device: string; workspace: string; checkout: Checkout };
+
+/** Every listed checkout: this machine's, then each connected device's. */
+export function checkoutPlaces(rest: SnapshotRest | null): CheckoutPlace[] {
+  return catalogWorkspaces(rest).flatMap((workspace) => workspace.checkouts.map((checkout) => ({ device: workspace.device_id, workspace: workspace.id, checkout })));
+}
+
+/** The checkout at `root` on `device`, null when it is not listed. */
+export function checkoutAtRoot(rest: SnapshotRest | null, device: string, root: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.device === device && place.checkout.path === root) ?? null;
+}
+
+/** The checkout whose tab holds `paneId`, null when no listed tab does. */
+export function checkoutOfPane(rest: SnapshotRest | null, paneId: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId))) ?? null;
+}
+
+/** The pane row of `paneId` as its tab lists it, local or on a device, for the ancestor path (PRD desk-2-ui B47). */
+export function paneRowOf(rest: SnapshotRest | null, paneId: string): PaneRow | null {
+  for (const place of checkoutPlaces(rest)) {
+    for (const tab of place.checkout.tabs) {
+      const pane = tab.panes.find((one) => one.id === paneId);
+      if (pane) return pane as PaneRow;
+    }
+  }
+  return null;
+}
+
 const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
 
 /**
@@ -4319,14 +4348,18 @@ export function agentPermission(rest: SnapshotRest | null, deviceId: string, age
  * own device, so the same path on two machines never shares a row (S5.5 B2).
  */
 export function explorerContext(rest: SnapshotRest | null): { device: string; checkout: Checkout | null; expanded: string[] } {
-  const node = localDeviceId(rest);
-  const device = focusedRemoteDevice(rest)?.id ?? node;
-  const state = rest?.ui_state;
+  const device = focusedRemoteDevice(rest)?.id ?? localDeviceId(rest);
   return {
     device,
     checkout: frontCheckout(rest),
-    expanded: (device === node ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS,
+    expanded: expandedOn(rest, device),
   };
+}
+
+/** One device's expanded Explorer folders, by absolute path (S5.5 B2); the same set for any checkout on it. */
+export function expandedOn(rest: SnapshotRest | null, device: string): string[] {
+  const state = rest?.ui_state;
+  return (device === localDeviceId(rest) ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS;
 }
 
 /** The changes of the checkout a listing belongs to, or null when they are another checkout's. */

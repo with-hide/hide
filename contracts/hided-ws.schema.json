@@ -1530,7 +1530,7 @@
       }
     },
     "paneAsk": {
-      "description": "A client `pane_ask` event {device_id, pane_id} asks what that agent waits on (PRD desk-2-ui B14). The answer is a pane_ask frame {device_id, pane_id, ask, reason}: `ask` is the body of the phone's `ask` frame (kind `question`, `plan_approval` or `permission`, turn, since_ms, text, choices [{id, label, note}], command, answerable), read from the core and the session at the moment asked, or null with `reason` (`not_asking`, `gone`, `invalid_request`, `unavailable`).",
+      "description": "A client `pane_ask` event {device_id, pane_id} asks what that agent waits on (PRD desk-2-ui B14). Nothing is pushed after it: a window asks when it opens a session's panel and again when that agent's row changes (its `changed_at_unix_ms` or group). Answered one at a time per connection, off the socket loop, after any choice waiting; a newer ask of the same pane replaces one waiting, and at 16 panes waiting the oldest gives way. The answer is a pane_ask frame {device_id, pane_id, ask, reason}: `ask` is the body of the phone's `ask` frame (kind `question`, `plan_approval` or `permission`, turn, since_ms, text, choices [{id, label, note}], command, answerable), read from the core and the session at the moment asked, or null with `reason` (`not_asking`, `gone`, `invalid_request`, `unavailable`).",
       "type": "object",
       "required": ["device_id", "pane_id"],
       "properties": {
@@ -1539,16 +1539,15 @@
       }
     },
     "paneChoice": {
-      "description": "A client `pane_choice` event {request_id, device_id, pane_id, turn, kind, choice} answers the ask a pane_ask frame showed, with one of its choice ids, as a phone's choice does: the daemon checks the agent still asks it in that turn and kind, then types the keys the agent's own screen takes for that choice, each only while the screen shows the ask (the phone's path, `hide_core::operator_input::choice_keys`); a choice is never sent as text. The answer is a pane_choice_result frame {request_id, ok, reason}, `reason` the phone's: `stale` (the agent left the ask, or the screen no longer shows it), `unknown_choice` (the ask is answered in the terminal, or its keys do not reach that choice), `invalid_request`, `gone`, `device_unreachable`, `unavailable`, `uncertain` (keys may have landed), or the write's own refusal.",
+      "description": "A client `pane_choice` event {request_id, device_id, pane_id, choice, ask} answers the ask a pane_ask frame showed, with one of its choice ids, as a phone's choice does; `ask` is that frame's `ask` object returned as received, untouched, and its `turn` and `kind` are the ones the choice names. The daemon checks the agent asks exactly that ask (the same turn, kind, call, command, words and choices, since two asks can share one turn) at the press and again before the first key, then types the keys the agent's own screen takes for that choice, each only while the screen shows the ask (the phone's path, `hide_core::operator_input::choice_keys`); a choice is never sent as text. The answer is a pane_choice_result frame {request_id, ok, reason}, `reason` the phone's: `stale` (the agent left the ask or asks another, or the screen no longer shows it; the window asks `pane_ask` again), `unknown_choice` (the ask is answered in the terminal, or its keys do not reach that choice), `invalid_request`, `gone`, `device_unreachable`, `unavailable`, `uncertain` (keys may have landed), `busy` (eight choices of this connection already wait; nothing typed), or the write's own refusal. Choices are answered in the order sent, never dropped.",
       "type": "object",
-      "required": ["request_id", "device_id", "pane_id", "turn", "kind", "choice"],
+      "required": ["request_id", "device_id", "pane_id", "choice", "ask"],
       "properties": {
         "request_id": { "type": "string", "maxLength": 64 },
         "device_id": { "type": "string" },
         "pane_id": { "type": "string" },
-        "turn": { "type": "string" },
-        "kind": { "type": "string", "enum": ["question", "plan_approval", "permission"] },
-        "choice": { "type": "string" }
+        "choice": { "type": "string" },
+        "ask": { "type": "object", "description": "The `ask` object of the pane_ask frame the choice was made on, unchanged; at most 64 KiB." }
       }
     },
     "fileIndexResult": {

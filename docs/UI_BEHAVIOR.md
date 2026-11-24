@@ -510,7 +510,7 @@ From the only area, Open to the side is a split, so it is offered only where Spl
 
 While Desk is the screen, ⌘P and ⌘K are the same palettes with their picks opening where Desk shows things (PRD desk-2-ui D-23, D-24; `web/src/deskPalette.ts`):
 with a session open beside Desk ⌘P lists that session's checkout, and with none it lists every project's files at once (hided's `file_index_all`, at most 80), each result led by a muted `project ›`, the project Desk's conversation named last first and then `Other projects`.
-↵ opens the file as the tab panel's italic preview tab, as the app's ⌘P does, and ⌘↵ (Ctrl+Enter off macOS) keeps it as a tab of its own; the panel stands beside the session, or at the window's right edge with none, and ⌘P never opens or closes the Explorer column.
+↵ opens the file as the tab panel's italic preview tab, as the app's ⌘P does, and ⌘↵ (Ctrl+Enter off macOS) opens it to the side, a second view of the file in the panel that the window holds and no Workspace's layout does; the panel stands beside the session, or at the window's right edge with none, and ⌘P never opens or closes the Explorer column.
 Its footer says when the list was cut at 80 matches and how many projects could not be listed.
 In ⌘K the same rows are found, with the missions added, and before anything is typed Desk's ⌘K lists the sessions, the pull requests and the missions, up to eight of each, instead of Related and Recent; ↵ on a session opens it beside Desk and ⌘↵ goes to its tab, and a pull request or a mission opens in the tab panel and opens no session.
 Every other screen's ⌘P and ⌘K are unchanged.
@@ -1209,7 +1209,8 @@ Moved to a private document: `docs/desk.md` in with-hide/hide-private.
 
 Web owner: `web/src/DeskScreen.tsx`, `web/src/deskRoom.ts`, `web/src/components/desk/`, the Desk row in `web/src/components/sidebar-header.tsx`, the row click in `web/src/components/sidebar-agent-row.tsx`.
 While Settings › Labs › Desk is on, the sidebar's Desk row sits on its own line between the Overview row and the `미션` row, with the warning mark while a session Desk started asks the operator, and is drawn selected while Desk is in front; with the switch off there is no row.
-While Desk is in front, pressing an agent's row in the sidebar opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
+While Desk is in front, pressing an agent's row in the sidebar, in a project's tree or in the 태스크 tab, opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
+Every other way to an agent (an ⌥ number, a notification, another computer's show) brings its tab forward whatever screen is in front.
 What the room beside Desk holds and how it opens and closes is `docs/desk.md`'s.
 
 ## Hide AI: the Hide AI tool

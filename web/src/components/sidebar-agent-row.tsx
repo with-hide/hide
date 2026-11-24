@@ -162,7 +162,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Each row reads only the facts it draws, so a snapshot that moves nothing here renders nothing.
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
   // The session open beside Desk reads as the selected row while Desk is in front, and its hint says where it is (PRD desk-2-ui B4).
-  const beside = useUiStore((s) => s.screen?.kind === "desk" && s.deskRoom.session === agent.pane_id);
+  const beside = useBesideDesk(agent.pane_id);
   // The agent drawn in its tab's pair view wears the pair view mark (PRD lane-desk-pair-view B22).
   const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.pane_id === agent.pane_id));
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
@@ -203,7 +203,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const facts = [agentWithProfile(t, agent), recordWords(t, agent), offline ?? markWords(t, agent)].filter(Boolean).join(" · ");
   const hintBody = (
     <span className="flex flex-col gap-xxs text-left">
-      {beside ? <span className="text-micro text-primary" data-desk-beside-hint="true">{t("desk.room.besideHint")}</span> : null}
+      {beside ? <DeskBesideHint /> : null}
       <span className="font-medium text-foreground">{resting ? t("sidebar.resolvedHint", { label: title }) : title}</span>
       {facts ? <span className="text-muted-foreground">{facts}</span> : null}
       {sentence ? <span className="text-muted-foreground">{sentence}</span> : null}
@@ -388,4 +388,15 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
       />
     </span>
   );
+}
+
+/** Whether the session of `paneId` is open beside Desk, which is in front (PRD desk-2-ui B4): its rows read as selected and say so. */
+export function useBesideDesk(paneId: string): boolean {
+  return useUiStore((s) => s.screen?.kind === "desk" && s.deskRoom.session === paneId);
+}
+
+/** The first line of a row's hint while its session is open beside Desk (B4). */
+export function DeskBesideHint() {
+  const { t } = useInterfaceTranslation();
+  return <span className="text-micro text-primary" data-desk-beside-hint="true">{t("desk.room.besideHint")}</span>;
 }

@@ -295,8 +295,11 @@ export type PendingTrash = {
    * checkout follows its own engine focus and can move while the prompt is
    * open, so the confirmation goes to this target, not the one in front then (B34).
    */
-  target: { root: string; device_id?: string };
+  target: ExplorerTarget;
 };
+
+/** The checkout an Explorer change names: its root and its device, and `desk` for Desk's Explorer, which changes its session's checkout rather than the one in front (PRD desk-2-ui B35). */
+export type ExplorerTarget = { root: string; device_id?: string; desk?: true };
 
 type UiStore = {
   screen: Screen | null;
@@ -558,10 +561,6 @@ export function coveringLayer(layers: readonly (() => void)[]): (() => void) | n
   return [...layers].reverse().find((layer) => !inlineLayers.has(layer)) ?? null;
 }
 
-/** The room's window state reset when the screen leaves Desk (PRD desk-2-ui B26); nothing while it stays. */
-function leftDesk(from: Screen | null, to: Screen | null): Partial<UiStore> {
-  return from?.kind === "desk" && to?.kind !== "desk" ? { deskRoom: DESK_ROOM_CLOSED } : {};
-}
 
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
@@ -647,8 +646,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
   // Leaving Desk closes its right side, so the room starts closed the next time it is entered (PRD desk-2-ui B26).
-  setScreen: (screen) => set((state) => ({ screen, opening: null, overviewOpen: false, overviewReveal: null, ...leftDesk(state.screen, screen) })),
-  restoreScreen: (screen) => set((state) => ({ screen, opening: null, overviewOpen: false, overviewReveal: null, ...leftDesk(state.screen, screen) })),
+  setScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
+  restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
   setMainView: (mainView) => set({ mainView }),
   setRelation: (relation) => set({ relation }),
   toggleRaised: (group) => {
@@ -757,3 +756,16 @@ export const useUiStore = create<UiStore>((set, get) => ({
     return () => set({ tooltips: get().tooltips.filter((tooltip) => tooltip !== close) });
   },
 }));
+
+// Desk's room is this window's and closes whenever the screen leaves Desk
+// (PRD desk-2-ui B26), whichever way the screen moved: a setter, a restore or
+// a direct `setState`. Coming back to Desk, by ⌘J or any other way, spends
+// the pane `터미널 ⌘J` left for: its `Desk로` and ⌘J are one round trip (B7).
+useUiStore.subscribe((state, previous) => {
+  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk" && state.deskRoom !== DESK_ROOM_CLOSED) {
+    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
+  }
+  if (previous.screen?.kind !== "desk" && state.screen?.kind === "desk" && state.deskReturn !== null) {
+    useUiStore.setState({ deskReturn: null });
+  }
+});

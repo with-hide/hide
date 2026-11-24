@@ -75,8 +75,9 @@ describe("Desk's room", () => {
     vi.unstubAllGlobals();
   });
 
+  let actions = createActions(() => true);
   async function render(section: DeskSection, mentions: DeskMentions = { sessions: [], projects: [] }) {
-    const actions = createActions((event) => { events.push(event); return true; });
+    actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, desk: section, deskLive: null, deskJobs: { jobs: [], workers: [], named: [] }, deskMentions: mentions });
       root.render(<TooltipProvider><DeskScreen actions={actions} /></TooltipProvider>);
@@ -324,12 +325,19 @@ describe("Desk's room", () => {
 
     // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
     for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
-    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false } })));
+    await act(async () => useUiStore.getState().setDeskRoom((now) => ({ ...now, panel: { tabs: [{ kind: "mission", mission: "mission-39", title: "1.3.0" }], preview: null, active: "mission:mission-39", explorer: false, beside: null } })));
     expect(document.body.querySelector("[data-desk-tab-panel]")?.getAttribute("data-desk-tab-panel")).toBe("beside_session");
-    // Escape runs the innermost layer the shell's Escape owner holds, as keyboard.ts does.
-    const escape = () => act(async () => { useUiStore.getState().escapeLayers.at(-1)!(); });
+    // Escape runs the innermost layer the shell's Escape owner holds, and with none open closes the session beside Desk,
+    // as keyboard.ts does (its order is keyboard.desk.test.ts's).
+    const escape = () => act(async () => {
+      const layer = useUiStore.getState().escapeLayers.at(-1);
+      if (layer) layer();
+      else actions.deskCloseSession();
+    });
+    expect(useUiStore.getState().escapeLayers).toHaveLength(1);
     await escape();
     expect([useUiStore.getState().deskRoom.panel, useUiStore.getState().deskRoom.session]).toEqual([null, "w1:p2"]);
+    expect(useUiStore.getState().escapeLayers).toHaveLength(0);
     await escape();
     expect(useUiStore.getState().deskRoom.session).toBeNull();
     expect(sent("session_thread_close")).toHaveLength(1);
@@ -354,11 +362,21 @@ describe("Desk's room", () => {
     await press('[data-phone-ask-choice="2"]');
     await press("[data-phone-ask-send]");
     const [choice] = sent("pane_choice");
-    expect(choice).toMatchObject({ device_id: "local", pane_id: "w1:p2", turn: "7", kind: "question", choice: "2" });
+    // The ask goes back as the frame gave it, so the daemon answers only the ask the card drew.
+    expect(choice).toMatchObject({ device_id: "local", pane_id: "w1:p2", choice: "2", ask });
     // A second press while it is on its way sends nothing more.
     await press("[data-phone-ask-send]");
     expect(sent("pane_choice")).toHaveLength(1);
     await act(async () => useShellStore.setState({ paneChoice: { request_id: String(choice!.request_id), ok: true, reason: null } }));
     expect(document.body.querySelector("[data-phone-ask-sent]")).not.toBeNull();
+
+    // A choice refused stale reads the card again.
+    await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask: { ...ask, turn: "8" }, reason: null } }));
+    await press('[data-phone-ask-choice="1"]');
+    await press("[data-phone-ask-send]");
+    const second = sent("pane_choice")[1]!;
+    const asks = sent("pane_ask").length;
+    await act(async () => useShellStore.setState({ paneChoice: { request_id: String(second.request_id), ok: false, reason: "stale" } }));
+    expect(sent("pane_ask")).toHaveLength(asks + 1);
   });
 });
