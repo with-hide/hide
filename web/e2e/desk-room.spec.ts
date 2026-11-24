@@ -225,7 +225,7 @@ test("a draft notice stands above Desk's input boxes, never over them (PRD desk-
     await row(page, desk.pane).click();
     await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
     const notice = page.locator("[data-draft-recovery]");
-    await expect(notice).toBeVisible({ timeout: 20_000 });
+    await expect(notice).toBeVisible({ timeout: 20_000 }); // wait-ok: the stored drafts read once the reloaded page is live
     await screenshot(page, "desk-room-notice");
 
     // Desk's own box and the session's beside it are both drawn, and the notice covers neither.
@@ -256,19 +256,19 @@ test("a session beside Desk that sleeps in its own pane offers 에이전트 깨�
     // Sleep agent from the session head's own pane menu: the agent ends and its pane stays.
     await page.locator(`[data-desk-session-menu="${desk.pane}"]`).click();
     const item = page.locator('[data-menu-item="sleep_agent"]');
-    await expect(item).toBeEnabled({ timeout: 20_000 });
+    await expect(item).toBeEnabled({ timeout: 20_000 }); // wait-ok: the stand-in's session report, which makes it sleepable
     await item.click();
 
-    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", /.+/, { timeout: 30_000 });
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", /.+/, { timeout: 30_000 }); // wait-ok: the engine ending the agent
     await screenshot(page, "desk-room-sleep");
     const wake = panel.locator("[data-desk-session-wake]");
-    await expect(wake).toBeVisible({ timeout: 30_000 });
+    await expect(wake).toBeVisible();
     await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", "sleeping");
     await expect(panel.locator("[data-desk-composer]")).toHaveCount(0);
     await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
 
     await wake.click();
-    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible({ timeout: 40_000 }); // wait-ok: the agent started again in its pane
     await expect(panel.locator("[data-desk-session-sleeping]")).toHaveCount(0);
     await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
     await screenshot(page, "desk-room-woke");
@@ -300,21 +300,21 @@ test("a session beside Desk whose sleep closes its pane keeps its conversation a
     if (!(await row(page, pane).isVisible())) await folded.click();
     await row(page, pane).click();
     const panel = page.locator(`[data-desk-thread-panel="${pane}"]`);
-    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible({ timeout: 30_000 });
+    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible({ timeout: 30_000 }); // wait-ok: the core's first read of the Pi session file
 
     await page.locator(`[data-desk-session-menu="${pane}"]`).click();
-    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 });
+    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 }); // wait-ok: the agent row the pane menu reads
     await page.locator('[data-menu-item="sleep_agent"]').click();
     await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
     const wake = panel.locator("[data-desk-session-wake]");
-    await expect(wake).toBeVisible({ timeout: 30_000 });
+    await expect(wake).toBeVisible();
     await screenshot(page, "desk-room-pi-asleep");
     await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible();
     await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
 
     await wake.click();
     const fresh = await withControl(daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; agent_kind: string | null }[] } | undefined)?.agents ?? []).find((agent) => agent.agent_kind === "pi" && agent.pane_id !== pane)?.pane_id, "a fresh pi agent", 30_000));
-    await expect(page.locator(`[data-desk-thread-panel="${fresh}"]`)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(`[data-desk-thread-panel="${fresh}"]`)).toBeVisible();
     await expect(page.locator("[data-desk-session-terminal]")).toBeVisible();
   } finally {
     daemon.stop();
