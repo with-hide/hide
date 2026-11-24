@@ -128,8 +128,11 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
   // An answer for another device or checkout is not this list, and one left from an earlier open is not this palette's.
   const checkoutAnswer = useShellStore((s) => (s.fileIndex && s.fileIndex.device_id === device && s.fileIndex.root_path === root ? s.fileIndex : null));
   const allAnswer = useShellStore((s) => s.fileIndexAll);
+  // On Desk an answer left from an earlier open is not this palette's; the app's own palette keeps showing the checkout's cached list.
   const left = useRef({ checkout: checkoutAnswer, all: allAnswer });
-  const answer = scope?.kind === "all" ? (allAnswer === left.current.all ? null : allAnswer) : checkoutAnswer === left.current.checkout ? null : checkoutAnswer;
+  const fresh = <T,>(held: T | null, was: T | null): T | null => (desk && held === was ? null : held);
+  const allRead = scope?.kind === "all" ? fresh(allAnswer, left.current.all) : null;
+  const answer = scope?.kind === "all" ? allRead : fresh(checkoutAnswer, left.current.checkout);
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState("");
   // Why ⌘↵ opened nothing, said in the footer where its hint stands.
@@ -158,13 +161,13 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
     return () => window.clearTimeout(poll);
   }, [scope?.kind, root, query, device, prefer?.root_path, answer, actions]);
 
-  const hits: FileHit[] = !answer ? [] : scope?.kind === "all" ? (allAnswer?.files ?? []) : (checkoutAnswer?.files ?? []).map((file) => ({ ...file, device_id: scope?.kind === "checkout" ? scope.device : "", root_path: scope?.kind === "checkout" ? scope.root : "" }));
+  const hits: FileHit[] = !answer ? [] : scope?.kind === "all" ? (allRead?.files ?? []) : (checkoutAnswer?.files ?? []).map((file) => ({ ...file, device_id: scope?.kind === "checkout" ? scope.device : "", root_path: scope?.kind === "checkout" ? scope.root : "" }));
   const groups = scope?.kind === "all" ? projectFileRows(rest, hits, named) : null;
   const listed = groups ? [...groups.named, ...groups.other].map((row) => row.hit) : hits;
   // The row Enter would choose: the one the pointer or arrows moved to, else the first.
   const current = listed.find((hit) => hitKey(hit) === highlighted) ?? listed[0];
   const unavailable = scope?.kind === "checkout" ? (checkoutAnswer?.unavailable ?? null) : null;
-  const skipped = scope?.kind === "all" ? (allAnswer?.unavailable.length ?? 0) : 0;
+  const skipped = allRead?.unavailable.length ?? 0;
 
   const open = (hit: FileHit, beside: boolean) => {
     if (desk) return actions.openDeskIndexEntry(hit, beside);
@@ -207,8 +210,8 @@ function FilePalette({ actions, desk }: { actions: Actions; desk: boolean }) {
       footer={
         <span className="flex items-center gap-md">
           <span data-palette-hint="beside">{besideReason ?? t(desk ? "documents.keepTab" : "documents.openBeside", { shortcut: fieldLabel("Enter") })}</span>
-          {(scope?.kind === "all" ? allAnswer?.index_truncated : checkoutAnswer?.truncated) ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
-          {scope?.kind === "all" && answer && allAnswer?.more ? <span data-palette-state="more">{t("documents.moreMatches", { count: 80 })}</span> : null}
+          {(scope?.kind === "all" ? allRead?.index_truncated : checkoutAnswer?.truncated) ? <span>{t("documents.indexTruncated", { limit: 50000 })}</span> : null}
+          {allRead?.more ? <span data-palette-state="more">{t("documents.moreMatches", { count: 80 })}</span> : null}
           {skipped > 0 ? <span data-palette-state="skipped">{t("documents.projectsUnavailable", { count: skipped })}</span> : null}
         </span>
       }

@@ -152,6 +152,13 @@ describe("⌘P on Desk", () => {
     expect(rows()).toHaveLength(1);
   });
 
+  it("keeps the app's own palette showing the checkout's cached list when it is opened again off Desk", async () => {
+    useUiStore.setState({ screen: { kind: "workspace" } });
+    useShellStore.setState({ fileIndex: { device_id: "local", root_path: "/ide", query: "", files: [{ path: "/ide/a.ts", relative_path: "a.ts" }], truncated: false, indexing: false, unavailable: null } });
+    await open();
+    expect(rows()).toEqual(["a.ts"]);
+  });
+
   it("searches only the checkout of the session open beside Desk", async () => {
     useUiStore.setState({ deskRoom: { ...DESK_ROOM_CLOSED, session: "p-atorni" } });
     await open();
