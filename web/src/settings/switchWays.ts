@@ -71,6 +71,14 @@ export function switchFailureKey(reason: string): MessageKey {
 const NOT_REACHED = new Set(["ssh_not_reached", "wsl_not_reached"]);
 
 /**
+ * How long a press waits for its answer: the daemon's own bound on a whole
+ * switch (`SWITCH_BOUND` in `hided/src/device_cli.rs`, 380 s) and a little
+ * over, so it ends only a press whose answer was lost, never a switch that
+ * still runs.
+ */
+export const SWITCH_ANSWER_WITHIN_MS = 400_000;
+
+/**
  * What a `look_switch` answer, or a press that left the device, says of the
  * machine. A look changes nothing there, so it cannot tell an account Hide
  * may turn lingering on for from one only an administrator may: once a
@@ -99,6 +107,20 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
   const [pressed, setPressed] = useState(false);
   const asks = useRef<{ look: string | null; press: string | null }>({ look: null, press: null });
   const admin = useRef<string | null>(null);
+  const deadline = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The press is over, answered or not: its place draws the button or its line again.
+  const settle = useCallback(() => {
+    if (deadline.current !== null) clearTimeout(deadline.current);
+    deadline.current = null;
+    asks.current.press = null;
+    setPressed(false);
+  }, []);
+  // A press nothing answered ends as one that failed, to be tried again.
+  const unanswered = useCallback(() => {
+    settle();
+    useUiStore.getState().setSwitchOutcome(deviceId, { kind: "failed", reason: "switch_unanswered" });
+  }, [deviceId, settle]);
+  useEffect(() => settle, [settle]);
   const read = useCallback(() => {
     const request = `look-switch-${deviceId}-${Date.now()}`;
     asks.current.look = request;
@@ -112,7 +134,9 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
     useUiStore.getState().setSwitchOutcome(deviceId, null);
     // Asking for the switch is the consent to start a Hide on a machine that runs none.
     actions.pairing("switch", { device: deviceId, install: true, request_id: request });
-  }, [actions, deviceId]);
+    if (deadline.current !== null) clearTimeout(deadline.current);
+    deadline.current = setTimeout(unanswered, SWITCH_ANSWER_WITHIN_MS);
+  }, [actions, deviceId, unanswered]);
   const asked = useRef(false);
   useEffect(() => {
     if (!wanted) {
@@ -133,9 +157,9 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
       useShellStore.subscribe((state, before) => {
         // A daemon that went away answers nothing it was asked: the press is over, and a read under way was not made.
         if (state.connection !== before.connection && state.connection !== "live") {
-          if (asks.current.press !== null) setPressed(false);
+          if (asks.current.press !== null) unanswered();
           if (asks.current.look !== null) setLook({ state: "unread", reason: "hide_unavailable" });
-          asks.current = { look: null, press: null };
+          asks.current.look = null;
           return;
         }
         const result = state.pairingResult;
@@ -146,8 +170,7 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
           return;
         }
         if (result.request_id !== asks.current.press) return;
-        asks.current.press = null;
-        setPressed(false);
+        settle();
         if (result.ok && result.switch === "left") setLook(lookOf(result, admin));
         else if (result.ok && result.switch === "held") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "held", by: result.by ?? "", terminals: result.terminals ?? null });
         else if (!result.ok && NOT_REACHED.has(result.reason ?? "")) setLook({ state: "unread", reason: result.reason ?? "" });
@@ -155,7 +178,7 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
         else if (!result.ok && result.reason !== "switch_running") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "failed", reason: result.reason ?? "" });
         else if (result.ok && result.switch !== "done") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "failed", reason: result.switch ?? "" });
       }),
-    [deviceId],
+    [deviceId, settle, unanswered],
   );
   return { look, pressed, read, press };
 }

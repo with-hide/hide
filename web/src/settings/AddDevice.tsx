@@ -155,10 +155,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
-    // A device added over SSH or wsl.exe is used over that login, and
-    // Hide moves it to its machine's own connection by itself when that
-    // machine can take it (operator decision 2026-11-24): the Add asks
-    // nothing more and never ends without the device.
+    // A device added over SSH or wsl.exe is used over that login until the
+    // operator chooses to connect it as a server from its row (operator
+    // decision 2026-11-24): the Add asks nothing more and never ends
+    // without the device.
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
       actions.registerWslDevice(distro);

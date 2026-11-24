@@ -12,6 +12,7 @@ import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
 import { DeviceMoveWatch } from "./DeviceSwitch";
 import { DevicesTab } from "./DevicesTab";
+import { SWITCH_ANSWER_WITHIN_MS } from "./switchWays";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
 vi.hoisted(() => {
@@ -200,7 +201,7 @@ it("says why a press did not switch the device and offers it again", async () =>
   await unmount();
 });
 
-it("gives the button back when the daemon went away with a press unanswered", async () => {
+it("ends a press nothing answered as one that failed, when the daemon went away or the daemon's own bound passed", async () => {
   const { q, answer, press, unmount } = await mount([helper()]);
   await press(FOLD);
   await answer("look_switch", { condition: { kind: "auto_login_on" } });
@@ -209,8 +210,29 @@ it("gives the button back when the daemon went away with a press unanswered", as
   expect(q('[data-switch-step="checking:on"]')).not.toBeNull();
   await act(async () => { useShellStore.setState({ connection: "reconnecting" } as never); });
   expect(q("[data-switch-step]")).toBeNull();
-  expect(q(SWITCH)?.hasAttribute("disabled")).toBe(false);
+  expect(q('[data-device-switch-outcome="mini:failed"]')?.textContent).toContain("It could not be connected as a server · try again");
+  expect(q(SWITCH)?.textContent).toBe("Retry");
   await unmount();
+  // The daemon stays, and the answer never comes: the steps do not turn for ever.
+  const quiet = await mount([helper()]);
+  await quiet.press(FOLD);
+  await quiet.answer("look_switch", { condition: { kind: "auto_login_on" } });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await quiet.press(SWITCH);
+    await act(async () => { vi.advanceTimersByTime(SWITCH_ANSWER_WITHIN_MS - 1); });
+    expect(quiet.q('[data-switch-step="checking:on"]')).not.toBeNull();
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(quiet.q('[data-device-switch-outcome="mini:failed"]')).not.toBeNull();
+    // An answer in time ends the wait: nothing fails later.
+    await quiet.press(SWITCH);
+    await quiet.answer("switch", { switch: "held", by: "Office MacBook", terminals: 1 });
+    await act(async () => { vi.advanceTimersByTime(SWITCH_ANSWER_WITHIN_MS); });
+    expect(quiet.q('[data-device-switch-outcome="mini:held"]')).not.toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+  await quiet.unmount();
 });
 
 it("says once, on the row of a device switched while this window watched, what starts fresh there (D-48)", async () => {
