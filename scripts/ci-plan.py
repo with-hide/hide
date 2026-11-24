@@ -151,6 +151,10 @@ DEVICE_KIT_CONTRACT = "contracts/device-kits.json"
 # source (`include_str!`) and a build that is not a release sends its hash in
 # its hello, so a change to it is a change to that crate.
 PEER_LINK_CONTRACT = "contracts/peer-link.json"
+# The Mac app's identity as macOS's consent knows it: `hide-kit` includes it
+# in its source (`include_str!`), so a change to it is a change to that crate,
+# and the packaging scripts read it too (READERS, MACOS_LANE_INPUTS).
+APP_IDENTITY_CONTRACT = "contracts/app-identity.json"
 # What `cargo deny` reads (`scripts/verify-cargo.sh deny`): a pull request
 # that changes one has every crate's license and the advisory database
 # checked in its Rust lane. The nightly checks too, and finds an advisory
@@ -277,6 +281,10 @@ READERS = (
     # its tests run in the desktop unit suite; `classify` plans hide-node's
     # lanes for it.
     (DEVICE_KIT_CONTRACT, {"checks", "windows-check"}, set()),
+    # desktop/scripts/app-identity.mjs reads the app identity contract, and
+    # its test runs in the desktop unit suite; `classify` plans hide-kit's
+    # lanes for it.
+    (APP_IDENTITY_CONTRACT, {"checks", "windows-check"}, set()),
     # hide-node's kit contract test holds the Windows kit's runtime to the
     # pinned ConPTY files, so a pin that changes them fails in the pull
     # request, not in a release's kit.
@@ -317,7 +325,7 @@ MACOS_LANE_INPUTS = {
         # both for the package's scripts, resources, kit, hooks and updater.
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-            "contracts/conpty.json", "contracts/device-kits.json", "scripts/fetch-conpty.py",
+            "contracts/conpty.json", "contracts/device-kits.json", APP_IDENTITY_CONTRACT, "scripts/fetch-conpty.py",
             "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh", "scripts/package-e2e.sh", "scripts/package-e2e-report.py",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
             "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
@@ -374,6 +382,9 @@ MACOS_PATHS = (
     # .app, dmg and zip (their Windows and Linux forms are the package lane's
     # other jobs), and the entitlements, icon and Swift helper only the .app carries.
     "desktop/scripts/macos-*.mjs", "desktop/scripts/package.mjs", "desktop/scripts/installers.mjs",
+    # The name the app's programs outside the bundle answer macOS's consent
+    # under, which `package (macos)` signs them with and reads back.
+    "desktop/scripts/app-identity.mjs", APP_IDENTITY_CONTRACT,
     "desktop/resources/entitlements/*", "desktop/resources/hide.icns", "desktop/native/*",
     # The desktop host's macOS forms, which only the macOS desktop suite
     # runs: the title bar under the traffic lights, the app menu's macOS
@@ -1132,6 +1143,7 @@ NAMED_LANES = (
     ("desktop/scripts/package.mjs", {"checks"}),
     ("desktop/scripts/smoke-package.mjs", {"checks"}),
     # The packager imports these helpers; package covers their native effects.
+    ("desktop/scripts/app-identity.mjs", {"checks"}),
     ("desktop/scripts/build-identity.mjs", {"checks"}),
     ("desktop/scripts/device-helpers.mjs", {"checks"}),
     ("desktop/scripts/fuses.mjs", {"checks", "windows-desktop"}),
@@ -1248,6 +1260,8 @@ def classify(path, status, crates, root):
         crate = crates.get("hide-node")
     if path.as_posix() == PEER_LINK_CONTRACT:
         crate = crates.get("hide-peer-protocol")
+    if path.as_posix() == APP_IDENTITY_CONTRACT:
+        crate = crates.get("hide-kit")
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
@@ -1277,10 +1291,11 @@ def classify(path, status, crates, root):
             lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")
-        # The device kit contract is compiled into hide-node's code, and the
-        # peer link contract into hide-peer-protocol's.
+        # The device kit contract is compiled into hide-node's code, the
+        # peer link contract into hide-peer-protocol's and the app identity
+        # contract into hide-kit's.
         if (path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path)
-                or path.as_posix() in (DEVICE_KIT_CONTRACT, PEER_LINK_CONTRACT)):
+                or path.as_posix() in (DEVICE_KIT_CONTRACT, PEER_LINK_CONTRACT, APP_IDENTITY_CONTRACT)):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:
