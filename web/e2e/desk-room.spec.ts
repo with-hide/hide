@@ -10,10 +10,13 @@ import { draftId, seedDraft, storedDrafts } from "./drafts";
 import { nativeSessionId, prepareEngineWriter } from "./session-reader-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
-// PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
-// Desk's room with a session opened beside it from the sidebar, ⌘J between
-// that session and its Agent tab, and Settings › Labs › Desk's switch, off on
-// a new install. Each test starts one stack and asserts one contract.
+// PRD desk-2-ui B2-B7, B19, B21, B28, B35, B36, B43, B44, B47 and PRD
+// session-docs-and-assistant B41: Desk's room with a session opened beside it
+// from the sidebar, ⌘J between that session and its Agent tab, a file of the
+// tab panel saved without leaving a draft behind, the corner's notices above
+// Desk's input boxes, a sleeping session woken from beside Desk, a child's
+// ancestors in its head, and Settings › Labs › Desk's switch, off on a new
+// install. Each test starts one stack and asserts one contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -182,6 +185,7 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
 });
 
 test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
+  // e2e: the draft lives in the page's IndexedDB across a save through the core and a reload of the page.
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-saved-draft");
   try {
@@ -215,6 +219,7 @@ test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the 
 });
 
 test("a draft notice stands above Desk's input boxes, never over them (PRD desk-2-ui B36, UI_BEHAVIOR Notices) @platform", async ({ page }) => {
+  // e2e: whether the notice covers a box is the drawn layout of the real window, which jsdom does not lay out.
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-notice");
   try {
@@ -248,6 +253,7 @@ test("a draft notice stands above Desk's input boxes, never over them (PRD desk-
 type Box = { x: number; y: number; width: number; height: number };
 
 test("a session beside Desk that sleeps in its own pane offers 에이전트 깨우기 in its input box's place, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
+  // e2e: the sleep and the wake are the engine ending and restarting the agent in its pane.
   test.setTimeout(150_000);
   const desk = await startDesk(page, "desk-room-sleep");
   try {
@@ -281,6 +287,7 @@ test("a session beside Desk that sleeps in its own pane offers 에이전트 깨�
 });
 
 test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43)", async ({ page }) => {
+  // e2e: the pane closes, the core keeps the sleeping session and the read conversation, and the wake starts a new pane.
   test.setTimeout(180_000);
   // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`). Its
   // stand-in reports its session for a Unix shell, so no Windows lane runs this.
@@ -326,6 +333,7 @@ test("a session beside Desk whose sleep closes its pane keeps its conversation a
 });
 
 test("a child session beside Desk names its ancestors before its name, as its pane head does, and an ancestor's name opens it beside Desk (PRD desk-2-ui B47) @platform", async ({ page }) => {
+  // e2e: the names hide by a container query, which only a laid-out page answers; the lineage is the core's from a real spawn.
   test.setTimeout(120_000);
   const engine = await startFixture({ family: true });
   const daemon = await startHided(engine, "desk-room-ancestors");
