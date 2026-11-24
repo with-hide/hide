@@ -19,9 +19,10 @@
 //! same; what it may not do is ask its own filesystem about another
 //! machine's path or read it by its own system's rules.
 //!
-//! A `file:` URL is one more spelling of an absolute wire path, written and
-//! read only here ([`to_file_url`], [`from_file_url`]), so a Windows drive
-//! is `file:///C:/...` for every reader.
+//! A `file:` URL is one more spelling of an absolute wire path: Hide writes
+//! and reads its own (a browser display's address) only here
+//! ([`to_file_url`], [`from_file_url`]), so a Windows drive is
+//! `file:///C:/...` for every reader.
 
 use std::ffi::OsStr;
 use std::fmt;
