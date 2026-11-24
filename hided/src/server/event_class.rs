@@ -266,8 +266,10 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("git_worktree_set_base", Screen),
     ("github_request", Screen),
     ("github_search", Screen),
-    // A guest's pane here is ended by this machine's operator (D-74).
-    ("guest_pane_close", OwnWindow),
+    // A guest's pane here is ended from a window that may already type into
+    // it: this machine's, or the screen another machine shows of it, which
+    // only a machine holding an open grant to this one draws (D-74, B10).
+    ("guest_pane_close", Window),
     ("guest_panes", Daemon),
     ("herdr_import", Screen),
     ("herdr_profiles_list", Screen),
@@ -568,6 +570,9 @@ mod tests {
             "rename_tab",
             "file_bytes",
             "ui_state_update",
+            // A screen that types into another machine's pane here may end
+            // it (D-74); it gives that screen nothing it could not do.
+            "guest_pane_close",
         ] {
             assert_eq!(admit(kind, Client::Remote), Ok(()), "{kind}");
         }

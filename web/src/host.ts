@@ -371,6 +371,12 @@ export type RemoteScreensBridge = {
    * drops it when it does not load. Absent on an older desktop app.
    */
   go?(request: { device: string; key: string; work: RemoteWork }): void;
+  /**
+   * Settings from this window's chrome (the rail's gear): the Settings of
+   * the screen in front, as ⌘, opens (B20), else this window's own. Absent
+   * on an older desktop app.
+   */
+  settings?(): void;
   /** How the shown screen's page loaded; returns the unsubscribe. */
   onState(listener: (state: RemoteScreenState) => void): () => void;
   /** How each start handed by `go` ended, by its request id; returns the unsubscribe. Absent with `go`. */

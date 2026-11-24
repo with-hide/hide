@@ -15,7 +15,7 @@ import type { SceneParams } from "./SidebarScene";
 
 type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"]; read?: boolean; wait?: AgentWait; pull?: number };
 /** Each example's task: its row's index and the state the core gave it. */
-const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "waiting"], [12, "waiting"], [13, "needs_you"]];
+const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "resting"], [11, "waiting"], [12, "waiting"], [13, "needs_you"]];
 const EXAMPLES: Example[] = [
   { title: "입력과 세션 복귀 흐름 검토", group: "needs_you", line: null, ask: { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", more: 0 } },
   { title: "한국어 입력 경계 검토", group: "needs_you", line: null, ask: { verb: "answer", what: "기존 stdin 종료 경로도 남길까요?", more: 0 } },
@@ -26,7 +26,7 @@ const EXAMPLES: Example[] = [
   { title: "회귀 테스트", group: "idle", line: "남은 경계 테스트 2개", unfinished: true, pr: "pending" },
   { title: "쉬는 세션", group: "idle", line: null },
   { title: "완료한 검토", group: "resolved", line: null, pr: "merged" },
-  // needs-you-cleanup: a Conductor resting on its mission's decision, a question the operator read, and two waits that name their cause.
+  // needs-you-cleanup: a Conductor resting on its mission's decision, a question the operator read (resting at the top of 쉬는 중, operator decision 2026-11-23), and two waits that name their cause.
   { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?", views: 2 } } },
   { title: "배포 환경 선택", group: "needs_you", line: null, ask: { verb: "answer", what: "staging부터 올릴까요?", more: 0 }, read: true },
   { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
