@@ -53,6 +53,31 @@ impl Runtime {
             .filter(|reported| Some(reported.kind.as_str()) == agent_id(kind))
     }
 
+    /// Lays the hook facts on `payload`'s agents (`HookFacts::lay`, whose
+    /// `key` and `owns` it passes on) and works out the panes' accounts again
+    /// when that moved the session a pane's account is read from: a pane's
+    /// agent the engine now names with another session than the one its last
+    /// account report was worked out under (#2889), or a pane that closed.
+    pub(super) fn lay_hook_facts(
+        &mut self,
+        payload: &mut crate::sidebar::SessionSnapshotPayload,
+        key: impl Fn(&str) -> String,
+        owns: impl Fn(&str) -> bool,
+    ) -> BTreeMap<String, crate::agent_hooks::PaneHookTokens> {
+        let (tokens, moved) = {
+            let mut facts = self
+                .hook_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let tokens = facts.lay(payload, key, owns);
+            (tokens, facts.take_laid_moved())
+        };
+        if moved {
+            self.refresh_reported_accounts();
+        }
+        tokens
+    }
+
     /// Works out every pane's reported account again from the hook facts and
     /// the machines' lists, and which profiles' last start ran in another
     /// account (D-35); lays the warnings on the lists. Whether anything a

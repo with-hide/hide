@@ -188,6 +188,32 @@ struct PaneFacts {
     /// started again in the same pane).
     #[serde(skip)]
     reported_since_engine: bool,
+    /// The session a projection last laid on the pane's agent ([`bound`]),
+    /// whose start's account is the pane's ([`HookFacts::reported_accounts`]).
+    /// Memory only: until the first projection after a restart lays one, the
+    /// session that reported its start last speaks for the account.
+    #[serde(skip)]
+    laid: Option<LaidSession>,
+}
+
+/// Which session fact a projection laid on a pane's agent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LaidSession {
+    runtime: String,
+    session: Option<String>,
+}
+
+impl LaidSession {
+    fn of(fact: &SessionFact) -> Self {
+        Self {
+            runtime: fact.runtime.clone(),
+            session: fact.session.clone(),
+        }
+    }
+
+    fn is(&self, fact: &SessionFact) -> bool {
+        self.runtime == fact.runtime && self.session == fact.session
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -227,6 +253,10 @@ pub(crate) struct HookFacts {
     /// High water mark, retained when the pane with the latest start closes.
     account_start: u64,
     file: Option<LatestFile<BTreeMap<String, PaneFacts>>>,
+    /// A projection laid another session on a pane's agent, or dropped a
+    /// pane's facts, since [`Self::take_laid_moved`]: the panes' accounts
+    /// are to be worked out again.
+    laid_moved: bool,
 }
 
 impl HookFacts {
@@ -304,6 +334,7 @@ impl HookFacts {
                 "facts",
                 encode,
             )),
+            laid_moved: false,
         };
         // Saved at once, so the records are read on this first run only.
         if seeded {
@@ -462,18 +493,22 @@ impl HookFacts {
     }
 
     /// Each pane's account as its agent's session start reported it
-    /// (`SessionFact::account`), from the session that speaks for the pane's
-    /// agent ([`speaking`]), the same one a projection lays: a session another
-    /// program in the pane starts (a `claude -p` the agent runs with another
-    /// `CLAUDE_CONFIG_DIR`) reports its own account through the same hooks,
-    /// and taking it would wake the agent in an account its conversation is
-    /// not in (#2889).
+    /// (`SessionFact::account`), from the session a projection last laid on
+    /// the pane's agent ([`bound`]): a session another program in the pane
+    /// starts (a `claude -p` the agent runs with another `CLAUDE_CONFIG_DIR`)
+    /// reports its own account through the same hooks, and taking it woke the
+    /// agent in an account its conversation is not in (#2889). Before a
+    /// projection laid one, the session that reported its start last speaks.
     pub(crate) fn reported_accounts(&self) -> impl Iterator<Item = Reported<'_>> {
         self.panes.iter().filter_map(|(pane, facts)| {
-            let at = speaking(facts, facts.engine_session.as_deref(), |fact| {
-                fact.account.is_some()
-            })?;
-            let fact = &facts.sessions[at];
+            let fact = match &facts.laid {
+                Some(laid) => facts.sessions.iter().rev().find(|fact| laid.is(fact))?,
+                None => facts
+                    .sessions
+                    .iter()
+                    .rev()
+                    .find(|fact| fact.account.is_some())?,
+            };
             Some(Reported {
                 pane,
                 runtime: &fact.runtime,
@@ -482,6 +517,12 @@ impl HookFacts {
                 start: fact.account_start,
             })
         })
+    }
+
+    /// Whether a projection moved what the panes' accounts are read from
+    /// since the last call ([`Self::reported_accounts`]).
+    pub(crate) fn take_laid_moved(&mut self) -> bool {
+        std::mem::take(&mut self.laid_moved)
     }
 
     /// Lays the facts on `payload`'s agents and answers each agent pane's
@@ -522,7 +563,13 @@ impl HookFacts {
                 facts.engine_session = Some(named.to_owned());
                 moved = true;
             }
-            let Some(fact) = bound(facts, agent) else {
+            let at = bound_at(facts, agent);
+            let laid = at.map(|at| LaidSession::of(&facts.sessions[at]));
+            if facts.laid != laid {
+                facts.laid = laid;
+                self.laid_moved = true;
+            }
+            let Some(fact) = at.and_then(|at| facts.sessions.get_mut(at)) else {
                 continue;
             };
             end_by_session_read(fact, agent);
@@ -578,6 +625,9 @@ impl HookFacts {
         });
         // A cut pane stays one while it is listed: its agent comes back in it.
         self.cut.retain(|pane| !owns(pane) || listed.contains(pane));
+        if self.panes.len() != before {
+            self.laid_moved = true;
+        }
         if moved || self.panes.len() != before {
             self.save();
         }
@@ -703,38 +753,27 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 /// session that reported last speaks: the hook proves its process runs in
 /// the pane, and the engine can keep naming the session of an agent that ended
 /// there.
-fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
+fn bound_at(facts: &PaneFacts, agent: &SessionAgentPayload) -> Option<usize> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let at = speaking(facts, engine_session(agent), |fact| fact.runtime == runtime)?;
-    facts.sessions.get_mut(at)
-}
-
-/// Where the session that speaks for a pane's agent is among `facts`'
-/// sessions that `of` takes: the last one with the id the engine names for
-/// the agent (`named`), or with none to compare; where none has that id and
-/// a hook reported since the engine last changed the id it names, the one
-/// that reported last.
-fn speaking(
-    facts: &PaneFacts,
-    named: Option<&str>,
-    of: impl Fn(&SessionFact) -> bool,
-) -> Option<usize> {
-    facts
-        .sessions
-        .iter()
-        .rposition(|fact| {
-            of(fact)
-                && match (named, fact.session.as_deref()) {
-                    (Some(named), Some(kept)) => named == kept,
-                    _ => true,
-                }
-        })
-        .or_else(|| {
-            facts
-                .reported_since_engine
-                .then(|| facts.sessions.iter().rposition(&of))
-                .flatten()
-        })
+    let reported = engine_session(agent);
+    let named = facts.sessions.iter().rposition(|fact| {
+        fact.runtime == runtime
+            && match (reported, fact.session.as_deref()) {
+                (Some(reported), Some(kept)) => reported == kept,
+                _ => true,
+            }
+    });
+    named.or_else(|| {
+        facts
+            .reported_since_engine
+            .then(|| {
+                facts
+                    .sessions
+                    .iter()
+                    .rposition(|fact| fact.runtime == runtime)
+            })
+            .flatten()
+    })
 }
 
 /// A pane's facts from the records its hooks kept: no turn, which no record
@@ -968,6 +1007,7 @@ mod tests {
             account_start: 1,
             file: None,
             cut: Default::default(),
+            laid_moved: false,
         };
 
         let reported: Vec<_> = restored
@@ -998,6 +1038,7 @@ mod tests {
             account_start: 0,
             file: None,
             cut: Default::default(),
+            laid_moved: false,
         };
 
         assert_eq!(older.reported_accounts().count(), 0);
@@ -1042,6 +1083,39 @@ mod tests {
             account(&facts),
             [(Some("nested".to_owned()), "/accounts/b".to_owned())]
         );
+
+        // Codex follows in the pane, its session named by a path: the engine
+        // keeps the id it last named, and Codex's own start is the account.
+        facts.take_laid_moved();
+        let mut codex = started("rollout", "/accounts/codex");
+        codex.runtime = "codex".to_owned();
+        facts.record("w1:p1", &codex, 0).unwrap();
+        let mut path: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [{"pane_id": "w1:p1", "agent": "codex", "agent_status": "idle",
+                "agent_session": {"kind": "path", "value": "/sessions/rollout.jsonl"}}],
+            "panes": [{"pane_id": "w1:p1"}],
+        }))
+        .unwrap();
+        lay(&mut facts, &mut path);
+        assert_eq!(
+            account(&facts),
+            [(Some("rollout".to_owned()), "/accounts/codex".to_owned())]
+        );
+        assert!(facts.take_laid_moved());
+        assert!(!facts.take_laid_moved(), "taken once");
+
+        // A restart keeps no laid session: the start that reported last
+        // speaks until the next projection lays one.
+        let saved = encode(&facts.panes).unwrap();
+        let stored: Stored = serde_json::from_slice(&saved).unwrap();
+        let restored = HookFacts {
+            panes: stored.panes,
+            ..HookFacts::default()
+        };
+        assert_eq!(
+            account(&restored),
+            [(Some("rollout".to_owned()), "/accounts/codex".to_owned())]
+        );
     }
 
     /// A session's report names its running subagents with its counts: the
@@ -1079,6 +1153,7 @@ mod tests {
             account_start: 0,
             file: None,
             cut: Default::default(),
+            laid_moved: false,
         };
 
         assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
