@@ -728,10 +728,13 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
     };
   });
   let body: React.ReactNode;
+  let keepers: React.ReactNode = null;
   if (front?.kind === "output") body = <DeskOutputView key={tabKey(front)} output={front.output} viewKey={tabKey(front)} actions={actions} />;
   else if (front?.kind === "mission") body = <MissionMap missionId={front.mission} actions={deskActions} onNode={(node) => (node.pane_id ? room.session({ name: "", mark: null, agent_kind: null, pane_id: node.pane_id }) : undefined)} />;
   else if (front?.kind === "file") {
     const beside = panel.beside ? panel.tabs.find((one) => tabKey(one) === panel.beside) : undefined;
+    const shown = beside?.kind === "file" ? [front, beside] : [front];
+    keepers = <DeskDocumentKeepers files={shown} actions={deskActions} />;
     body = beside?.kind === "file" ? (
       <div className="flex min-h-0 min-w-0 flex-1" data-desk-file-split="true">
         <DeskFileView key={`front:${tabKey(front)}`} tab={front} side="front" actions={deskActions} onClose={() => set((now) => closeSide(now, "front"))} />
@@ -753,9 +756,29 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
       onCloseTab={(key) => set((now) => closeTab(now, key))}
       onClose={() => set(closePanel)}
     >
+      {keepers}
       {body}
     </DeskTabPanel>
   );
+}
+
+type FileTab = Extract<DeskTab, { kind: "file" }>;
+
+/** The document the core holds for a Desk file tab: the editor tab of its checkout's file, once the core has opened it. */
+function heldDocument(state: ReturnType<typeof useShellStore.getState>, tab: FileTab) {
+  const checkoutId = checkoutAtRoot(state.rest, tab.device_id, tab.root)?.checkout.id ?? null;
+  return state.editor?.tabs.find((one) => one.kind === "file" && one.checkout_id === checkoutId && one.path === tab.path) ?? null;
+}
+
+/**
+ * One keeper per document the panel shows, however many of its sides show it, as a Workspace's View mounts one
+ * (`ViewAreas.tsx`): its autosave, the save of a draft left behind, and the stored draft's restore and its removal once
+ * a save lands, which without it stayed in the browser and came back as an unsaved draft after a reload.
+ */
+function DeskDocumentKeepers({ files, actions }: { files: FileTab[]; actions: Actions }) {
+  // One string, so the selector reads the same value until a held document changes.
+  const held = useShellStore((s) => [...new Set(files.map((tab) => heldDocument(s, tab)?.id).filter((id) => id !== undefined))].join("\n"));
+  return held ? held.split("\n").map((tabId) => <DocumentKeeper key={tabId} tabId={tabId} actions={actions} />) : null;
 }
 
 /**
@@ -770,7 +793,7 @@ function DeskFileView({ tab, side, actions, onClose }: { tab: Extract<DeskTab, {
   // Plain ids, so the selectors read the same value until the catalog moves.
   const workspaceId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.workspace ?? null);
   const checkoutId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.checkout.id ?? null);
-  const held = useShellStore((s) => s.editor?.tabs.find((one) => one.kind === "file" && one.checkout_id === checkoutId && one.path === tab.path) ?? null);
+  const held = useShellStore((s) => heldDocument(s, tab));
   const key = `desk:${side}:${tabKey(tab)}`;
   const display = useMemo<ViewDisplaySnapshot>(
     () => ({ id: key, tab_id: held?.id ?? null, path: tab.path, label: fileName(tab.path), kind: "file", committed: null, preview: false, state: "open", reason: null }),
@@ -788,17 +811,7 @@ function DeskFileView({ tab, side, actions, onClose }: { tab: Extract<DeskTab, {
         <Button variant="ghost" onClick={() => actions.deskFileRetry(file)} data-desk-file-retry={tab.path}>{t("common.retry")}</Button>
       </AreaEmpty>
     );
-  } else if (held) {
-    // The document's keeper, one per document as a Workspace's View mounts it (`ViewAreas.tsx`): its autosave, the
-    // save of a draft left behind, and the stored draft's restore and its removal once a save lands, which without it
-    // stayed in the browser and came back as an unsaved draft after a reload.
-    body = (
-      <>
-        <DocumentKeeper tabId={held.id} actions={actions} />
-        <DisplayEditor display={display} workspace={workspace} placeKey={key} actions={actions} root={tab.root} trailing={close} />
-      </>
-    );
-  }
+  } else if (held) body = <DisplayEditor display={display} workspace={workspace} placeKey={key} actions={actions} root={tab.root} trailing={close} />;
   else body = <p role="status" className="m-auto text-caption text-muted-foreground" data-desk-file-loading={tab.path}>{t("common.loading")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-file={tab.path} data-desk-file-side={side}>
