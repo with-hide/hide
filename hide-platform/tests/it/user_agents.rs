@@ -338,8 +338,8 @@ fn an_adopted_agent_keeps_its_run_and_a_dropped_one_is_loaded_again() {
 }
 
 /// systemd's agent is a unit the account's manager wants with
-/// `default.target`, kept alive while its marker exists: an install stops
-/// what runs, writes the unit, reloads, enables and starts it; a removal
+/// `default.target`, kept alive while its marker exists: an install writes
+/// the unit, reloads, enables it, stops what runs and starts it; a removal
 /// stops it and takes the unit and its link away; a forgotten unit goes on
 /// running.
 #[cfg(unix)]
@@ -398,9 +398,11 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
             "enable example.agent.service",
             "start --no-block example.agent.service",
             "daemon-reload",
-            "stop example.agent.service",
+            // A replacement has the manager read the new unit before it
+            // stops the old run, which is stopped by the unit last read.
             "daemon-reload",
             "enable example.agent.service",
+            "stop example.agent.service",
             "start --no-block example.agent.service",
             "stop example.agent.service",
             "daemon-reload",
@@ -657,6 +659,156 @@ fn a_login_agent_restarts_while_its_marker_exists_and_ends_when_removed() {
     wait("the removed agent's end", Duration::from_secs(10), &|| {
         !alive(running)
     });
+    assert!(!agents.is_installed(&label, home).unwrap());
+}
+
+/// What an agent's run started to outlive it (`start_resident`, as a pane's
+/// holder is) goes on when the run's program ends and when a replacement
+/// stops the run, which is what a core's update does to the core it
+/// replaces. On Linux the same holds for a run a unit of an earlier build
+/// started: systemd ends every process of a unit it stops unless the unit
+/// says otherwise, and it stops a run by the unit it last read.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+#[ignore = "the real login agents: only on a disposable CI runner"]
+fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement() {
+    use std::time::{Duration, Instant};
+    assert!(
+        std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+        "this test reaches the account's real login agents; it runs only on a hosted CI runner"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    // systemd's manager reads units from the account's own home; launchd is
+    // handed its list by path, so it leaves the runner's home alone.
+    let home = if cfg!(target_os = "linux") {
+        account_home().unwrap()
+    } else {
+        directory.path().to_path_buf()
+    };
+    let home = home.as_path();
+    let program = std::env::current_exe().unwrap();
+    let label = format!("dev.withhide.contract.resident.{}", std::process::id());
+    let log = directory.path().join("agent.log");
+    let home_value = home.to_string_lossy().into_owned();
+    // Each run is the `starter` role: it starts one resident child, says
+    // both pids on its output, and lives a minute.
+    let environment = [
+        ("HOME", home_value.as_str()),
+        (crate::resident::ROLE, "starter"),
+    ];
+    let agent = LoginAgent {
+        label: &label,
+        program: &program,
+        arguments: &crate::resident::ROLE_ARGUMENTS,
+        environment: &environment,
+        log: &log,
+    };
+    let agents = UserAgents::current();
+    let stop = AtomicBool::new(false);
+    assert_ne!(
+        agents.login(home, &stop).unwrap(),
+        Login::LoggedOut,
+        "the account has no session for its agents"
+    );
+    // The runs so far, each as its program's pid and its resident's.
+    let runs = || -> Vec<(u32, u32)> {
+        let field = |line: &str, key: &str| -> Option<u32> {
+            line.split_whitespace()
+                .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))?
+                .parse()
+                .ok()
+        };
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.find("STARTED ").map(|at| &line[at..]))
+            .filter_map(|line| Some((field(line, "starter")?, field(line, "pid")?)))
+            .collect()
+    };
+    #[allow(clippy::disallowed_methods)] // a bounded poll of another process
+    let run = |nth: usize| -> (u32, u32) {
+        // Either manager holds a restart back ten seconds.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if let Some(run) = runs().get(nth - 1) {
+                return *run;
+            }
+            assert!(Instant::now() < deadline, "run {nth} never started");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    // A resident named while it runs, by its pid and start time
+    // (docs/TESTING.md, rule 7).
+    let pinned = |pid: u32| (pid, hide_platform::process::start_time(pid).unwrap());
+    let runs_still = |(pid, started): (u32, u64)| {
+        hide_platform::process::is_alive(pid)
+            && hide_platform::process::start_time(pid).ok() == Some(started)
+    };
+    let marker = directory.path().join("keep-alive");
+    std::fs::write(&marker, "").unwrap();
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (first_program, first) = run(1);
+        let first = pinned(first);
+        hide_platform::process::kill_tree(first_program).unwrap();
+        let (_, second) = run(2);
+        let second = pinned(second);
+        assert!(runs_still(first), "ended with its run's program");
+        agents.install(&agent, &marker, home, &stop).unwrap();
+        let third = pinned(run(3).1);
+        assert!(runs_still(first), "ended by a later run's replacement");
+        assert!(
+            runs_still(second),
+            "ended with the run a replacement stopped"
+        );
+        assert!(runs_still(third), "the new run's resident is not running");
+        #[cfg(target_os = "linux")]
+        {
+            // The unit as a build before this rule wrote it, read by the
+            // manager and running: its restart ends what its run started,
+            // which is why the unit says otherwise now.
+            let unit = home.join(format!(".config/systemd/user/{label}.service"));
+            let written = std::fs::read_to_string(&unit).unwrap();
+            let earlier = written.replace("KillMode=process\n", "");
+            assert_ne!(earlier, written, "{written}");
+            std::fs::write(&unit, earlier).unwrap();
+            let systemctl = |arguments: &[&str]| {
+                // SAFETY: getuid has no failure case.
+                let uid = unsafe { libc::getuid() };
+                let status = std::process::Command::new("/usr/bin/systemctl")
+                    .arg("--user")
+                    .args(arguments)
+                    .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "systemctl {arguments:?}: {status}");
+            };
+            systemctl(&["daemon-reload"]);
+            systemctl(&["restart", &format!("{label}.service")]);
+            let (_, fourth) = run(4);
+            let fourth = pinned(fourth);
+            assert!(
+                !runs_still(third),
+                "the earlier unit's restart left its run's resident: the premise is gone"
+            );
+            agents.install(&agent, &marker, home, &stop).unwrap();
+            run(5);
+            assert!(
+                runs_still(fourth),
+                "ended by the replacement of a run an earlier unit started"
+            );
+        }
+    }));
+    let removal = agents.remove(&label, home, &stop);
+    // A resident lives a minute by itself; end the ones still there now.
+    for (_, resident) in runs() {
+        let _ = hide_platform::process::kill_tree(resident);
+    }
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+    removal.unwrap();
     assert!(!agents.is_installed(&label, home).unwrap());
 }
 

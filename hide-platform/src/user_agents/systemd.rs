@@ -130,7 +130,10 @@ impl Systemd {
     }
 
     /// Writes `agent`'s unit under `home`, has the manager start it with
-    /// the account and starts it now; one running already is stopped first.
+    /// the account and starts it now; one running already is stopped first,
+    /// under the unit as written now: the manager stops a run by the unit it
+    /// last read, and one an earlier build wrote ends every process the run
+    /// started, the panes' holders among them.
     pub(super) fn install(
         &self,
         agent: &LoginAgent<'_>,
@@ -138,8 +141,9 @@ impl Systemd {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
+        self.place(agent, marker, home, stop)?;
         self.unload(agent.label, home, stop)?;
-        self.adopt(agent, marker, home, stop)
+        self.start(agent.label, home, stop)
     }
 
     /// Writes `agent`'s unit under `home`, has the manager start it with the
@@ -152,18 +156,29 @@ impl Systemd {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
-        let path = Self::unit_file(home, agent.label);
-        crate::fs::private::create_dir_all(&Self::units(home))?;
-        crate::fs::atomic::write_file(
-            &path,
-            unit(agent, marker).as_bytes(),
-            crate::fs::Access::Private,
-        )?;
-        self.load(agent.label, home, stop)?;
+        self.place(agent, marker, home, stop)?;
         if self.is_loaded(agent.label, home, stop)? {
             return Ok(());
         }
         self.start(agent.label, home, stop)
+    }
+
+    /// Writes `agent`'s unit under `home` and has the manager read it, which
+    /// neither stops nor starts a run.
+    fn place(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
+        crate::fs::private::create_dir_all(&Self::units(home))?;
+        crate::fs::atomic::write_file(
+            &Self::unit_file(home, agent.label),
+            unit(agent, marker).as_bytes(),
+            crate::fs::Access::Private,
+        )?;
+        self.load(agent.label, home, stop)
     }
 
     /// Has the manager read the installed unit `label` and start it with the
@@ -358,7 +373,10 @@ fn login_name() -> String {
 
 /// `agent`'s unit: started with the account's manager, restarted ten
 /// seconds after any exit while `marker` exists, and stopped within
-/// [`STOP_WITHIN_SECS`].
+/// [`STOP_WITHIN_SECS`]. A stop, and the end of its program, ends that
+/// program alone (`KillMode=process`): what it started to outlive it
+/// ([`crate::process::start_resident`]) stays in the unit's control group,
+/// which systemd otherwise ends whole.
 fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
     let mut command = quote(&agent.program.to_string_lossy());
     for argument in agent.arguments {
@@ -380,6 +398,7 @@ fn unit(agent: &LoginAgent<'_>, marker: &Path) -> String {
          [Service]\n\
          ExecStart={command}\n\
          {environment}\
+         KillMode=process\n\
          Restart=always\n\
          RestartSec=10\n\
          TimeoutStopSec={STOP_WITHIN_SECS}\n\
@@ -472,6 +491,7 @@ mod tests {
             "{unit}"
         );
         assert!(unit.contains("Restart=always\n"), "{unit}");
+        assert!(unit.contains("KillMode=process\n"), "{unit}");
         assert!(unit.contains("WantedBy=default.target\n"), "{unit}");
     }
 }
