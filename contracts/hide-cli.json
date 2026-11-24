@@ -7040,6 +7040,7 @@
                 "switch_running",
                 "switch_not_connected",
                 "switch_not_moved",
+                "switch_cut",
                 "ssh_core_not_started",
                 "ssh_not_reached",
                 "ssh_busy",
@@ -9790,7 +9791,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e077ed4885cc0c6f5b1579a3550069af2cd2d2363a33b016863862380b250b52",
+    "digest": "sha256:963a71d35efb70233bd62fc3729d13901d11b55469243688453c0adedd6219cb",
     "envelopes": {
         "access": {
             "answer": "value",

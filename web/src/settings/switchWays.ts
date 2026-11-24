@@ -57,8 +57,14 @@ export function switchFailureKey(reason: string): MessageKey {
     case "ssh_core_not_started":
     case "ssh_hide_not_running":
       return "devices.ways.failed.start";
+    // A press whose own read did not sign in (the login asked, or the
+    // machine went away, after the row read it) is tried again like any
+    // other connection: another press reads again.
     case "switch_not_connected":
     case "switch_not_moved":
+    case "switch_cut":
+    case "ssh_not_reached":
+    case "wsl_not_reached":
       return "devices.ways.failed.connect";
     case "ssh_mac_from_mac_only":
       return "devices.ways.failed.macOnly";
@@ -66,9 +72,6 @@ export function switchFailureKey(reason: string): MessageKey {
       return refusalKey(reason) ?? "devices.ways.failed.other";
   }
 }
-
-/** A login that asked for an answer, or a distribution WSL did not open: the machine was not read, and no switch reaches it. */
-const NOT_REACHED = new Set(["ssh_not_reached", "wsl_not_reached"]);
 
 /**
  * How long a press waits for its answer: the daemon's own bound on a whole
@@ -97,10 +100,13 @@ function lookOf(result: PairingResult, admin: { current: string | null }): Switc
 /**
  * One device's read and switch, for its row. While `wanted`, the machine is
  * read once over its own login, again each time the row is opened, and on
- * `read`; what was read stays as it is while the row is open. `press` asks
+ * `read`; what was read stays as it is while the row is open, and a fold
+ * or a reopen also ends how the last press ended. `press` asks
  * for the switch, which reads the machine again first: a machine it leaves
  * answers with what it said, which replaces the look, and any other end
- * that did not switch the device is kept as its outcome (`ui.ts`).
+ * that did not switch the device is kept as its outcome (`ui.ts`), a login
+ * that asked or ended midway among them: the password line is the look's
+ * alone, read before any press.
  */
 export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: boolean, open: boolean): { look: SwitchLook | null; pressed: boolean; read: () => void; press: () => void } {
   const [look, setLook] = useState<SwitchLook | null>(null);
@@ -139,7 +145,13 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
   }, [actions, deviceId, unanswered]);
   const asked = useRef(false);
   useEffect(() => {
+    // How the last press ended stands until the row reads its machine again:
+    // a fold, or opening it again, and what that read says is drawn instead.
+    const fresh = () => {
+      if (asked.current) useUiStore.getState().setSwitchOutcome(deviceId, null);
+    };
     if (!wanted) {
+      fresh();
       asked.current = false;
       asks.current.look = null;
       admin.current = null;
@@ -148,9 +160,10 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
     }
     // A fold keeps what was read; opening the row reads again.
     if (!open && asked.current) return;
+    fresh();
     asked.current = true;
     read();
-  }, [wanted, open, read]);
+  }, [deviceId, wanted, open, read]);
   // Subscribed, not selected: two answers in one tick would each replace the store's one slot before a render read it.
   useEffect(
     () =>
@@ -173,7 +186,6 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
         settle();
         if (result.ok && result.switch === "left") setLook(lookOf(result, admin));
         else if (result.ok && result.switch === "held") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "held", by: result.by ?? "", terminals: result.terminals ?? null });
-        else if (!result.ok && NOT_REACHED.has(result.reason ?? "")) setLook({ state: "unread", reason: result.reason ?? "" });
         // A switch that is already running goes on drawing its steps.
         else if (!result.ok && result.reason !== "switch_running") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "failed", reason: result.reason ?? "" });
         else if (result.ok && result.switch !== "done") useUiStore.getState().setSwitchOutcome(deviceId, { kind: "failed", reason: result.switch ?? "" });

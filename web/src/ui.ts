@@ -516,7 +516,7 @@ type UiStore = {
   devicesOpen: string[];
   toggleDeviceOpen: (deviceId: string) => void;
   closeDevices: () => void;
-  /** How this window's last press of 서버로 연결 ended for a device that was not switched, until it is pressed again. */
+  /** How this window's last press of 서버로 연결 ended for a device that was not switched, until it is pressed again or its row reads the machine again (folded or opened again). */
   switchOutcomes: Record<string, import("./settings/switchWays").SwitchOutcome>;
   setSwitchOutcome: (deviceId: string, outcome: import("./settings/switchWays").SwitchOutcome | null) => void;
   setPendingClose: (pending: PendingClose | null) => void;

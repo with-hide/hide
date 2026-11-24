@@ -1461,6 +1461,7 @@ pub const COMMANDS: &[Spec] = &[
             "switch_running",
             "switch_not_connected",
             "switch_not_moved",
+            "switch_cut",
             "ssh_core_not_started",
             "ssh_not_reached",
             "ssh_busy",
