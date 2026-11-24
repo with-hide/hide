@@ -15,7 +15,7 @@ import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { machineName, ownMachineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace, type AutomationNames } from "./hideAiOrigin";
-import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
+import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Checkout, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
 
@@ -146,6 +146,14 @@ export function agentPlaces(
     byDevice.set(deviceLabel(devices, status.target_id), checkoutPlaces((status.session?.workspaces ?? []).filter((p) => p.agent_scope.places_live), hideAi, names));
   }
   return (device, paneId) => byDevice.get(device)?.get(paneId) ?? null;
+}
+
+/** Every listed checkout with its project and the machine it is on: this machine's, then each connected device's. */
+export function listedCheckouts(rest: SnapshotRest | null): { device: string; workspace: Workspace; checkout: Checkout }[] {
+  const node = localDeviceId(rest);
+  const local = (rest?.navigator?.workspaces ?? []).map((workspace) => ({ device: node, workspace }));
+  const remote = (rest?.status?.remote ?? []).flatMap((row) => (row.session?.workspaces ?? []).map((workspace) => ({ device: row.target_id, workspace })));
+  return [...local, ...remote].flatMap(({ device, workspace }) => workspace.checkouts.map((checkout) => ({ device, workspace, checkout })));
 }
 
 /**

@@ -1,4 +1,4 @@
-import { CircleDotIcon, FolderIcon, GlobeIcon, GitBranchIcon, LoaderCircleIcon, SearchIcon, ServerIcon, TriangleAlertIcon, ChevronRightIcon } from "lucide-react";
+import { CircleDotIcon, FlagIcon, FolderIcon, GlobeIcon, GitBranchIcon, LoaderCircleIcon, SearchIcon, ServerIcon, TriangleAlertIcon, ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { Actions } from "./actions";
@@ -9,15 +9,18 @@ import { PrMark } from "./components/pr-mark";
 import { DeviceChip } from "./components/device-chip";
 import { Command, CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from "./components/ui/command";
 import { Kbd } from "./components/ui/kbd";
+import { deskTabOf } from "./deskPalette";
+import { fieldLabel } from "./shortcutLabels";
+import { composingKey } from "./keys";
 import { frontTarget, relationRows, relationsOf, type Relations } from "./relations";
-import { filterEntries, githubEntries, groupEntries, openUrlEntry, recentEntries, GITHUB_GROUP, RECENT_GROUP, RELATED_GROUP, SESSIONS_GROUP, sessionEntries, searchEntries, type SearchEntry, type SearchSection, type Tone } from "./search";
+import { filterEntries, githubEntries, groupEntries, openUrlEntry, recentEntries, GITHUB_GROUP, RECENT_GROUP, RELATED_GROUP, SESSIONS_GROUP, sessionEntries, searchEntries, missionEntries, type SearchEntry, type SearchSection, type Tone } from "./search";
 import { summariesEnabled } from "./hideAi";
 import { workKey, recordTitle } from "./sessionWork";
 import { Button } from "./components/ui/button";
 import type { LinkSummaries, WorkSession } from "./snapshot";
 import { detailOf, type Detail } from "./searchDetail";
 import { githubRow, hasGithubProject, ownAnswer, projectRead, projectToRead, startsSearch, type GithubRow, type ProjectRead } from "./searchGithub";
-import { browserBridge } from "./host";
+import { browserBridge, holdsCommandKey } from "./host";
 import { frontCheckout } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -83,6 +86,8 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return {
       target: frontTarget(state.rest, ui.screen?.kind ?? null, ui.searchOver === "settings", state.focusedPaneId, owner === "pane" || owner === "agent", checkout?.id ?? null),
       checkout: ui.screen?.kind === "workspace" && ui.searchOver !== "settings" ? checkout : null,
+      // On Desk a pick opens beside Desk or in its tab panel, and missions are listed (PRD desk-2-ui B39).
+      desk: ui.screen?.kind === "desk",
     };
   });
 
@@ -104,7 +109,7 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     return () => observer.disconnect();
   }, [box]);
 
-  const entries = useMemo(() => (rest ? searchEntries(rest, t) : []), [rest, t]);
+  const entries = useMemo(() => (rest ? [...searchEntries(rest, t), ...(front.desk ? missionEntries(rest) : [])] : []), [rest, t, front]);
   const related = useMemo<Relations | null>(() => (front.target ? relationsOf(rest, front.target, t, true) : null), [rest, front, t]);
   const trimmed = query.trim();
   useEffect(() => { actions.searchSessionWork(trimmed); }, [actions, trimmed, summaries]);
@@ -144,12 +149,18 @@ export function SearchPalette({ actions }: { actions: Actions }) {
   const detailVisible = !collapsed && showsDetail(width);
   const now = Date.now();
 
-  const activate = (entry: SearchEntry) => {
+  const activate = (entry: SearchEntry, tab = false) => {
     // The agent in front is where the operator already is; the detail says so (B21).
     if (entry.tag === "here") return;
     // A Recent row of a device that is not connected is dimmed and does nothing, and says nothing (PRD cmdk-recent B9).
     if (entry.dimmed) return;
     close();
+    if (front.desk) {
+      // A session opens beside Desk, or goes to its tab with ⌘↵; a PR or a mission opens in the tab panel and opens no session (D-24).
+      if (entry.kind === "agent" && entry.paneId) return tab ? actions.openDeskSessionTab(entry.paneId) : actions.openDeskSession(entry.paneId);
+      const deskTab = deskTabOf(entry);
+      if (deskTab) return actions.deskOpen(deskTab);
+    }
     switch (entry.kind) {
       case "session":
         return entry.session ? actions.openSessionRecord(entry.session) : undefined;
@@ -181,15 +192,17 @@ export function SearchPalette({ actions }: { actions: Actions }) {
     actions.searchGithub(requestId, trimmed);
   };
 
-  const onSelect = (id: string) => {
+  const onSelect = (id: string, tab = false) => {
     if (id === GITHUB_ROW_ID) return search();
     const entry = listed.find((candidate) => candidate.id === id);
-    if (entry) activate(entry);
+    if (entry) activate(entry, tab);
   };
 
   const reads = (entry: SearchEntry): ProjectRead => (entry.kind === "checkout" && entry.workspace ? projectRead(entry.workspace, askedProjects, now, t, language) : null);
 
-  const detail: Detail | null = selectedEntry ? detailOf(rest, selectedEntry, now, t, language, linkSummaries) : null;
+  const detailOfRow = selectedEntry ? detailOf(rest, selectedEntry, now, t, language, linkSummaries) : null;
+  const sessionOnDesk = front.desk && selectedEntry?.kind === "agent";
+  const detail: Detail | null = detailOfRow && sessionOnDesk ? { ...detailOfRow, action: t("search.openBesideDesk") } : detailOfRow;
 
   return (
     <CommandDialog
@@ -202,7 +215,20 @@ export function SearchPalette({ actions }: { actions: Actions }) {
       }}
     >
       <div ref={setBox} className="flex min-w-0 flex-col" data-cmdk={collapsed ? "collapsed" : "open"}>
-        <Command shouldFilter={false} label={t("commands.search")} data-palette="Search" value={selected} onValueChange={setHighlighted}>
+        <Command
+          shouldFilter={false}
+          label={t("commands.search")}
+          data-palette="Search"
+          value={selected}
+          onValueChange={setHighlighted}
+          onKeyDown={front.desk ? (event) => {
+            // ⌘↵ (Ctrl+Enter off macOS) on a session goes to its tab; on any other row it is ↵.
+            if (event.key !== "Enter" || !holdsCommandKey(event) || composingKey(event) || !selectedEntry) return;
+            event.preventDefault();
+            event.stopPropagation();
+            onSelect(selectedEntry.id, true);
+          } : undefined}
+        >
           <CommandInput
             value={query}
             placeholder={t("search.placeholder")}
@@ -258,7 +284,8 @@ export function SearchPalette({ actions }: { actions: Actions }) {
           {collapsed ? null : (
             <div className="flex items-center gap-md border-t border-border px-md py-xxs text-caption text-muted-foreground" data-palette-footer="true">
               <span className="flex items-center gap-xxs"><Kbd>↑</Kbd><Kbd>↓</Kbd> {t("search.navigate")}</span>
-              <span className="flex items-center gap-xxs"><Kbd>↵</Kbd> {t("common.open")}</span>
+              <span className="flex items-center gap-xxs"><Kbd>↵</Kbd> {sessionOnDesk ? t("search.openBesideDesk") : t("common.open")}</span>
+              {sessionOnDesk ? <span className="flex items-center gap-xxs" data-palette-hint="tab"><Kbd>{fieldLabel("Enter")}</Kbd> {t("search.openSessionTab")}</span> : null}
               <span className="flex items-center gap-xxs"><Kbd>Esc</Kbd> {t("common.close")}</span>
             </div>
           )}
@@ -285,7 +312,7 @@ function EntryIcon({ entry }: { entry: SearchEntry }) {
     );
   }
   const Icon =
-    entry.command === "open_url" ? GlobeIcon : entry.kind === "project" ? FolderIcon : entry.kind === "checkout" ? GitBranchIcon : entry.kind === "device" ? ServerIcon : entry.kind === "issue" ? CircleDotIcon : ChevronRightIcon;
+    entry.command === "open_url" ? GlobeIcon : entry.kind === "project" ? FolderIcon : entry.kind === "checkout" ? GitBranchIcon : entry.kind === "device" ? ServerIcon : entry.kind === "mission" ? FlagIcon : entry.kind === "issue" ? CircleDotIcon : ChevronRightIcon;
   const tone = entry.kind === "issue" ? TONE_CLASS[entry.status?.tone ?? "muted"] : "";
   return (
     <span className={`flex w-(--size-agent-badge-compact) shrink-0 justify-center ${tone}`} aria-hidden="true">

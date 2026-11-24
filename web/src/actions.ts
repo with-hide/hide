@@ -35,7 +35,7 @@ import { latestDraft, noteClosing, noteSent } from "./editor/draft";
 import { RELATION_ANSWER_TIMEOUT_MS, relationState } from "./lineage";
 import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { allAgents, boardProjects } from "./navigation";
+import { allAgents, boardProjects, listedCheckouts } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
@@ -470,13 +470,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspaceId, checkout_id: checkoutId, ...(expanded === undefined ? {} : { expanded }), ...(projectExpanded === undefined ? {} : { project_expanded: projectExpanded }) } });
   };
 
-  /** Every listed checkout with its project and machine: this machine's, then each connected device's. */
-  const everyCheckout = () => {
-    const node = localDeviceId(rest());
-    const local = (rest()?.navigator?.workspaces ?? []).map((workspace) => ({ device: node, workspace }));
-    const remote = (rest()?.status?.remote ?? []).flatMap((row) => (row.session?.workspaces ?? []).map((workspace) => ({ device: row.target_id, workspace })));
-    return [...local, ...remote].flatMap(({ device, workspace }) => workspace.checkouts.map((checkout) => ({ device, workspace: workspace.id, checkout })));
-  };
+  /** Every listed checkout with its project id and machine: this machine's, then each connected device's. */
+  const everyCheckout = () => listedCheckouts(rest()).map(({ device, workspace, checkout }) => ({ device, workspace: workspace.id, checkout }));
 
   /** The checkout at `root` on `device` (PRD desk-2-ui B19, B37, B38). */
   const checkoutAt = (device: string, root: string) => {
@@ -2785,6 +2780,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         });
       }
       ui().setDeskRoom((room) => openDeskTab(room, tab, options));
+    },
+
+    /**
+     * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
+     * tab panel, as the checkout's preview tab, or kept (`keep`, ⌘↵) so it
+     * stands beside what is already open. The Explorer column stays as it was.
+     */
+    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, keep = false) {
+      ui().closeOverlay();
+      ui().setExplorerSelection(hit.path);
+      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, { preview: !keep });
+    },
+
+    /** ⌘↵ on a session in Desk's ⌘K (PRD desk-2-ui D-24, B39): its tab, where ⌘J brings Desk back (B7). */
+    openDeskSessionTab(paneId: string) {
+      ui().setDeskReturn(paneId);
+      this.openAgent(paneId);
     },
 
     /**

@@ -13,6 +13,7 @@ import { searchDevices } from "./search";
 import { reviewWord } from "./prMark";
 import type { LinkSummaries, SnapshotRest } from "./snapshot";
 import { sameIssue } from "./linkPanel";
+import { missionCounts } from "./missions";
 import { pullLabel } from "./codeHost";
 
 export type Detail = {
@@ -86,6 +87,11 @@ export function detailOf(rest: SnapshotRest | null, entry: SearchEntry, now: num
         facts: present([[t("search.fact.checkout"), entry.place], [t("search.fact.pr"), (entry.agent?.request?.pull_requests ?? []).map((pr) => pullLabel(pr)).join(", ")], [t("search.fact.lastWords"), lastWords(entry)]]),
         action: t("search.goToAgent"),
       };
+    }
+    case "mission": {
+      const mission = rest?.missions?.items.find((one) => one.id === entry.missionId);
+      const counts = mission ? missionCounts(mission) : null;
+      return { ...base, kind: t("kind.mission"), title: entry.title, tags: counts ? [`${counts.done}/${counts.total}`] : [], facts: present([[t("common.project"), mission?.project]]), action: t("common.open") };
     }
     case "checkout": {
       // A Recent row of a device that is not connected: the names the record kept and nothing else, and ↵ does nothing, so no action is offered.

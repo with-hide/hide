@@ -7,6 +7,7 @@ import { Command, CommandDialog, CommandInput, CommandItem, CommandList } from "
 import { Kbd } from "./components/ui/kbd";
 import { changedFiles } from "./newTab";
 import { fileIcon } from "./fileIcons";
+import { DeskFilePalette } from "./DeskFilePalette";
 import { SearchPalette } from "./SearchPalette";
 import { explorerContext } from "./snapshot";
 import { useShellStore } from "./store";
@@ -29,13 +30,15 @@ import { composingKey } from "./keys";
 
 export function Palette({ actions }: { actions: Actions }) {
   const overlay = useUiStore((s) => s.overlay);
-  if (overlay === "file_palette") return <FilePalette actions={actions} />;
+  const onDesk = useUiStore((s) => s.screen?.kind === "desk");
+  // On Desk ⌘P searches the open session's checkout or every project and opens in the tab panel (PRD desk-2-ui B37, B38); every other screen keeps its own.
+  if (overlay === "file_palette") return onDesk ? <DeskFilePalette actions={actions} /> : <FilePalette actions={actions} />;
   if (overlay === "diff_palette") return <DiffPalette actions={actions} />;
   if (overlay === "search") return <SearchPalette actions={actions} />;
   return null;
 }
 
-function PaletteShell({
+export function PaletteShell({
   label,
   placeholder,
   query,
@@ -74,7 +77,7 @@ function PaletteShell({
 }
 
 /** One palette row: its icon or mark, the title, and ↵ while it is the row Enter would choose. */
-function PaletteRow({ icon, title }: { icon?: ReactNode; title: string }) {
+export function PaletteRow({ icon, title }: { icon?: ReactNode; title: ReactNode }) {
   return (
     <>
       {icon}
@@ -85,6 +88,17 @@ function PaletteRow({ icon, title }: { icon?: ReactNode; title: string }) {
         ↵
       </span>
     </>
+  );
+}
+
+/** One file of a file palette: its mark and `title`, which ↵ opens through `onSelect`. */
+export function PaletteFileRow({ path, relativePath, title, onSelect }: { path: string; relativePath: string; title: ReactNode; onSelect: () => void }) {
+  return (
+    <CommandItem asChild value={path} onSelect={onSelect}>
+      <button type="button" data-palette-row={path} className="group/palette-row w-full text-left">
+        <PaletteRow icon={<FileMark icon={fileIcon(relativePath)} />} title={title} />
+      </button>
+    </CommandItem>
   );
 }
 
@@ -165,14 +179,7 @@ function FilePalette({ actions }: { actions: Actions }) {
         </div>
       ) : (
         entries.map((entry) => (
-          <CommandItem key={entry.path} asChild value={entry.path} onSelect={() => actions.openIndexEntry(entry.path)}>
-            <button type="button" data-palette-row={entry.path} className="group/palette-row w-full text-left">
-              <PaletteRow
-                icon={<FileMark icon={fileIcon(entry.relative_path)} />}
-                title={entry.relative_path}
-              />
-            </button>
-          </CommandItem>
+          <PaletteFileRow key={entry.path} path={entry.path} relativePath={entry.relative_path} title={entry.relative_path} onSelect={() => actions.openIndexEntry(entry.path)} />
         ))
       )}
     </PaletteShell>
