@@ -434,7 +434,7 @@ fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
             std::time::Instant::now() < deadline,
             "timed out waiting for {what}"
         );
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(250)); // wait-ok: a pane's screen and a process's end, read by polling; the deadline bounds it
     }
 }
 
