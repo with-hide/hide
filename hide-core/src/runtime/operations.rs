@@ -5,7 +5,8 @@
 //! a host connection generation, target and conflict-scope ids, phase, stage,
 //! start time and absolute deadline. Transport success is never topology
 //! truth, and an expired or ambiguous mutation becomes an explicit unknown
-//! that is never resent; `docs/ARCHITECTURE.md` owns the reasons. The close
+//! that is never resent, until fresh topology confirms it or a device's
+//! later connection settles it; `docs/ARCHITECTURE.md` owns the reasons. The close
 //! lifecycle itself lives beside reopen in `editor.rs`.
 
 use super::*;
@@ -280,13 +281,33 @@ enum RemoteSettle {
     FreshSession,
     /// A report that arrived earlier, read when the operation began to wait.
     HeldSession,
+    /// A report of a later connection than the operation was sent on, whose
+    /// layout is its result whatever it shows.
+    LaterConnection,
 }
 
 impl RemoteSettle {
+    /// The diagnostic a settled operation leaves: confirmed by the engine's
+    /// layout, or settled by a later connection's layout without a check.
+    fn kind(self) -> &'static str {
+        match self {
+            Self::FreshSession | Self::HeldSession => "remote.control.topology_confirmed",
+            Self::LaterConnection => "remote.control.superseded",
+        }
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::FreshSession | Self::HeldSession => "Confirmed",
+            Self::LaterConnection => "Settled",
+        }
+    }
+
     fn source(self) -> &'static str {
         match self {
             Self::FreshSession => "fresh topology",
             Self::HeldSession => "the session received before it waited",
+            Self::LaterConnection => "the layout of a later connection",
         }
     }
 }
@@ -542,11 +563,42 @@ impl Runtime {
     /// Settles the operations of `target_id` that `session`, that device's
     /// fresh report, shows the effect of. Another device's operation is not
     /// judged by it: its pane being absent here proves nothing there.
+    ///
+    /// An operation sent on an earlier connection than the one `session`
+    /// came on is settled by it whatever it shows: its answer can no longer
+    /// arrive (a result of an earlier connection is dropped as stale), so
+    /// the engine's layout in this session is its result, as it is for
+    /// anything drawn ahead of the engine. Nothing is resent, and the tab's
+    /// line moves on; held as `unknown`, it refused every later operation of
+    /// that tab until the core started anew, which a device's core ending
+    /// or being replaced by an update (a new connection) left behind.
     pub(super) fn observe_remote_operations(
         &mut self,
         target_id: &str,
         session: &RemoteSessionSnapshot,
     ) -> bool {
+        let generation = self
+            .remote_connection_generations
+            .get(target_id)
+            .copied()
+            .unwrap_or(0);
+        let open = |operation: &PendingRemoteOperation| {
+            matches!(
+                operation.phase.as_str(),
+                "transmitting" | "awaiting_topology" | "unknown"
+            )
+        };
+        let superseded = self
+            .remote_operations
+            .iter()
+            .filter(|((target, _), operation)| {
+                target == target_id
+                    && operation.connection_generation != generation
+                    && open(operation)
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let mut changed = self.settle_remote_operations(superseded, RemoteSettle::LaterConnection);
         let completed = self
             .remote_operations
             .iter()
@@ -557,7 +609,8 @@ impl Runtime {
             .filter(|(_, operation)| remote_operation_confirmed_by(operation, session))
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        self.settle_remote_operations(completed, RemoteSettle::FreshSession)
+        changed |= self.settle_remote_operations(completed, RemoteSettle::FreshSession);
+        changed
     }
 
     fn settle_remote_operations(
@@ -572,9 +625,10 @@ impl Runtime {
                 changed = true;
                 scopes.push(operation.scope_id.clone());
                 self.push_diagnostic(
-                    "remote.control.topology_confirmed",
+                    via.kind(),
                     format!(
-                        "Confirmed {} for {} on {} from {}",
+                        "{} {} for {} on {} from {}",
+                        via.verb(),
                         operation.kind,
                         operation.target_id,
                         key.0,

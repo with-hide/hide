@@ -3146,6 +3146,53 @@ fn a_held_device_session_that_does_not_show_the_effect_leaves_the_operation_wait
     );
 }
 
+/// A zoom sent as the device's core ends gets no answer and turns unknown at
+/// its deadline. When the device is back on a new connection, the layout it
+/// reports settles the zoom whatever it shows (here, never applied), nothing
+/// is resent, and the tab's next operation is sent instead of being refused
+/// as running until the core starts anew (mission-94, an update replacing a
+/// device's core).
+#[test]
+fn an_operation_left_unknown_when_a_device_core_ended_is_settled_by_its_next_connection() {
+    let t = tree();
+    let mut runtime = connected_device_runtime();
+    runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
+    let _requests = recording_device(&mut runtime);
+
+    assert!(!zoom_t1(&mut runtime, "zoom-1"));
+    runtime.ingest_remote_session(
+        TARGET,
+        Err(crate::live::SessionFetchError::Unreachable(
+            "the device's core ended".into(),
+        )),
+    );
+    runtime.expire_remote_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
+    assert_eq!(pending_remote(&runtime)[0].2, "unknown");
+
+    runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
+    assert!(
+        runtime.remote_operations.is_empty(),
+        "the later connection's layout settled the zoom"
+    );
+    assert_eq!(
+        diagnostic_messages(&runtime, "remote.control.superseded"),
+        ["Settled pane.zoom for remote:mini:pane:t1 on mini from the layout of a later connection"]
+    );
+
+    assert!(
+        !zoom_t1(&mut runtime, "zoom-2"),
+        "the tab takes its next operation"
+    );
+    assert_eq!(
+        pending_remote(&runtime),
+        [(
+            TARGET.to_owned(),
+            "zoom-2".to_owned(),
+            "transmitting".to_owned()
+        )]
+    );
+}
+
 /// A close is confirmed by the pane's absence, which the same function reads
 /// from the held session on the answer: tab t2 went away before the answer.
 #[test]
