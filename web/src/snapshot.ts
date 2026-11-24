@@ -2287,16 +2287,10 @@ export type Device = {
   dials_in?: boolean;
   /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
   peer_key?: string | null;
-  /** Where the switch of this helper device to its machine's own Hide stands (`DeviceSnapshot::switch`); absent while none runs or failed. */
-  switch?: DeviceSwitch | null;
-  /** What the Hide this core started on the device's machine over SSH still needs to stay reachable (`DeviceSnapshot::needs`); absent when it needs nothing. */
+  /** What the device's machine needs from the operator before its own Hide is back after a restart with no one there (`DeviceSnapshot::needs`): for a device reached over SSH or WSL, what keeps Hide from moving it to its machine's own connection; for a machine that moved, what the Hide started there still needs. Absent when it needs nothing. */
   needs?: DeviceNeeds | null;
-  /** Whether the switch to its machine's own Hide is offered on this device (`DeviceSnapshot::switchable`): a helper device dialed over SSH that has connected. */
-  switchable?: boolean;
-  /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
+  /** How many of the device's terminals its move could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
   not_carried?: number | null;
-  /** Added over SSH or as a WSL distribution to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
-  switch_first?: boolean;
 };
 
 /**
@@ -2307,15 +2301,6 @@ export type Device = {
  * distribution with no systemd being opened again after Windows restarts.
  */
 export type DeviceNeeds = { kind: "auto_login" | "linger" | "open_distribution"; command?: string | null };
-
-/**
- * A helper device's switch to the connection of the Hide on its machine
- * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
- * the code of why a `failed` one stopped; the device is the helper's until
- * the switch lands, so a failed one changed nothing. `held` waits for the
- * operator: `by` is the computer that switched the device first.
- */
-export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed" | "held"; reason?: string | null; by?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
@@ -4016,8 +4001,6 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
-    /** The device the last Add over SSH or of a WSL distribution did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
-    device_not_added?: { label: string; reason: string } | null;
     /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
     peers?: import("./pairing").Peer[];
     /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */

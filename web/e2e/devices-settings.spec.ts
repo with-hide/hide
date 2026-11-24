@@ -88,10 +88,9 @@ test("a device row is one state with a menu, Add device is one button, a rename 
     await page.locator("[data-add-device]").click();
     await expect(page.locator("[data-add-device-dialog]")).toHaveCount(0);
 
-    // B54; operator review 2026-11-23: the device is one row: its name marked as the old way, and one state.
+    // B54; operator review 2026-11-23: the device is one row with one state, and nothing on it says how it is reached.
     const row = sheet.locator(`[data-device-row="${ALIAS}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await expect(row.locator(`[data-device-old-link="${ALIAS}"]`)).toHaveText("old way");
     await expect(row.locator(`[data-device-state="${ALIAS}:unavailable"]`)).toBeVisible({ timeout: 30_000 });
     await expect(row.locator("[data-device-state]")).toHaveCount(1);
     // B56: no per-device Agents line, no Coordination retirement row, no kit part list.

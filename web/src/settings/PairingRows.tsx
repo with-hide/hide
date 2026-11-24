@@ -226,7 +226,7 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
           {relayTip(peer) ? <Note data-peer-relay-tip={device}>{t("devices.relayTip")}</Note> : null}
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
           <DeviceNotCarriedLine deviceId={device} />
-          <DeviceNeedsLine deviceId={device} actions={actions} />
+          <DeviceNeedsLine deviceId={device} actions={actions} moved />
         </span>
       }
     >

@@ -72,8 +72,7 @@ it("lists each Host with its address, and fills the name and adds only the alias
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
   // The core gives the device its id: the shell sends none.
-  // Every Add over SSH is added to be switched at once (B41).
-  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true, switch_first: true });
+  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
   await unmount();
 });
 
@@ -152,7 +151,7 @@ it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was",
   for (const state of ["absent", "not_reached"]) {
     await answer("look_ssh", { ok: true, alias: "lab", looked: { state } });
     expect(q("[data-ssh-look]")).toBeNull();
-    expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
+    expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   }
   await unmount();
 });
@@ -165,7 +164,7 @@ it("waits for the device its alias added, under whatever id the core gives it", 
   expect(q('[data-add-device="true"]')?.textContent).toBe("Adding…");
   // Its first connection names it by its machine's id, not by the alias.
   await rerender([{ id: "4c1d2e3f-0a1b-4c2d-8e3f-5a6b7c8d9e0f", ssh_alias: "lab" } as Device]);
-  expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   await unmount();
 });
 
@@ -275,8 +274,7 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
-  // It goes on to the new connection once its helper is connected: the core keeps that it was added for its switch (B41).
-  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true, switch_first: true });
+  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true });
   await unmount();
 });
 

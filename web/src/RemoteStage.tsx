@@ -18,7 +18,7 @@ import { hostBridge, type BrowserRect, type RemoteScreenState } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { pairedMachines } from "./pairing";
-import { DeviceSwitchStrip } from "./settings/DeviceSwitch";
+import { DeviceMovedStrip } from "./settings/DeviceSwitch";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { trafficLightSpace, useWindowChrome } from "./windowChrome";
@@ -125,7 +125,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       {rail ? <DeviceRail actions={actions} /> : null}
       {/* The notice takes the window's top row, so it starts after macOS's traffic lights as the title row does. */}
       <div ref={notice} className={cn("fixed top-0 right-0 z-10", lights ? "left-0" : rail ? "left-(--size-rail)" : "left-0")} data-remote-notice="true">
-        <DeviceSwitchStrip actions={actions} start={lights ? "calc(var(--size-traffic-light-inset) + var(--spacing-xs))" : undefined} />
+        <DeviceMovedStrip start={lights ? "calc(var(--size-traffic-light-inset) + var(--spacing-xs))" : undefined} />
       </div>
       <div ref={stage} className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-sm p-xl text-center" data-remote-stage={device ?? ""} data-remote-state={why ?? loaded?.state ?? "opening"}>
         {why ? (

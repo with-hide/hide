@@ -2,7 +2,6 @@ import { MoreHorizontalIcon } from "lucide-react";
 import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
-import { Badge } from "../components/ui/badge";
 import { Note, Row, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
@@ -10,10 +9,9 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceReason, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
-import { switchDrawn, switchOffered } from "../deviceSwitch";
 import { ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
-import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
+import { DeviceNeedsLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
@@ -44,12 +42,13 @@ export type DeviceRowPlace = { name: string; own: boolean; windowIsNode: boolean
 
 /**
  * One machine of Settings › Devices that is not a paired Hide (operator
- * review 2026-11-23): this computer, or a device reached the old way, over
- * SSH or WSL. A row says its name and system and one state; a device that
- * is not connected says why in one plain line, and only what the operator
- * acts on grows under it (a sign-in, a changed server key, the helper's
- * consent, a part of Hide's kit, a switch under way). Test, the technical
- * detail and the rename are in ⋯.
+ * review 2026-11-23): this computer, or a device reached over SSH or WSL.
+ * A row says its name and system and one state; a device that is not
+ * connected says why in one plain line, one that would work without this
+ * computer once its machine is set up says that faintly (`DeviceNeedsLine`),
+ * and only what the operator acts on grows under it (a sign-in, a changed
+ * server key, the helper's consent, a part of Hide's kit). Test, the
+ * technical detail and the rename are in ⋯.
  */
 export function DeviceRow({ device, status, place, actions, handlers }: { device: Device; status: RemoteStatus | undefined; place: DeviceRowPlace; actions: Actions; handlers: DeviceRowHandlers }) {
   const { t } = useInterfaceTranslation();
@@ -57,28 +56,19 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
   const corePlatform = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.kind !== "remote")?.host?.platform ?? null);
   // A node that dials in has no SSH connection to retry here.
   const dialed = device.kind === "remote" && device.dials_in !== true;
-  const oldWay = dialed && !place.own;
+  const reached = dialed && !place.own;
   // A WSL distribution is named where it is, the core's PC (PRD wsl-device B5).
   const system = device.wsl_distro ? place.coreName : machineSystem(device);
   const line = deviceLine(device, status, t);
-  const reason = oldWay ? deviceReason(device, status, t, corePlatform) : null;
-  // A helper device offers its switch (B35), from this computer's own window only (B52).
-  const switchable = ownScreen && switchOffered(device);
-  // One button: a sign-in the device waits on comes first, since every
-  // other step goes over that login; then the switch (mockup 6); then Retry.
-  const canRetry = dialed && canRetryDevice(device, status);
-  const signInFirst = canRetry && retrySignsIn(device.problem);
-  const switchShown = switchable && !switchDrawn(device) && !signInFirst;
-  const retry = canRetry && (signInFirst || !switchable);
+  const reason = reached ? deviceReason(device, status, t, corePlatform) : null;
+  // One button: a sign-in the device waits on, else Retry where trying again can help.
+  const retry = dialed && canRetryDevice(device, status);
   return (
     <Row
       data-device-row={device.id}
       label={
         <span className="flex min-w-0 flex-col">
-          <span className="flex min-w-0 flex-wrap items-center gap-xs">
-            <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
-            {oldWay ? <Badge variant="warning" data-device-old-link={device.id}>{t("devices.oldBadge")}</Badge> : null}
-          </span>
+          <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
           {system ? (
             <span className="break-words text-caption text-muted-foreground" data-device-subtitle={device.id}>
               {system}
@@ -90,9 +80,10 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
               {device.problem === "windows_not_started" ? <> · <SmartAppControlHint deviceId={device.id} /></> : null}
             </Note>
           ) : null}
+          {reached ? <DeviceNeedsLine deviceId={device.id} actions={actions} /> : null}
         </span>
       }
-      detail={<DeviceAttention device={device} place={place} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
+      detail={<DeviceAttention device={device} place={place} actions={actions} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
     >
       {place.own ? null : (
         <Status tone={line.tone === "ok" ? "live" : line.tone} data-device-state={`${device.id}:${device.state}`}>
@@ -104,7 +95,6 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
           {t("devices.share")}
         </Button>
       ) : null}
-      {switchShown ? <DeviceSwitchButton device={device} actions={actions} size="sm" /> : null}
       {retry ? (
         <Button
           variant="secondary"
@@ -193,13 +183,13 @@ function DeviceMenu({ device, place, actions, handlers, ownScreen }: { device: D
 
 /**
  * What grows under a device because the operator acts on it now: a node's
- * split that did not happen, a switch under way or stopped, a sign-in ssh
+ * split that did not happen, a sign-in ssh
  * asks for, a changed server key with the command that checks it, the
  * helper's consent or its retry, and a part of Hide's kit. Why a device is
  * not connected is the row's one reason line; ssh's and the helper's own
  * words and a test's stages are Connection details' (`DeviceDetails`).
  */
-function DeviceAttention({ device, place, actions, switchable, onAct, onAllow }: { device: Device; place: DeviceRowPlace; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
+function DeviceAttention({ device, place, actions, onAct, onAllow }: { device: Device; place: DeviceRowPlace; actions: Actions; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t } = useInterfaceTranslation();
   // A node whose machine was not made a Hide of its own says why on its own row, with the Retry (PRD device-connect-iroh B45).
   const splitFailed = useShellStore((s) => (place.own && place.windowIsNode ? s.coreSplit : null));
@@ -228,7 +218,6 @@ function DeviceAttention({ device, place, actions, switchable, onAct, onAllow }:
         </Button>
       </div>
     ) : null,
-    switchable && switchDrawn(device) ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     signIn ? <DeviceSignIn key={`sign-in-${signIn.question}`} deviceId={device.id} wait={signIn} actions={actions} /> : null,
     keyCommand ? (
       <div key="key" className="flex flex-wrap items-center gap-x-sm gap-y-xxs" data-device-problem={`${device.id}:host_key_changed`}>

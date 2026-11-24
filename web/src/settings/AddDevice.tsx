@@ -149,16 +149,16 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
-    // A device added over SSH or wsl.exe goes on to the new connection once
-    // it connects (B41): the core keeps that it was added for its switch,
-    // which is asked then and says what would be installed there before
-    // anything is.
+    // A device added over SSH or wsl.exe is used over that login, and
+    // Hide moves it to its machine's own connection by itself when that
+    // machine can take it (operator decision 2026-11-24): the Add asks
+    // nothing more and never ends without the device.
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
-      actions.registerWslDevice(distro, { switchFirst: true });
+      actions.registerWslDevice(distro);
     } else {
       setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-      actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: true });
+      actions.registerDevice(name.trim(), chosen, { hostConsent: true });
     }
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
@@ -217,7 +217,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       )}
       <div className="flex justify-end">
         <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
-          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("devices.next")}
+          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("common.add")}
         </Button>
       </div>
     </div>
