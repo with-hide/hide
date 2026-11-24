@@ -356,8 +356,8 @@ type UiStore = {
    * View, which takes them (`viewFocusRequest`), so the pane leaves them (operator decision 2026-11-23).
    */
   pairEntry: { input: number; keys: "pane" | "desk" } | null;
-  /** `laneExpanded` as it was when focus mode came on, given back when it ends, null outside the mode (PRD lane-desk-pair-view D-51, D-59). Kept here, not on the Workspace screen, so leaving that screen in focus mode forgets nothing. */
-  laneExpandedBeforePair: boolean | null;
+  /** Whether the Workspace screen has drawn the focus mode that is on, so the lane is unexpanded once as the mode comes on and once as it ends (D-59). Kept here, not on the Workspace screen, so leaving that screen in focus mode forgets nothing. */
+  pairDrawn: boolean;
   /**
    * The Hide AI tool's tab and the 제안 row shown in full, by its id (`s12`,
    * `m72`); a Needs You row opens the tool on its row (PRD hide-ai-suggestions
@@ -583,7 +583,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   agentFindRequest: null,
   viewFocusRequest: null,
   laneExpanded: false,
-  laneExpandedBeforePair: null,
+  pairDrawn: false,
   pairEntry: null,
   hideAiTab: "suggestions",
   openSuggestion: null,
