@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, listedDevices, mayRequest, openedMachines, ownWindow, pairedMachines, peerRouteKey, peerState, refusalKey, relayTip, requestLine, timeLeft, type Peer } from "./pairing";
+import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, listedDevices, machinesWithOwnRow, mayRequest, openedMachines, ownWindow, pairedMachines, peerRouteKey, peerState, refusalKey, relayTip, requestLine, timeLeft, type Peer } from "./pairing";
 import type { SnapshotRest } from "./snapshot";
 
 const peer = (over: Partial<Peer> = {}): Peer => ({ key: "ab".repeat(32), device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null, ...over });
@@ -111,6 +111,18 @@ describe("the paired machines a screen reads", () => {
     expect(openedMachines(rest([peer({ opens: "paused" })], [device]))).toEqual([]);
     // An SSH device that only says the same id is another machine: both have a tile.
     expect(openedMachines(rest([confirmed], [{ id: "windows-pc", peer_key: null }]))).toEqual([confirmed]);
+  });
+
+  it("gives no tile and no row of its own to a machine the core says is still a helper device here", () => {
+    // A move paired the two and the device did not take the connection:
+    // the device's tile and row are the machine's only ones.
+    const unmoved = peer({ helper_device: "windows-pc" });
+    const other = peer({ key: "cd".repeat(32), device_id: "macbook" });
+    expect(openedMachines(rest([unmoved, other], [{ id: "windows-pc", peer_key: null }]))).toEqual([other]);
+    expect(machinesWithOwnRow([unmoved, other])).toEqual([other]);
+    // With none such, the list is the same one, so a selector on it stays still.
+    const all = [other];
+    expect(machinesWithOwnRow(all)).toBe(all);
   });
 
   it("lists in Settings every device but a paired machine's, whose row is its pairing's", () => {

@@ -39,6 +39,7 @@ fn has_no_login_agents(agents: &UserAgents, reason: &str) {
         reason,
     );
     unsupported(agents.linger(home, &stop).map(drop), reason);
+    unsupported(agents.unattended(home, &stop).map(drop), reason);
     unsupported(agents.start("example.agent", home, &stop), reason);
     assert_eq!(
         agents.last_exit("example.agent", home, &stop).unwrap(),
@@ -493,6 +494,81 @@ fn a_linger_the_account_may_not_ask_for_names_the_command_that_turns_it_on() {
     std::fs::write(home.join("allowed"), "").unwrap();
     assert_eq!(agents.linger(home, &stop).unwrap(), Linger::On);
     assert_eq!(agents.login(home, &stop).unwrap(), Login::NotNeeded);
+}
+
+/// Whether an account's agents run after the machine starts with nobody at
+/// it is each system's own fact, and reading it turns nothing on: a
+/// systemd account that lingers, a Mac that logs this account in by itself
+/// (and no other account, and not when the setting cannot be read), and
+/// never Task Scheduler's, whose tasks run at a logon.
+#[cfg(unix)]
+#[test]
+fn only_an_account_its_machine_starts_with_nobody_there_is_unattended() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    let stop = AtomicBool::new(false);
+    crate::stand_ins::program(
+        &home.join("loginctl"),
+        "#!/bin/sh\necho \"$1\" >> \"$HOME/asked\"\n[ \"$1\" = show-user ] && [ -f \"$HOME/lingers\" ] && echo yes && exit 0\necho no\n",
+    );
+    let linux = UserAgents::fixture_of(Kind::Systemd, home);
+    assert!(!linux.unattended(home, &stop).unwrap());
+    std::fs::write(home.join("lingers"), "").unwrap();
+    assert!(linux.unattended(home, &stop).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(home.join("asked")).unwrap(),
+        "show-user\nshow-user\n",
+        "a read of linger asked for more than its state"
+    );
+
+    crate::stand_ins::program(
+        &home.join("defaults"),
+        "#!/bin/sh\n[ -f \"$HOME/auto\" ] || exit 1\ncat \"$HOME/auto\"\n",
+    );
+    let mac = UserAgents::fixture_of(Kind::Launchd, home);
+    assert!(!mac.unattended(home, &stop).unwrap());
+    std::fs::write(home.join("auto"), "someone-else\n").unwrap();
+    assert!(!mac.unattended(home, &stop).unwrap());
+    std::fs::write(home.join("auto"), "fixture\n").unwrap();
+    assert!(mac.unattended(home, &stop).unwrap());
+
+    let windows = UserAgents::fixture_of(Kind::TaskScheduler, home);
+    assert!(!windows.unattended(home, &stop).unwrap());
+}
+
+/// A Mac offers automatic login unless FileVault locks its disk, a state
+/// that cannot be read is one that offers it, and no other system has the
+/// setting.
+#[cfg(unix)]
+#[test]
+fn a_mac_offers_automatic_login_unless_filevault_locks_its_disk() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    let stop = AtomicBool::new(false);
+    let mac = UserAgents::fixture_of(Kind::Launchd, home);
+    assert_eq!(mac.account(), Some("fixture"));
+    // No program answers.
+    assert!(mac.offers_automatic_login(home, &stop).unwrap());
+    crate::stand_ins::program(
+        &home.join("fdesetup"),
+        "#!/bin/sh\n[ \"$1\" = status ] || exit 2\ncat \"$HOME/vault\"\n",
+    );
+    std::fs::write(home.join("vault"), "FileVault is Off.\n").unwrap();
+    assert!(mac.offers_automatic_login(home, &stop).unwrap());
+    std::fs::write(home.join("vault"), "FileVault is On.\n").unwrap();
+    assert!(!mac.offers_automatic_login(home, &stop).unwrap());
+
+    for kind in [Kind::Systemd, Kind::TaskScheduler] {
+        let other = UserAgents::fixture_of(kind, home);
+        let refused = other.offers_automatic_login(home, &stop).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Unsupported, "{refused}");
+        assert_eq!(
+            refused.to_string(),
+            "this system has no automatic login for the operator to turn on"
+        );
+    }
 }
 
 /// Task Scheduler's agent is a task under `\\Hide\\` created from its

@@ -1408,6 +1408,27 @@ impl Core {
         lock_recover(&self.runtime).device_switch_source(device)
     }
 
+    /// Whether the helper device `device` took the connection of the
+    /// machine under `key`: `None` while its switch is under way.
+    pub fn device_switch_landed(&self, device: &str, key: &str) -> Option<bool> {
+        if !check_owner_thread(self, "device_switch_landed") {
+            return Some(false);
+        }
+        lock_recover(&self.runtime).device_switch_landed(device, key)
+    }
+
+    /// How many terminals of this machine's the helper device `device`
+    /// lists, read on the connection it has: what a switch that goes on
+    /// with a folder of this machine's own asks first, since that folder
+    /// takes up none of them. None while its session is unread, which is
+    /// not known to list none.
+    pub fn device_terminals(&self, device: &str) -> Option<usize> {
+        if !check_owner_thread(self, "device_terminals") {
+            return None;
+        }
+        lock_recover(&self.runtime).device_terminals(device)
+    }
+
     /// Takes the link a node that dialed this core brought (PRD
     /// core-host-node-remote-core D-04, D-10), registering the node on its
     /// first link; the refusal is the reason the node is told.

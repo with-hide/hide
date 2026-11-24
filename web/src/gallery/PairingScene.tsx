@@ -5,34 +5,35 @@
 // `view=allow` and `view=request` are the allow window, with and without
 // words; `view=join` is the pasted link's words, and `view=failed` how a
 // pairing ended; `view=other` is the same Devices list on a screen that is
-// not this computer's own window, which only lists (B52); `view=switch` is
-// three helper devices on the old connection (B35, B36, B41): one that
-// offers the switch, one whose switch is connecting and one whose switch
-// stopped, with the strip of the one in front (`front=`) over the list, and
-// `view=held` the question a later computer is asked first (B69), and
-// `view=install` what a machine with no Hide of its own would get (B36,
-// D-45); `view=update` is two Hides too far apart to connect (B22): the
+// not this computer's own window, which only lists (B52); `view=ways`
+// is the rows a device reached over SSH or WSL opens on (operator decision
+// 2026-11-24, Doop canvas 1N77v1reLZ), one `frame` per state of that
+// canvas: the list, each condition a machine can be in beside 서버로 연결,
+// a switch under way, done, failed and refused, a switched machine opened,
+// one that restarted with nobody logged in, and how to turn automatic
+// login on;
+// `view=update` is two Hides too far apart to connect (B22): the
 // computer this one asked to update, the one that asked this computer, and
 // this computer's own notice in the corner. It proves the rendered parts;
 // the pairing is the daemon's.
-import { useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { ToastStack } from "../components/ui/toast";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { PairingDialogs } from "../PairingDialogs";
 import { PeerUpdateNotice } from "../PeerUpdateNotice";
-import type { PairingView, Peer } from "../pairing";
-import { DeviceSwitchDialogs, DeviceSwitchStrip } from "../settings/DeviceSwitch";
+import type { PairingResult, PairingView, Peer, SwitchCondition } from "../pairing";
 import { DevicesTab } from "../settings/DevicesTab";
 import type { UpdateStatus } from "../host";
-import type { Device } from "../snapshot";
+import type { Device, DeviceSwitchStep } from "../snapshot";
+import type { SwitchOutcome } from "../settings/switchWays";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { standInHost } from "../practice/mount";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
-const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "switch", "held", "install", "landed", "update"] as const;
+const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "ways", "update"] as const;
 type View = (typeof VIEWS)[number];
 
 const WORDS: Record<string, string[]> = { ko: ["바다", "연필", "구름", "사과"], en: ["engine", "bicycle", "muscle", "into"] };
@@ -68,30 +69,69 @@ const GUEST_PANES = [{ device_id: "macbook", key: key("a"), panes: [{ id: "guest
 
 const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
 
-const helper = (id: string, label: string, over: Partial<Device> = {}): Device => ({ ...LOCAL, id, label, kind: "remote", state: "ready", ssh_alias: id, switchable: true, ...over });
+const helper = (id: string, label: string, over: Partial<Device> = {}): Device => ({ ...LOCAL, id, label, kind: "remote", state: "ready", ssh_alias: id, ...over });
 
-/** One helper device per state its switch can be in (B35, B36, B41), over SSH and as a WSL distribution of this PC (D-27). */
-const HELPERS: Device[] = [
-  helper("build-box", "build-box"),
-  helper("mac-mini", "Mac mini", { switch: { state: "connecting" } }),
-  helper("windows-pc", "Windows PC", { switch: { state: "failed", reason: "ssh_refused_there" } }),
-  helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, wsl_distro: "Ubuntu" }),
-  helper("wsl-debian", "WSL Debian", { ssh_alias: null, wsl_distro: "Debian", switch: { state: "failed", reason: "wsl_not_reached" } }),
-];
+const MAC = { platform: "macos aarch64", consent: "granted", state: "ready" } as Device["host"];
+const LINUX = { platform: "linux x86_64", consent: "granted", state: "ready" } as Device["host"];
+const WINDOWS = { platform: "windows x86_64", consent: "granted", state: "ready" } as Device["host"];
+/** A device that was switched to its machine's own Hide: the paired machine's device, under the id it had. */
+const server = (id: string, label: string, letter: string, host: Device["host"], over: Partial<Device> = {}): Device => helper(id, label, { ssh_alias: null, peer_key: key(letter), switched: true, host, ...over });
 
-/** Machines a switch landed on, each with what its Hide still needs (B30), the last a WSL distribution with no systemd (B43); the first one's switch landed in this window (D-48), with two terminals it could not take over (B36). */
-const LANDED: Device[] = [
-  helper("build-box", "build-box", { ssh_alias: null, switchable: false, peer_key: key("i"), not_carried: 2, needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } }),
-  helper("mac-mini", "Mac mini", { ssh_alias: null, switchable: false, peer_key: key("b"), needs: { kind: "auto_login" } }),
-  helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, switchable: false, peer_key: key("j"), needs: { kind: "open_distribution" } }),
-];
-const LANDED_PEERS: Peer[] = [peer("i", "build-box", { opens: "active" }), peer("b", "Mac mini", { opens: "active" }), peer("j", "WSL Ubuntu", { opens: "active" })];
+/**
+ * One frame of the canvas: the devices listed, the paired machines among
+ * them, the row that is open, what its machine answers a read with, and
+ * what this window keeps of a switch.
+ */
+type WaysFrame = {
+  devices: Device[];
+  peers?: Peer[];
+  open?: string;
+  /** What the open device's machine says when it is read; a string is the reason the read was refused. */
+  look?: SwitchCondition | string;
+  step?: DeviceSwitchStep;
+  outcome?: SwitchOutcome;
+  /** The device switched while this window watched, which says once what starts fresh there. */
+  landed?: string;
+  /** Devices that are not connected. */
+  down?: string[];
+};
 
-/** A device the last Add over SSH did not add: its switch stopped before anything was started there (B41). */
-const NOT_ADDED = { label: "lab-server", reason: "ssh_mac_signed_out" };
+const MINI = helper("mac-mini", "Mac mini", { host: MAC });
+const BUILD = helper("build-server", "build-server", { host: LINUX });
+const WSL = helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, wsl_distro: "Ubuntu", host: LINUX });
+const PC = helper("windows-pc", "Windows PC", { host: WINDOWS });
+const mini = (look: WaysFrame["look"], over: Partial<WaysFrame> = {}): WaysFrame => ({ devices: [MINI], open: "mac-mini", look, ...over });
+const build = (look: WaysFrame["look"], over: Partial<WaysFrame> = {}): WaysFrame => ({ devices: [BUILD], open: "build-server", look, ...over });
+const MINI_SERVER = { devices: [server("mac-mini", "Mac mini", "b", MAC)], peers: [peer("b", "Mac mini", { opens: "active" })] };
 
-/** This computer runs three terminals on the Windows PC, which a switch with a folder of its own closes (B69). */
-const HELPER_PROJECTS = [{ id: "bot", device_id: "windows-pc", removal: { pane_count: 3, running_agent_count: 0 }, checkouts: [] }];
+const WAYS: Record<string, WaysFrame> = {
+  "2": { devices: [MINI, server("build-server", "build-server", "i", LINUX), PC], peers: [peer("i", "build-server", { opens: "active" })] },
+  "7": { devices: [MINI, BUILD, WSL] },
+  "3-a": mini({ kind: "auto_login_on" }),
+  "3-b": mini({ kind: "auto_login_off", how: true }),
+  "3-b-filevault": mini({ kind: "auto_login_off", how: false }),
+  "3-c": build({ kind: "linger_on" }),
+  "3-d": build({ kind: "linger_off" }),
+  "3-e": build({ kind: "linger_admin", command: "sudo loginctl enable-linger me" }),
+  "3-f": { devices: [WSL], open: "wsl-ubuntu", look: { kind: "no_systemd" } },
+  "3-g": { devices: [PC], open: "windows-pc" },
+  "3-h": build("ssh_not_reached"),
+  "3-i": mini({ kind: "signed_out" }),
+  "4-a": mini({ kind: "auto_login_on" }, { step: "starting" }),
+  "4-b": { ...MINI_SERVER, open: "mac-mini", look: { kind: "auto_login_on" }, landed: "mac-mini" },
+  "4-c": mini({ kind: "auto_login_on" }, { outcome: { kind: "failed", reason: "ssh_core_not_started" } }),
+  "4-d": mini({ kind: "auto_login_on" }, { outcome: { kind: "held", by: "Office MacBook", terminals: 3 } }),
+  "5": { devices: [server("build-server", "build-server", "i", LINUX)], peers: [peer("i", "build-server", { opens: "active" })], open: "build-server", look: { kind: "linger_on" } },
+  "5-b": { devices: MINI_SERVER.devices, peers: [peer("b", "Mac mini", { opens: "active", connected: false, path: null })], look: { kind: "signed_out" }, down: ["mac-mini"] },
+  "6": mini({ kind: "auto_login_off", how: true }),
+};
+
+/** What the gallery's daemon answers a read of `device` with, in the frame shown. */
+function lookAnswer(frame: WaysFrame, request_id: unknown, device: unknown): PairingResult {
+  const base = { verb: "look_switch", request_id: typeof request_id === "string" ? request_id : null };
+  if (typeof frame.look !== "object") return { ...base, ok: false, reason: frame.look ?? "device_unknown" };
+  return { ...base, ok: true, device_id: String(device), condition: frame.look, user: "me" };
+}
 
 function pairingOf(view: View, lang: string): PairingView | null {
   // hided sends such a screen no `pairing` frame.
@@ -99,7 +139,7 @@ function pairingOf(view: View, lang: string): PairingView | null {
   const words = WORDS[lang] ?? WORDS.en!;
   const soon = Date.now() + 101_000;
   const idle: PairingView = { offer: null, asks: [], join: null, requests: [] };
-  if (view === "switch" || view === "held" || view === "install" || view === "landed" || view === "update") return idle;
+  if (view === "ways" || view === "update") return idle;
   if (view === "devices") return { ...idle, offer: { link: "hide://pair#v=1&id=7f3a9c1e…&dev=windows-pc&relay=https%3A%2F%2Fdevice-relay.withhide.dev&s=4be2…", expires_unix_ms: Date.now() + 521_000 }, requests: [{ key: key("a"), state: "declined" }] };
   if (view === "allow") return { ...idle, asks: [{ id: 1, key: key("a"), device: "macbook", name: "MacBook", kind: "link", words, expires_unix_ms: soon }] };
   if (view === "request") return { ...idle, asks: [{ id: 2, key: key("c"), device: "windows-pc", name: "Windows PC", kind: "request", words: null, expires_unix_ms: soon }] };
@@ -113,7 +153,21 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   if (!["en", "ko", "ja", "zh-CN"].includes(lang)) throw new Error(`Unknown pairing language ${lang}`);
   const view = (params.get("view") ?? "devices") as View;
   if (!VIEWS.includes(view)) throw new Error(`Unknown pairing view ${view}`);
-  const actions = useMemo(() => createActions(() => true), []);
+  const frameId = params.get("frame") ?? "2";
+  const frame = view === "ways" ? WAYS[frameId] : undefined;
+  if (view === "ways" && !frame) throw new Error(`Unknown device ways frame ${frameId}`);
+  // The gallery's daemon: a read of a device's machine is answered with the frame's condition, and nothing is switched.
+  const actions = useMemo(
+    () =>
+      createActions((event) => {
+        if (frame && event.kind === "pairing_look_switch") {
+          const { request_id, device } = event.payload as { request_id?: unknown; device?: unknown };
+          queueMicrotask(() => useShellStore.setState({ pairingResult: lookAnswer(frame, request_id, device) }));
+        }
+        return true;
+      }),
+    [frame],
+  );
   // `firewall=missing`: a Windows PC whose firewall rules are not in place
   // (B32), drawn through a stand-in of the desktop host's two firewall calls.
   const firewall = params.get("firewall") === "missing";
@@ -147,38 +201,44 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
       window.hideHost = before;
     };
   }, [firewall, updating]);
-  const switching = view === "switch" || view === "held" || view === "install";
-  const landed = view === "landed";
-  const front = params.get("front") ?? "build-box";
+  const ways = useMemo(() => frame?.devices.map((device) => (device.id === frame.open && frame.step ? { ...device, switch_step: frame.step } : device)) ?? [], [frame]);
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
       pairing: pairingOf(view, lang),
-      pairingResult:
-        view === "held"
-          ? { verb: "switch", ok: true, switch: "held", by: lang === "ko" ? "회사 Mac" : "Office Mac", device_id: "windows-pc", request_id: "gallery" }
-          : view === "install"
-            ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
-            : null,
+      pairingResult: null,
       rest: {
-        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? updatePeers : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
-        status: { remote: (switching ? HELPERS : landed ? LANDED : []).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
-        ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" },
+        navigator: { devices: [ways.some((device) => device.wsl_distro) ? { ...LOCAL, host: WINDOWS } : LOCAL, ...ways.map((device) => (frame?.down?.includes(device.id) ? { ...device, state: "unavailable" } : device))], peers: view === "devices" || view === "other" ? PEERS : frame ? (frame.peers ?? []) : updating ? updatePeers : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: "local", workspaces: [] },
+        status: { remote: ways.filter((device) => !frame?.down?.includes(device.id)).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
+        ui_state: {
+          interface_language: lang as "en" | "ko" | "ja" | "zh-CN",
+          // The two projects the switched machine's own Hide now lists too.
+          workspace_registrations: frame?.landed ? ["app", "site"].map((name) => ({ id: `workspace:${name}`, label: name, path: `/home/me/${name}`, device_id: frame.landed, pinned: false, primary_checkout_id: null })) : [],
+        },
       },
     } as never);
-    useUiStore.setState({ switchedDevices: landed ? ["build-box"] : [] });
+    useUiStore.setState({ switchedDevices: frame?.landed ? [frame.landed] : [], devicesOpen: frame?.open ? [frame.open] : [], switchOutcomes: frame?.outcome && frame.open ? { [frame.open]: frame.outcome } : {} });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view, switching, landed, updating, updatePeers, front]);
+  }, [theme, lang, view, frame, ways, updating, updatePeers]);
+  // Frame 6 is the steps 방법 opens: pressed once the read has drawn it.
+  useEffect(() => {
+    if (view !== "ways" || frameId !== "6") return;
+    const timer = window.setInterval(() => {
+      const how = document.querySelector<HTMLElement>("[data-device-auto-login-how]");
+      if (!how) return;
+      window.clearInterval(timer);
+      how.click();
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [view, frameId]);
   return (
     <>
       <InterfaceLanguageBoundary />
       <TooltipProvider>
         <div className="min-h-screen w-full bg-background text-foreground" data-gallery-scene="pairing" data-scene-ready="true">
-          {switching || landed ? <DeviceSwitchStrip actions={actions} /> : null}
-          {view === "devices" || view === "other" || switching || landed || updating ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
+          {view === "devices" || view === "other" || view === "ways" || updating ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
           <PairingDialogs actions={actions} />
-          <DeviceSwitchDialogs actions={actions} />
           {updating ? <ToastStack><PeerUpdateNotice actions={actions} /></ToastStack> : null}
         </div>
       </TooltipProvider>

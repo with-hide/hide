@@ -26,6 +26,7 @@ const NO_LOGIN_AGENTS: &str = "this system has no login agents";
 pub const NOT_THE_ACCOUNT_HOME: &str =
     "HOME is not the account's own home, so the account's login agents are left alone";
 const NO_LINGER: &str = "this system's agents run only while the account is logged in";
+const NO_AUTOMATIC_LOGIN: &str = "this system has no automatic login for the operator to turn on";
 
 #[derive(Clone, Debug)]
 pub struct UserAgents {
@@ -159,6 +160,45 @@ impl UserAgents {
         match &self.system {
             System::Systemd(systemd) => systemd.linger(home, stop),
             System::Launchd(_) | System::TaskScheduler(_) => Err(unsupported(NO_LINGER)),
+            System::None(reason) => Err(unsupported(reason)),
+        }
+    }
+
+    /// Whether the account's agents run after the machine starts with
+    /// nobody at it: a systemd account that lingers, and a Mac that logs
+    /// this account in by itself (automatic login). Task Scheduler's tasks
+    /// run at a logon, which nobody there makes, and a setting that cannot
+    /// be read is not known to be on: both are `false`. It only reads;
+    /// [`Self::linger`] is what turns linger on.
+    pub fn unattended(&self, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
+        match &self.system {
+            System::Launchd(launchd) => Ok(launchd.logs_in_by_itself(home, stop)),
+            System::Systemd(systemd) => systemd.lingers(home, stop),
+            System::TaskScheduler(_) => Ok(false),
+            System::None(reason) => Err(unsupported(reason)),
+        }
+    }
+
+    /// The login name a Mac's automatic login is turned on for, which is
+    /// the one its console is read against; none on another system and
+    /// where the user database did not say.
+    pub fn account(&self) -> Option<&str> {
+        match &self.system {
+            System::Launchd(launchd) => Some(launchd.account()).filter(|name| !name.is_empty()),
+            System::Systemd(_) | System::TaskScheduler(_) | System::None(_) => None,
+        }
+    }
+
+    /// Whether the machine offers the setting that makes this account's
+    /// agents run with nobody at it, where that is the operator's to turn
+    /// on: a Mac's automatic login, which macOS does not offer while
+    /// FileVault locks the disk. `Unsupported` on a system with no such
+    /// setting (systemd's linger is asked for by [`Self::linger`], and
+    /// Task Scheduler has none).
+    pub fn offers_automatic_login(&self, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
+        match &self.system {
+            System::Launchd(launchd) => Ok(launchd.offers_automatic_login(home, stop)),
+            System::Systemd(_) | System::TaskScheduler(_) => Err(unsupported(NO_AUTOMATIC_LOGIN)),
             System::None(reason) => Err(unsupported(reason)),
         }
     }

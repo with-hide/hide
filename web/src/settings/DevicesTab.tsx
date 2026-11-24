@@ -15,13 +15,11 @@ import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { switchFailureKey } from "../deviceSwitch";
 import { AddByLink, AddDevice } from "./AddDevice";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PeerRows, ShareDialog } from "./PairingRows";
 import { listedDevices, ownWindow, pairedMachines } from "../pairing";
-import { switchOffered } from "../deviceSwitch";
 import { openPractice } from "../practice/channel";
 import { PhoneGroup } from "./PhoneRows";
 import { RenameDevice } from "./RenameDevice";
@@ -71,8 +69,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localCliDir = localHost?.cli_dir ?? null;
   // A paired machine's row is its pairing's; its device has none of its own.
   const listed = listedDevices(rows);
-  // What the last Add over SSH did not add, and why (B41).
-  const notAdded = useShellStore((s) => s.rest?.navigator?.device_not_added ?? null);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const canAdd = ownScreen;
@@ -115,6 +111,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
     setAddKind("hide");
     setAddStep("choose");
   }, [adding]);
+  // A row opened on how its device is connected is folded again when the tab closes, so the next opening reads its machine again.
+  useEffect(() => () => useUiStore.getState().closeDevices(), []);
   const handlers: DeviceRowHandlers = {
     onAct: () => setActedAt(Date.now()),
     onDetails: setDetails,
@@ -142,15 +140,13 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   );
   // The list stands in two groups (operator review 2026-11-23): this
   // computer, with its share; then every other machine, the Hides it is
-  // paired with and the devices it still reaches the old way, over SSH or
-  // WSL, each of those marked so. One Add device above them adds either kind.
+  // paired with and the devices it reaches over SSH or WSL, with no mark
+  // that tells the two apart. One Add device above them adds either kind.
   const ownRows = listed.filter((device) => device.id === own);
   const otherRows = listed.filter((device) => device.id !== own);
   const peerCount = useShellStore((s) => pairedMachines(s.rest).length);
   const ownName = machineName(devices, own, t);
-  // The devices that can move to the new connection, from this computer's own window only (B35, B52).
-  const movable = ownScreen ? otherRows.filter((device) => switchOffered(device)).length : 0;
-  const empty = otherRows.length === 0 && peerCount === 0 && !notAdded;
+  const empty = otherRows.length === 0 && peerCount === 0;
   return (
     <>
       <div className="mb-md flex items-start justify-between gap-md">
@@ -167,13 +163,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           </Button>
         ) : null}
       </div>
-      {movable > 0 ? (
-        <p className="mb-md break-keep rounded-md bg-selected px-md py-sm text-body text-foreground" data-devices-old-way={movable}>
-          <span className="font-semibold text-primary">{t("devices.oldWay.title")}</span>
-          {" · "}
-          {t("devices.oldWay.line", { count: movable, machine: ownName })}
-        </p>
-      ) : null}
       <Group title={t("devices.section.thisComputer")} data-device-section="this">
         {ownRows.map(row)}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
@@ -181,15 +170,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       <Group title={t("devices.section.other")} data-device-section="other">
         <PeerRows actions={actions} />
         {otherRows.map(row)}
-        {notAdded ? (
-          <Row
-            label={
-              <Note tone="warn" data-device-not-added={notAdded.reason}>
-                {t("devices.notAdded", { name: notAdded.label })} · {t(switchFailureKey(notAdded.reason))}
-              </Note>
-            }
-          />
-        ) : null}
         {empty ? <Row label={canAdd ? <FirstDeviceGuide machine={ownName} /> : <Note>{t("devices.empty.none")}</Note>} data-devices-empty="true" /> : null}
       </Group>
       <div ref={phonesRef} className="scroll-mt-md">

@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch" | "rename";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "update" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "rename" | "look_switch" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "refused" | "not_running" | "not_reached"; system?: string };
@@ -61,15 +61,27 @@ export type PairingResult = {
   link?: string;
   alias?: string;
   looked?: SshLook;
-  /** `switch`: how the press ended, or what it asks the operator first (hided `Ask::Switch`). */
-  switch?: "done" | "held" | "install_needed";
-  /** `switch`: the helper device the press was for. */
+  /** With `look_switch` and `switch`: the device asked about, what its machine said, and the login name a Mac said. */
   device_id?: string;
-  /** `switch` `held`: the computer that switched the device first. */
+  condition?: SwitchCondition;
+  user?: string | null;
+  /** With `switch`: how the press ended; `held` names the computer that switched the device first and how many terminals this one runs there. */
+  switch?: "done" | "left" | "held" | "install_needed";
   by?: string;
-  /** `switch` `install_needed`: the system of the machine with no Hide. */
-  system?: string;
+  terminals?: number | null;
 };
+
+/**
+ * What a device's machine said of the rule every switch passes (hided
+ * `pairing_ssh::Condition::payload`): a Mac's automatic login and whether
+ * someone is logged in now, a Linux account's linger, and the systems that
+ * are not switched. `how` is false while FileVault keeps a Mac from
+ * offering automatic login; `command` is what an administrator runs.
+ */
+export type SwitchCondition =
+  | { kind: "auto_login_on" | "signed_out" | "linger_on" | "linger_off" | "no_systemd" | "windows" | "unknown" }
+  | { kind: "auto_login_off"; how: boolean }
+  | { kind: "linger_admin"; command: string };
 
 export type PairRequest = { key: string; state: "waiting" | "declined" | "unanswered" | "unreachable" };
 
@@ -94,6 +106,12 @@ export type Peer = {
    * update of the Hide it started there stands (B23).
    */
   update?: "here" | "there" | "here_asked" | "there_asked" | "updating" | "update_not_reached" | "update_rolled_back" | "update_busy" | "update_failed" | null;
+  /**
+   * The device of this computer that is this machine and still reaches it
+   * over SSH or WSL (hide-core `PeerMachine::helper_device`): that device's
+   * row and tile are the machine's only ones.
+   */
+  helper_device?: string | null;
 };
 
 /** Why this machine's update of the Hide it started on `peer` did not happen; none when it did not fail. */
@@ -134,6 +152,17 @@ export function pairedMachines(rest: SnapshotRest | null | undefined): readonly 
   return rest?.navigator?.peers ?? NONE;
 }
 
+/**
+ * The paired machines that have a row of their own in Settings and may have
+ * a tile of their own on the rail: every one but a machine that is still a
+ * helper device of this computer (`Peer.helper_device`, which the core
+ * writes), whose device's row and tile are its only ones. A move that paired
+ * the two and did not take the device leaves it so until the next one.
+ */
+export function machinesWithOwnRow(peers: readonly Peer[]): readonly Peer[] {
+  return peers.some((peer) => peer.helper_device != null) ? peers.filter((peer) => peer.helper_device == null) : peers;
+}
+
 /** One empty list, so a store selector answers the same value while nothing is paired. */
 const NONE: readonly Peer[] = [];
 
@@ -148,7 +177,7 @@ const NONE: readonly Peer[] = [];
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
   const devices = rest?.navigator?.devices ?? [];
-  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
+  return machinesWithOwnRow(pairedMachines(rest)).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
 }
 
 /**

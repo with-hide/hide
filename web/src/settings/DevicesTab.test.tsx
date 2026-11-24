@@ -22,7 +22,7 @@ const kit = (components: KitComponent[], over: Partial<Kit> = {}): Kit => ({ una
 
 const host: DeviceHost = { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:abc", granted_at_unix_ms: 1, state: "ready", message: null, platform: "macos aarch64", helper_path: "~/.hide/host-helper/current/hided" };
 
-const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, switchable: true, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
+const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
 
 const state = (devices: Device[]) => ({
   connection: "live" as const,
@@ -57,17 +57,6 @@ async function mount(next: ReturnType<typeof state>) {
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
 
-it("says in one line which device the last Add over SSH did not add, and why (B41)", async () => {
-  const shown = state([remote("mini")]);
-  (shown.rest.navigator as Record<string, unknown>).device_not_added = { label: "lab", reason: "ssh_mac_signed_out" };
-  const { q, unmount } = await mount(shown);
-  expect(q('[data-device-not-added="ssh_mac_signed_out"]')?.textContent).toBe("lab was not added · Log in on that Mac");
-  await unmount();
-  const none = await mount(state([remote("mini")]));
-  expect(none.q("[data-device-not-added]")).toBeNull();
-  await none.unmount();
-});
-
 it("says nothing about a healthy kit on a device row, and names the device by its name and system (B54; operator review 2026-11-23)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));
   const mini = row("mini")!;
@@ -76,10 +65,9 @@ it("says nothing about a healthy kit on a device row, and names the device by it
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
-  // The switch to the new connection and the menu are the only controls a healthy helper device row carries; Test is in ⋯.
+  // The row's own press, which opens how the device is connected, and the menu are the only controls a healthy device row carries; Test is in ⋯.
   expect(mini.querySelectorAll("button")).toHaveLength(2);
-  expect(q('[data-device-old-link="mini"]')?.textContent).toBe("old way");
-  expect(q('[data-device-switch="mini"]')?.textContent).toBe("Connect the new way");
+  expect(q('[data-device-way="mini:ssh"]')?.textContent).toBe("SSH");
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
   await openMenu(q, "mini");
   const items = [...document.querySelectorAll('[data-device-menu-content="mini"] [role="menuitem"]')].map((item) => item.textContent);
@@ -274,17 +262,6 @@ it("lists this computer, then every other machine in one group, and adds either 
   await unmount();
 });
 
-it("says what moving gains once while a device can move to the new connection, and nothing once none can", async () => {
-  const two = await mount(state([remote("mini"), remote("studio")]));
-  expect(two.q("[data-devices-old-way]")?.textContent).toBe("New connection · 2 devices are connected the old way (SSH). Move them, and their agents keep running with This computer turned off, and they reconnect when the network changes.");
-  await two.unmount();
-  const none = await mount(state([remote("mini", { switchable: false })]));
-  expect(none.q("[data-devices-old-way]")).toBeNull();
-  // The row still says it is on the old way.
-  expect(none.q('[data-device-old-link="mini"]')?.textContent).toBe("old way");
-  await none.unmount();
-});
-
 it("guides a first device in three steps while no other machine is connected", async () => {
   const { q, unmount } = await mount(state([]));
   const guide = q("[data-devices-guide]")!;
@@ -458,18 +435,9 @@ it("draws a changed server key with its terminal check and a connection that cou
     expect(lost.q('[data-device-reason="mini"]')?.textContent).toBe("Couldn't connect");
     // ssh's last line is Connection details'.
     expect(lost.row("mini")?.textContent).not.toContain(policy);
-    // A device that can move offers that in the one button's place (mockup 6).
-    expect(lost.q('[data-device-switch="mini"]')).not.toBeNull();
-    expect(lost.q('[data-device-retry="mini"]')).toBeNull();
+    expect(lost.q('[data-device-retry="mini"]')?.textContent).toBe("Retry");
   } finally {
     await lost.unmount();
-  }
-  // Without ssh there is no line of ssh's to show, so Hide's sentence stands in it.
-  const fixed = await mount(state([remote("mini", { switchable: false, state: "unavailable", problem: "cannot_connect", message: policy, host: { ...unavailable, message: policy } })]));
-  try {
-    expect(fixed.q('[data-device-retry="mini"]')?.textContent).toBe("Retry");
-  } finally {
-    await fixed.unmount();
   }
   const missing = await mount(state([remote("mini", { state: "unavailable", problem: "ssh_missing", message: "/usr/bin/ssh was not found on this computer", host: unavailable })]));
   try {

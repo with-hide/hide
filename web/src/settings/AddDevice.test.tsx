@@ -72,8 +72,7 @@ it("lists each Host with its address, and fills the name and adds only the alias
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
   // The core gives the device its id: the shell sends none.
-  // Every Add over SSH is added to be switched at once (B41).
-  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true, switch_first: true });
+  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
   await unmount();
 });
 
@@ -95,6 +94,34 @@ it("connects to a Host whose own Hide runs, and installs nothing there (PRD devi
   await answer("pair_ssh", { ok: true, device_id: "lab-machine", name: "Lab" });
   expect(paired).toHaveBeenCalledTimes(1);
   await unmount();
+});
+
+it("adds a Host whose own Hide runs as an SSH device when asked to, and leaves that Hide as it is (operator decision 2026-11-24)", async () => {
+  const { events, q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  // Nothing to choose until the Host said it runs a Hide.
+  expect(q("[data-add-device-over-ssh]")).toBeNull();
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  expect(q("[data-add-device-over-ssh]")?.textContent).toBe("Add over SSH");
+  await act(async () => { q("[data-add-device-over-ssh]")?.click(); });
+  // The form of a Host with no Hide: a name to give and what Hide installs there.
+  expect((q("[data-device-label]") as HTMLInputElement).value).toBe("lab");
+  expect(q('[data-add-device-advanced="true"]')).not.toBeNull();
+  expect(q("[data-add-device-over-ssh]")).toBeNull();
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => event.payload)).toEqual([{ label: "lab", ssh_alias: "lab", host_consent: true }]);
+  // Nothing pairs with the Hide there, and nothing stops it.
+  expect(sent(events, "pairing_pair_ssh")).toHaveLength(0);
+  await unmount();
+  // The choice is one Host's: another Host that runs a Hide offers Connect again.
+  const other = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { other.q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await other.answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  await act(async () => { other.q("[data-add-device-over-ssh]")?.click(); });
+  await act(async () => { other.q('[data-ssh-host="studio"] [role="radio"]')?.click(); });
+  await other.answer("look_ssh", { ok: true, alias: "studio", looked: { state: "ready" } });
+  expect(other.q('[data-add-device="connect"]')?.textContent).toBe("Connect");
+  await other.unmount();
 });
 
 it("waits for the Host's own answer before it adds, so a machine that runs Hide is never added as a helper device meanwhile (B7)", async () => {
@@ -152,7 +179,7 @@ it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was",
   for (const state of ["absent", "not_reached"]) {
     await answer("look_ssh", { ok: true, alias: "lab", looked: { state } });
     expect(q("[data-ssh-look]")).toBeNull();
-    expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
+    expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   }
   await unmount();
 });
@@ -165,7 +192,7 @@ it("waits for the device its alias added, under whatever id the core gives it", 
   expect(q('[data-add-device="true"]')?.textContent).toBe("Adding…");
   // Its first connection names it by its machine's id, not by the alias.
   await rerender([{ id: "4c1d2e3f-0a1b-4c2d-8e3f-5a6b7c8d9e0f", ssh_alias: "lab" } as Device]);
-  expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   await unmount();
 });
 
@@ -275,8 +302,7 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
-  // It goes on to the new connection once its helper is connected: the core keeps that it was added for its switch (B41).
-  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true, switch_first: true });
+  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true });
   await unmount();
 });
 

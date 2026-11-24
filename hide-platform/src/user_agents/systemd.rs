@@ -104,7 +104,7 @@ impl Systemd {
         })
     }
 
-    fn lingers(&self, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
+    pub(super) fn lingers(&self, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
         let answered = self.loginctl(
             &["show-user", &self.user, "--property=Linger", "--value"],
             home,

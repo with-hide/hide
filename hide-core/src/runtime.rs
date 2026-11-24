@@ -1356,27 +1356,22 @@ pub struct Runtime {
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
-    /// Each helper device's switch to its machine's own connection, while
-    /// one is under way or stopped (`device_switch`). Never saved: a switch
-    /// is one press of the operator, asked again after a restart.
+    /// Each helper device whose switch paired its machine and waits for
+    /// that machine's grant to be active (`device_switch`). Never saved: a
+    /// switch is one ask of the operator, asked again after a restart.
     device_switches: HashMap<String, device_switch::DeviceSwitch>,
     /// Devices whose registration was rewritten to their machine's
     /// connection and is not saved yet; each takes that connection once a
     /// save holds it (`device_switch`).
     device_switch_saving: HashMap<String, device_switch::SwitchSaving>,
-    /// What the Hide a switch started on a device's machine still needs
-    /// (`DeviceSnapshot::needs`), by device; an entry goes with its device.
-    device_needs: HashMap<String, crate::model::DeviceNeedsSnapshot>,
     /// How many terminals each device's switch could not take up again
     /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
     /// device.
     device_not_carried: HashMap<String, u32>,
-    /// The devices added to be switched at once whose switch has not
-    /// landed (`RegisterDevicePayload::switch_first`), by the alias or the
-    /// distribution each is dialed by, since an SSH device's id changes at
-    /// its first connection. Never saved: after a restart it is a helper
-    /// device like any other.
-    device_fresh_adds: HashSet<crate::model::DialedBy>,
+    /// The step each device's switch is at while hided runs one
+    /// (`DeviceSnapshot::switch_step`): one entry for a registered device,
+    /// dropped when hided says the switch ended or the device is removed.
+    device_switch_steps: HashMap<String, crate::model::DeviceSwitchStep>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2550,9 +2545,8 @@ impl Runtime {
             remote_device_tests: HashMap::new(),
             device_switches: HashMap::new(),
             device_switch_saving: HashMap::new(),
-            device_needs: HashMap::new(),
             device_not_carried: HashMap::new(),
-            device_fresh_adds: HashSet::new(),
+            device_switch_steps: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

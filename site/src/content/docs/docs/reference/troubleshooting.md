@@ -178,6 +178,20 @@ The machine's row in Settings > Devices says what to do: **Sign in**, check a ch
 **Test** runs the SSH, authentication, protocol, PTY and Git stages one after another and names the first one that needs attention.
 What ssh asks, such as a password or a key's passphrase, is answered on the machine's row; hide does not store, log or copy an answer.
 
+### A machine over SSH works only while this computer is on
+
+A machine you add over SSH is used through this computer, so the work on it goes on only while this computer is on and connected.
+To let it work on its own, connect the two as hides: open Settings > Devices, press the machine's row, and press **Connect as a server**. In a terminal, `hide device switch <name> --install` does the same.
+The row says what that machine needs first:
+
+- A Mac needs someone logged in to its desktop. With automatic login off it still connects, and after that Mac restarts you log in to it once before it connects again. To skip that, open **System Settings**, then **Users & Groups**, and set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
+- A Linux machine needs lingering for your user. hide turns it on when your account may; when it may not, hide shows the command an administrator runs there.
+- A WSL distribution needs systemd: set `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown`.
+- A machine whose SSH login asks for a password cannot be connected this way. Set up a key first.
+- A Windows PC cannot be connected with the button yet. To use it as a server, install hide on that PC, remove the machine here, then connect the two from **+ Add device**.
+
+Until then the machine keeps working over SSH as before, and an update switches no machine by itself.
+
 ### The phone says "The code expired"
 
 The QR code works for five minutes, and one phone uses it once.

@@ -21,7 +21,7 @@
 //! The endpoint is `peer_host`'s. Asking for a status opens nothing; sharing,
 //! adding and acting on a machine the records name do (D-83).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -199,15 +199,20 @@ pub enum Ask {
     /// of the distribution this core runs in (D-27, D-62). Answered by
     /// [`Pairing::carrier`], never as a value.
     Carry,
+    /// Reads where a device stands on the rule every switch passes
+    /// (`pairing_ssh::may_move`), over the login it is reached by, and
+    /// changes nothing there: what an opened row shows beside its button.
+    /// `device` is a helper device, or a machine a helper device was
+    /// switched to, read over the login it was switched through.
+    LookSwitch {
+        device: String,
+    },
     /// Switches the helper device this machine dials as `alias` to the
     /// connection of the Hide on its machine (D-49, B36): that Hide is
     /// paired over the device's SSH login and, once the connection is
-    /// confirmed, the device goes on over it. `own_folder` goes on without
-    /// the helper's folder, which another machine took first (D-75).
+    /// confirmed, the device goes on over it.
     Switch {
         device: String,
-        #[serde(default)]
-        own_folder: bool,
         /// The operator allowed a Hide to be started on a machine that
         /// runs none of its own (D-45).
         #[serde(default)]
@@ -253,6 +258,7 @@ impl Ask {
             | Self::Update { .. }
             | Self::Address { .. }
             | Self::LookSsh { .. }
+            | Self::LookSwitch { .. }
             | Self::PairSsh { .. }
             | Self::LookWsl { .. }
             | Self::PairWsl { .. }
@@ -379,6 +385,9 @@ pub fn next_action(code: &str) -> &'static str {
         "switch_not_connected" => {
             "The two machines were paired and the new connection did not open in time; the device is used as before. Try the switch again"
         }
+        "switch_not_moved" => {
+            "The two machines were paired and the device did not take the new connection; it is used as before. Try the switch again"
+        }
         "switch_running" => "This device's switch is already running",
         "ssh_core_not_started" => {
             "Hide could not be started on that machine; the device is used as before. Try the switch again, or open Hide there"
@@ -412,34 +421,15 @@ struct Paired {
     key: PeerKey,
 }
 
-/// How far a switch got with its target, for a device that was added for
-/// that switch (B41): such a device is taken off again only when the target
-/// was asked and nothing was started there. A switch that never reached
-/// its login, SSH or `wsl.exe` (too many run, [`SSH_DIALS`]), said nothing
-/// about the target, and one that started a Hide there or had a grant
-/// saved there left something the device still reaches.
-#[derive(Default)]
-struct SwitchReach(std::sync::atomic::AtomicU8);
-
-impl SwitchReach {
-    const ASKED: u8 = 1;
-    const STARTED: u8 = 2;
-
-    /// The login to the target runs.
-    fn asked(&self) {
-        self.0
-            .fetch_max(Self::ASKED, std::sync::atomic::Ordering::AcqRel);
-    }
-
-    /// A Hide is being started on the target, or it answered a pairing.
-    fn started(&self) {
-        self.0
-            .fetch_max(Self::STARTED, std::sync::atomic::Ordering::AcqRel);
-    }
-
-    fn clean(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::Acquire) == Self::ASKED
-    }
+/// What one switch was asked with.
+#[derive(Clone, Copy)]
+struct SwitchAsked {
+    /// Go on without the helper's folder, which another machine took first
+    /// (D-75), and so without the terminals the helper ran: only for a
+    /// device that lists none of this machine's.
+    own_folder: bool,
+    /// Start a Hide on a machine that runs none of its own (D-45).
+    install: bool,
 }
 
 struct RelayAnswer {
@@ -495,7 +485,7 @@ pub struct Pairing {
     /// it: two machines that ask at once are answered one after the other.
     helper_asks: tokio::sync::Mutex<()>,
     /// The devices whose switch runs now.
-    switching: Mutex<std::collections::HashSet<String>>,
+    switching: Mutex<HashSet<String>>,
     shutdown: Ending,
 }
 
@@ -1112,6 +1102,15 @@ impl Pairing {
                 .await?;
             return Ok(json!({ "alias": alias, "looked": looked }));
         }
+        if let Ask::LookSwitch { device } = &ask {
+            let (device, via) = self.read_through(device).await?;
+            let moves = self.may_move(&via, pairing_ssh::Asked::Look).await?;
+            return Ok(json!({
+                "device_id": device,
+                "condition": moves.condition.payload(),
+                "user": moves.user,
+            }));
+        }
         if let Ask::LookWsl { distro } = &ask {
             let (carriers, reach) = (self.wsl()?, self.ssh.clone());
             let target = distro.clone();
@@ -1161,7 +1160,10 @@ impl Pairing {
             }
         };
         match ask {
-            Ask::Status { .. } | Ask::LookSsh { .. } | Ask::LookWsl { .. } => {
+            Ask::Status { .. }
+            | Ask::LookSsh { .. }
+            | Ask::LookWsl { .. }
+            | Ask::LookSwitch { .. } => {
                 unreachable!("answered above")
             }
             // A carrier is a stream, which only the bootstrap socket hands
@@ -1220,11 +1222,7 @@ impl Pairing {
                 lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
                 Ok(answer)
             }
-            Ask::Switch {
-                device,
-                own_folder,
-                install,
-            } => {
+            Ask::Switch { device, install } => {
                 // The device as the core knows it: a terminal may name it
                 // by its alias.
                 let (core, named) = (Arc::clone(&self.core), device);
@@ -1232,36 +1230,22 @@ impl Pairing {
                     .await
                     .map_err(|_| "hide_unavailable")??;
                 let device = source.device_id.clone();
-                // One switch of a device at a time: a second press while
+                // One switch of a device at a time: a second ask while
                 // the first runs changes nothing.
                 if !lock(&self.switching).insert(device.clone()) {
                     return Err("switch_running");
                 }
-                let far = Arc::new(SwitchReach::default());
-                // The window that pressed reads which device its answer is for.
-                let answer = self
-                    .switch(&service, &peers, source, own_folder, install, &far)
-                    .await
-                    .map(|mut answer| {
-                        answer["device_id"] = json!(device);
-                        answer
-                    });
+                let answer = self.switch_asked(&service, &peers, &source, install).await;
+                // The one who asked reads which device its answer is for.
+                let answer = answer.map(|mut answer| {
+                    answer["device_id"] = json!(device);
+                    answer
+                });
+                // The switch is over, however it ended: the core draws no
+                // step of it any more, and a device that was not switched
+                // is left as it was.
+                self.switch_step(&device, "ended", json!({})).await;
                 lock(&self.switching).remove(&device);
-                match &answer {
-                    // The operator is asked something first: no step shows.
-                    Ok(answer) if answer["switch"] != "done" => {
-                        self.switch_step(&device, "ended", json!({})).await;
-                    }
-                    Ok(_) => {}
-                    Err(code) => {
-                        self.switch_step(
-                            &device,
-                            "failed",
-                            json!({ "reason": code, "clean": far.clean() }),
-                        )
-                        .await;
-                    }
-                }
                 answer
             }
             Ask::Share { language, held } => {
@@ -1533,24 +1517,79 @@ impl Pairing {
         }
     }
 
-    /// The steps of [`Ask::Switch`], each told to the core as it starts so
-    /// the device's row draws it. Whatever stops it before the connection
-    /// is confirmed leaves the device a helper device: the core changes
-    /// its link only when the paired machine's grant is active.
+    /// One switch the operator asked for (operator decision 2026-11-24:
+    /// a device is switched only when they ask). The machine is read first,
+    /// and one the rule refuses answers `left` with where it stands, for
+    /// the one line of whoever asked; this is the read that asks a Linux
+    /// account that does not linger to. A device another computer switched
+    /// first (D-75) goes on with a folder of this machine's own, which
+    /// takes up none of the terminals it runs there, so only when it lists
+    /// none: one that lists any, or was not read, answers `held` with that
+    /// computer's name and the count. No switch closes a terminal.
+    async fn switch_asked(
+        self: &Arc<Self>,
+        service: &Service,
+        peers: &HostPeers,
+        source: &hide_core::DeviceSwitchSource,
+        install: bool,
+    ) -> Result<Value, &'static str> {
+        // The operator asked: a distribution that is off may be started
+        // for the read, the switch and the dial that follows it (B43).
+        if let hide_core::SwitchVia::Wsl { distro } = &source.via {
+            self.wsl()?.may_wake(distro);
+        }
+        let device = source.device_id.as_str();
+        self.switch_step(device, "checking", json!({})).await;
+        let moves = self
+            .may_move(&source.via, pairing_ssh::Asked::Switch)
+            .await?;
+        let condition = moves.condition.payload();
+        if !moves.condition.may() {
+            return Ok(json!({ "switch": "left", "condition": condition, "user": moves.user }));
+        }
+        let asked = |own_folder| SwitchAsked {
+            own_folder,
+            install,
+        };
+        let mut answer = self.switch(service, peers, source, asked(false)).await?;
+        if answer["switch"] == "held" {
+            let (core, listed) = (Arc::clone(&self.core), device.to_owned());
+            let open = tokio::task::spawn_blocking(move || core.device_terminals(&listed))
+                .await
+                .map_err(|_| "hide_unavailable")?;
+            if open != Some(0) {
+                // How many this computer runs there, when the core read
+                // them: the ones to close before the switch is asked again.
+                answer["terminals"] = json!(open);
+                return Ok(answer);
+            }
+            answer = self.switch(service, peers, source, asked(true)).await?;
+        }
+        // What the one who asked is told of the machine it switched: a
+        // Mac that does not log in by itself is switched with that said.
+        answer["condition"] = condition;
+        answer["user"] = json!(moves.user);
+        Ok(answer)
+    }
+
+    /// The steps of [`Ask::Switch`]. Whatever stops it before the
+    /// connection is confirmed leaves the device a helper device: the core
+    /// changes its link only when the paired machine's grant is active.
     async fn switch(
         self: &Arc<Self>,
         service: &Service,
         peers: &HostPeers,
-        source: hide_core::DeviceSwitchSource,
-        own_folder: bool,
-        install: bool,
-        far: &Arc<SwitchReach>,
+        source: &hide_core::DeviceSwitchSource,
+        how: SwitchAsked,
     ) -> Result<Value, &'static str> {
+        let SwitchAsked {
+            own_folder,
+            install,
+        } = how;
         let device = source.device_id.as_str();
         // The machine keeps the name its device had here, not the one it
         // calls itself: the operator switched the device they know.
         let label = hide_peer::link::clean_name(&source.label);
-        self.switch_step(device, "checking", json!({})).await;
         // The request a switch runs under is its channel's own, so one
         // that stopped midway is asked again as the same request.
         let requested = match &source.via {
@@ -1561,16 +1600,7 @@ impl Pairing {
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
         let helper_root = source.helper_root.clone();
         let projects = source.projects.clone();
-        // The install's step is told from the thread that runs the login.
-        let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
-        let installing = {
-            let (runtime, far) = (runtime.clone(), Arc::clone(far));
-            let installed = device.to_owned();
-            move || {
-                far.started();
-                runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
-            }
-        };
+        let runtime = tokio::runtime::Handle::current();
         // The login the machine is reached through, which its record keeps
         // for bringing its Hide to this machine's build (B23).
         let through = match &source.via {
@@ -1581,15 +1611,17 @@ impl Pairing {
         // the login, before it ends: the machine's own Hide is handed the
         // device's projects only once it admitted this machine.
         let landed: Arc<Mutex<Option<Result<Value, &'static str>>>> = Arc::default();
+        // Each step is told to the core as it begins, from that thread.
+        let step = {
+            let (this, device, runtime) = (Arc::clone(self), device.to_owned(), runtime.clone());
+            move |step: &'static str| runtime.block_on(this.switch_step(&device, step, json!({})))
+        };
         let admitted = {
             let (this, service, peers) = (Arc::clone(self), service.clone(), peers.clone());
             let (device, requested, landed) =
                 (device.to_owned(), requested.clone(), Arc::clone(&landed));
             let label = label.clone();
-            let far = Arc::clone(far);
             move |switched: &pairing_ssh::Switched| {
-                // The target answered a pairing: it holds a grant now.
-                far.started();
                 let done = runtime.block_on(this.admit_switch(
                     &service,
                     &peers,
@@ -1597,6 +1629,7 @@ impl Pairing {
                     label.as_deref(),
                     &through,
                     &requested,
+                    own_folder,
                     switched,
                 ));
                 let active = done.is_ok();
@@ -1607,11 +1640,9 @@ impl Pairing {
         // What one switch asks, whichever channel carries it, from the
         // thread its login runs on.
         let asked = {
-            let far = Arc::clone(far);
             move |run: &dyn Fn(
                 &pairing_ssh::Switch<'_>,
             ) -> Result<pairing_ssh::Switched, &'static str>| {
-                far.asked();
                 run(&pairing_ssh::Switch {
                     reach: &reach,
                     request: &request,
@@ -1621,24 +1652,20 @@ impl Pairing {
                     projects: &projects,
                     admitted: &admitted,
                     install,
-                    installing: &installing,
+                    step: &step,
                 })
             }
         };
         let switched = match &source.via {
-            hide_core::SwitchVia::Ssh { alias, sign_in } => {
-                let (target, press) = (alias.clone(), sign_in.clone());
+            hide_core::SwitchVia::Ssh { alias } => {
+                let target = alias.clone();
                 self.ssh_dial(alias, move || {
-                    asked(&|switch| pairing_ssh::switch(&target, press.clone(), switch))
+                    asked(&|switch| pairing_ssh::switch(&target, switch))
                 })
                 .await??
             }
             hide_core::SwitchVia::Wsl { distro } => {
-                let carriers = self.wsl()?;
-                // The operator's press: the distribution may be started
-                // for the switch and for the dial that follows it (B43).
-                carriers.may_wake(distro);
-                let target = distro.clone();
+                let (carriers, target) = (self.wsl()?, distro.clone());
                 self.wsl_call(distro, move || {
                     asked(&|switch| pairing_wsl::switch(carriers.access(), &target, switch))
                 })
@@ -1646,7 +1673,11 @@ impl Pairing {
             }
         };
         match switched {
-            pairing_ssh::Switched::HeldBy(by) => Ok(json!({ "switch": "held", "by": by })),
+            // That computer's name came over a wire and is printed.
+            pairing_ssh::Switched::HeldBy(by) => Ok(json!({
+                "switch": "held",
+                "by": hide_peer::link::clean_name(&by),
+            })),
             pairing_ssh::Switched::InstallNeeded { system } => {
                 Ok(json!({ "switch": "install_needed", "system": system }))
             }
@@ -1671,14 +1702,10 @@ impl Pairing {
         label: Option<&str>,
         through: &Login,
         requested: &str,
+        own_folder: bool,
         switched: &pairing_ssh::Switched,
     ) -> Result<Value, &'static str> {
-        let pairing_ssh::Switched::Paired {
-            paired,
-            folder,
-            needs,
-        } = switched
-        else {
+        let pairing_ssh::Switched::Paired { paired, folder } = switched else {
             return Err("switch_not_connected");
         };
         // The machine the device is: the one that just answered, or the
@@ -1700,12 +1727,7 @@ impl Pairing {
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
-        // What the Hide started there still needs goes with the step, and
-        // onto the device's row once it is that machine's (B30).
-        let mut connecting = json!({ "key": host.to_hex() });
-        if let Some(needs) = needs {
-            connecting["needs"] = needs.payload();
-        }
+        let connecting = json!({ "key": host.to_hex(), "own_folder": own_folder });
         self.switch_step(device, "connecting", connecting).await;
         if let Some(paired) = paired.clone() {
             match service.adopt(paired.accepted, paired.first) {
@@ -1741,18 +1763,85 @@ impl Pairing {
                 "reason": format!("{error:?}"),
             }));
         }
+        // Done is the device holding that machine's connection, which
+        // the core gives it once the grant is active and may refuse (a
+        // terminal opened there meanwhile, the save failed): a pairing
+        // alone is no switched device, and its machine is handed nothing.
         let over = Instant::now() + SWITCH_CONNECTS_WITHIN;
         loop {
-            let active = self.paired(peers).into_iter().any(|paired| {
-                paired.key == host && paired.machine.opens == Some(PeerOpens::Active)
-            });
-            if active {
-                return Ok(json!({ "switch": "done", "folder": folder }));
+            let (core, named, key) = (Arc::clone(&self.core), device.to_owned(), host.to_hex());
+            let landed =
+                tokio::task::spawn_blocking(move || core.device_switch_landed(&named, &key))
+                    .await
+                    .map_err(|_| "hide_unavailable")?;
+            match landed {
+                Some(true) => return Ok(json!({ "switch": "done", "folder": folder })),
+                Some(false) => return Err("switch_not_moved"),
+                None => {}
             }
             if Instant::now() >= over || self.shutdown.has_ended() {
                 return Err("switch_not_connected");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Where the machine reached through `via` stands on the rule every
+    /// switch passes (`pairing_ssh::may_move`), read over a login of its
+    /// own that asks nobody.
+    async fn may_move(
+        &self,
+        via: &hide_core::SwitchVia,
+        asked: pairing_ssh::Asked,
+    ) -> Result<pairing_ssh::Move, &'static str> {
+        let reach = self.ssh.clone();
+        match via {
+            hide_core::SwitchVia::Ssh { alias, .. } => {
+                let target = alias.clone();
+                self.ssh_dial(alias, move || {
+                    pairing_ssh::may_move_device(&reach, &target, asked)
+                })
+                .await?
+            }
+            hide_core::SwitchVia::Wsl { distro } => {
+                let (carriers, target) = (self.wsl()?, distro.clone());
+                self.wsl_call(distro, move || {
+                    pairing_wsl::may_move(carriers.access(), &reach, &target, asked)
+                })
+                .await?
+            }
+        }
+    }
+
+    /// The login `device` is read through, and its id: a helper device's
+    /// own, as the core knows it, or, for a machine a helper device was
+    /// switched to, the login it was switched through, which its record
+    /// keeps. A machine paired any other way has none.
+    async fn read_through(
+        &self,
+        device: &str,
+    ) -> Result<(String, hide_core::SwitchVia), &'static str> {
+        let (core, named) = (Arc::clone(&self.core), device.to_owned());
+        let source = tokio::task::spawn_blocking(move || core.device_switch_source(&named))
+            .await
+            .map_err(|_| "hide_unavailable")?;
+        match source {
+            Ok(source) => Ok((source.device_id, source.via)),
+            Err(refusal) => {
+                // Read from the records, so a machine is read whether or
+                // not the endpoint is open.
+                let (_, hosts) = self.host.recorded().await.map_err(|_| refusal)?;
+                let started = hosts
+                    .into_iter()
+                    .find(|host| host.device == device)
+                    .and_then(|host| host.started)
+                    .ok_or(refusal)?;
+                let via = match started {
+                    Login::Ssh(alias) => hide_core::SwitchVia::Ssh { alias },
+                    Login::Wsl(distro) => hide_core::SwitchVia::Wsl { distro },
+                };
+                Ok((device.to_owned(), via))
+            }
         }
     }
 
@@ -2046,6 +2135,17 @@ fn rows(
                 path: link.map(|link| path_of(link.path())),
                 reason: None,
                 update: updates.get(&host.key).copied(),
+                // The distribution this PC reaches it through, when it is
+                // one: the same record `admit_switch` reads.
+                wsl: host
+                    .candidates
+                    .iter()
+                    .find_map(|candidate| match candidate {
+                        Candidate::Wsl(distro) => Some(distro.clone()),
+                        _ => None,
+                    }),
+                // The core's to say, of its own devices.
+                helper_device: None,
             },
         });
     }
@@ -2076,6 +2176,8 @@ fn rows(
                 path: link.map(|link| path_of(link.path())),
                 reason: None,
                 update: updates.get(&guest.key).copied(),
+                wsl: None,
+                helper_device: None,
             },
         });
     }
@@ -2185,6 +2287,8 @@ mod tests {
             path: None,
             reason: None,
             update: None,
+            wsl: None,
+            helper_device: None,
         }
     }
 
@@ -2605,21 +2709,5 @@ mod tests {
             .collect();
         shown.sort();
         assert_eq!(shown, [("Machine 2", false), ("거실 Mac mini", true)]);
-    }
-
-    /// B41: a device added for its switch is taken off again only when the
-    /// target was asked and nothing was started there. A switch that never
-    /// got its SSH login said nothing about the target, so the device stays
-    /// with its reason and Try again.
-    #[test]
-    fn a_switch_is_clean_only_when_its_target_was_asked_and_nothing_started_there() {
-        let far = SwitchReach::default();
-        assert!(!far.clean(), "no SSH login ran");
-        far.asked();
-        assert!(far.clean());
-        far.started();
-        assert!(!far.clean());
-        far.asked();
-        assert!(!far.clean(), "what was started there stays started");
     }
 }

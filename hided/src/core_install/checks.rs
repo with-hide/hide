@@ -20,7 +20,8 @@ pub(crate) fn desktop_session(home: &Path, stop: &AtomicBool) -> Option<bool> {
     session_of(&crate::always_on::agents_for(home), home, stop)
 }
 
-fn session_of(agents: &UserAgents, home: &Path, stop: &AtomicBool) -> Option<bool> {
+/// [`desktop_session`] of `agents`.
+pub(crate) fn session_of(agents: &UserAgents, home: &Path, stop: &AtomicBool) -> Option<bool> {
     match agents.login(home, stop) {
         Ok(Login::NotNeeded | Login::LoggedIn) => Some(true),
         Ok(Login::LoggedOut) => Some(false),

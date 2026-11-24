@@ -47,7 +47,7 @@ test("an agent reads what a device waits on and retries it until the attempt's o
     // B29, B31: an added device waits on the operator's Allow, and says what to ask them.
     const added = await fromPane(fixture, daemon, ["add", ALIAS], 1);
     expect(added.value.device).toMatchObject({ id: ALIAS, state: "operator_turn", waits_on: { kind: "allow_and_install" }, failure: null });
-    expect(Object.keys(added.value.device).sort()).toEqual(["failure", "id", "label", "next_action", "ssh_alias", "state", "waits_on"]);
+    expect(Object.keys(added.value.device).sort()).toEqual(["connection_id", "failure", "id", "label", "next_action", "ssh_alias", "state", "waits_on"]);
 
     // B30, D-11: a retry does not stand in for the Allow; it starts nothing and answers at once.
     const notAllowed = await fromPane(fixture, daemon, ["retry", ALIAS, "--wait"], 2);

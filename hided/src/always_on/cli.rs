@@ -10,6 +10,10 @@
 //!   (Linux's linger), or says the command an administrator runs when the
 //!   account may not turn it on itself; a machine that starts a Hide here
 //!   over SSH asks it and shows that command on its screen (B30).
+//! - `unattended --json`: what a machine reads, and only reads, before it
+//!   switches a device to this account's own Hide: whether the account's
+//!   login item is back after a restart with nobody at the machine, and
+//!   whether someone is logged in to its desktop now.
 //! - `firewall ask-allow`: the desktop app's one ask for the rules of the
 //!   folder's UDP port (chosen once): Windows's permission prompt runs
 //!   `firewall allow --port <n>` elevated, and one line says whether the
@@ -27,6 +31,7 @@ use serde_json::json;
 pub const USAGE: &str = "usage: hide always-on status [--json]
        hide always-on remove
        hide always-on linger [--json]
+       hide always-on unattended --json
        hide always-on firewall ask-allow
        hide always-on firewall allow --port <n> [--retire <n>]
        hide always-on firewall remove
@@ -37,6 +42,7 @@ pub enum Command {
     Status { json: bool },
     Remove,
     Linger { json: bool },
+    Unattended,
     FirewallAskAllow,
     FirewallAllow { port: u16, retired: Option<u16> },
     FirewallRemove,
@@ -52,6 +58,7 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
         ["remove"] => Ok(Command::Remove),
         ["linger"] => Ok(Command::Linger { json: false }),
         ["linger", "--json"] => Ok(Command::Linger { json: true }),
+        ["unattended", "--json"] => Ok(Command::Unattended),
         ["firewall", "ask-allow"] => Ok(Command::FirewallAskAllow),
         ["firewall", "allow", "--port", port] => port
             .parse()
@@ -104,6 +111,12 @@ pub fn run(command: &Command, home: &Path, state_dir: &Path) -> Result<(), Strin
                     None => println!("linger: {}", linger["linger"].as_str().unwrap_or_default()),
                 }
             }
+            Ok(())
+        }
+        Command::Unattended => {
+            let value = unattended(&super::agents_for(home), home);
+            // The line a machine reading it over SSH takes as an answer.
+            println!("{}", json!({ "ok": true, "value": value }));
             Ok(())
         }
         Command::FirewallAskAllow => {
@@ -228,6 +241,31 @@ fn linger(
     }
 }
 
+/// What a machine reads before it switches a device to this account's own
+/// Hide (operator decision 2026-11-24), and changes nothing by reading:
+/// `unattended`, whether the account's login item runs after the machine
+/// starts with nobody at it (a systemd account that lingers, a Mac that
+/// logs this account in by itself); `desktop`, whether a login item can
+/// run now (someone is logged in to a Mac's desktop; always on a system
+/// whose items need no login), left out for a HOME that has no login items;
+/// `automatic_login_offered`, on a Mac, false while FileVault locks its
+/// disk; and `user`, on a Mac, the login name its automatic login is turned
+/// on for.
+fn unattended(agents: &hide_platform::user_agents::UserAgents, home: &Path) -> serde_json::Value {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut answer = json!({ "unattended": agents.unattended(home, &stop).unwrap_or(false) });
+    if let Some(desktop) = crate::core_install::checks::session_of(agents, home, &stop) {
+        answer["desktop"] = json!(desktop);
+    }
+    if let Ok(offered) = agents.offers_automatic_login(home, &stop) {
+        answer["automatic_login_offered"] = json!(offered);
+    }
+    if let Some(user) = agents.account() {
+        answer["user"] = json!(user);
+    }
+    answer
+}
+
 /// The login item and its marker, then the install root's builds; the core
 /// they ran was stopped first (`hide stop`), so nothing runs from them.
 fn remove(home: &Path, state_dir: &Path) -> Result<(), String> {
@@ -275,9 +313,14 @@ mod tests {
             parse(&words(&["linger", "--json"])),
             Ok(Command::Linger { json: true })
         );
+        assert_eq!(
+            parse(&words(&["unattended", "--json"])),
+            Ok(Command::Unattended)
+        );
         for refused in [
             &["firewall", "allow"][..],
             &["linger", "now"],
+            &["unattended"],
             &["firewall", "allow", "--port", "x"],
             &["firewall", "allow", "--port", "51234", "--retire", "x"],
             &["remove", "--all"],
@@ -301,6 +344,67 @@ mod tests {
         assert_eq!(
             linger(&crate::always_on::agents_for(home.path()), home.path()).unwrap(),
             json!({ "linger": "not_used" })
+        );
+    }
+
+    /// What a machine reads before a switch, per system, with nothing
+    /// asked for: a Mac says whether someone is logged in, whether it logs
+    /// the account in by itself and whether it offers that setting; a
+    /// Linux account says whether it lingers; a HOME with no login items
+    /// says only that it is not back.
+    #[cfg(unix)]
+    #[test]
+    fn the_read_before_a_switch_says_each_systems_facts_and_asks_for_nothing() {
+        use hide_platform::user_agents::{Kind, UserAgents};
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let program = |name: &str, script: &str| {
+            let path = home.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let none = UserAgents::none();
+        assert_eq!(
+            unattended(&none, home.path()),
+            json!({ "unattended": false })
+        );
+
+        program("launchctl", "[ -f \"$HOME/out\" ] && exit 113; exit 0");
+        program(
+            "defaults",
+            "[ -f \"$HOME/auto\" ] || exit 1; cat \"$HOME/auto\"",
+        );
+        program(
+            "fdesetup",
+            "[ -f \"$HOME/vault\" ] && echo 'FileVault is On.' || echo 'FileVault is Off.'",
+        );
+        let mac = UserAgents::fixture_of(Kind::Launchd, home.path());
+        let said = |unattended_: bool, desktop: bool, offered: bool| json!({ "unattended": unattended_, "desktop": desktop, "automatic_login_offered": offered, "user": "fixture" });
+        assert_eq!(unattended(&mac, home.path()), said(false, true, true));
+        std::fs::write(home.path().join("vault"), "").unwrap();
+        assert_eq!(unattended(&mac, home.path()), said(false, true, false));
+        std::fs::remove_file(home.path().join("vault")).unwrap();
+        std::fs::write(home.path().join("auto"), "fixture\n").unwrap();
+        assert_eq!(unattended(&mac, home.path()), said(true, true, true));
+        std::fs::write(home.path().join("out"), "").unwrap();
+        assert_eq!(unattended(&mac, home.path()), said(true, false, true));
+
+        program(
+            "loginctl",
+            "echo \"$1\" >> \"$HOME/asked\"; [ \"$1\" = show-user ] && [ -f \"$HOME/lingers\" ] && echo yes && exit 0; echo no",
+        );
+        program("systemctl", "exit 0");
+        let linux = UserAgents::fixture_of(Kind::Systemd, home.path());
+        assert_eq!(
+            unattended(&linux, home.path()),
+            json!({ "unattended": false, "desktop": true })
+        );
+        std::fs::write(home.path().join("lingers"), "").unwrap();
+        assert_eq!(unattended(&linux, home.path())["unattended"], true);
+        let asked = std::fs::read_to_string(home.path().join("asked")).unwrap();
+        assert!(
+            asked.lines().all(|verb| verb == "show-user"),
+            "the read asked for more than linger's state: {asked}"
         );
     }
 

@@ -16,12 +16,9 @@ import { screenState, screenStateKey, type ScreenState } from "./computers";
 import { railShown } from "./devices";
 import { hostBridge, type BrowserRect, type RemoteScreenState } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
-import { cn } from "./lib/utils";
 import { pairedMachines } from "./pairing";
-import { DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { trafficLightSpace, useWindowChrome } from "./windowChrome";
 
 /** How long a page that could not load waits before it is asked again while its machine reads as reachable. */
 const RETRY_MS = 5_000;
@@ -43,11 +40,8 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   // What this window calls the machine, which its page names itself by.
   const name = peer?.name ?? null;
   const rail = useShellStore((s) => railShown(s.rest));
-  const chrome = useWindowChrome();
   const bridge = hostBridge()?.remoteScreens ?? null;
   const stage = useRef<HTMLDivElement>(null);
-  // The line a switch that just landed says (devices.switch.fresh) stands over the screen's top, which starts under it.
-  const notice = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<RemoteScreenState | null>(null);
   const [attempt, setAttempt] = useState(0);
   const state = peer ? screenState(peer) : "no_grant";
@@ -91,8 +85,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       const element = stage.current;
       if (!element) return;
       const left = element.getBoundingClientRect().left;
-      const top = notice.current?.getBoundingClientRect().height ?? 0;
-      const rect: BrowserRect = { x: left, y: top, width: Math.max(0, window.innerWidth - left), height: Math.max(0, window.innerHeight - top) };
+      const rect: BrowserRect = { x: left, y: 0, width: Math.max(0, window.innerWidth - left), height: window.innerHeight };
       const covered = overlayRects().rects.some((overlay) => intersects(overlay, rect));
       const placed = covered ? "covered" : JSON.stringify(rect);
       if (placed === last) return;
@@ -105,7 +98,6 @@ export function RemoteStage({ actions }: { actions: Actions }) {
     place();
     const resized = new ResizeObserver(schedule);
     if (stage.current) resized.observe(stage.current);
-    if (notice.current) resized.observe(notice.current);
     const layers = new MutationObserver(schedule);
     layers.observe(document.body, { childList: true });
     window.addEventListener("resize", schedule);
@@ -118,15 +110,10 @@ export function RemoteStage({ actions }: { actions: Actions }) {
     };
   }, [bridge, showing, device, key, name, attempt]);
 
-  const lights = trafficLightSpace(chrome);
   const why = state !== "ready" ? state : failed ? failedState(loaded?.reason) : null;
   return (
     <>
       {rail ? <DeviceRail actions={actions} /> : null}
-      {/* The notice takes the window's top row, so it starts after macOS's traffic lights as the title row does. */}
-      <div ref={notice} className={cn("fixed top-0 right-0 z-10", lights ? "left-0" : rail ? "left-(--size-rail)" : "left-0")} data-remote-notice="true">
-        <DeviceSwitchStrip actions={actions} start={lights ? "calc(var(--size-traffic-light-inset) + var(--spacing-xs))" : undefined} />
-      </div>
       <div ref={stage} className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-sm p-xl text-center" data-remote-stage={device ?? ""} data-remote-state={why ?? loaded?.state ?? "opening"}>
         {why ? (
           <>

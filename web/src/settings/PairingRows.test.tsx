@@ -126,6 +126,15 @@ it("names a paired machine's system as its device reports it, and none before th
   await unmount();
 });
 
+it("lists no row for a machine that is still a helper device of this computer: its device's row is its one row", async () => {
+  const unmoved = peer({ helper_device: "windows-pc" });
+  const other = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook" });
+  const { q, unmount } = await mount(idle, [unmoved, other], [], [{ id: "windows-pc", label: "Windows PC", kind: "remote", state: "ready", ssh_alias: "win" }]);
+  expect(q('[data-peer-row="windows-pc"]')).toBeNull();
+  expect(q('[data-peer-row="macbook"]')).not.toBeNull();
+  await unmount();
+});
+
 it("names a machine a device was switched onto by that device's name, as the rail does (B36)", async () => {
   const switched = peer({ name: "DESKTOP-7Q2" });
   const { q, unmount } = await mount(idle, [switched], [], [{ id: "build-box", label: "빌드 서버", kind: "remote", state: "ready", peer_key: switched.key }]);
@@ -397,26 +406,6 @@ it("shows no firewall line where the host keeps no rules", async () => {
   await act(async () => {});
   expect(screen.q("[data-pair-firewall]")).toBeNull();
   await screen.unmount();
-});
-
-it("says under a machine's row what the Hide started there over SSH still needs, with its command (B30)", async () => {
-  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" }), peer({ key: "12".repeat(32), device_id: "wsl-ubuntu", name: "WSL Ubuntu" })];
-  const devices: Partial<Device>[] = [
-    { id: "build-box", kind: "remote", needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } },
-    { id: "mac-mini", kind: "remote", needs: { kind: "auto_login" } },
-    { id: "laptop", kind: "remote" },
-    { id: "wsl-ubuntu", kind: "remote", needs: { kind: "open_distribution" } },
-  ];
-  const { q, unmount } = await mount(idle, peers, [], devices);
-  const linger = q('[data-peer-row="build-box"] [data-device-needs="build-box:linger"]');
-  expect(linger?.textContent).toContain("Needs sudo");
-  expect(linger?.querySelector("code")?.textContent).toBe("sudo loginctl enable-linger hy");
-  expect(q('[data-peer-row="mac-mini"] [data-device-needs="mac-mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
-  // A WSL distribution with no systemd says when it has to be opened again (B43).
-  expect(q('[data-peer-row="wsl-ubuntu"] [data-device-needs="wsl-ubuntu:open_distribution"]')?.textContent).toBe("After Windows restarts, open this distribution again");
-  // A machine whose Hide needs nothing has no line.
-  expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
-  await unmount();
 });
 
 it("keeps under a machine's row how many terminals its switch could not take over (B36)", async () => {

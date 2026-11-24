@@ -65,6 +65,8 @@ mod device_names;
 mod device_reconnect;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
+#[path = "tests/device_switch_folder.rs"]
+mod device_switch_folder;
 #[path = "tests/device_worktrees.rs"]
 mod device_worktrees;
 #[path = "tests/devices.rs"]

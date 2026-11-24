@@ -155,6 +155,9 @@ pub fn retried_schema() -> serde_json::Value {
 /// and no key file: ssh's prompt can name the account, and none of it is the
 /// agent's to answer. `remote_state` is the device's session status and
 /// `problem` its last attempt's class, both as the row reads them.
+/// `connection_id` is its paired machine's, for a device that is one
+/// (`hide device list` draws that machine's line alone), and null for a
+/// device the core dials itself.
 pub(crate) fn device_answer(
     device: &crate::model::DeviceSnapshot,
     remote_state: Option<&str>,
@@ -165,6 +168,7 @@ pub(crate) fn device_answer(
         "id": device.id,
         "label": device.label,
         "ssh_alias": device.ssh_alias,
+        "connection_id": device.peer_key,
         "state": connection.state,
         "waits_on": connection.waits_on,
         "failure": connection.failure,

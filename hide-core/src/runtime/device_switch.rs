@@ -1,35 +1,42 @@
 //! A helper device's switch to the connection of the Hide on its machine
-//! (PRD device-connect-iroh D-49, B35, B36, B41).
+//! (PRD device-connect-iroh D-49, B36).
+//!
+//! The operator chooses it (operator decision 2026-11-24): a device the
+//! core dials over SSH, or a WSL distribution of this PC, is switched only
+//! when they ask for it, and only when its machine's own Hide is back after
+//! a restart with nobody there; an update switches no device.
 //!
 //! The steps run in hided, which reaches the machine over the device's SSH
-//! login, or through `wsl.exe` when the device is a WSL distribution of
-//! this PC (D-27), has a Hide put there when it has none and pairs the two. The
-//! core hears each step as a `device_switch` event, sent by the daemon
-//! only: it draws the step on the device's row and, once the paired
-//! machine's grant is active, changes the registration's link in place.
-//! The device keeps its id and its name, and so its engine folder, its
-//! projects, its tabs and every record that names it; only the transport
-//! under it is made again. Until that moment the registration is the
-//! helper's and its link is untouched, so a switch that stops leaves the
-//! device as it was, with the reason on its row.
+//! login, or through `wsl.exe` (D-27), reads whether its Hide would be
+//! back, has a Hide put there when it has none and pairs the two. Once the
+//! paired machine's grant is active the core changes the registration's
+//! link in place: the device keeps its id and its name, and so its engine
+//! folder, its projects, its tabs and every record that names it. Until
+//! then the registration is the helper's and its link is untouched, so a
+//! switch that stops leaves the device as it was.
+//!
+//! A device another computer switched first keeps its helper folder for
+//! that computer, so this one goes on with a folder of its own, which
+//! takes up none of the terminals it ran there: hided asks for that switch
+//! only for a device that lists no terminal, and the core refuses the link
+//! change if one opened meanwhile. No switch closes a terminal.
 
 use serde::Deserialize;
 
 use super::devices::Retiring;
 use super::*;
-use crate::model::{DeviceSwitchSnapshot, DeviceSwitchState, LinkOrigin};
+use crate::model::LinkOrigin;
 
 /// Where one device's switch stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DeviceSwitch {
-    state: DeviceSwitchState,
-    reason: Option<String>,
-    /// The connection key of the machine the device is, known from the
-    /// pairing on: the grant that becomes active under it takes the device.
-    key: Option<String>,
-    /// What the Hide this switch started on the machine still needs, which
-    /// the device's row says once it is that machine's.
-    needs: Option<crate::model::DeviceNeedsSnapshot>,
+    /// The connection key of the machine the device is: the grant that
+    /// becomes active under it takes the device.
+    key: String,
+    /// The switch goes on with a folder of this computer's own, which
+    /// takes up no terminal the helper ran: it lands only on a device that
+    /// lists none.
+    own_folder: bool,
 }
 
 /// A registration rewritten to its machine's connection whose save is not
@@ -38,9 +45,6 @@ pub(super) struct DeviceSwitch {
 pub(super) struct SwitchSaving {
     key: String,
     was: LinkOrigin,
-    /// What the Hide the switch started there still needs, which the
-    /// device's row says once it is that machine's.
-    needs: Option<crate::model::DeviceNeedsSnapshot>,
 }
 
 /// What a helper device is switched from: how the core reaches it, and
@@ -64,13 +68,10 @@ pub struct DeviceSwitchSource {
 
 /// What hided reaches the machine a helper device is through.
 pub enum SwitchVia {
-    /// Over the SSH alias the device is dialed by.
-    Ssh {
-        alias: String,
-        /// Where the questions of the switch's SSH login go: the device's
-        /// row.
-        sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
-    },
+    /// Over the SSH alias the device is dialed by, by a login that asks
+    /// nobody: the read every switch starts with signs in without asking,
+    /// so a login that needs an answer never reaches the switch.
+    Ssh { alias: String },
     /// Through `wsl.exe`, into this PC's distribution of that name; it asks
     /// nothing.
     Wsl { distro: String },
@@ -88,30 +89,42 @@ pub(super) struct DeviceSwitchPayload {
     /// With `connecting`: the paired machine's connection key.
     #[serde(default)]
     pub(super) key: Option<String>,
-    /// With `failed`: why, as a code.
+    /// With `connecting`: the switch goes on with a folder of this
+    /// computer's own.
     #[serde(default)]
-    pub(super) reason: Option<String>,
-    /// With `connecting`: what the Hide this switch started there still
-    /// needs to stay reachable (B30).
-    #[serde(default)]
-    pub(super) needs: Option<crate::model::DeviceNeedsSnapshot>,
-    /// With `failed`: the switch started nothing on the device's machine
-    /// and no grant was saved there, so a device added for this switch can
-    /// be taken off again (B41).
-    #[serde(default)]
-    pub(super) clean: bool,
+    pub(super) own_folder: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SwitchStep {
+    /// The machine is read for the rule every switch passes.
     Checking,
-    Installing,
+    /// Its own Hide is looked for, and started where it has none.
+    Starting,
+    /// That Hide saves a grant for this machine.
+    Pairing,
+    /// The two machines are paired and the connection is being opened.
     Connecting,
-    Failed,
-    /// The switch is over with nothing to show: the operator was asked
-    /// something first, or cancelled.
+    /// The device's projects are handed to its machine's Hide.
+    Projects,
+    /// The switch is over, switched or not.
     Ended,
+}
+
+impl SwitchStep {
+    /// What the device's row draws while the switch is at this step.
+    fn drawn(self) -> Option<crate::model::DeviceSwitchStep> {
+        use crate::model::DeviceSwitchStep as Drawn;
+        match self {
+            Self::Checking => Some(Drawn::Checking),
+            Self::Starting => Some(Drawn::Starting),
+            Self::Pairing => Some(Drawn::Pairing),
+            Self::Connecting => Some(Drawn::Connecting),
+            Self::Projects => Some(Drawn::Projects),
+            Self::Ended => None,
+        }
+    }
 }
 
 impl DeviceSwitchPayload {
@@ -120,21 +133,7 @@ impl DeviceSwitchPayload {
             .key
             .as_deref()
             .is_none_or(crate::model::peer_key_is_spelled);
-        let reason_plain = self.reason.as_deref().is_none_or(|reason| {
-            !reason.is_empty()
-                && reason.len() <= 64
-                && reason
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-        });
-        let needs_spelled = self
-            .needs
-            .as_ref()
-            .is_none_or(crate::model::DeviceNeedsSnapshot::valid);
-        key_spelled
-            && reason_plain
-            && needs_spelled
-            && (self.step != SwitchStep::Connecting || self.key.is_some())
+        key_spelled && (self.step != SwitchStep::Connecting || self.key.is_some())
     }
 }
 
@@ -144,7 +143,9 @@ impl Runtime {
     /// under its machine's own id, which the paired machine's device then
     /// has too, or a WSL distribution of this PC. `device` is its id, or
     /// the SSH alias or the distribution it is dialed by, which is what a
-    /// terminal knows of a device it has just added.
+    /// terminal knows of a device it has just added. Its login asks nobody,
+    /// whoever asked for the switch, as Hide's own connection attempts do
+    /// not (PRD system-ssh-device-link B14).
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
@@ -166,25 +167,8 @@ impl Runtime {
         if !registration.origin.switches() {
             return Err("switch_unsupported");
         }
-        // The operator's press on the device's row started the switch, so
-        // its login asks there, as the device's own connection attempts do
-        // (D-45). A device that never had an attempt has no row state to
-        // put a question in: its login then asks nobody.
-        let sign_in = self
-            .worker_context
-            .clone()
-            .zip(self.device_hosts.get(device_id))
-            .map(|(context, host)| {
-                Arc::new(super::device_sign_in::RowSignIn {
-                    context,
-                    device_id: device_id.to_owned(),
-                    generation: host.generation,
-                    wake: crate::remote::Wake::Allowed,
-                    withdrawn: Arc::default(),
-                }) as Arc<dyn hide_node_link::device::SignIn>
-            });
         let via = match registration.origin.dialed_by() {
-            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias, sign_in },
+            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias },
             Some(crate::model::DialedBy::Wsl(distro)) => SwitchVia::Wsl { distro },
             None => return Err("switch_unsupported"),
         };
@@ -209,92 +193,92 @@ impl Runtime {
         })
     }
 
-    /// The switch of `device_id` as its row draws it.
-    pub(super) fn device_switch_snapshot(&self, device_id: &str) -> Option<DeviceSwitchSnapshot> {
-        self.device_switches
+    /// How many terminals `device_id` lists, or none while the core has
+    /// not read its session on the connection it has: what a switch with a
+    /// folder of this computer's own would not take up.
+    pub(crate) fn device_terminals(&self, device_id: &str) -> Option<usize> {
+        let connected = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == device_id && status.state == "connected");
+        self.device_raw_sessions
             .get(device_id)
-            .map(|switch| DeviceSwitchSnapshot {
-                state: switch.state,
-                reason: switch.reason.clone(),
-            })
+            .filter(|_| connected)
+            .map(|session| super::remote_live_pane_ids(session).len())
+    }
+
+    /// Where the switch of `device_id` to the machine under `key` stands,
+    /// for the daemon that waits on it: `Some(true)` once the registration
+    /// is that machine's and saved, `Some(false)` once the core refused it
+    /// or the device is gone, and `None` while it is under way. A paired
+    /// machine alone is no switched device: the daemon answers a switch
+    /// done, and hands the machine its projects, only on `Some(true)`.
+    pub(crate) fn device_switch_landed(&self, device_id: &str, key: &str) -> Option<bool> {
+        if self.device_switch_saving.contains_key(device_id) {
+            return None;
+        }
+        let landed = self
+            .device_registration(device_id)
+            .is_some_and(|registration| registration.origin.peer_key() == Some(key));
+        match landed || !self.device_switches.contains_key(device_id) {
+            true => Some(landed),
+            false => None,
+        }
     }
 
     /// The helper device that is being switched to the machine under `key`.
     pub(super) fn switching_to(&self, key: &str) -> Option<String> {
         self.device_switches
             .iter()
-            .find(|(_, switch)| switch.key.as_deref() == Some(key))
+            .find(|(_, switch)| switch.key == key)
             .map(|(device, _)| device.clone())
     }
 
-    /// One step of a device's switch, as hided said it.
+    /// One step of a device's switch, as hided said it. Every step is
+    /// drawn on the device's row until hided says the switch ended, also
+    /// the ones that follow the link change; only `connecting` changes what
+    /// the core does.
     pub(super) fn device_switch(&mut self, payload: DeviceSwitchPayload) -> bool {
         let device_id = payload.device_id;
+        // A device removed meanwhile draws nothing and keeps no entry.
+        let drawn = payload
+            .step
+            .drawn()
+            .filter(|_| self.device_registration(&device_id).is_some());
+        let stepped = match drawn {
+            Some(step) => self.device_switch_steps.insert(device_id.clone(), step) != Some(step),
+            None => self.device_switch_steps.remove(&device_id).is_some(),
+        };
+        let drawn_changed = stepped && self.refresh_device_snapshots();
         let helper = self
             .snapshot
             .ui_state
             .device_registrations
             .iter()
             .any(|registration| registration.id == device_id && registration.origin.dials_helper());
-        if !helper {
-            // Switched already, or removed meanwhile: no step is drawn.
-            let dropped = self.device_switches.remove(&device_id).is_some();
-            return dropped && self.refresh_device_snapshots();
+        if !helper || payload.step == SwitchStep::Ended {
+            // Switched already, removed meanwhile, or over: nothing waits
+            // for a grant any more.
+            self.device_switches.remove(&device_id);
+            return drawn_changed;
         }
-        // A device added over SSH, or as a WSL distribution, to be switched
-        // is not left on the helper
-        // when that switch stops with nothing started on its machine (B41):
-        // it is taken off again, and one line says why. Past that point its
-        // machine runs a Hide from the helper's folder, or holds a grant
-        // that may still become active, so it stays, with its reason and a
-        // retry, like any helper device.
-        if payload.step == SwitchStep::Failed {
-            let fresh = self
-                .device_registration(&device_id)
-                .and_then(|registration| registration.origin.dialed_by())
-                .filter(|by| self.device_fresh_adds.contains(by));
-            if let Some(by) = fresh {
-                self.device_fresh_adds.remove(&by);
-                if payload.clean {
-                    return self.take_off_fresh_add(&device_id, payload.reason.as_deref());
-                }
-            }
+        if payload.step != SwitchStep::Connecting {
+            return drawn_changed;
         }
-        let state = match payload.step {
-            SwitchStep::Ended => {
-                let dropped = self.device_switches.remove(&device_id).is_some();
-                return dropped && self.refresh_device_snapshots();
-            }
-            SwitchStep::Checking => DeviceSwitchState::Checking,
-            SwitchStep::Installing => DeviceSwitchState::Installing,
-            SwitchStep::Connecting => DeviceSwitchState::Connecting,
-            SwitchStep::Failed => DeviceSwitchState::Failed,
-        };
-        let key = payload
-            .key
-            .filter(|_| payload.step == SwitchStep::Connecting);
+        let key = payload.key.unwrap_or_default();
         self.device_switches.insert(
             device_id.clone(),
             DeviceSwitch {
-                state,
-                reason: payload
-                    .reason
-                    .filter(|_| payload.step == SwitchStep::Failed),
                 key: key.clone(),
-                needs: payload
-                    .needs
-                    .filter(|_| payload.step == SwitchStep::Connecting),
+                own_folder: payload.own_folder,
             },
         );
         // A machine that was paired before the switch was asked for is
         // active already: no change of the paired machines will say so.
-        if let Some(key) = key
-            && self.peer_opens(&key)
-        {
-            self.switch_device_link(&device_id, &key);
-        }
-        self.refresh_device_snapshots();
-        true
+        let switched = self.peer_opens(&key) && self.switch_device_link(&device_id, &key);
+        drawn_changed || switched
     }
 
     /// The paired machine under `key` may be opened: the helper device
@@ -314,6 +298,17 @@ impl Runtime {
         // Rewritten already and waiting for its save: the paired machines
         // changing again meanwhile asks for nothing more.
         if self.device_switch_saving.contains_key(device_id) {
+            return false;
+        }
+        // A folder of this computer's own takes up no terminal the helper
+        // ran: a device that lists one, or whose session is not read, stays
+        // a helper device.
+        let own_folder = self
+            .device_switches
+            .get(device_id)
+            .is_some_and(|switch| switch.own_folder);
+        if own_folder && self.device_terminals(device_id) != Some(0) {
+            self.not_moved(device_id, "terminals_open");
             return false;
         }
         let taken = self
@@ -339,8 +334,8 @@ impl Runtime {
                 "target": device_id,
                 "key_taken": taken,
             }));
-            self.fail_device_switch(device_id, "device_already_connected");
-            return self.refresh_device_snapshots();
+            self.not_moved(device_id, "device_already_connected");
+            return false;
         };
         let was = std::mem::replace(
             &mut registration.origin,
@@ -352,16 +347,11 @@ impl Runtime {
         if was == LinkOrigin::Inbound {
             registration.host_consent = Some(paired);
         }
-        let needs = self
-            .device_switches
-            .get_mut(device_id)
-            .and_then(|switch| switch.needs.take());
         self.device_switch_saving.insert(
             device_id.to_owned(),
             SwitchSaving {
                 key: key.to_owned(),
                 was,
-                needs,
             },
         );
         // Its first open on the new connection closes the panes that
@@ -380,9 +370,9 @@ impl Runtime {
 
     /// A save of the core's state ended: every switched registration it
     /// holds takes its machine's connection when the save succeeded, and
-    /// goes back to its helper, with the reason on its row, when it did
-    /// not. A save taken before the switch holds no such registration and
-    /// settles nothing; the save the switch asked for follows it.
+    /// goes back to its helper when it did not. A save taken before the
+    /// switch holds no such registration and settles nothing; the save the
+    /// switch asked for follows it.
     pub(super) fn acknowledge_device_switch(
         &mut self,
         saved: &UiStateSnapshot,
@@ -408,7 +398,7 @@ impl Runtime {
                 continue;
             };
             changed |= if success {
-                self.land_device_switch(&id, saving)
+                self.land_device_switch(&id)
             } else {
                 self.undo_device_switch(&id, saving)
             };
@@ -421,7 +411,7 @@ impl Runtime {
     /// the same registration. The machine's own Hide then starts this
     /// core's node on the folder the helper ran in, and the panes are taken
     /// up again as on any new link.
-    fn land_device_switch(&mut self, device_id: &str, saving: SwitchSaving) -> bool {
+    fn land_device_switch(&mut self, device_id: &str) -> bool {
         // The device may have been removed since the save was asked.
         let Some(registration) = self
             .device_registration(device_id)
@@ -431,12 +421,6 @@ impl Runtime {
             return false;
         };
         self.device_switches.remove(device_id);
-        if let Some(by) = saving.was.dialed_by() {
-            self.device_fresh_adds.remove(&by);
-        }
-        if let Some(needs) = saving.needs {
-            self.device_needs.insert(device_id.to_owned(), needs);
-        }
         self.rebuild_device_rows();
         let focused_device = self.look.front().map(str::to_owned);
         let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
@@ -462,8 +446,8 @@ impl Runtime {
     }
 
     /// The save that held `device_id`'s switched registration failed: the
-    /// registration is the helper's again, as the store still has it, its
-    /// link was never touched, and its row says why (B41).
+    /// registration is the helper's again, as the store still has it, and
+    /// its link was never touched.
     fn undo_device_switch(&mut self, device_id: &str, saving: SwitchSaving) -> bool {
         let Some(registration) =
             self.snapshot
@@ -487,7 +471,7 @@ impl Runtime {
             "kind": "device_switch.not_saved",
             "target": device_id,
         }));
-        self.fail_device_switch(device_id, "switch_not_saved");
+        self.not_moved(device_id, "switch_not_saved");
         self.rebuild_device_rows();
         self.refresh_device_snapshots();
         true
@@ -555,44 +539,17 @@ impl Runtime {
         true
     }
 
-    /// Takes the device `device_id`, added over SSH for a switch that
-    /// stopped before it started anything on its machine, off again, and
-    /// keeps the one line that says why.
-    fn take_off_fresh_add(&mut self, device_id: &str, reason: Option<&str>) -> bool {
-        let Some(label) = self
-            .device_registration(device_id)
-            .map(|registration| registration.label.clone())
-        else {
-            return false;
-        };
-        if let Err(refusal) = self.remove_device(device_id) {
-            crate::diagnostic!(serde_json::json!({
-                "component": "device_switch",
-                "kind": "device_switch.fresh_add_not_removed",
-                "target": device_id,
-                "code": refusal.code,
-            }));
-            // It stays a helper device, with its reason.
-            self.fail_device_switch(device_id, reason.unwrap_or("switch_failed"));
-            return self.refresh_device_snapshots();
-        }
-        self.snapshot.navigator.device_not_added = Some(crate::model::DeviceNotAddedSnapshot {
-            label,
-            reason: reason.unwrap_or("switch_failed").to_owned(),
-        });
-        true
-    }
-
-    /// The switch of `device_id` stopped for `reason`, which its row says.
-    fn fail_device_switch(&mut self, device_id: &str, reason: &str) {
-        self.device_switches.insert(
-            device_id.to_owned(),
-            DeviceSwitch {
-                state: DeviceSwitchState::Failed,
-                reason: Some(reason.to_owned()),
-                key: None,
-                needs: None,
-            },
-        );
+    /// The switch of `device_id` stopped in the core for `reason`: the
+    /// device stays on its helper with nothing on its row, the log says
+    /// why, and the daemon that waits on the switch reads that it did not
+    /// land (`device_switch_landed`).
+    fn not_moved(&mut self, device_id: &str, reason: &str) {
+        self.device_switches.remove(device_id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "device_switch",
+            "kind": "device_switch.not_moved",
+            "target": device_id,
+            "reason": reason,
+        }));
     }
 }

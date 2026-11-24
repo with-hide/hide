@@ -9,7 +9,7 @@ use super::run::{Run, finish};
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -944,31 +944,10 @@ impl Fixture {
             }))?,
             hide_platform::fs::Access::Private,
         )?;
-        let log = File::create(root.join("hided.log"))?;
-        let mut command = local_env.command(cli.join("hided"));
-        command
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log);
-        let mut daemon = Some(OwnedChild::spawn(&mut command)?);
+        let mut daemon = Some(Self::start_daemon(&local_env, &cli.join("hided"), &root)?);
         // Until the fixture holds them, a failed start ends what it started.
         let started = (|| -> Result<(Daemon, Agent, Agent)> {
-            let daemon_state: Value = wait_for("private hided state", || {
-                let path = state.join("hided.json");
-                if !path.exists() {
-                    return Ok(None);
-                }
-                Ok(serde_json::from_slice(&read(&path)?).ok())
-            })?;
-            let screen = Daemon {
-                port: daemon_state["port"]
-                    .as_u64()
-                    .context("private daemon port")? as u16,
-                token: daemon_state["token"]
-                    .as_str()
-                    .context("private daemon token")?
-                    .into(),
-            };
+            let screen = Self::screen_of(&state, None)?;
             Self::connect_device(&screen, &state, &remote_env)?;
             Self::add_local_project(&screen, &local_env.home.join("project"))?;
             // What each pane runs for a journey is kept in the run directory,
@@ -1042,6 +1021,81 @@ impl Fixture {
                 })
             }
         }
+    }
+
+    /// This machine's daemon, started in its account with its output kept
+    /// in the run directory.
+    fn start_daemon(account: &Environment, hided: &Path, root: &Path) -> Result<OwnedChild> {
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("hided.log"))?;
+        let mut command = account.command(hided);
+        command
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
+        Ok(OwnedChild::spawn(&mut command)?)
+    }
+
+    /// The screen connection of the daemon that runs from `state`; `before`
+    /// is the token of the daemon that ran there last, whose record a new
+    /// one replaces.
+    fn screen_of(state: &Path, before: Option<&str>) -> Result<Daemon> {
+        wait_for("private hided state", || {
+            let path = state.join("hided.json");
+            if !path.exists() {
+                return Ok(None);
+            }
+            let Ok(record) = serde_json::from_slice::<Value>(&read(&path)?) else {
+                return Ok(None);
+            };
+            let (Some(port), Some(token)) = (
+                record["port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok()),
+                record["token"].as_str(),
+            ) else {
+                return Ok(None);
+            };
+            Ok((Some(token) != before).then(|| Daemon {
+                port,
+                token: token.to_owned(),
+            }))
+        })
+    }
+
+    /// Ends this machine's core and starts it again from its own state
+    /// folder, as an update of the app does; `store` changes what the core
+    /// saved in between, so a journey can start this build from what an
+    /// earlier one wrote. The panes keep running in their holders, and the
+    /// fixture's screen connection is the new daemon's.
+    pub fn restart_core(&mut self, store: impl FnOnce(&mut Value) -> Result<()>) -> Result<()> {
+        let before = self.screen.token.clone();
+        if let Some(mut daemon) = self.daemon.take() {
+            daemon.kill_tree()?;
+            wait_for("private hided confirmed exit", || {
+                Ok(daemon.try_wait()?.map(|_| ()))
+            })?;
+        }
+        let path = self.state.join(hide_core::node_migration::CORE_STATE);
+        let mut saved: Value = serde_json::from_slice(&read(&path)?)?;
+        store(&mut saved)?;
+        hide_platform::fs::atomic::write_file(
+            &path,
+            &serde_json::to_vec(&saved)?,
+            hide_platform::fs::Access::Private,
+        )?;
+        let hided = self.hide.with_file_name("hided");
+        self.daemon = Some(Self::start_daemon(
+            &self.local.environment,
+            &hided,
+            &self.root,
+        )?);
+        self.screen = Self::screen_of(&self.state, Some(&before))?;
+        self.local.daemon = self.screen.clone();
+        self.remote.daemon = self.screen.clone();
+        Ok(())
     }
 
     /// Registers the device and its project and waits for its node's pane

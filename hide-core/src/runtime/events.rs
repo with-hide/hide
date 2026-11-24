@@ -333,13 +333,6 @@ pub(super) struct RegisterDevicePayload {
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
     pub(super) host_consent: bool,
-    /// The device is added to be switched to its machine's own connection
-    /// at once, as every Add over SSH or of a WSL distribution is (PRD
-    /// device-connect-iroh B41): it
-    /// is not left on the helper when that switch stops before anything
-    /// was started there.
-    #[serde(default)]
-    pub(super) switch_first: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2709,10 +2702,11 @@ impl Runtime {
             Event::PeerWork(payload) => self.take_peer_work(&payload.key, payload.work),
             Event::DeviceSwitch(payload) => self.device_switch(payload),
             Event::PeerMachines(payload) => {
-                let changed = self.snapshot.navigator.peers != payload.machines;
+                let mut machines = payload.machines;
+                self.name_helper_devices(&mut machines);
+                let changed = self.snapshot.navigator.peers != machines;
                 if changed {
-                    let before =
-                        std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
+                    let before = std::mem::replace(&mut self.snapshot.navigator.peers, machines);
                     self.list_peer_work();
                     self.reconcile_peer_devices(&before);
                 }

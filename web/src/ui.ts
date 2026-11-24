@@ -508,10 +508,17 @@ type UiStore = {
   /** Opens Settings on Devices with its phone group in view, where every way to a phone's settings leads. */
   openPhones: () => void;
   clearDevicesRequest: () => void;
-  /** The devices whose switch to their machine's own Hide landed while this window watched, until their screen has been shown once (PRD device-connect-iroh D-48). */
+  /** The devices whose switch to their machine's own Hide landed while this window watched, until the notice on their row is confirmed (PRD device-connect-iroh D-48). */
   switchedDevices: string[];
   markSwitched: (deviceId: string) => void;
   clearSwitched: (deviceId: string) => void;
+  /** The rows of Settings › Devices that are opened on how their device is connected; emptied when the tab closes. */
+  devicesOpen: string[];
+  toggleDeviceOpen: (deviceId: string) => void;
+  closeDevices: () => void;
+  /** How this window's last press of 서버로 연결 ended for a device that was not switched, until it is pressed again. */
+  switchOutcomes: Record<string, import("./settings/switchWays").SwitchOutcome>;
+  setSwitchOutcome: (deviceId: string, outcome: import("./settings/switchWays").SwitchOutcome | null) => void;
   setPendingClose: (pending: PendingClose | null) => void;
   setPendingArchive: (pending: { paneId: string } | null) => void;
   setPendingViewsClose: (pending: PendingViewsClose | null) => void;
@@ -607,6 +614,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   devicesRequest: null,
   storeAskRequested: null,
   switchedDevices: [],
+  devicesOpen: [],
+  switchOutcomes: {},
   pendingClose: null,
   pendingArchive: null,
   pendingViewsClose: null,
@@ -700,6 +709,13 @@ export const useUiStore = create<UiStore>((set, get) => ({
   clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
+  toggleDeviceOpen: (deviceId) => set((state) => ({ devicesOpen: state.devicesOpen.includes(deviceId) ? state.devicesOpen.filter((id) => id !== deviceId) : [...state.devicesOpen, deviceId] })),
+  closeDevices: () => set((state) => (state.devicesOpen.length === 0 ? state : { devicesOpen: [] })),
+  setSwitchOutcome: (deviceId, outcome) =>
+    set((state) => {
+      const rest = Object.fromEntries(Object.entries(state.switchOutcomes).filter(([id]) => id !== deviceId));
+      return { switchOutcomes: outcome ? { ...rest, [deviceId]: outcome } : rest };
+    }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
   setPendingArchive: (pendingArchive) => set({ pendingArchive }),
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),

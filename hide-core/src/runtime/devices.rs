@@ -390,8 +390,8 @@ impl Runtime {
         self.remote_device_tests.remove(device_id);
         if matches!(why, Retiring::Removed) {
             self.device_switches.remove(device_id);
-            self.device_needs.remove(device_id);
             self.device_not_carried.remove(device_id);
+            self.device_switch_steps.remove(device_id);
             self.snapshot.ui_state.device_switch_opens.remove(device_id);
         }
         match why {
@@ -451,6 +451,11 @@ impl Runtime {
             }
         }
         self.snapshot.navigator.devices = devices;
+        // Which paired machine is a helper device here follows the
+        // registrations, as the rows do.
+        let mut peers = std::mem::take(&mut self.snapshot.navigator.peers);
+        self.name_helper_devices(&mut peers);
+        self.snapshot.navigator.peers = peers;
         self.refresh_device_snapshots();
         self.refresh_agent_scopes();
     }
@@ -692,30 +697,6 @@ impl Runtime {
                     .map(|sign_in| (device.id.clone(), sign_in))
             })
             .collect::<HashMap<_, _>>();
-        let switches = self
-            .snapshot
-            .navigator
-            .devices
-            .iter()
-            .filter_map(|device| {
-                self.device_switch_snapshot(&device.id)
-                    .map(|switch| (device.id.clone(), switch))
-            })
-            .collect::<HashMap<_, _>>();
-        // The devices added for their switch, by what each is dialed by.
-        let fresh = self
-            .snapshot
-            .ui_state
-            .device_registrations
-            .iter()
-            .filter(|registration| {
-                registration
-                    .origin
-                    .dialed_by()
-                    .is_some_and(|by| self.device_fresh_adds.contains(&by))
-            })
-            .map(|registration| registration.id.clone())
-            .collect::<HashSet<_>>();
         let statuses = &self.snapshot.status.remote;
         let tests = &self.remote_device_tests;
         let mut changed = false;
@@ -756,29 +737,23 @@ impl Runtime {
                 .map(|problem| problem.code().to_owned());
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
-            let switch = switches.get(&device.id).cloned();
-            let needs = self.device_needs.get(&device.id).cloned();
             let not_carried = self.device_not_carried.get(&device.id).copied();
-            let switch_first = fresh.contains(&device.id);
+            let switch_step = self.device_switch_steps.get(&device.id).copied();
             if device.state != state
                 || device.message != message
                 || device.problem != problem
                 || device.sign_in != sign_in
                 || device.test != test
-                || device.switch != switch
-                || device.needs != needs
                 || device.not_carried != not_carried
-                || device.switch_first != switch_first
+                || device.switch_step != switch_step
             {
                 device.state = state.to_owned();
                 device.message = message;
                 device.problem = problem;
                 device.sign_in = sign_in;
                 device.test = test;
-                device.switch = switch;
-                device.needs = needs;
                 device.not_carried = not_carried;
-                device.switch_first = switch_first;
+                device.switch_step = switch_step;
                 changed = true;
             }
         }
@@ -890,7 +865,7 @@ impl Runtime {
                 ));
             }
             return self
-                .register_wsl_device(distro.trim(), payload.host_consent, payload.switch_first)
+                .register_wsl_device(distro.trim(), payload.host_consent)
                 .map(|registration| registration.id);
         }
         let label = payload.label.trim().to_owned();
@@ -931,12 +906,6 @@ impl Runtime {
             .ui_state
             .device_registrations
             .push(registration.clone());
-        // One line at most says what the last Add did not add.
-        self.snapshot.navigator.device_not_added = None;
-        if payload.switch_first {
-            self.device_fresh_adds
-                .insert(crate::model::DialedBy::Ssh(ssh_alias.clone()));
-        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         self.push_diagnostic(
@@ -956,7 +925,6 @@ impl Runtime {
         &mut self,
         distro: &str,
         consent: bool,
-        switch_first: bool,
     ) -> Result<crate::model::DeviceRegistration, DeviceRefusal> {
         if !hide_platform::wsl::valid_distribution_name(distro) {
             return Err(DeviceRefusal::new(
@@ -986,12 +954,6 @@ impl Runtime {
             .ui_state
             .device_registrations
             .push(registration.clone());
-        // One line at most says what the last Add did not add.
-        self.snapshot.navigator.device_not_added = None;
-        if switch_first {
-            self.device_fresh_adds
-                .insert(crate::model::DialedBy::Wsl(distro.to_owned()));
-        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         self.push_diagnostic(
@@ -1032,9 +994,6 @@ impl Runtime {
         self.forget_device_connect_outcome(device_id);
         self.device_names_saving.remove(device_id);
         self.device_switch_saving.remove(device_id);
-        if let Some(by) = registration.origin.dialed_by() {
-            self.device_fresh_adds.remove(&by);
-        }
         self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.
@@ -1193,8 +1152,6 @@ impl Runtime {
                     ssh_alias,
                     host_consent: false,
                     wsl_distro: None,
-                    // A terminal registers only; its own `switch` follows.
-                    switch_first: false,
                 };
                 let id = self.register_device(payload).map_err(refused)?;
                 let device = self
