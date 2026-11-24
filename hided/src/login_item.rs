@@ -94,6 +94,7 @@ fn put_in(
         environment: &environment,
         log: &log,
     };
+    name_core(program);
     keep(state_dir)?;
     // A core still running when the item is replaced is the one the old
     // item ran; Task Scheduler ends a run without its program, so it is
@@ -117,6 +118,36 @@ fn put_in(
         crate::core_install::starter::stop_pid(previous.pid)?;
     }
     Ok(())
+}
+
+/// Gives the core `program` the app's name for macOS's consent, before the
+/// item that runs it is put in: the item's core is the program macOS holds
+/// responsible for what it reads, named by the path of its build unless an
+/// identity file is beside it when it starts, and a file written later
+/// changes nothing for a core that already runs. Asked once for a build, of
+/// a program the system says is the app's (`hide_platform::privacy::give`);
+/// any other keeps its own name, as on Windows and Linux, and the item is
+/// put in all the same.
+fn name_core(program: &Path) {
+    if hide_platform::privacy::has_identity_file(program) {
+        return;
+    }
+    let given = hide_platform::privacy::give(program, &hide_kit::app_identity::app());
+    let (state, reason, detail) = match &given {
+        hide_platform::privacy::Given::Shared => ("shared", None, None),
+        hide_platform::privacy::Given::Own(hide_platform::privacy::Refusal::NotMacos) => return,
+        hide_platform::privacy::Given::Own(refusal) => {
+            ("own", Some(refusal.reason()), refusal.detail())
+        }
+    };
+    hide_core::diagnostic!(json!({
+        "component": "login_item",
+        "kind": "login_item.identity",
+        "program": program,
+        "state": state,
+        "reason": reason,
+        "detail": detail,
+    }));
 }
 
 /// What the item runs the core with besides its arguments: the account's
@@ -315,6 +346,27 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
             "message": error.to_string(),
         }));
     }
+}
+
+/// Whether this process's panes answer macOS's consent as the app
+/// ([`name_panes`]).
+static PANES_NAMED: std::sync::atomic::AtomicBool = AtomicBool::new(false);
+
+/// Has this process's panes answer macOS's consent as the app and for
+/// themselves (`hide_node::terminal::holder::answer_consent_as`). Said at
+/// the start of a core the login item started, and of a guest's node such a
+/// core started (`env::HIDE_PANES_ANSWER_AS_APP`): no app is above either,
+/// so macOS would ask about their panes under the path of each build, in a
+/// window nobody may be there to answer.
+pub fn name_panes() {
+    hide_node::terminal::holder::answer_consent_as(hide_kit::app_identity::app());
+    PANES_NAMED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether [`name_panes`] was said, which a guest's node this daemon starts
+/// is told in turn.
+pub fn panes_named() -> bool {
+    PANES_NAMED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// What `hided core-login` does once [`at_login`] has looked.

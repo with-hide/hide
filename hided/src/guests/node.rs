@@ -612,6 +612,11 @@ impl GuestNode {
         if let Some(state) = &self.process_state {
             command.env("HIDE_STATE_DIR", state);
         }
+        // No app is above a node this daemon starts when none is above the
+        // daemon: its panes answer macOS's consent as this daemon's do.
+        if crate::login_item::panes_named() {
+            command.env(crate::env::HIDE_PANES_ANSWER_AS_APP, "1");
+        }
         command
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)

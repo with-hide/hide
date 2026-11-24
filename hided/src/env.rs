@@ -55,6 +55,11 @@ pub const HIDE_PEER_RELAY: &str = "HIDE_PEER_RELAY";
 /// Development and tests: with `HIDE_PEER_RELAY`, the endpoint keeps no IP
 /// transport, so every connection goes through that relay (`peer_host`).
 pub const HIDE_PEER_RELAY_ONLY: &str = "HIDE_PEER_RELAY_ONLY";
+/// Set on a guest's node by a daemon whose own panes answer macOS's consent
+/// as the app and for themselves (`login_item::name_panes`): the node's
+/// panes then do too. A node's own word to its child, read at the node's
+/// start and taken out of its environment, so no pane inherits it.
+pub const HIDE_PANES_ANSWER_AS_APP: &str = "HIDE_PANES_ANSWER_AS_APP";
 /// Test-only: how a core is started on a machine for another one's sake.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: a file in a fixture HOME naming a build whose daemon exits at
