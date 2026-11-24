@@ -459,7 +459,7 @@ Public CI prepares unsigned packages without those signing credentials.
 A Developer ID build signs `hided` and `hide-holder` under the app's identifier (`contracts/app-identity.json`, `SIGNED_AS_APP` in `desktop/scripts/app-identity.mjs`), not under their own names: outside the app bundle, as the core a login item runs and the pane holders it starts are, a program answers macOS's consent as the app only when it meets the code requirement the app's consent is kept under ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)).
 The package reads both back and fails otherwise: the built app's `Info.plist` says what the contract says (identifier, name, every usage sentence), and each of the two programs meets the contract's requirement (`codesign --verify -R`).
 A build signed with a local identity that is not the Developer ID certificate, such as Apple Development (`HIDE_SIGN_IDENTITY` alone), is still made: the requirement refuses that certificate by design, the package prints one line saying so, and the two programs answer consent under their own names.
-An ad-hoc build signs nothing as the app and its programs keep their own names, as every build did before 1.3.0.
+An ad-hoc build signs nothing as the app and its programs keep their own names, as every build did before 1.2.12.
 The Mac programs of a release and of its device kit are signed by the private publisher, which signs the two the same way and reads the requirement back.
 
 ### A local Developer ID build

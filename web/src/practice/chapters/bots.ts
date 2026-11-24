@@ -17,7 +17,7 @@ export default chapter<BotsModel>({
   id: "bots",
   number: 8,
   version: 2,
-  since: "1.3.0",
+  since: "1.2.12",
   world: BOTS_WORLD,
   quest: true,
   preview: "rows",

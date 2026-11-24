@@ -13,7 +13,7 @@ export default chapter<ConnectModel>({
   id: "connect",
   number: 9,
   version: 2,
-  since: "1.3.0",
+  since: "1.2.12",
   world: CONNECT_WORLD,
   quest: true,
   preview: "switch",

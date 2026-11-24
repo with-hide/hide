@@ -1,4 +1,4 @@
-// What's new scene for connecting computers that run Hide (1.3.0): many
+// What's new scene for connecting computers that run Hide (1.2.12): many
 // computers, one team of agents. This Mac stands in the middle with its own
 // agent at work; a Mac mini, a Windows PC and a Linux server join around it,
 // one after another; an agent works on each of them; the Linux server's

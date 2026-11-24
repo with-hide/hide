@@ -10,7 +10,7 @@ export default chapter<GitlabModel>({
   id: "gitlab",
   number: 10,
   version: 1,
-  since: "1.3.0",
+  since: "1.2.12",
   world: GITLAB_WORLD,
   quest: true,
   preview: "rows",

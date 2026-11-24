@@ -364,7 +364,7 @@ export type StartCatalog = {
 
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
-  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before 1.3.0. */
+  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before 1.2.12. */
   /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
   /**
    * `answer`: the computer takes a reply of several lines up to one phone message (`replyFits`), sends the open detail's `ask` and the
