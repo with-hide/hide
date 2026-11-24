@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { movingTab, movePaneReason, paneEdge, selectedMovePane } from "./paneMove";
+import { movingTab, movePaneReason, paneEdge, paneHeadPicksPane, selectedMovePane } from "./paneMove";
 import type { AsyncOperation, PaneRow, Tab, TerminalPane } from "./snapshot";
 
 const pane: PaneRow = { id: "w1:p1", device_id: "local", device_pane_id: "w1:p1", engine_label: "shell", terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null };
@@ -38,5 +39,18 @@ describe("edge destinations", () => {
     expect(paneEdge(rect, 300, 150)).toBeNull();
     expect(paneEdge(rect, 90, 150)).toBeNull();
     expect(paneEdge({ ...rect, width: 0 }, 100, 50)).toBeNull();
+  });
+});
+
+describe("a click on a pane's head", () => {
+  it("picks the pane from the head's own surface, not from a control in it or a menu it opened", () => {
+    const header = document.createElement("header");
+    header.innerHTML = '<span data-pane-move-grip="true"><svg></svg></span><span data-pane-move-title="true">zsh</span><button><svg></svg></button><span role="button">tree</span>';
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menuitem");
+    document.body.append(header, menu);
+    const at = (selector: string) => header.querySelector(selector);
+    expect([header, at("svg"), at("[data-pane-move-title]")].map((target) => paneHeadPicksPane(header, target))).toEqual([true, true, true]);
+    expect([at("button svg"), at("[role='button']"), menu, null].map((target) => paneHeadPicksPane(header, target))).toEqual([false, false, false, false]);
   });
 });

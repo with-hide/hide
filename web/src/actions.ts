@@ -185,6 +185,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
+   * The pane a pane command acts on when the operator pointed at none: the
+   * pane this page's keyboard is on, which a click moves at once, while it is
+   * in the tab on screen; else the core's focused pane. The core's answer to
+   * the click reaches the page a round trip later, and reading it alone
+   * zoomed, split or closed the pane the operator had just left.
+   */
+  const keyboardPane = (): string | null => {
+    const owner = keyboardCommandOwner();
+    const focused = useShellStore.getState().focusedPaneId;
+    if (owner.kind !== "pane") return focused;
+    const context = remoteContext(rest());
+    const tab = context ? remoteView(context.session, rest()?.workspace_view)?.tab : current()?.tab;
+    return tab?.panes.some((pane) => pane.id === owner.paneId) ? owner.paneId : focused;
+  };
+
+  /**
    * The checkout an Explorer change is made in: the one in front on the
    * selected device, named with that device so the core refuses the change
    * once another device's tree is on screen (S5.5 B16, B34).
@@ -3232,7 +3248,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     closeTab,
 
     closePane(paneId?: string) {
-      const id = paneId ?? useShellStore.getState().focusedPaneId;
+      const id = paneId ?? keyboardPane();
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.closePane");
         if (!host) return;
@@ -3415,20 +3431,21 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * Splits `target`, a pane the operator pointed at, else the focused pane.
-     * The core splits its current pane, which the pointing already focused.
+     * Splits `target`, a pane the operator pointed at, else the pane the
+     * keyboard is on (`keyboardPane`). The core splits its current pane,
+     * which the pointing or the click already focused.
      */
     split(direction: "right" | "down", target?: string) {
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.split");
         if (!host) return;
-        const pane = host.view?.tab?.panes.find((row) => row.id === (target ?? host.view?.focusedPaneId));
+        const pane = host.view?.tab?.panes.find((row) => row.id === (target ?? keyboardPane()));
         if (!pane) return diagnostic("split_pane: no focused remote pane");
         sendRemote(host.targetId, { action: "split_pane", pane_id: pane.id, direction, cwd: pane.cwd || null });
         return;
       }
       const here = current();
-      const paneId = target ?? useShellStore.getState().focusedPaneId;
+      const paneId = target ?? keyboardPane();
       const pane = here?.tab?.panes.find((row) => row.id === paneId);
       // Named, because a split that sends nothing is otherwise invisible:
       // the core's keyboard pane outside the tab it shows was the whole
@@ -3443,19 +3460,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       armKeyTarget(requestId);
     },
 
-    /** Zooms or unzooms `target`, a pane the operator pointed at, else the focused pane. */
+    /** Zooms or unzooms `target`, a pane the operator pointed at, else the pane the keyboard is on (`keyboardPane`). */
     toggleZoom(target?: string) {
       // Focus mode leaves the tab's layout and zoom as they are, a device pane's too; the pane is alone already (D-16, D-65).
       if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.zoomPane");
         if (!host) return;
-        const paneId = target ?? host.view?.focusedPaneId;
+        const paneId = target ?? keyboardPane();
         if (!paneId) return diagnostic("toggle_pane_zoom: no focused remote pane");
         sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
         return;
       }
-      const paneId = target ?? useShellStore.getState().focusedPaneId;
+      const paneId = target ?? keyboardPane();
       if (!paneId) return diagnostic("toggle_zoom: no focused pane");
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
     },
@@ -3484,7 +3501,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const owner = keyboardCommandOwner();
       const onDesk = owner.kind === "view" && view?.layout ? findArea(view.layout.root, owner.areaId)?.active ?? null : null;
       if (onDesk) return this.pinPairView(onDesk);
-      const paneId = useShellStore.getState().focusedPaneId;
+      const paneId = keyboardPane();
       if (!paneId) return diagnostic("pair_view: no focused pane");
       askPairView({ pane_id: paneId });
     },
@@ -3518,7 +3535,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         dispatch({ schema_version: 2, kind: "editor_text_scale", payload: { direction } });
         return;
       }
-      const paneId = useShellStore.getState().focusedPaneId;
+      const paneId = keyboardPane();
       if (!paneId) return diagnostic("pane_text_scale: no focused pane");
       dispatch({ schema_version: 2, kind: "pane_text_scale", payload: { pane_id: paneId, direction } });
     },
@@ -3694,7 +3711,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     togglePlanChip(target?: string) {
       const state = useShellStore.getState();
-      const paneId = target ?? state.focusedPaneId;
+      const paneId = target ?? keyboardPane();
       if (!paneId) return;
       if (ui().planPane === paneId) return ui().setPlanPane(null);
       if (planOfPane(state.rest, paneId) || missionOfPane(state.rest, allPaneAgents(state.agents, state.rest?.status?.remote), paneId)) ui().setPlanPane(paneId);
@@ -3876,7 +3893,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       }
       // A pointed-at pane is focused by the pointing; the find bar follows the
       // focused pane, so only the agent's own search needs the target named.
-      const paneId = target ?? useShellStore.getState().focusedPaneId;
+      const paneId = target ?? keyboardPane();
       const agent = paneId ? contextAgents(rest(), rest()?.navigator?.agents ?? []).find((row) => row.pane_id === paneId) : undefined;
       if (paneId && agent?.own_find) {
         const requestId = remoteRequestId();
