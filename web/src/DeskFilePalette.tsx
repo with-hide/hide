@@ -13,8 +13,8 @@ import { useUiStore } from "./ui";
 
 // ⌘P while Desk is in front (PRD desk-2-ui D-23, B37, B38): the app's file
 // palette, over the checkout of the session open beside Desk, or over every
-// project at once when none is open. ↵ opens the file in the tab panel and
-// ⌘↵ keeps it beside what is open; the Explorer column is left as it was.
+// project at once when none is open. ↵ opens the file in the tab panel as the
+// app's ⌘P opens one (the preview) and ⌘↵ opens it to the side; the Explorer column is left as it was.
 
 export function DeskFilePalette({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -52,7 +52,7 @@ export function DeskFilePalette({ actions }: { actions: Actions }) {
   const paths = rows ? rows.map((row) => row.hit.path) : hits.map((hit) => hit.path);
   const current = hits.find((hit) => hit.path === highlighted && paths.includes(hit.path)) ?? hits.find((hit) => hit.path === paths[0]);
 
-  const open = (hit: DeskFileHit, keep: boolean) => actions.openDeskIndexEntry(hit, keep);
+  const open = (hit: DeskFileHit, beside: boolean) => actions.openDeskIndexEntry(hit, beside);
   const row = (hit: DeskFileHit, title: React.ReactNode) => (
     <PaletteFileRow key={`${hit.device_id}:${hit.root_path}:${hit.path}`} path={hit.path} relativePath={hit.relative_path} title={title} onSelect={() => open(hit, false)} />
   );
@@ -74,7 +74,7 @@ export function DeskFilePalette({ actions }: { actions: Actions }) {
       value={current?.path ?? ""}
       onValue={setHighlighted}
       onKeyDown={(event) => {
-        // ⌘↵ (Ctrl+Enter off macOS) keeps the highlighted file as a tab of its own.
+        // ⌘↵ (Ctrl+Enter off macOS) opens the highlighted file to the side, as the app's ⌘P does.
         if (event.key !== "Enter" || !holdsCommandKey(event) || composingKey(event) || !current) return;
         event.preventDefault();
         event.stopPropagation();

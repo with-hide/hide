@@ -2766,7 +2766,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * its preview slot or keeps it (`preview`), and the panel draws that
      * display, so editing and ⌘S are the app's.
      */
-    deskOpen(tab: DeskTab, options: { preview?: boolean } = {}) {
+    deskOpen(tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}) {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       if (ui().screen?.kind !== "desk") this.openDesk();
       if (tab.kind === "file") {
@@ -2776,7 +2776,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         dispatch({
           schema_version: 2,
           kind: "file_open",
-          payload: { path: tab.path, workspace_id: place.workspace, checkout_id: place.checkout, preview: options.preview ?? false, ...deviceField(place.device, localDeviceId(rest())) },
+          payload: { path: tab.path, workspace_id: place.workspace, checkout_id: place.checkout, preview: options.beside ? false : (options.preview ?? false), ...(options.beside ? { beside: true } : {}), ...deviceField(place.device, localDeviceId(rest())) },
         });
       }
       ui().setDeskRoom((room) => openDeskTab(room, tab, options));
@@ -2784,13 +2784,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
-     * tab panel, as the checkout's preview tab, or kept (`keep`, ⌘↵) so it
-     * stands beside what is already open. The Explorer column stays as it was.
+     * tab panel, as the checkout's preview tab as the app's ⌘P opens it, or
+     * to the side (`beside`, ⌘↵) as the app's Open to the side does: a pinned
+     * second view of the file. The Explorer column stays as it was.
      */
-    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, keep = false) {
+    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, beside = false) {
       ui().closeOverlay();
       ui().setExplorerSelection(hit.path);
-      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, { preview: !keep });
+      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, beside ? { beside: true } : { preview: true });
     },
 
     /** ⌘↵ on a session in Desk's ⌘K (PRD desk-2-ui D-24, B39): its tab, where ⌘J brings Desk back (B7). */

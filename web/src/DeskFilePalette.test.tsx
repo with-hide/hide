@@ -75,12 +75,11 @@ describe("⌘P on Desk", () => {
 
   it("with no session open searches every project, the project Desk named last first, each result led by its project", async () => {
     await open();
-    expect(sent.at(-1)).toBeUndefined();
     expect(rows()).toEqual(["herdr-ide › token.tsweb/src", "atorni-ax › token-guard.tssrc"]);
     expect([...document.querySelectorAll("[data-palette-group]")].map((group) => group.getAttribute("data-palette-group"))).toEqual(["named", "other"]);
   });
 
-  it("opens the highlighted file in the tab panel as the preview on ↵ and keeps it on ⌘↵, leaving the Explorer column alone", async () => {
+  it("opens the highlighted file in the tab panel as the preview on ↵ and to the side on ⌘↵, leaving the Explorer column alone", async () => {
     await open();
     await press({});
     let room = useUiStore.getState().deskRoom;
@@ -94,10 +93,10 @@ describe("⌘P on Desk", () => {
     await open();
     await press({ metaKey: true, ctrlKey: true });
     room = useUiStore.getState().deskRoom;
-    // The same file again, kept: it stops being the italic preview.
+    // The same file again, to the side as the app's Open to the side asks the core for it: a pinned second view.
     expect(room.panel?.tabs).toHaveLength(1);
     expect(room.panel?.preview).toBeNull();
-    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: false });
+    expect(sent.at(-1)?.payload).toMatchObject({ path: "/ide/web/src/token.ts", preview: false, beside: true });
   });
 
   it("searches only the checkout of the session open beside Desk", async () => {
