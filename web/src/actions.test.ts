@@ -16,7 +16,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { attachTerminal, terminalFor } from "./terminals";
-import { installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered } from "./viewFocus";
+import { installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, noteKeyboardOwner, type KeyboardOwner } from "./viewFocus";
 import { emptyScope } from "../test/legacyAgentScope";
 
 // jsdom has no canvas. Keep real actions and terminals while answering
@@ -549,5 +549,35 @@ describe("selecting a tool's cell", () => {
     expect({ screen: useUiStore.getState().screen, cell: cellInFront() }).toEqual({ screen: { kind: "missions" }, cell: null });
     actions.openMissions();
     expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
+  });
+});
+
+describe("a pane command pressed without pointing at a pane", () => {
+  const checkout = {
+    id: "c", workspace_id: "w", path: "/fixture", label: "fixture", active_tab_id: "t", agent_scope: emptyScope(),
+    tabs: [{ id: "t", panes: [{ id: "left", cwd: "/fixture/left" }, { id: "right", cwd: "/fixture/right" }] }, { id: "behind", panes: [{ id: "elsewhere", cwd: "/fixture/elsewhere" }] }],
+  };
+  // The core still names the left pane: its answer to a click on another pane is on its way.
+  const rest = { navigator: { focused_checkout_id: "c", focused_workspace_id: "w", workspaces: [{ id: "w", device_id: "local", checkouts: [checkout] }] }, focused: { pane_id: "left" } } as never;
+  const pressed = (owner: KeyboardOwner) => {
+    useShellStore.setState({ rest, connection: "live", focusedPaneId: "left" });
+    noteKeyboardOwner(owner);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    const actions = createActions((event) => { sent.push(event); return true; });
+    actions.toggleZoom();
+    actions.split("right");
+    return sent.map((event) => [event.kind, event.kind === "create_pane" ? event.payload.cwd : event.payload.pane_id]);
+  };
+  afterEach(() => {
+    noteKeyboardOwner({ kind: "none" });
+    useShellStore.setState({ rest: null, focusedPaneId: null });
+  });
+
+  it("acts on the pane the operator clicked before the core's answer arrives", () => {
+    expect(pressed({ kind: "pane", workspace: "c", paneId: "right" })).toEqual([["toggle_zoom", "right"], ["create_pane", "/fixture/right"]]);
+  });
+
+  it.each<KeyboardOwner>([{ kind: "none" }, { kind: "pane", workspace: "c", paneId: "elsewhere" }])("acts on the core's focused pane with the keyboard on no pane of the tab on screen ($kind)", (owner) => {
+    expect(pressed(owner)).toEqual([["toggle_zoom", "left"], ["create_pane", "/fixture/left"]]);
   });
 });
