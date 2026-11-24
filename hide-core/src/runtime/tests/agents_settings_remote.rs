@@ -101,7 +101,6 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         machine_name: None,
         dials_in: false,
         peer_key: None,
-        needs: None,
         not_carried: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

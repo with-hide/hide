@@ -1546,7 +1546,6 @@ fn a_closed_device_file_reopens_only_on_its_device_and_leaves_this_machines_clos
             machine_name: None,
             dials_in: false,
             peer_key: None,
-            needs: None,
             not_carried: None,
         });
         assert_eq!(runtime.snapshot.recent_closed.count, 1);

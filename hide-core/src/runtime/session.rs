@@ -2279,9 +2279,6 @@ impl Runtime {
         if reachable_again {
             changed |= self.device_reachable_again(target_id);
         }
-        if session_ok {
-            self.move_when_closed(target_id);
-        }
         changed |= self.refresh_device_snapshots();
         if observed_session.is_some() {
             self.reconcile_node_agent_topology(target_id);

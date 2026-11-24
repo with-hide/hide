@@ -1163,61 +1163,10 @@ pub struct DeviceSnapshot {
     /// device-connect-iroh D-72): the machine has one row in Settings, its
     /// pairing's, and this device serves its rail tile and its panes.
     pub peer_key: Option<String>,
-    /// What the device's machine needs from the operator before its own
-    /// Hide is back after a restart with nobody there (PRD
-    /// device-connect-iroh B30), as that machine said: for a helper device,
-    /// what keeps it from moving to its machine's own connection by
-    /// itself; for a machine's device, what the Hide started there still
-    /// needs. Kept while this core runs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub needs: Option<DeviceNeedsSnapshot>,
     /// How many of the device's terminals its switch could not take up
     /// again and closed (B36), kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_carried: Option<u32>,
-}
-
-/// What a machine's Hide, reached over SSH or `wsl.exe`, needs to stay
-/// reachable with no one at it (PRD device-connect-iroh B30, B43).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DeviceNeedsSnapshot {
-    pub kind: DeviceNeeds,
-    /// With `linger`: the command an administrator runs on that machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-}
-
-impl DeviceNeedsSnapshot {
-    /// Whether it is spelled as a row can draw it: a linger with its one
-    /// command line, an automatic login or an opened distribution with
-    /// none.
-    pub(crate) fn valid(&self) -> bool {
-        match (self.kind, self.command.as_deref()) {
-            (DeviceNeeds::AutoLogin | DeviceNeeds::OpenDistribution, None) => true,
-            (DeviceNeeds::Linger, Some(command)) => {
-                !command.is_empty()
-                    && command.len() <= 256
-                    && !command.chars().any(char::is_control)
-            }
-            _ => false,
-        }
-    }
-}
-
-/// `contracts/snapshot-wire-enums.json`: `device_needs`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeviceNeeds {
-    /// A Mac's core starts at a login: after a restart it is back only
-    /// once someone logs in, or with automatic login on.
-    AutoLogin,
-    /// Linux: the core ends with the account's last session until an
-    /// administrator turns linger on.
-    Linger,
-    /// A WSL distribution with no systemd: its core lives while the
-    /// distribution runs, so after Windows restarts it is back only once
-    /// the operator opens the distribution.
-    OpenDistribution,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -11780,19 +11729,6 @@ mod wire_enum_tests {
             &problems.map(DeviceProblem::code),
         );
         checked.insert("device_problem");
-
-        let needs = [
-            DeviceNeeds::AutoLogin,
-            DeviceNeeds::Linger,
-            DeviceNeeds::OpenDistribution,
-        ];
-        for variant in needs {
-            match variant {
-                DeviceNeeds::AutoLogin | DeviceNeeds::Linger | DeviceNeeds::OpenDistribution => {}
-            }
-        }
-        assert_wire(&contract, "device_needs", &needs);
-        checked.insert("device_needs");
 
         let text = String::new;
         let waits = [

@@ -599,9 +599,9 @@ pub enum Folder {
     Kept,
 }
 
-/// What a Hide started on a machine over SSH needs from the operator to
-/// stay reachable with no one at that machine (PRD device-connect-iroh
-/// B30).
+/// What a machine needs from the operator before its own Hide is back
+/// after a restart with no one there (PRD device-connect-iroh B30): the
+/// one thing a switch that left a device says to change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Needs {
     /// A Mac's core starts at a login, so after a restart it is back only
@@ -611,85 +611,54 @@ pub enum Needs {
     /// with its last session until an administrator runs `command`.
     Linger { command: String },
     /// A WSL distribution with no systemd: nothing there starts its core,
-    /// which lives while the distribution runs, so after Windows restarts
-    /// the operator opens the distribution again (B43).
-    OpenDistribution,
+    /// which lives only while the distribution runs (B43).
+    Systemd,
 }
 
 impl Needs {
-    /// As the core's `device_switch` event carries it.
+    /// As the answer of a switch that left the device carries it.
     pub fn payload(&self) -> Value {
         match self {
             Self::AutoLogin => serde_json::json!({ "kind": "auto_login" }),
             Self::Linger { command } => {
                 serde_json::json!({ "kind": "linger", "command": command })
             }
-            Self::OpenDistribution => serde_json::json!({ "kind": "open_distribution" }),
+            Self::Systemd => serde_json::json!({ "kind": "systemd" }),
         }
     }
 }
 
-/// What the target's Hide needs. A WSL distribution with no systemd says
-/// so whoever started its Hide, since nothing there starts it again. For a
-/// Hide this switch `started` the rest is what the target says of itself
-/// ([`may_move`]): nothing when its Hide is back with nobody there, else
-/// what its system asks for. The switch goes on either way.
-fn needs_of(login: &dyn Login, reach: &Reach, started: bool) -> Option<Needs> {
-    if login.channel() == Channel::Wsl && !runs_systemd(login) {
-        return Some(Needs::OpenDistribution);
-    }
-    started
-        .then(|| read_move(login, reach).ok())
-        .flatten()
-        .and_then(|moves| moves.needs)
-}
-
-/// Whether a helper device moves to its machine's own Hide by itself, and
-/// what its operator does when it does not.
+/// Whether a helper device is switched to its machine's own Hide, and what
+/// its operator does when it is not.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Move {
     /// The account's Hide is back after a restart with nobody at the
-    /// machine: the device is moved.
+    /// machine: the device is switched.
     pub back: bool,
     /// What the operator turns on for that, where something does: a Mac's
     /// automatic login, or the command a Linux administrator runs. None
-    /// for a machine that is moved, and for one nothing here would move.
+    /// for a machine that is switched, and for one nothing here would
+    /// change.
     pub needs: Option<Needs>,
 }
 
-/// The one rule of a move nobody pressed for (operator decision
-/// 2026-11-24): a helper device moves only when its machine's own Hide is
-/// back after a restart with nobody there, since the SSH login it is
-/// dialed by reaches such a machine and its own Hide is there only where
-/// its login item runs then. Asked of the target in its own
-/// `hide always-on linger`: where the account lingers (Linux, which that
-/// turns on when the account may: only asking says whether it may), or the
-/// machine logs it in by itself (a Mac's automatic login). The call starts
-/// no Hide; on Linux it leaves lingering on for an account that may turn
-/// it on, whether or not the device then moves, and writes nothing else
-/// there. A target whose `hide` does not say is not known to be back and
-/// is left on its login, which the log says; one the login did not reach
-/// was not read, and the code says so.
+/// The one rule every switch passes (operator decision 2026-11-24): a
+/// helper device is switched only when its machine's own Hide is back
+/// after a restart with nobody there, since the SSH login it is dialed by
+/// reaches such a machine and its own Hide is there only where its login
+/// item runs then. Asked of the target in its own `hide always-on linger`:
+/// where the account lingers (Linux, which that turns on when the account
+/// may: only asking says whether it may), or the machine logs it in by
+/// itself (a Mac's automatic login). The call starts no Hide; on Linux it
+/// leaves lingering on for an account that may turn it on, whether or not
+/// the device is then switched, and writes nothing else there. A target
+/// whose `hide` does not say is not known to be back and is left on its
+/// login; one the login did not reach was not read, and the code says so.
 pub(crate) fn may_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
-    let moves = read_move(login, reach)?;
-    if !moves.back {
-        hide_core::diagnostic!(serde_json::json!({
-            "component": "pairing",
-            "kind": "pairing.device_left",
-            "alias": login.name(),
-            "reason": "not_back_unattended",
-        }));
-    }
-    Ok(moves)
-}
-
-/// What the target says of itself for [`may_move`], with nothing logged
-/// about a device: a switch that already moved one reads it for what the
-/// Hide it started still needs ([`needs_of`]).
-fn read_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
     let answer = match run_hide(login, reach, &["always-on", "linger", "--json"]) {
         Ok(Said::Answer(answer)) if answer["ok"] == true => answer,
-        Ok(_) => return Ok(Move::default()),
+        // It does not say: not known to be back.
+        Ok(_) => Value::Null,
         Err(error) => return Err(not_reached(login, "linger", &error)),
     };
     if answer["value"]["unattended"] == true {
@@ -699,6 +668,12 @@ fn read_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
         });
     }
     let needs = match login.system().ok().as_deref() {
+        // Nothing in a distribution with no systemd starts its Hide again,
+        // whatever its `hide` answered or failed to.
+        Some("linux") if login.channel() == Channel::Wsl && !runs_systemd(login) => {
+            Some(Needs::Systemd)
+        }
+        _ if answer.is_null() => None,
         // A Mac takes a Hide only from a Mac: from any other system its
         // automatic login would move nothing.
         Some("macos") if takes_hide_from("macos", std::env::consts::OS) => Some(Needs::AutoLogin),
@@ -751,13 +726,10 @@ pub enum Switched {
     Paired {
         paired: Option<Paired>,
         folder: Folder,
-        /// What the Hide this switch started there still needs from the
-        /// operator to stay reachable; none for a Hide that ran already.
-        needs: Option<Needs>,
     },
     /// Another machine took the helper's folder first, named as the target
-    /// knows it: nothing was saved, and the operator is asked before this
-    /// machine's terminals there are given up (D-75).
+    /// knows it: nothing was saved, and this machine goes on with a folder
+    /// of its own only when it runs no terminal there (D-75).
     HeldBy(String),
     /// The target has no Hide of its own: one is installed only when the
     /// operator allows it (D-45).
@@ -771,8 +743,8 @@ pub struct Switch<'a> {
     pub me: &'a Me,
     pub key: &'a PeerKey,
     /// The root this machine's helper is installed under on the target,
-    /// when this machine asks for the helper's folder: not after its
-    /// operator agreed to go on without it (D-75).
+    /// when this machine asks for the helper's folder: not when it goes
+    /// on with a folder of its own (D-75).
     pub helper_root: Option<&'a str>,
     /// The folders this machine registered as projects on the device,
     /// which the machine's own Hide lists from then on (D-48).
@@ -808,7 +780,6 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
         }
         Err(error) => return Err(not_reached(login, "look", &error)),
     };
-    let mut started = false;
     // A Hide of the account's own that stopped and that no app there opens
     // is one a machine started over a login: a switch that ended before
     // its pairing leaves it with nothing to keep it running, and nobody
@@ -839,12 +810,10 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
         Looked::Ready => {}
         Looked::Absent if switch.install => {
             start()?;
-            started = true;
         }
         // The operator allowed a Hide there when it was first started.
         Looked::NotRunning { .. } if stopped => {
             start()?;
-            started = true;
         }
         Looked::Absent => {
             let system = login
@@ -878,7 +847,6 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
                 Switched::Paired {
                     paired: None,
                     folder: Folder::Kept,
-                    needs: None,
                 },
             ));
         }
@@ -900,16 +868,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
         Value::Null if switch.helper_root.is_some() => None,
         accepted => Some(paired(login, accepted).ok_or("ssh_update_there")?),
     };
-    let needs = needs_of(login, switch.reach, started);
-    Ok(admit(
-        login,
-        switch,
-        Switched::Paired {
-            paired,
-            folder,
-            needs,
-        },
-    ))
+    Ok(admit(login, switch, Switched::Paired { paired, folder }))
 }
 
 /// The target answered the pairing `done`: the caller confirms it over the
@@ -1323,10 +1282,7 @@ mod tests {
             None
         );
         assert_eq!(Needs::AutoLogin.payload(), json!({"kind": "auto_login"}));
-        assert_eq!(
-            Needs::OpenDistribution.payload(),
-            json!({"kind": "open_distribution"})
-        );
+        assert_eq!(Needs::Systemd.payload(), json!({"kind": "systemd"}));
     }
 
     /// The command folder is spelled for the system that runs it, from the

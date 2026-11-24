@@ -874,25 +874,23 @@ fn device_row(snapshot: &Value) -> Result<Value> {
         .context("the device left the core's list")
 }
 
-/// The operator's decision of 2026-11-24 (mission remote-1-3-0 R03, R04,
-/// R05, R11): each time a device's helper connects and its kit pass
-/// answers, the daemon looks at the device by itself, with nothing pressed
-/// and no window open, and moves it only when its machine's own Hide would
-/// be back after a restart with nobody there. The fixture's account has no
-/// login item of the system's (its HOME is not the account's own), so its
-/// device is left as it is: nothing is started there, its terminal runs
-/// on, and the next connection looks again. A device that is off is not
-/// looked at. `hide device switch` passes the same rule: it answers that
-/// the device is left, pairs nothing and starts nothing, and the device is
-/// one row, in the snapshot and in `hide device list`, across another
-/// start of the core. A move itself runs against stand-ins:
-/// `pairing_wsl`'s `a_distribution_is_switched_through_wsl_and_says_what_no_systemd_means`
-/// and `a_distribution_moves_by_itself_only_when_it_runs_and_its_hide_is_back_unattended`,
-/// and `hide-core`'s `device_moves` tests.
+/// The operator's decision of 2026-11-24: a device is switched to its
+/// machine's own Hide only when the operator asks, and only when that Hide
+/// would be back after a restart with nobody there. The fixture's account
+/// has no login item of the system's (its HOME is not the account's own),
+/// so `hide device switch` answers that the device is left: it pairs
+/// nothing and starts nothing there, the device's terminal runs on, and
+/// the device is one row across another start of the core. A device that
+/// is off is not reached by the switch, which answers a refusal. Nothing
+/// switches a device nobody asked about: at each point the journey reads
+/// it, after a start and after a connection, it is still the helper's.
+/// A switch that runs is held against stand-ins: `pairing_wsl`'s
+/// `a_distribution_is_switched_through_wsl` and
+/// `a_distribution_is_switched_only_when_its_hide_is_back_unattended`, and
+/// `hide-core`'s `device_switch_folder` tests.
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
-fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_connection()
--> Result<()> {
+fn a_switch_leaves_on_its_helper_a_device_whose_hide_would_not_be_back_alone() -> Result<()> {
     Fixture::journey(|fixture| {
         let stand_in = |fixture: &mut Fixture| -> Result<String> {
             let ran = fixture.remote.run_in_pane("echo $PPID")?;
@@ -915,77 +913,59 @@ fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_con
                 .filter(|row| row["kind"] == kind)
                 .collect())
         };
-        let looks = |fixture: &Fixture| said(fixture, "pairing.moved_by_itself");
-        // Every look so far left the device where it was.
-        let left = |fixture: &Fixture, row: &Value| -> Result<()> {
-            ensure!(
-                looks(fixture)?
-                    .iter()
-                    .all(|look| look["device"] == fixture::DEVICE && look["ended"] == "left"),
-                "what the daemon said of its looks: {:?}",
-                looks(fixture)?
-            );
-            ensure!(
-                row["peer_key"].is_null(),
-                "a device that was left was moved: {row}"
-            );
+        // The device is the helper's, and no Hide was started on it.
+        let left = |fixture: &Fixture| -> Result<()> {
+            let row = device_row(&fixture.snapshot()?)?;
+            ensure!(row["peer_key"].is_null(), "the device was switched: {row}");
             ensure!(
                 !state.join("hided.json").exists(),
                 "a Hide was started on a device that was left"
             );
             Ok(())
         };
+        // The device's link is up, as each switch below needs it and as
+        // its terminal's carrying on is read over it.
+        let connected = |fixture: &Fixture| -> Result<()> {
+            fixture::wait_within(
+                "the device to connect",
+                SWITCH_WITHIN + fixture::READY_BOUND,
+                || {
+                    let snapshot = fixture.snapshot()?;
+                    Ok(snapshot
+                        .pointer("/status/remote")
+                        .and_then(Value::as_array)
+                        .is_some_and(|rows| {
+                            rows.iter().any(|row| {
+                                row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                            })
+                        })
+                        .then_some(()))
+                },
+            )
+        };
+        // Connected, with nothing asked: as it was added.
+        left(fixture)?;
 
-        // Nothing is pressed: the device this build added connected, its
-        // kit pass answered, and the daemon looked at it. Its Hide would
-        // not be back with nobody there, so it is left.
-        let first = fixture::wait_within(
-            "the daemon to look at the device by itself",
-            SWITCH_WITHIN + fixture::READY_BOUND,
-            || Ok(Some(looks(fixture)?.len()).filter(|count| *count > 0)),
-        )?;
-        ensure!(
-            !said(fixture, "pairing.device_left")?.is_empty(),
-            "the daemon did not say why it left the device"
-        );
-        left(fixture, &device_row(&fixture.snapshot()?)?)?;
-        ensure!(
-            stand_in(fixture)? == before,
-            "the terminal of a device that was left did not carry on"
-        );
-
-        // The device is off when the core next starts: the core lists it
-        // and does not reach it, so nothing is asked of its machine.
+        // The device is off when the core next starts: a switch asked for
+        // at a terminal does not reach it, answers a refusal and changes
+        // nothing.
         let retries = said(fixture, "host.retry_scheduled")?.len();
         fixture.ssh.online(false)?;
         fixture.restart_core(|_| Ok(()))?;
         wait_for("a connection attempt that did not reach the device", || {
             Ok((said(fixture, "host.retry_scheduled")?.len() > retries).then_some(()))
         })?;
-        ensure!(
-            looks(fixture)?.len() == first,
-            "a device that was not reached was looked at: {:?}",
-            looks(fixture)?
-        );
-        left(fixture, &device_row(&fixture.snapshot()?)?)?;
-        // A switch asked for at a terminal does not reach it either: it
-        // answers a refusal, and changes nothing.
         let (ok, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
         ensure!(
             !ok && answer["value"]["switch"].is_null(),
             "a switch to a device that is off: {answer}"
         );
-        left(fixture, &device_row(&fixture.snapshot()?)?)?;
-        // It is back: the helper's link returns, and with it the look,
-        // which reads the machine again and leaves it again.
+        left(fixture)?;
+        // It is back, and connected again with nothing asked.
         fixture.ssh.online(true)?;
         fixture.reconnect_device()?;
-        fixture::wait_within(
-            "the daemon to look again at the device's next connection",
-            SWITCH_WITHIN + fixture::READY_BOUND,
-            || Ok((looks(fixture)?.len() > first).then_some(())),
-        )?;
-        left(fixture, &device_row(&fixture.snapshot()?)?)?;
+        connected(fixture)?;
+        left(fixture)?;
 
         // One row for the machine: one device the core dials over SSH and
         // no paired machine.
@@ -1013,10 +993,9 @@ fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_con
             Ok(())
         };
 
-        // `hide device switch` passes the same rule, with or without the
-        // install allowed and named by the alias a terminal knows the
-        // device by: it says the device is left, and why is the daemon's
-        // one read of the machine.
+        // The switch reads the machine once, with or without the install
+        // allowed and named by the alias a terminal knows the device by:
+        // its Hide would not be back alone, so the device is left.
         for words in [&[][..], &["--install"][..]] {
             let (ok, answer) = switch_device(fixture, "delivery-fixture", words)?;
             ensure!(
@@ -1024,7 +1003,7 @@ fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_con
                     && answer["value"]["device_id"] == fixture::DEVICE,
                 "the switch of a device whose Hide would not be back alone: {answer}"
             );
-            left(fixture, &device_row(&fixture.snapshot()?)?)?;
+            left(fixture)?;
         }
         one_row(fixture)?;
         ensure!(
@@ -1032,15 +1011,10 @@ fn a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_con
             "the terminal of a device that was left did not carry on"
         );
 
-        // The next start finds the same one device and leaves it again.
-        let looked = looks(fixture)?.len();
+        // The next start finds the same one device, still the helper's.
         fixture.restart_core(|_| Ok(()))?;
-        fixture::wait_within(
-            "the daemon to look at the device after another start",
-            SWITCH_WITHIN + fixture::READY_BOUND,
-            || Ok((looks(fixture)?.len() > looked).then_some(())),
-        )?;
-        left(fixture, &device_row(&fixture.snapshot()?)?)?;
+        connected(fixture)?;
+        left(fixture)?;
         one_row(fixture)?;
         ensure!(
             stand_in(fixture)? == before,

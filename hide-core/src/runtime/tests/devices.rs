@@ -1679,7 +1679,7 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
         // The release left a project on the device, which its machine's own
         // Hide is handed (D-48).
         let source = runtime
-            .device_switch_source(&helper.id, crate::SwitchBy::Operator)
+            .device_switch_source(&helper.id)
             .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
         assert!(
             !source.projects.is_empty(),
@@ -1896,7 +1896,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         let devices = runtime.snapshot.ui_state.device_registrations.len();
         for named in [helper.id.as_str(), "Ubuntu"] {
             let source = runtime
-                .device_switch_source(named, crate::SwitchBy::Operator)
+                .device_switch_source(named)
                 .unwrap_or_else(|code| panic!("{tag}: {named} cannot be switched: {code}"));
             assert_eq!(source.device_id, helper.id, "{tag}: {named}");
             assert!(
@@ -1965,9 +1965,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         );
         // A switched device is no helper any more: nothing is left to switch.
         assert_eq!(
-            runtime
-                .device_switch_source(&helper.id, crate::SwitchBy::Operator)
-                .err(),
+            runtime.device_switch_source(&helper.id).err(),
             Some("switch_unsupported"),
             "{tag}"
         );
@@ -2048,15 +2046,13 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     }
     for named in ["build-box-id", "build-box"] {
         let source = runtime
-            .device_switch_source(named, crate::SwitchBy::Operator)
+            .device_switch_source(named)
             .expect("a device to switch");
         assert_eq!(source.device_id, "build-box-id", "{named}");
         assert_eq!(source.projects, ["/home/me/app"], "{named}");
     }
     assert_eq!(
-        runtime
-            .device_switch_source("nowhere", crate::SwitchBy::Operator)
-            .err(),
+        runtime.device_switch_source("nowhere").err(),
         Some("device_unknown")
     );
 
@@ -2064,24 +2060,10 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     dispatch(&mut runtime, "device_switch", step("ended"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
 
-    // Paired, and not confirmed yet: still the helper's. The switch started
-    // a Hide there, which said what it still needs (B30); one spelled as no
-    // row can draw it is not taken.
+    // Paired, and not confirmed yet: still the helper's.
     let mut connecting = step("connecting");
     connecting["key"] = serde_json::json!(key);
-    let mut unspelled = connecting.clone();
-    unspelled["needs"] = serde_json::json!({"kind": "linger"});
-    dispatch(&mut runtime, "device_switch", unspelled);
-    assert_eq!(
-        runtime.switching_to(&key),
-        None,
-        "a step that names a linger without its command was taken"
-    );
-    connecting["needs"] = serde_json::json!({
-        "kind": "linger", "command": "sudo loginctl enable-linger hy",
-    });
     dispatch(&mut runtime, "device_switch", connecting.clone());
-    assert_eq!(device(&runtime, "build-box-id").needs, None);
     dispatch(&mut runtime, "peer_machines", machines("confirming"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     assert_eq!(runtime.switching_to(&key).as_deref(), Some("build-box-id"));
@@ -2104,15 +2086,6 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
     assert_eq!(row.ssh_alias, None);
-    // What that machine's Hide still needs is on the row from then on.
-    let needs = row.needs.clone().expect("what the machine's Hide needs");
-    assert_eq!(
-        (needs.kind, needs.command.as_deref()),
-        (
-            crate::model::DeviceNeeds::Linger,
-            Some("sudo loginctl enable-linger hy")
-        )
-    );
     // Saved as it is, and read back the same.
     let stored = serde_json::to_value(&switched).unwrap();
     assert_eq!(stored["peer_switched"], true);
@@ -2168,10 +2141,9 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
             .switched()
     );
 
-    // A step that names no key, or a need no row can draw, is refused.
+    // A step that names no key, or one no key is spelled like, is refused.
     for bad in [
         serde_json::json!({"device_id": "build-box-id", "step": "connecting"}),
-        serde_json::json!({"device_id": "build-box-id", "step": "looked", "needs": {"kind": "linger"}}),
         serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": "zz"}),
     ] {
         let before = runtime.snapshot.ui_state.device_registrations.clone();
@@ -2333,7 +2305,7 @@ fn a_switch_names_no_more_projects_than_its_machine_takes() {
         );
     }
     let source = runtime
-        .device_switch_source("build-box-id", crate::SwitchBy::Operator)
+        .device_switch_source("build-box-id")
         .expect("a device to switch");
     assert_eq!(source.projects.len(), crate::SWITCHED_PROJECTS);
     let first: Vec<String> = (0..crate::SWITCHED_PROJECTS)
@@ -2391,12 +2363,11 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
     let store = std::mem::replace(&mut runtime.state_path, blocked.join("state.json"));
     let connecting = serde_json::json!({
         "device_id": "build-box-id", "step": "connecting", "key": key,
-        "needs": {"kind": "auto_login"},
     });
     dispatch(&mut runtime, "device_switch", connecting.clone());
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     let row = device(&runtime, "build-box-id");
-    assert_eq!((row.peer_key.as_deref(), &row.needs), (None, &None));
+    assert_eq!(row.peer_key.as_deref(), None);
     assert_eq!(terminals.devices(), before, "the helper's link was touched");
     assert_eq!(
         runtime.switching_to(&key),
@@ -2409,7 +2380,6 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
     dispatch(&mut runtime, "device_switch", connecting);
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
-    assert!(row.needs.is_some());
     // Only now is the helper's link let go.
     assert!(
         terminals.devices().len() > before.len()

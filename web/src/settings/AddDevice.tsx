@@ -12,8 +12,8 @@
 // through wsl.exe (D-27), which starts it when it is off (B43). One that
 // does is connected to as a Hide, which installs nothing there, and the
 // form says so before the press; one whose Hide is too old or not running
-// says what to do on that machine; any other is added as before, and goes
-// on to the new connection once its helper is connected (B41).
+// says what to do on that machine; any other is added and used over SSH
+// or WSL, and nothing switches it but the operator's own choice.
 
 import { useEffect, useId, useState } from "react";
 import type { Actions } from "../actions";

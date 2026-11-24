@@ -20,7 +20,7 @@ import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { guestPaneCount, machinesWithOwnRow, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, relayTip, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
-import { DeviceNeedsLine, DeviceNotCarriedLine } from "./DeviceSwitch";
+import { DeviceNotCarriedLine } from "./DeviceSwitch";
 import { askForFirewallOnce, useFirewall } from "./firewall";
 import { machineSystem } from "./agentRows";
 import { PeerDetails } from "./DeviceDetails";
@@ -226,7 +226,6 @@ export function PeerRow({ peer, request, actions, own, onRemove, onDetails, onRe
           {relayTip(peer) ? <Note data-peer-relay-tip={device}>{t("devices.relayTip")}</Note> : null}
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
           <DeviceNotCarriedLine deviceId={device} />
-          <DeviceNeedsLine deviceId={device} actions={actions} moved />
         </span>
       }
     >

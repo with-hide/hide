@@ -11,7 +11,6 @@ import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
-import { DeviceNeedsLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
@@ -44,9 +43,8 @@ export type DeviceRowPlace = { name: string; own: boolean; windowIsNode: boolean
  * One machine of Settings › Devices that is not a paired Hide (operator
  * review 2026-11-23): this computer, or a device reached over SSH or WSL.
  * A row says its name and system and one state; a device that is not
- * connected says why in one plain line, one that would work without this
- * computer once its machine is set up says that faintly (`DeviceNeedsLine`),
- * and only what the operator acts on grows under it (a sign-in, a changed
+ * connected says why in one plain line, and only what the operator acts on
+ * grows under it (a sign-in, a changed
  * server key, the helper's consent, a part of Hide's kit). Test, the
  * technical detail and the rename are in ⋯.
  */
@@ -80,7 +78,6 @@ export function DeviceRow({ device, status, place, actions, handlers }: { device
               {device.problem === "windows_not_started" ? <> · <SmartAppControlHint deviceId={device.id} /></> : null}
             </Note>
           ) : null}
-          {reached ? <DeviceNeedsLine deviceId={device.id} actions={actions} /> : null}
         </span>
       }
       detail={<DeviceAttention device={device} place={place} actions={actions} onAct={handlers.onAct} onAllow={handlers.onAllow} />}

@@ -66,7 +66,6 @@ fn fixture() -> Runtime {
         machine_name: None,
         dials_in: false,
         peer_key: None,
-        needs: None,
         not_carried: None,
     });
     runtime.set_front_device(Some(crate::node::TEST_NODE.to_owned()));

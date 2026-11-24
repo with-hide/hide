@@ -390,7 +390,6 @@ impl Runtime {
         self.remote_device_tests.remove(device_id);
         if matches!(why, Retiring::Removed) {
             self.device_switches.remove(device_id);
-            self.device_needs.remove(device_id);
             self.device_not_carried.remove(device_id);
             self.snapshot.ui_state.device_switch_opens.remove(device_id);
         }
@@ -737,14 +736,12 @@ impl Runtime {
                 .map(|problem| problem.code().to_owned());
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
-            let needs = self.device_needs.get(&device.id).cloned();
             let not_carried = self.device_not_carried.get(&device.id).copied();
             if device.state != state
                 || device.message != message
                 || device.problem != problem
                 || device.sign_in != sign_in
                 || device.test != test
-                || device.needs != needs
                 || device.not_carried != not_carried
             {
                 device.state = state.to_owned();
@@ -752,7 +749,6 @@ impl Runtime {
                 device.problem = problem;
                 device.sign_in = sign_in;
                 device.test = test;
-                device.needs = needs;
                 device.not_carried = not_carried;
                 changed = true;
             }
@@ -994,8 +990,6 @@ impl Runtime {
         self.forget_device_connect_outcome(device_id);
         self.device_names_saving.remove(device_id);
         self.device_switch_saving.remove(device_id);
-        self.device_moves_ready.remove(device_id);
-        self.device_moves_held.remove(device_id);
         self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.

@@ -517,10 +517,6 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 fields.remove("ok");
             }
             let lines = match answer["switch"].as_str() {
-                Some("held") => format!(
-                    "{} switched {device} first, and its terminals there carry on. Once every terminal this machine runs there is closed, Hide switches {device} by itself if it is still a device Hide moves.\n",
-                    answer["by"].as_str().unwrap_or("Another computer"),
-                ),
                 Some("left") => left_line(device, &answer["needs"]),
                 Some("install_needed") => format!(
                     "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
@@ -799,13 +795,13 @@ fn add_alias(
         ),
         _ => {}
     }
-    // The line says how an SSH device becomes its machine's own Hide: by
-    // itself when that machine can take it, which the command reads now.
+    // The line says how an SSH device becomes its machine's own Hide: only
+    // when the operator asks for it.
     match core(env, command, wait)? {
         Printed::Value(value, lines) => Ok(Printed::Value(
             value,
             format!(
-                "{lines}{alias} is used over SSH. Hide connects the two as Hides by itself once the Hide on that machine would be back after a restart with nobody there; hide device switch {alias} reads that now.\n"
+                "{lines}{alias} is used over SSH. To connect the two as Hides, so it works without this computer, run hide device switch {alias} --install once it is connected.\n"
             ),
         )),
         printed => Ok(printed),
@@ -1220,13 +1216,13 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
 }
 
 /// Why a switch left `device` on SSH, and the one thing that changes it
-/// (operator decision 2026-11-24): the rule Hide's own move follows, said
+/// (operator decision 2026-11-24): the rule every switch passes, said
 /// to the one who asked at a terminal. `needs` is what the machine said it
 /// needs (`pairing_ssh::Needs::payload`), null where nothing set there
-/// would move it or it could not be read.
+/// would change it or it could not be read.
 fn left_line(device: &str, needs: &Value) -> String {
     let stays = format!(
-        "{device} is not switched and is used over SSH as before: the Hide on its machine would not be back after a restart with nobody there."
+        "{device} is not switched and is used as before: the Hide on its machine would not be back after a restart with nobody there."
     );
     let then = format!("then run hide device switch {device} again");
     match (needs["kind"].as_str(), needs["command"].as_str()) {
@@ -1236,6 +1232,9 @@ fn left_line(device: &str, needs: &Value) -> String {
         (Some("linger"), Some(command)) => {
             format!("{stays} Run {command} on that machine, {then}.\n")
         }
+        (Some("systemd"), _) => format!(
+            "{stays} Its distribution has no systemd, so nothing starts its Hide again: turn systemd on there (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {then}.\n"
+        ),
         _ => format!("{stays}\n"),
     }
 }
@@ -1580,6 +1579,33 @@ mod tests {
         for verb in ["trust", "answer", "sign-in"] {
             assert!(parse_words(&[verb, "studio"]).is_err(), "{verb}");
         }
+    }
+
+    /// A switch that leaves a device says why and the one thing to do,
+    /// each as its machine's system needs it; a machine nothing set there
+    /// would change gets the reason alone.
+    #[test]
+    fn a_switch_that_leaves_a_device_says_the_one_thing_to_do() {
+        let stays = "studio is not switched and is used as before: the Hide on its machine would not be back after a restart with nobody there.";
+        let again = "then run hide device switch studio again.\n";
+        assert_eq!(
+            left_line("studio", &json!({"kind": "auto_login"})),
+            format!("{stays} Turn on automatic login for that account on the Mac, {again}")
+        );
+        assert_eq!(
+            left_line(
+                "studio",
+                &json!({"kind": "linger", "command": "sudo loginctl enable-linger me"})
+            ),
+            format!("{stays} Run sudo loginctl enable-linger me on that machine, {again}")
+        );
+        assert_eq!(
+            left_line("studio", &json!({"kind": "systemd"})),
+            format!(
+                "{stays} Its distribution has no systemd, so nothing starts its Hide again: turn systemd on there (systemd=true under [boot] in /etc/wsl.conf, then wsl --shutdown), {again}"
+            )
+        );
+        assert_eq!(left_line("studio", &Value::Null), format!("{stays}\n"));
     }
 
     /// A sign-in failure carries no ssh line (the core leaves it out), so

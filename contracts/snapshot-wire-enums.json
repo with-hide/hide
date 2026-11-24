@@ -134,7 +134,6 @@
   "suggestion_attempt_purpose": ["branch", "pr", "rebase"],
   "device_problem": ["sign_in_needed", "sign_in_refused", "host_key_changed", "cannot_connect", "ssh_missing", "openssh_old", "unsupported", "hide_updated", "windows_not_started"],
   "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"],
-  "device_needs": ["auto_login", "linger", "open_distribution"],
   "desk_agent": ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"],
   "desk_agent_state": ["checking", "ready", "preparing", "install_failed", "node_missing", "cli_missing", "no_ask_mode", "off"],
   "desk_host_state": ["idle", "starting", "ready", "thinking", "stopped"],

@@ -3,13 +3,12 @@ import { emptyScope } from "../../test/legacyAgentScope";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { NOTHING_UNDER_WAY, type PairingView } from "../pairing";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { AUTO_LOGIN_DOCS, DeviceMovedStrip, DeviceMoveWatch, DeviceNeedsLine } from "./DeviceSwitch";
+import { DeviceMovedStrip, DeviceMoveWatch } from "./DeviceSwitch";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
 vi.hoisted(() => {
@@ -26,10 +25,9 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(device: Device, over: { front?: string; pairing?: PairingView | null; moved?: boolean } = {}) {
+async function mount(device: Device, over: { front?: string; pairing?: PairingView | null } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
-  const actions = createActions(() => true);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -42,7 +40,7 @@ async function mount(device: Device, over: { front?: string; pairing?: PairingVi
   // `place` is where the window draws the strip: the main screen, or the
   // remote screen once a machine's own Hide shows (App, RemoteStage). The
   // watch is the window's, mounted once whichever screen shows.
-  const draw = (place: string) => root.render(<TooltipProvider><DeviceMoveWatch /><div key={place}><DeviceMovedStrip /></div><DeviceNeedsLine deviceId={device.id} actions={actions} moved={over.moved} /></TooltipProvider>);
+  const draw = (place: string) => root.render(<TooltipProvider><DeviceMoveWatch /><div key={place}><DeviceMovedStrip /></div></TooltipProvider>);
   await act(async () => {
     useShellStore.setState({ connection: "live", pairing: over.pairing === undefined ? NOTHING_UNDER_WAY : over.pairing, pairingResult: null, rest: rest(device) } as never);
     draw("main");
@@ -52,45 +50,6 @@ async function mount(device: Device, over: { front?: string; pairing?: PairingVi
   const moveStrip = async (place: string) => { await act(async () => draw(place)); };
   return { q, show, moveStrip, unmount: async () => { await act(async () => root.unmount()); useUiStore.setState({ switchedDevices: [] }); useShellStore.setState(saved, true); } };
 }
-
-it("says faintly what a Mac reached over SSH needs to work without this computer, with where to turn it on (B30)", async () => {
-  const { q, show, unmount } = await mount(helper({ needs: { kind: "auto_login" } }));
-  const line = q('[data-device-needs="mini:auto_login"]')!;
-  expect(line.textContent).toBe("Turn on automatic login there, and it can work on its own without this computer · How");
-  expect(q('[data-device-needs-docs="mini"]')?.getAttribute("href")).toBe(AUTO_LOGIN_DOCS);
-  // The setting is on at the next connection: the core clears the line.
-  await show(helper());
-  expect(q("[data-device-needs]")).toBeNull();
-  await unmount();
-});
-
-it("gives a Linux machine reached over SSH the one command to run there, with Copy (B30)", async () => {
-  const command = "sudo loginctl enable-linger hy";
-  const { q, unmount } = await mount(helper({ id: "box", label: "build-box", ssh_alias: "box", needs: { kind: "linger", command } }));
-  const line = q('[data-device-needs="box:linger"]')!;
-  expect(line.textContent).toBe("Run this there once, and it can work on its own without this computer" + command);
-  expect(line.querySelector("button")?.getAttribute("aria-label")).toBe("Copy");
-  await unmount();
-});
-
-it("says nothing under a device whose machine needs nothing", async () => {
-  const { q, unmount } = await mount(helper());
-  expect(q("[data-device-needs]")).toBeNull();
-  await unmount();
-});
-
-it("warns under a machine that moved what the Hide started there still needs", async () => {
-  const mac = await mount(moved({ needs: { kind: "auto_login" } }), { moved: true });
-  expect(mac.q('[data-device-needs="mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
-  expect(mac.q("[data-device-needs-docs]")).toBeNull();
-  await mac.unmount();
-  const linux = await mount(moved({ needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } }), { moved: true });
-  expect(linux.q('[data-device-needs="mini:linger"]')?.textContent).toBe("Needs sudo" + "sudo loginctl enable-linger hy");
-  await linux.unmount();
-  const wsl = await mount(moved({ needs: { kind: "open_distribution" } }), { moved: true });
-  expect(wsl.q('[data-device-needs="mini:open_distribution"]')?.textContent).toBe("After Windows restarts, open this distribution again");
-  await wsl.unmount();
-});
 
 it("says once over a machine's screen what starts fresh there after it moved while this window watched (D-48)", async () => {
   const { q, show, unmount } = await mount(helper());

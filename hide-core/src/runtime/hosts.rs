@@ -1230,16 +1230,12 @@ impl Runtime {
                     {
                         self.device_kit_pending.remove(device_id);
                     }
-                    let applied = report.clone().ok();
                     self.ingest_device_kit_answer(
                         device_id,
                         super::DeviceKitAnswer::Report(report),
                         None,
                     );
                     self.start_device_kit(device_id);
-                    if let Some(report) = applied {
-                        self.kit_applied(device_id, &report);
-                    }
                 } else {
                     self.queue_device_kit(
                         device_id,

@@ -408,26 +408,6 @@ it("shows no firewall line where the host keeps no rules", async () => {
   await screen.unmount();
 });
 
-it("says under a machine's row what the Hide started there over SSH still needs, with its command (B30)", async () => {
-  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" }), peer({ key: "12".repeat(32), device_id: "wsl-ubuntu", name: "WSL Ubuntu" })];
-  const devices: Partial<Device>[] = [
-    { id: "build-box", kind: "remote", needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } },
-    { id: "mac-mini", kind: "remote", needs: { kind: "auto_login" } },
-    { id: "laptop", kind: "remote" },
-    { id: "wsl-ubuntu", kind: "remote", needs: { kind: "open_distribution" } },
-  ];
-  const { q, unmount } = await mount(idle, peers, [], devices);
-  const linger = q('[data-peer-row="build-box"] [data-device-needs="build-box:linger"]');
-  expect(linger?.textContent).toContain("Needs sudo");
-  expect(linger?.querySelector("code")?.textContent).toBe("sudo loginctl enable-linger hy");
-  expect(q('[data-peer-row="mac-mini"] [data-device-needs="mac-mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
-  // A WSL distribution with no systemd says when it has to be opened again (B43).
-  expect(q('[data-peer-row="wsl-ubuntu"] [data-device-needs="wsl-ubuntu:open_distribution"]')?.textContent).toBe("After Windows restarts, open this distribution again");
-  // A machine whose Hide needs nothing has no line.
-  expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
-  await unmount();
-});
-
 it("keeps under a machine's row how many terminals its switch could not take over (B36)", async () => {
   const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
   const devices: Partial<Device>[] = [

@@ -1431,9 +1431,11 @@ pub const COMMANDS: &[Spec] = &[
     },
     // Switches an SSH device to the connection of the Hide on its machine:
     // the two are paired over the device's SSH login, and the device keeps
-    // its id, its name and its running terminals. `held` names the machine
-    // that switched it first: the device is then switched by itself once
-    // this machine runs no terminal there.
+    // its id, its name and its running terminals. Only a machine whose
+    // Hide would be back after a restart with nobody there is switched:
+    // `left` is one that would not, with what it needs. A device another
+    // machine switched first is switched while this machine runs no
+    // terminal there, and refused `terminals_open` while it does.
     // `install_needed` is a machine that runs no Hide of its own, where
     // `--install` starts one from this machine's helper build.
     Spec {
@@ -1466,7 +1468,7 @@ pub const COMMANDS: &[Spec] = &[
             "ssh_hide_not_running",
             "wsl_not_reached",
             "wsl_unavailable",
-            "wsl_off",
+            "terminals_open",
             "device_already_connected",
         ],
     },

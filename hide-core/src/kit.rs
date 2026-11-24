@@ -343,12 +343,6 @@ pub(crate) fn spawn_device_worker(
                 let Some(core) = runtime.upgrade() else {
                     return;
                 };
-                let applied = match (&answer, &call.work) {
-                    (DeviceKitAnswer::Report(Ok(report)), DeviceKitWork::Job(KitJob::Apply(_))) => {
-                        Some(report.clone())
-                    }
-                    _ => None,
-                };
                 let Ok(changed) = core.lock().map(|mut locked| {
                     if let DeviceKitAnswer::Report(report) = &answer {
                         locked.complete_device_connect_kit(
@@ -359,9 +353,6 @@ pub(crate) fn spawn_device_worker(
                     }
                     let mut changed =
                         locked.ingest_device_kit_answer(&device_id, answer, call.daemon_off_run);
-                    if let Some(report) = &applied {
-                        locked.kit_applied(&device_id, report);
-                    }
                     if let Some(profiles) = profiles {
                         changed |= locked.ingest_profiles(&device_id, profiles);
                     }

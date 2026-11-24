@@ -282,13 +282,16 @@ enum Command {
     },
     DeviceSwitchSource {
         device: String,
-        by: hide_core::SwitchBy,
         reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
     },
     DeviceSwitchLanded {
         device: String,
         key: String,
         reply: Sender<Option<bool>>,
+    },
+    DeviceListsNoTerminal {
+        device: String,
+        reply: Sender<bool>,
     },
     InboundNode {
         node: String,
@@ -480,12 +483,6 @@ impl CoreHandle {
     /// Gives the core its connection to the other machines' cores.
     pub fn set_core_link(&self, link: Arc<dyn hide_core::core_calls::CoreLink>) {
         let _ = self.on_owner(move |core| core.set_core_link(link));
-    }
-
-    /// Gives the core what switches a helper device by itself
-    /// (`Core::set_device_mover`).
-    pub fn set_device_mover(&self, mover: Arc<dyn hide_core::DeviceMover>) {
-        let _ = self.on_owner(move |core| core.set_device_mover(mover));
     }
 
     /// The letters that wait to go to the core of machine `key`
@@ -1386,13 +1383,11 @@ impl CoreHandle {
     pub fn device_switch_source(
         &self,
         device: &str,
-        by: hide_core::SwitchBy,
     ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::DeviceSwitchSource {
                 device: device.to_owned(),
-                by,
                 reply,
             })
             .map_err(|_| "hide_unavailable")?;
@@ -1414,6 +1409,18 @@ impl CoreHandle {
             Ok(()) => rx.recv().unwrap_or(Some(false)),
             Err(_) => Some(false),
         }
+    }
+
+    /// Whether `device` lists no terminal of this machine's; see
+    /// `Core::device_lists_no_terminal`. A core that does not answer is
+    /// not known to list none.
+    pub fn device_lists_no_terminal(&self, device: &str) -> bool {
+        let (reply, rx) = mpsc::channel();
+        let asked = self.commands.send(Command::DeviceListsNoTerminal {
+            device: device.to_owned(),
+            reply,
+        });
+        asked.is_ok() && rx.recv().unwrap_or(false)
     }
 
     /// Why a node dialing this core would be refused, before its link is
@@ -2155,8 +2162,11 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::DeviceSwitchSource { device, by, reply } => {
-                let _ = reply.send(core.device_switch_source(&device, by));
+            Command::DeviceSwitchSource { device, reply } => {
+                let _ = reply.send(core.device_switch_source(&device));
+            }
+            Command::DeviceListsNoTerminal { device, reply } => {
+                let _ = reply.send(core.device_lists_no_terminal(&device));
             }
             Command::DeviceSwitchLanded { device, key, reply } => {
                 let _ = reply.send(core.device_switch_landed(&device, &key));

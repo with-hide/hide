@@ -67,7 +67,6 @@ it("says nothing about a healthy kit on a device row, and names the device by it
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
   // The menu is the only control a healthy device row carries; Test is in ⋯. The row says nothing of how it is reached.
   expect(mini.querySelectorAll("button")).toHaveLength(1);
-  expect(mini.querySelector("[data-device-needs]")).toBeNull();
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
   await openMenu(q, "mini");
   const items = [...document.querySelectorAll('[data-device-menu-content="mini"] [role="menuitem"]')].map((item) => item.textContent);

@@ -1,13 +1,11 @@
-// What a device says about moving to the connection of the Hide on its
-// machine (PRD device-connect-iroh B30, B36, D-48; operator decision
-// 2026-11-24). Hide moves a device by itself, so nothing here asks for a
-// move or draws its steps: a device that stays says in one faint line what
-// its machine needs before it can move, and a device that just moved says
-// once what starts fresh there. The core owns both facts (`Device.needs`,
-// `Device.not_carried`, and a device's `peer_key` once it moved).
+// What a device that was switched to the connection of the Hide on its
+// machine says (PRD device-connect-iroh B36, D-48; operator decision
+// 2026-11-24): once, what starts fresh there, and how many terminals the
+// switch could not carry on. The operator asks for a switch; nothing here
+// starts one. The core owns both facts (`Device.not_carried`, and a
+// device's `peer_key` once it was switched).
 
 import { useEffect, useRef } from "react";
-import type { Actions } from "../actions";
 import { Note, Status } from "../components/settings-rows";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -15,48 +13,6 @@ import { ownWindow } from "../pairing";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { FixCommand } from "./FixCommand";
-
-/** The site's section on a Mac's automatic login, which a Mac that stays on SSH links to. */
-export const AUTO_LOGIN_DOCS = "https://withhide.dev/docs/reference/troubleshooting/#a-mac-over-ssh-works-only-while-this-computer-is-on";
-
-/**
- * What a machine needs from the operator to be back after a restart with no
- * one there (B30, B43), under its row; nothing for a machine that needs
- * nothing. A device still reached over SSH or WSL (its own row, which
- * leaves `moved` out) says it faintly, as what
- * would let it work without this computer: automatic login on a Mac, with
- * where to turn it on, or on Linux the one command an administrator runs,
- * with Copy. Once the setting is on, the next connection moves the device
- * and the line goes. A machine that already moved (its pairing's row, which
- * sets `moved`) says what the Hide started there still needs, as a warning:
- * it is not back after a restart until then.
- */
-export function DeviceNeedsLine({ deviceId, actions, moved = false }: { deviceId: string; actions: Actions; moved?: boolean }) {
-  const { t } = useInterfaceTranslation();
-  const device = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.id === deviceId) ?? null);
-  const needs = device?.needs ?? null;
-  if (needs === null) return null;
-  if (needs.kind === "open_distribution") return <Note tone="warn" data-device-needs={`${deviceId}:open_distribution`}>{t("devices.needs.openDistribution")}</Note>;
-  if (needs.kind === "auto_login") {
-    if (moved) return <Note tone="warn" data-device-needs={`${deviceId}:auto_login`}>{t("devices.needs.autoLogin")}</Note>;
-    return (
-      <Note data-device-needs={`${deviceId}:auto_login`}>
-        {t("devices.stays.autoLogin")}
-        {" · "}
-        <a href={AUTO_LOGIN_DOCS} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 outline-none focus-visible:ring-1 focus-visible:ring-ring" data-device-needs-docs={deviceId}>
-          {t("devices.stays.howTo")}
-        </a>
-      </Note>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-needs={`${deviceId}:linger`}>
-      {moved ? <Note tone="warn">{t("devices.needs.linger")}</Note> : <Note>{t("devices.stays.linger")}</Note>}
-      {needs.command ? <FixCommand command={needs.command} what="linger command" actions={actions} /> : null}
-    </div>
-  );
-}
 
 /**
  * How many of a machine's terminals its move could not take up again and

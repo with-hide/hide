@@ -209,18 +209,6 @@ pub enum Ask {
         /// runs none of its own (D-45).
         #[serde(default)]
         install: bool,
-        /// Goes on without the helper's folder, which another machine took
-        /// first (D-75), and so without the terminals the helper ran: only
-        /// the core asks for it, for a device that lists none
-        /// ([`Pairing::move_by_itself`]). Never read from an ask that came
-        /// over a wire.
-        #[serde(skip)]
-        own_folder: bool,
-        /// The core asked ([`Pairing::move_by_itself`]): nobody pressed,
-        /// so its login asks nobody. Never read from an ask that came over
-        /// a wire.
-        #[serde(skip)]
-        by_itself: bool,
     },
     /// The target's side of a pairing over SSH or `wsl.exe` (security spec
     /// 15, 17).
@@ -379,8 +367,8 @@ pub fn next_action(code: &str) -> &'static str {
             "WSL did not run Hide in that distribution: open the distribution once in a terminal, then try again"
         }
         "wsl_unavailable" => "This computer has no WSL to reach a distribution through",
-        "wsl_off" => {
-            "That distribution is not running, and a switch starts none: open it once in a terminal, then run the switch again"
+        "terminals_open" => {
+            "Another computer switched this device first, so this one goes on without the terminals it runs there: close them, then run the switch again"
         }
         "ssh_mac_from_mac_only" => {
             "A Mac takes a Hide only from a Mac: install Hide on that Mac and add it by a link it shares"
@@ -431,23 +419,11 @@ struct Paired {
 #[derive(Clone, Copy)]
 struct SwitchAsked {
     /// Go on without the helper's folder, which another machine took first
-    /// (D-75).
+    /// (D-75), and so without the terminals the helper ran: only for a
+    /// device that lists none of this machine's.
     own_folder: bool,
     /// Start a Hide on a machine that runs none of its own (D-45).
     install: bool,
-}
-
-/// The step the core is told when a switch ended as `answer`
-/// (`device_switch`), or none when the device was switched: the paired
-/// machines say that. A device another computer switched first waits for
-/// its terminals; any other end leaves the device as it was, and the log
-/// says why.
-fn switch_ended(answer: &Result<Value, &'static str>) -> Option<&'static str> {
-    match answer {
-        Ok(answer) if answer["switch"] == "held" => Some("held"),
-        Ok(answer) if answer["switch"] == "done" => None,
-        _ => Some("ended"),
-    }
 }
 
 struct RelayAnswer {
@@ -504,26 +480,7 @@ pub struct Pairing {
     helper_asks: tokio::sync::Mutex<()>,
     /// The devices whose switch runs now.
     switching: Mutex<HashSet<String>>,
-    /// The devices the core asked to be switched by themselves.
-    moves: Arc<Moves>,
     shutdown: Ending,
-}
-
-/// The devices due to move whose switch has not been taken up yet, each
-/// with whether it goes on with a folder of this computer's own: what the
-/// core signals under its lock (`hide_core::DeviceMover`). It holds at
-/// most one entry for each registered device.
-#[derive(Default)]
-struct Moves {
-    due: Mutex<std::collections::BTreeMap<String, bool>>,
-    woke: tokio::sync::Notify,
-}
-
-impl hide_core::DeviceMover for Moves {
-    fn due(&self, device_id: &str, own_folder: bool) {
-        lock(&self.due).insert(device_id.to_owned(), own_folder);
-        self.woke.notify_one();
-    }
 }
 
 /// The most `ssh` this daemon runs at once to look at or pair with a
@@ -671,13 +628,8 @@ impl Pairing {
             ssh_requests: Mutex::new(Vec::new()),
             helper_asks: tokio::sync::Mutex::default(),
             switching: Mutex::default(),
-            moves: Arc::default(),
             shutdown,
         });
-        pairing
-            .core
-            .set_device_mover(Arc::clone(&pairing.moves) as _);
-        tokio::spawn(Arc::clone(&pairing).move_devices());
         for kind in [StreamKind::Pairing, StreamKind::Revoke] {
             let pairing = Arc::clone(&pairing);
             host.handle(kind, move |incoming: Incoming| {
@@ -1252,61 +1204,29 @@ impl Pairing {
                 lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
                 Ok(answer)
             }
-            Ask::Switch {
-                device,
-                own_folder,
-                install,
-                by_itself,
-            } => {
+            Ask::Switch { device, install } => {
                 // The device as the core knows it: a terminal may name it
                 // by its alias.
                 let (core, named) = (Arc::clone(&self.core), device);
-                let by = match by_itself {
-                    true => hide_core::SwitchBy::Rule { own_folder },
-                    false => hide_core::SwitchBy::Operator,
-                };
-                let source =
-                    tokio::task::spawn_blocking(move || core.device_switch_source(&named, by))
-                        .await
-                        .map_err(|_| "hide_unavailable")??;
+                let source = tokio::task::spawn_blocking(move || core.device_switch_source(&named))
+                    .await
+                    .map_err(|_| "hide_unavailable")??;
                 let device = source.device_id.clone();
                 // One switch of a device at a time: a second ask while
                 // the first runs changes nothing.
                 if !lock(&self.switching).insert(device.clone()) {
                     return Err("switch_running");
                 }
-                let how = SwitchAsked {
-                    own_folder,
-                    install,
-                };
-                // The one rule, whoever asked (operator decision
-                // 2026-11-24): the machine is read first, and only one
-                // whose Hide would be back with nobody there is switched.
-                // What it needs otherwise is the row's one line, and the
-                // answer of the terminal that asked.
-                let moves = self.may_move(&source.via).await;
-                if let Ok(moves) = &moves {
-                    let looked = match &moves.needs {
-                        Some(needs) => json!({ "needs": needs.payload() }),
-                        None => json!({}),
-                    };
-                    self.switch_step(&device, "looked", looked).await;
-                }
-                let answer = match moves {
-                    Ok(moves) if moves.back => self.switch(&service, &peers, source, how).await,
-                    Ok(moves) => Ok(json!({
-                        "switch": "left",
-                        "needs": moves.needs.as_ref().map(pairing_ssh::Needs::payload),
-                    })),
-                    Err(code) => Err(code),
-                };
-                // The terminal that asked reads which device its answer is for.
+                let answer = self.switch_asked(&service, &peers, &source, install).await;
+                // The one who asked reads which device its answer is for.
                 let answer = answer.map(|mut answer| {
                     answer["device_id"] = json!(device);
                     answer
                 });
-                if let Some(step) = switch_ended(&answer) {
-                    self.switch_step(&device, step, json!({})).await;
+                // Any end but a switched device leaves it as it was, which
+                // the core is told: the paired machines say the other.
+                if !matches!(&answer, Ok(answer) if answer["switch"] == "done") {
+                    self.switch_step(&device, "ended", json!({})).await;
                 }
                 lock(&self.switching).remove(&device);
                 answer
@@ -1580,6 +1500,51 @@ impl Pairing {
         }
     }
 
+    /// One switch the operator asked for (operator decision 2026-11-24:
+    /// a device is switched only when they ask). The machine is read first,
+    /// and only one whose Hide would be back after a restart with nobody
+    /// there is switched: any other answers `left` with what it needs, for
+    /// the one line of whoever asked. A device another computer switched
+    /// first (D-75) goes on with a folder of this machine's own, which
+    /// takes up none of the terminals it runs there, so only when it lists
+    /// none: no switch closes a terminal.
+    async fn switch_asked(
+        self: &Arc<Self>,
+        service: &Service,
+        peers: &HostPeers,
+        source: &hide_core::DeviceSwitchSource,
+        install: bool,
+    ) -> Result<Value, &'static str> {
+        // The operator asked: a distribution that is off may be started
+        // for the read, the switch and the dial that follows it (B43).
+        if let hide_core::SwitchVia::Wsl { distro } = &source.via {
+            self.wsl()?.may_wake(distro);
+        }
+        let moves = self.may_move(&source.via).await?;
+        if !moves.back {
+            return Ok(json!({
+                "switch": "left",
+                "needs": moves.needs.as_ref().map(pairing_ssh::Needs::payload),
+            }));
+        }
+        let asked = |own_folder| SwitchAsked {
+            own_folder,
+            install,
+        };
+        let answer = self.switch(service, peers, source, asked(false)).await?;
+        if answer["switch"] != "held" {
+            return Ok(answer);
+        }
+        let (core, device) = (Arc::clone(&self.core), source.device_id.clone());
+        let none = tokio::task::spawn_blocking(move || core.device_lists_no_terminal(&device))
+            .await
+            .map_err(|_| "hide_unavailable")?;
+        if !none {
+            return Err("terminals_open");
+        }
+        self.switch(service, peers, source, asked(true)).await
+    }
+
     /// The steps of [`Ask::Switch`]. Whatever stops it before the
     /// connection is confirmed leaves the device a helper device: the core
     /// changes its link only when the paired machine's grant is active.
@@ -1587,7 +1552,7 @@ impl Pairing {
         self: &Arc<Self>,
         service: &Service,
         peers: &HostPeers,
-        source: hide_core::DeviceSwitchSource,
+        source: &hide_core::DeviceSwitchSource,
         how: SwitchAsked,
     ) -> Result<Value, &'static str> {
         let SwitchAsked {
@@ -1667,12 +1632,9 @@ impl Pairing {
                 .await??
             }
             hide_core::SwitchVia::Wsl { distro } => {
-                // A switch starts no distribution, whoever asked for it
-                // (B43): one that went off since it was read is asked
-                // nothing.
                 let (carriers, target) = (self.wsl()?, distro.clone());
                 self.wsl_call(distro, move || {
-                    asked(&|switch| pairing_wsl::move_device(carriers.access(), &target, switch))
+                    asked(&|switch| pairing_wsl::switch(carriers.access(), &target, switch))
                 })
                 .await??
             }
@@ -1710,12 +1672,7 @@ impl Pairing {
         own_folder: bool,
         switched: &pairing_ssh::Switched,
     ) -> Result<Value, &'static str> {
-        let pairing_ssh::Switched::Paired {
-            paired,
-            folder,
-            needs,
-        } = switched
-        else {
+        let pairing_ssh::Switched::Paired { paired, folder } = switched else {
             return Err("switch_not_connected");
         };
         // The machine the device is: the one that just answered, or the
@@ -1737,12 +1694,7 @@ impl Pairing {
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
-        // What the Hide started there still needs goes with the step, and
-        // onto the device's row once it is that machine's (B30).
-        let mut connecting = json!({ "key": host.to_hex(), "own_folder": own_folder });
-        if let Some(needs) = needs {
-            connecting["needs"] = needs.payload();
-        }
+        let connecting = json!({ "key": host.to_hex(), "own_folder": own_folder });
         self.switch_step(device, "connecting", connecting).await;
         if let Some(paired) = paired.clone() {
             match service.adopt(paired.accepted, paired.first) {
@@ -1801,65 +1753,10 @@ impl Pairing {
         }
     }
 
-    /// Switches each device the core asks for, one after the other, so the
-    /// devices of one update never take every login at once
-    /// ([`SSH_DIALS`]); ends with the daemon.
-    async fn move_devices(self: Arc<Self>) {
-        loop {
-            tokio::select! {
-                () = self.shutdown.ended() => return,
-                () = self.moves.woke.notified() => {}
-            }
-            loop {
-                let Some((device, own_folder)) = lock(&self.moves.due).pop_first() else {
-                    break;
-                };
-                if self.shutdown.has_ended() {
-                    return;
-                }
-                self.move_by_itself(device, own_folder).await;
-            }
-        }
-    }
-
-    /// One device's switch with nobody asked (operator decision
-    /// 2026-11-24). The device is looked at first, before this machine
-    /// opens its endpoint for the switch: only one whose machine's own
-    /// Hide is back after a restart with nobody there is moved, and the
-    /// core is told what any other needs, for its row's one line. A device
-    /// that is left changes nothing on either machine. A Hide is started
-    /// on a machine that runs none, since the operator allowed this
-    /// machine's programs there when the device was added. How it ended is
-    /// one diagnostic; nothing of a stop reaches the screen.
-    async fn move_by_itself(self: &Arc<Self>, device: String, own_folder: bool) {
-        let ask = Ask::Switch {
-            device: device.clone(),
-            install: true,
-            own_folder,
-            by_itself: true,
-        };
-        let ended = match self.run(ask, Caller::Operator).await {
-            Ok(answer) => answer["switch"].as_str().unwrap_or("done").to_owned(),
-            Err(code) => code.to_owned(),
-        };
-        // A terminal opened there since the core asked: the device waits
-        // again for its terminals to close, as when it was first held.
-        if ended == "terminals_open" {
-            self.switch_step(&device, "held", json!({})).await;
-        }
-        hide_core::diagnostic!(json!({
-            "component": "pairing",
-            "kind": "pairing.moved_by_itself",
-            "device": device,
-            "own_folder": own_folder,
-            "ended": ended,
-        }));
-    }
-
     /// Whether the device reached through `via` is switched, and what its
     /// machine needs when it is not (`pairing_ssh::may_move`), read over a
     /// login of its own that asks nobody: the one rule every switch
-    /// passes, the core's and the operator's alike.
+    /// passes.
     async fn may_move(
         &self,
         via: &hide_core::SwitchVia,
@@ -2351,24 +2248,6 @@ mod tests {
         };
         assert!(!pairing_finished(&[machine(true, false)], &[connected]));
         assert!(!pairing_finished(&[machine(true, true)], &[]));
-    }
-
-    /// What the core is told when a switch ended: that the device waits
-    /// for its terminals when another computer switched it first, nothing
-    /// more for a device that was switched, and an end with nothing to
-    /// show for every other answer and every refusal.
-    #[test]
-    fn a_switch_s_end_is_told_as_one_step() {
-        assert_eq!(
-            switch_ended(&Ok(json!({"switch": "held", "by": "Office"}))),
-            Some("held")
-        );
-        assert_eq!(switch_ended(&Ok(json!({"switch": "done"}))), None);
-        assert_eq!(
-            switch_ended(&Ok(json!({"switch": "install_needed"}))),
-            Some("ended")
-        );
-        assert_eq!(switch_ended(&Err("ssh_not_reached")), Some("ended"));
     }
 
     fn paired(key: u8, device: &str, name: &str) -> Paired {

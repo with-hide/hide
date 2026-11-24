@@ -18,8 +18,7 @@
 //! A distribution that is off is started only by the operator: a dial made
 //! in the background finds it off and stops there, and one made in the
 //! minute after the operator opened it, or by a pairing they pressed, may
-//! start it (B43, [`Carriers::may_wake`]); a switch starts none, whoever
-//! asked for it ([`move_device`]).
+//! start it (B43, [`Carriers::may_wake`]), as may a switch they asked for.
 
 use std::collections::HashMap;
 use std::io::{self, Read};
@@ -140,40 +139,25 @@ pub fn accept(
 /// One switch of the helper device `distro` is (`pairing_ssh::switch`); a
 /// Hide of the distribution's own that stopped with it is started first,
 /// as [`look`] starts it.
-fn switch(access: &WslAccess, distro: &str, switch: &Switch<'_>) -> Result<Switched, &'static str> {
+pub fn switch(
+    access: &WslAccess,
+    distro: &str,
+    switch: &Switch<'_>,
+) -> Result<Switched, &'static str> {
     let login = Wsl { access, distro };
     woken(&login, switch.reach);
     pairing_ssh::switch_on(&login, switch)
 }
 
-/// A switch found its distribution off, and asked it nothing (B43).
-pub const OFF: &str = "wsl_off";
-
 /// Whether the helper device `distro` is switched
-/// (`pairing_ssh::may_move`). A distribution that is off is asked nothing,
-/// since any command run in it would start it (B43), and is not moved.
+/// (`pairing_ssh::may_move`), read through `wsl.exe`, which starts a
+/// distribution that is off: only a switch the operator asked for reads it.
 pub fn may_move(
     access: &WslAccess,
     reach: &Reach,
     distro: &str,
 ) -> Result<pairing_ssh::Move, &'static str> {
-    if !matches!(access.runs(distro), Ok(true)) {
-        return Err(OFF);
-    }
     pairing_ssh::may_move(&Wsl { access, distro }, reach)
-}
-
-/// One switch of the helper device `distro` is: a distribution that went
-/// off since it was looked at ([`may_move`]) is asked nothing (B43).
-pub fn move_device(
-    access: &WslAccess,
-    distro: &str,
-    switch: &Switch<'_>,
-) -> Result<Switched, &'static str> {
-    if !matches!(access.runs(distro), Ok(true)) {
-        return Err(OFF);
-    }
-    self::switch(access, distro, switch)
 }
 
 /// What makes the carriers of this PC's connections to its distributions.
@@ -450,10 +434,9 @@ esac
     /// A helper distribution is switched through `wsl.exe` as an SSH device
     /// is over its login (B36): its Hide is asked for the grant with the
     /// helper's folder, and handed the device's projects once the pairing
-    /// is admitted (D-48); one with no systemd says the operator opens it
-    /// again after Windows restarts (B43), whoever started its Hide.
+    /// is admitted (D-48).
     #[test]
-    fn a_distribution_is_switched_through_wsl_and_says_what_no_systemd_means() {
+    fn a_distribution_is_switched_through_wsl() {
         const SWITCHED: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/hide.log"
 case "$2" in
@@ -485,19 +468,13 @@ esac
             )
             .unwrap_or_else(|code| panic!("{code}"))
         };
-        let Switched::Paired {
-            paired,
-            folder,
-            needs,
-        } = asked()
-        else {
+        let Switched::Paired { paired, folder } = asked() else {
             panic!("the distribution's Hide did not pair");
         };
         let paired = paired.expect("a new pairing");
         assert_eq!(paired.accepted.key, theirs);
         assert_eq!(paired.first, vec![Candidate::Wsl("Ubuntu".to_owned())]);
         assert!(matches!(folder, pairing_ssh::Folder::Taken));
-        assert_eq!(needs, Some(pairing_ssh::Needs::OpenDistribution));
         let log = std::fs::read_to_string(pc.dir.path().join("home/hide.log")).unwrap();
         let said: Vec<&str> = log.lines().collect();
         assert_eq!(
@@ -513,14 +490,6 @@ esac
             said[said.len() - 1],
             "device projects-ssh --project /home/me/app"
         );
-
-        // A distribution systemd started has a Hide that ran before this
-        // switch: it needs nothing said.
-        std::fs::write(pc.dir.path().join("systemd"), "").unwrap();
-        let Switched::Paired { needs, .. } = asked() else {
-            panic!("the distribution's Hide did not pair");
-        };
-        assert_eq!(needs, None);
     }
 
     /// A switch's whole way on a machine that runs no Hide of its own,
@@ -544,20 +513,18 @@ case "$1 $2" in
         fi ;;
     "device accept-ssh") printf '{"ok":true,"value":{"helper":"taken","accepted":{"key":"%s","device":"distro-device","name":"Ubuntu","grant":"g1","candidates":[]}}}\n' "$(cat "$HOME/key")" ;;
     "device projects-ssh") echo '{"ok":true,"value":{"projects":1}}' ;;
-    "always-on linger") echo '{"ok":true,"value":{"linger":"on","unattended":true}}' ;;
     *) exit 2 ;;
 esac
 "#;
         let pc = pc(Some(ABSENT));
         pc.running("Ubuntu\n");
-        std::fs::write(pc.dir.path().join("systemd"), "").unwrap();
         let home = pc.dir.path().join("home");
         let theirs = hide_peer::MachineKey::generate().unwrap().public();
         std::fs::write(home.join("key"), theirs.to_hex()).unwrap();
         let mine = hide_peer::MachineKey::generate().unwrap().public();
         let projects = ["/home/me/app".to_owned()];
         let asked = |install: bool, admitted: bool| {
-            move_device(
+            switch(
                 &pc.access,
                 "Ubuntu",
                 &Switch {
@@ -589,14 +556,13 @@ esac
         assert_eq!(said(), ["device look-ssh"; 2]);
 
         // Allowed, and this PC did not admit the pairing (the connection
-        // never confirmed it): a Hide was started and paired with, what it
-        // still needs was read, and no project was handed over.
+        // never confirmed it): a Hide was started and paired with, and no
+        // project was handed over.
         std::fs::remove_file(home.join("hide.log")).unwrap();
-        let Ok(Switched::Paired { paired, needs, .. }) = asked(true, false) else {
+        let Ok(Switched::Paired { paired, .. }) = asked(true, false) else {
             panic!("the started Hide did not pair");
         };
         assert_eq!(paired.expect("a new pairing").accepted.key, theirs);
-        assert_eq!(needs, None);
         assert_eq!(
             said(),
             [
@@ -605,7 +571,6 @@ esac
                 "connect",
                 "device look-ssh",
                 "device accept-ssh",
-                "always-on linger",
             ]
         );
 
@@ -624,14 +589,15 @@ esac
         );
     }
 
-    /// The operator's decision of 2026-11-24, and the rule of what moves
-    /// with nobody asked: a distribution that is off is asked nothing, one
-    /// whose Hide is not back after a restart with nobody there is asked
-    /// that one question and left as it is, and one whose Hide is back is
-    /// switched. What its `hide always-on linger` says is the answer; an
-    /// older `hide`, or one that says nothing, is not known to be back.
+    /// The one rule (operator decision 2026-11-24) as a pressed switch of a
+    /// distribution reads it: the switch is the operator's, so it wakes a
+    /// distribution that is off, and it is run only when the distribution's
+    /// Hide is back after a restart with nobody there. What its `hide
+    /// always-on linger` says is the answer; an older `hide`, or one that
+    /// says nothing, is not known to be back. A distribution with no
+    /// systemd is left with that as the reason, whatever its `hide` said.
     #[test]
-    fn a_distribution_moves_by_itself_only_when_it_runs_and_its_hide_is_back_unattended() {
+    fn a_distribution_is_switched_only_when_its_hide_is_back_unattended() {
         const MOVED: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/hide.log"
 [ "$1" = "always-on" ] && { cat "$HOME/linger"; exit 0; }
@@ -642,29 +608,15 @@ case "$2" in
     *) exit 2 ;;
 esac
 "#;
+        const BACK: &str = r#"{"ok":true,"value":{"linger":"on","unattended":true}}"#;
         let pc = pc_with(MOVED, "linger");
-        std::fs::write(pc.dir.path().join("systemd"), "").unwrap();
+        let systemd = pc.dir.path().join("systemd");
+        std::fs::write(&systemd, "").unwrap();
         let home = pc.dir.path().join("home");
         let theirs = hide_peer::MachineKey::generate().unwrap().public();
         std::fs::write(home.join("key"), theirs.to_hex()).unwrap();
         let mine = hide_peer::MachineKey::generate().unwrap().public();
-        let moved = || {
-            move_device(
-                &pc.access,
-                "Ubuntu",
-                &Switch {
-                    reach: &pc.reach,
-                    request: "req-1",
-                    me: &me(),
-                    key: &mine,
-                    helper_root: Some("~/.hide/device"),
-                    projects: &[],
-                    admitted: &|_| true,
-                    install: true,
-                },
-            )
-        };
-        let may = || may_move(&pc.access, &pc.reach, "Ubuntu");
+        let may = || may_move(&pc.access, &pc.reach, "Ubuntu").unwrap();
         let said = || {
             std::fs::read_to_string(home.join("hide.log"))
                 .unwrap_or_default()
@@ -673,15 +625,9 @@ esac
                 .collect::<Vec<_>>()
         };
 
-        // Off: nothing is run in it, by the look or by the switch.
-        pc.running("");
-        assert_eq!(may(), Err(OFF));
-        assert_eq!(moved().err(), Some(OFF));
-        assert_eq!(pc.calls(), ["--list --running --quiet"; 2]);
-        assert!(said().is_empty());
-
-        // On, and its Hide is not back with nobody there, or does not say.
+        // Its Hide is not back with nobody there, or does not say.
         pc.running("Ubuntu");
+        let command = "sudo loginctl enable-linger me";
         let left = [
             r#"{"ok":true,"value":{"linger":"needs_administrator","command":"sudo loginctl enable-linger me","unattended":false}}"#,
             r#"{"ok":true,"value":{"linger":"not_used","unattended":false}}"#,
@@ -692,7 +638,16 @@ esac
         ];
         for answer in left {
             std::fs::write(home.join("linger"), answer).unwrap();
-            assert!(!may().unwrap().back, "{answer}");
+            let moves = may();
+            assert!(!moves.back, "{answer}");
+            let administrator = answer.contains("needs_administrator");
+            assert_eq!(
+                moves.needs,
+                administrator.then(|| pairing_ssh::Needs::Linger {
+                    command: command.to_owned()
+                }),
+                "{answer}"
+            );
         }
         assert_eq!(
             said(),
@@ -700,18 +655,53 @@ esac
             "a distribution that is left was asked for more than the one answer"
         );
 
-        // Back with nobody there: it may move, and is switched as a press
-        // switches it.
-        std::fs::write(
-            home.join("linger"),
-            r#"{"ok":true,"value":{"linger":"on","unattended":true}}"#,
-        )
-        .unwrap();
-        assert!(may().unwrap().back);
-        let Ok(Switched::Paired { paired, .. }) = moved() else {
+        // No systemd: nothing starts its Hide again, which is the one
+        // reason said, whether its `hide` answered or failed.
+        std::fs::remove_file(&systemd).unwrap();
+        for answer in [left[1], left[3]] {
+            std::fs::write(home.join("linger"), answer).unwrap();
+            assert_eq!(
+                may(),
+                pairing_ssh::Move {
+                    back: false,
+                    needs: Some(pairing_ssh::Needs::Systemd)
+                },
+                "{answer}"
+            );
+        }
+        std::fs::write(&systemd, "").unwrap();
+
+        // Off, and back with nobody there once it runs: the switch the
+        // operator asked for reads it and runs in it, which is what starts
+        // a distribution (`wsl.exe` starts the one a command names). No
+        // read of what runs stands in its way.
+        pc.running("");
+        std::fs::write(home.join("linger"), BACK).unwrap();
+        std::fs::remove_file(pc.dir.path().join("calls.log")).unwrap();
+        assert!(may().back);
+        let switched = switch(
+            &pc.access,
+            "Ubuntu",
+            &Switch {
+                reach: &pc.reach,
+                request: "req-1",
+                me: &me(),
+                key: &mine,
+                helper_root: Some("~/.hide/device"),
+                projects: &[],
+                admitted: &|_| true,
+                install: true,
+            },
+        );
+        let Ok(Switched::Paired { paired, .. }) = switched else {
             panic!("the distribution was not switched");
         };
         assert_eq!(paired.expect("a new pairing").accepted.key, theirs);
+        assert!(
+            pc.calls().iter().all(|call| !call.starts_with("--list")),
+            "{:?}",
+            pc.calls()
+        );
     }
 
     /// A distribution's own Hide that stopped with it is started by the

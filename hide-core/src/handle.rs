@@ -1401,12 +1401,11 @@ impl Core {
     pub fn device_switch_source(
         &self,
         device: &str,
-        by: crate::SwitchBy,
     ) -> Result<crate::DeviceSwitchSource, &'static str> {
         if !check_owner_thread(self, "device_switch_source") {
             return Err("hide_unavailable");
         }
-        lock_recover(&self.runtime).device_switch_source(device, by)
+        lock_recover(&self.runtime).device_switch_source(device)
     }
 
     /// Whether the helper device `device` took the connection of the
@@ -1418,10 +1417,13 @@ impl Core {
         lock_recover(&self.runtime).device_switch_landed(device, key)
     }
 
-    /// Gives the core what switches a helper device by itself (operator
-    /// decision 2026-11-24), once, at the daemon's start.
-    pub fn set_device_mover(&self, mover: Arc<dyn crate::DeviceMover>) {
-        lock_recover(&self.runtime).set_device_mover(mover);
+    /// Whether the helper device `device` lists no terminal of this
+    /// machine's, read on the connection it has: what a switch that goes
+    /// on with a folder of this machine's own asks first, since that
+    /// folder takes up none of them. An unread session is not none.
+    pub fn device_lists_no_terminal(&self, device: &str) -> bool {
+        check_owner_thread(self, "device_lists_no_terminal")
+            && lock_recover(&self.runtime).device_terminals(device) == Some(0)
     }
 
     /// Takes the link a node that dialed this core brought (PRD

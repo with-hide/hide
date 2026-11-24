@@ -2287,20 +2287,9 @@ export type Device = {
   dials_in?: boolean;
   /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
   peer_key?: string | null;
-  /** What the device's machine needs from the operator before its own Hide is back after a restart with no one there (`DeviceSnapshot::needs`): for a device reached over SSH or WSL, what keeps Hide from moving it to its machine's own connection; for a machine that moved, what the Hide started there still needs. Absent when it needs nothing. */
-  needs?: DeviceNeeds | null;
   /** How many of the device's terminals its move could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
   not_carried?: number | null;
 };
-
-/**
- * What a machine's Hide, reached over SSH or `wsl.exe`, needs from the
- * operator to stay reachable with no one at it
- * (`contracts/snapshot-wire-enums.json`: `device_needs`): automatic login on
- * a Mac, on Linux the `command` an administrator runs there, or a WSL
- * distribution with no systemd being opened again after Windows restarts.
- */
-export type DeviceNeeds = { kind: "auto_login" | "linger" | "open_distribution"; command?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
