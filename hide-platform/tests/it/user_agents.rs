@@ -737,7 +737,7 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
                 return *run;
             }
             assert!(Instant::now() < deadline, "run {nth} never started");
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(200)); // wait-ok: the manager started this run, read from the agent's log
         }
     };
     // A resident named while it runs, by its pid and start time
@@ -813,10 +813,10 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
         #[allow(clippy::disallowed_methods)] // a bounded poll of another process
         while hide_platform::process::is_alive(last_program) {
             assert!(Instant::now() < deadline, "the run's program did not end");
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(100)); // wait-ok: the killed run's program is gone
         }
         #[allow(clippy::disallowed_methods)] // past the manager's handling of the exit
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(2)); // wait-ok: the manager handled the run's exit, which neither manager shows as a state
         assert!(runs_still(last), "ended with a forgotten agent's run");
     }));
     let removal = agents.remove(&label, home, &stop);
