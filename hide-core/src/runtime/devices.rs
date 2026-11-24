@@ -1034,7 +1034,10 @@ impl Runtime {
         self.device_switch_saving.remove(device_id);
         if let Some(by) = registration.origin.dialed_by() {
             self.device_fresh_adds.remove(&by);
+            // Saved with the removal below.
+            self.snapshot.ui_state.device_moves_due.remove(&by);
         }
+        self.device_moves_ready.remove(device_id);
         self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.

@@ -1401,11 +1401,18 @@ impl Core {
     pub fn device_switch_source(
         &self,
         device: &str,
+        pressed: bool,
     ) -> Result<crate::DeviceSwitchSource, &'static str> {
         if !check_owner_thread(self, "device_switch_source") {
             return Err("hide_unavailable");
         }
-        lock_recover(&self.runtime).device_switch_source(device)
+        lock_recover(&self.runtime).device_switch_source(device, pressed)
+    }
+
+    /// Gives the core what switches a helper device by itself (operator
+    /// decision 2026-11-24), once, at the daemon's start.
+    pub fn set_device_mover(&self, mover: Arc<dyn crate::DeviceMover>) {
+        lock_recover(&self.runtime).set_device_mover(mover);
     }
 
     /// Takes the link a node that dialed this core brought (PRD

@@ -282,6 +282,7 @@ enum Command {
     },
     DeviceSwitchSource {
         device: String,
+        pressed: bool,
         reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
     },
     InboundNode {
@@ -474,6 +475,12 @@ impl CoreHandle {
     /// Gives the core its connection to the other machines' cores.
     pub fn set_core_link(&self, link: Arc<dyn hide_core::core_calls::CoreLink>) {
         let _ = self.on_owner(move |core| core.set_core_link(link));
+    }
+
+    /// Gives the core what switches a helper device by itself
+    /// (`Core::set_device_mover`).
+    pub fn set_device_mover(&self, mover: Arc<dyn hide_core::DeviceMover>) {
+        let _ = self.on_owner(move |core| core.set_device_mover(mover));
     }
 
     /// The letters that wait to go to the core of machine `key`
@@ -1374,11 +1381,13 @@ impl CoreHandle {
     pub fn device_switch_source(
         &self,
         device: &str,
+        pressed: bool,
     ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::DeviceSwitchSource {
                 device: device.to_owned(),
+                pressed,
                 reply,
             })
             .map_err(|_| "hide_unavailable")?;
@@ -2124,8 +2133,12 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::DeviceSwitchSource { device, reply } => {
-                let _ = reply.send(core.device_switch_source(&device));
+            Command::DeviceSwitchSource {
+                device,
+                pressed,
+                reply,
+            } => {
+                let _ = reply.send(core.device_switch_source(&device, pressed));
             }
             Command::InboundNode {
                 node,

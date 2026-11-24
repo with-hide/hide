@@ -21,7 +21,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 /// Every verb a person types, which `hide --help` and the agent guide list.
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device rename <device> <name> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder | --keep] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -113,11 +113,13 @@ pub enum Verb {
     /// An SSH device switched to the connection of the Hide on its machine
     /// (D-49). `install` starts a Hide on a machine that runs none of its
     /// own (D-45); `own_folder` goes on after another machine switched the
-    /// device first (D-75).
+    /// device first (D-75), and `keep` leaves it on the old connection,
+    /// which a device that would move by itself then no longer does.
     Switch {
         device: String,
         install: bool,
         own_folder: bool,
+        keep: bool,
     },
     /// What a machine about to pair over SSH runs on its target first: it
     /// changes nothing and says whether a Hide of the target's own runs
@@ -170,6 +172,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut wait = false;
     let mut wsl = false;
     let mut own_folder = false;
+    let mut keep = false;
     let mut install = false;
     let mut helper = None;
     let mut projects = Vec::new();
@@ -187,11 +190,15 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 wait = true;
                 continue;
             }
-            "--own-folder" if verb == Some("switch") && !own_folder => {
+            "--own-folder" if verb == Some("switch") && !own_folder && !keep => {
                 own_folder = true;
                 continue;
             }
-            "--install" if verb == Some("switch") && !install => {
+            "--keep" if verb == Some("switch") && !keep && !own_folder && !install => {
+                keep = true;
+                continue;
+            }
+            "--install" if verb == Some("switch") && !install && !keep => {
                 install = true;
                 continue;
             }
@@ -297,6 +304,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             device: named(device)?,
             install,
             own_folder,
+            keep,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
         (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
@@ -512,10 +520,12 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             device,
             install,
             own_folder,
+            keep,
         } => {
             operators(env)?;
             let ask = json!({
                 "verb":"switch","device":device,"own_folder":own_folder,"install":install,
+                "keep":keep,
             });
             let mut answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
                 .map_err(Refused::Unreachable)?;
@@ -532,8 +542,11 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             }
             let lines = match answer["switch"].as_str() {
                 Some("held") => format!(
-                    "{} switched {device} first, and its terminals there carry on. Run hide device switch {device} --own-folder to go on: the terminals this machine ran there close, and their AI conversations can be resumed.\n",
+                    "{} switched {device} first, and its terminals there carry on. Run hide device switch {device} --own-folder to go on: the terminals this machine ran there close, and their AI conversations can be resumed. Run hide device switch {device} --keep to leave it on the old connection.\n",
                     answer["by"].as_str().unwrap_or("Another computer"),
+                ),
+                Some("kept") => format!(
+                    "{device} stays on the old connection. Run hide device switch {device} to switch it.\n"
                 ),
                 Some("install_needed") => format!(
                     "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"

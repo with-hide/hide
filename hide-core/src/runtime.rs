@@ -1377,6 +1377,12 @@ pub struct Runtime {
     /// its first connection. Never saved: after a restart it is a helper
     /// device like any other.
     device_fresh_adds: HashSet<crate::model::DialedBy>,
+    /// What switches a device by itself, which the daemon hands in at its
+    /// start (`device_switch::DeviceMover`).
+    device_mover: Option<Arc<dyn device_switch::DeviceMover>>,
+    /// The devices due to move whose helper connected before the daemon
+    /// handed its mover in; at most one entry for each registered device.
+    device_moves_ready: BTreeSet<String>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2553,6 +2559,8 @@ impl Runtime {
             device_needs: HashMap::new(),
             device_not_carried: HashMap::new(),
             device_fresh_adds: HashSet::new(),
+            device_mover: None,
+            device_moves_ready: BTreeSet::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

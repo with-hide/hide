@@ -1258,6 +1258,9 @@ pub struct DeviceSwitchSnapshot {
     /// Why a `failed` switch stopped: a code the shell words, the pairing's
     /// refusal codes among them.
     pub reason: Option<String>,
+    /// With `held`: the computer that switched the device first, as the
+    /// device's machine names it.
+    pub by: Option<String>,
 }
 
 /// `contracts/snapshot-wire-enums.json`: `device_switch_state`.
@@ -1272,6 +1275,10 @@ pub enum DeviceSwitchState {
     Connecting,
     /// The switch stopped; the device is used as before.
     Failed,
+    /// Another computer switched the device first: the switch waits for
+    /// the operator, who goes on with a folder of this computer's own or
+    /// keeps the device on the old connection (D-75, B69).
+    Held,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -5428,6 +5435,18 @@ pub struct UiStateSnapshot {
     /// before it still owes it. The store owns it.
     #[serde(default, skip_serializing)]
     pub device_switch_opens: BTreeSet<String>,
+    /// The helper devices a build before 1.3.0 registered that have not
+    /// moved to their machine's own connection, by what each is dialed by,
+    /// since an SSH device's id changes at its first connection: each is
+    /// switched by itself when its helper connects
+    /// (`runtime::device_switch`, PRD device-connect-iroh D-49 as the
+    /// operator changed it on 2026-11-24). An entry goes when its device is
+    /// switched or removed, or when the operator keeps it on the old
+    /// connection; a device this build registers is never listed. The store
+    /// owns it, and fills it once from the registrations a store without it
+    /// holds.
+    #[serde(default, skip_serializing)]
+    pub device_moves_due: BTreeSet<DialedBy>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -6326,6 +6345,7 @@ impl Default for UiStateSnapshot {
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
             device_switch_opens: BTreeSet::new(),
+            device_moves_due: BTreeSet::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
@@ -6456,8 +6476,11 @@ impl DeviceNaming {
 }
 
 /// What the core dials a helper device by, whatever its id: an SSH alias
-/// or a WSL distribution of this PC ([`LinkOrigin::dialed_by`]).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// or a WSL distribution of this PC ([`LinkOrigin::dialed_by`]). The store
+/// spells it `{"ssh": "<alias>"}` or `{"wsl": "<distribution>"}`
+/// (`UiStateSnapshot::device_moves_due`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DialedBy {
     Ssh(String),
     Wsl(String),
@@ -11841,13 +11864,15 @@ mod wire_enum_tests {
             DeviceSwitchState::Installing,
             DeviceSwitchState::Connecting,
             DeviceSwitchState::Failed,
+            DeviceSwitchState::Held,
         ];
         for variant in switch_states {
             match variant {
                 DeviceSwitchState::Checking
                 | DeviceSwitchState::Installing
                 | DeviceSwitchState::Connecting
-                | DeviceSwitchState::Failed => {}
+                | DeviceSwitchState::Failed
+                | DeviceSwitchState::Held => {}
             }
         }
         assert_wire(&contract, "device_switch_state", &switch_states);

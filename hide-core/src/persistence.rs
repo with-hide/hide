@@ -225,6 +225,11 @@ struct StoredUiState {
     /// and whenever no switched device waits for its first open.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     device_switch_opens: BTreeSet<String>,
+    /// Absent in a store a build before 1.3.0 wrote: every helper device it
+    /// registered is then listed, once (`moves_due`). Written from then on,
+    /// empty included, so a device registered later is never added.
+    #[serde(default)]
+    device_moves_due: Option<BTreeSet<crate::model::DialedBy>>,
     /// Absent in a store written before the request view; loads empty, and
     /// each row's wait starts over once.
     #[serde(default)]
@@ -773,6 +778,16 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             home_retire.push(retirement);
         }
     }
+    // A store a build before 1.3.0 wrote names no device that moves by
+    // itself: every helper device it registered does (operator decision
+    // 2026-11-24).
+    let device_moves_due = stored.device_moves_due.unwrap_or_else(|| {
+        stored
+            .device_registrations
+            .iter()
+            .filter_map(|registration| registration.origin.dialed_by())
+            .collect()
+    });
     let disposition = if unrecognized.is_empty() {
         LoadDisposition::Loaded
     } else {
@@ -853,6 +868,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             pane_completions: stored.pane_completions,
             pane_launches: stored.pane_launches,
             device_switch_opens: stored.device_switch_opens,
+            device_moves_due,
             request_verbs: stored.request_verbs,
             agent_sleep_after_hours: crate::agent_sleep::loaded_after_hours(
                 stored.agent_sleep_hours,
@@ -1056,6 +1072,7 @@ pub fn save(
         pane_completions: state.pane_completions.clone(),
         pane_launches: state.pane_launches.clone(),
         device_switch_opens: state.device_switch_opens.clone(),
+        device_moves_due: Some(state.device_moves_due.clone()),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
         agent_sleep_hours: Some(crate::agent_sleep::stored_after_hours(
@@ -1306,6 +1323,75 @@ mod tests {
             serde_json::to_value(&state.device_registrations).unwrap(),
             serde_json::json!([dialed, pending, legacy, inbound, wsl, peer])
         );
+    }
+
+    /// The helper devices a build before 1.3.0 added move to their
+    /// machines' own Hide by themselves, and only those: a store with no
+    /// `device_moves_due` is such a build's, and every device it dials is
+    /// listed once. This build always writes the list, so a device it
+    /// registers later, or one the operator kept on the old connection, is
+    /// never put back on it by a restart.
+    #[test]
+    fn a_store_from_an_earlier_build_lists_the_devices_it_dials_once() {
+        use crate::model::DialedBy;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        save(
+            &path,
+            &UiStateSnapshot::default(),
+            &PaneTerminalSizes::new(),
+        )
+        .unwrap();
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        // A new install's first store lists nothing, and says so.
+        assert_eq!(persisted["device_moves_due"], serde_json::json!([]));
+        persisted["device_registrations"] = serde_json::json!([
+            {"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null, "naming": "named"},
+            {"id": "old-host", "label": "old", "ssh_alias": "old-host", "host_consent": null},
+            {"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null, "wsl_distro": "Ubuntu"},
+            {"id": "laptop", "label": "MacBook", "ssh_alias": null, "host_consent": null, "inbound": true},
+            {"id": "windows-pc", "label": "Windows PC", "ssh_alias": null, "host_consent": null, "peer_key": "ab".repeat(32)},
+        ]);
+        let written_by_this_build = persisted.clone();
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("device_moves_due");
+        fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
+
+        let (mut state, sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        let dialed = [
+            DialedBy::Ssh("old-host".to_owned()),
+            DialedBy::Ssh("studio-host".to_owned()),
+            DialedBy::Wsl("Ubuntu".to_owned()),
+        ];
+        assert_eq!(
+            state.device_moves_due.iter().cloned().collect::<Vec<_>>(),
+            dialed
+        );
+
+        // One moved, or was kept: the next start reads what is left.
+        state.device_moves_due.remove(&dialed[1]);
+        save(&path, &state, &sizes).unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored["device_moves_due"],
+            serde_json::json!([{"ssh": "old-host"}, {"wsl": "Ubuntu"}])
+        );
+        assert_eq!(
+            load(&path)
+                .0
+                .device_moves_due
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [dialed[0].clone(), dialed[2].clone()]
+        );
+
+        // The same devices in a store this build wrote are this build's.
+        fs::write(&path, serde_json::to_vec(&written_by_this_build).unwrap()).unwrap();
+        assert!(load(&path).0.device_moves_due.is_empty());
     }
 
     // PRD D-11: the folded set is not migrated. An old store's collapsed

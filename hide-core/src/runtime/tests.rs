@@ -59,6 +59,8 @@ mod detail;
 mod device_catalog;
 #[path = "tests/device_kit.rs"]
 mod device_kit;
+#[path = "tests/device_moves.rs"]
+mod device_moves;
 #[path = "tests/device_names.rs"]
 mod device_names;
 #[path = "tests/device_reconnect.rs"]

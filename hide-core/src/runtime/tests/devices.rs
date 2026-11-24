@@ -1679,7 +1679,7 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
         // The release left a project on the device, which its machine's own
         // Hide is handed (D-48).
         let source = runtime
-            .device_switch_source(&helper.id)
+            .device_switch_source(&helper.id, true)
             .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
         assert!(
             !source.projects.is_empty(),
@@ -1819,7 +1819,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         let devices = runtime.snapshot.ui_state.device_registrations.len();
         for named in [helper.id.as_str(), "Ubuntu"] {
             let source = runtime
-                .device_switch_source(named)
+                .device_switch_source(named, true)
                 .unwrap_or_else(|code| panic!("{tag}: {named} cannot be switched: {code}"));
             assert_eq!(source.device_id, helper.id, "{tag}: {named}");
             assert!(
@@ -1888,7 +1888,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         );
         // A switched device is no helper any more: nothing is left to switch.
         assert_eq!(
-            runtime.device_switch_source(&helper.id).err(),
+            runtime.device_switch_source(&helper.id, true).err(),
             Some("switch_unsupported"),
             "{tag}"
         );
@@ -1969,13 +1969,13 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     }
     for named in ["build-box-id", "build-box"] {
         let source = runtime
-            .device_switch_source(named)
+            .device_switch_source(named, true)
             .expect("a device to switch");
         assert_eq!(source.device_id, "build-box-id", "{named}");
         assert_eq!(source.projects, ["/home/me/app"], "{named}");
     }
     assert_eq!(
-        runtime.device_switch_source("nowhere").err(),
+        runtime.device_switch_source("nowhere", true).err(),
         Some("device_unknown")
     );
 
@@ -2277,7 +2277,7 @@ fn a_switch_names_no_more_projects_than_its_machine_takes() {
         );
     }
     let source = runtime
-        .device_switch_source("build-box-id")
+        .device_switch_source("build-box-id", true)
         .expect("a device to switch");
     assert_eq!(source.projects.len(), crate::SWITCHED_PROJECTS);
     let first: Vec<String> = (0..crate::SWITCHED_PROJECTS)
@@ -2415,6 +2415,13 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
         });
     runtime.rebuild_device_rows();
     let helper = runtime.device_registration("build-box-id").unwrap().clone();
+    // An earlier build added it, so it is due to move by itself.
+    let due = crate::model::DialedBy::Ssh("build-box".to_owned());
+    runtime
+        .snapshot
+        .ui_state
+        .device_moves_due
+        .insert(due.clone());
     dispatch(
         &mut runtime,
         "peer_machines",
@@ -2444,6 +2451,10 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
     );
     assert_eq!((row.peer_key.as_deref(), &row.needs), (None, &None));
     assert_eq!(terminals.devices(), before, "the helper's link was touched");
+    assert!(
+        runtime.snapshot.ui_state.device_moves_due.contains(&due),
+        "a switch that was not saved is still due"
+    );
 
     // Pressed again once the store can be written, it lands (B41).
     runtime.state_path = store;
@@ -2452,6 +2463,10 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
     assert_eq!(row.switch, None);
     assert!(row.needs.is_some());
+    // It moved: the same save took it off the devices still to move.
+    assert!(!runtime.snapshot.ui_state.device_moves_due.contains(&due));
+    let (stored, _, _) = crate::persistence::load(&runtime.state_path);
+    assert!(stored.device_moves_due.is_empty());
     // Only now is the helper's link let go.
     assert!(
         terminals.devices().len() > before.len()

@@ -4834,6 +4834,7 @@ impl Runtime {
                     pane_completions: current.pane_completions,
                     pane_launches: current.pane_launches,
                     device_switch_opens: current.device_switch_opens,
+                    device_moves_due: current.device_moves_due,
                     request_verbs: current.request_verbs,
                     // `agent_sleep_set` owns the setting and the core owns
                     // the sleep records; a shared save carries both through.

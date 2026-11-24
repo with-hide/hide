@@ -1434,7 +1434,9 @@ pub const COMMANDS: &[Spec] = &[
     // its id, its name and its running terminals. `held` names the machine
     // that switched it first; `--own-folder` goes on without its terminals.
     // `install_needed` is a machine that runs no Hide of its own, where
-    // `--install` starts one from this machine's helper build.
+    // `--install` starts one from this machine's helper build. `--keep`
+    // leaves the device on the old connection, so one a build before 1.3.0
+    // registered no longer moves by itself.
     Spec {
         words: &["device", "switch"],
         arguments: &[Arg {
@@ -1448,6 +1450,7 @@ pub const COMMANDS: &[Spec] = &[
         options: &[
             switch("--install"),
             switch("--own-folder"),
+            switch("--keep"),
             switch("--json"),
         ],
         rest: None,
