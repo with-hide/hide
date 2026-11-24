@@ -605,7 +605,7 @@
     "example": "hide device rename mac-mini \"Studio Mac\""
   },
   "device switch": {
-    "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals: --install starts a Hide there when that machine runs none, and --own-folder goes on after another computer switched the device first.",
+    "line": "Switches an SSH device to the connection of the Hide on its machine, keeping its name, projects and running terminals: --install starts a Hide there when that machine runs none, --own-folder goes on after another computer switched the device first, and --keep leaves it on the old connection so it no longer moves by itself.",
     "example": "hide device switch mini --install"
   },
   "phone pair": {
