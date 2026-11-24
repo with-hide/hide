@@ -789,7 +789,7 @@ mod tests {
                     ..
                 } => {
                     let path = format!(
-                        "C:/Users/op/.hide/state/terminal-attachments/hide-{request}-{index}.png"
+                        "C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-{index}.png"
                     );
                     self.staged
                         .lock()
@@ -822,13 +822,13 @@ mod tests {
         assert_eq!(
             attach.words("봐 줘", std::slice::from_ref(&staged), request),
             Ok(format!(
-                "\"C:/Users/op/.hide/state/terminal-attachments/hide-{request}-0.png\" 봐 줘"
+                "\"C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png\" 봐 줘"
             ))
         );
         assert_eq!(
             device.staged.lock().unwrap().as_slice(),
             [(
-                format!("C:/Users/op/.hide/state/terminal-attachments/hide-{request}-0.png"),
+                format!("C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png"),
                 b"PNG".to_vec()
             )]
         );
