@@ -21,6 +21,13 @@
 //!
 //! The runtime copies (`crate::runtime`) live under `~/.hide/runtime`, a
 //! different root with its own lock, so neither cleanup touches the other's.
+//!
+//! A source that names an app ([`Source::identity`], macOS, the core a login
+//! item started) gets a folder of its own, with the app's identity file
+//! beside the holder when the system says the holder is the app's
+//! (`hide_platform::privacy::give`). Its name takes the identity into the
+//! hash, so the folder a core the app started copies is the one it always
+//! was, byte for byte.
 
 use std::fs;
 use std::io;
@@ -30,6 +37,7 @@ use std::time::{Duration, SystemTime};
 
 use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::lock::{Lock, Mode, Waited, lock_file};
+use hide_platform::privacy::{self, Given, Identity};
 use sha2::{Digest, Sha256};
 
 use crate::layout;
@@ -74,6 +82,11 @@ pub const FOLDERS_CAP: usize = 8;
 pub struct Source {
     pub program: PathBuf,
     pub conpty: Option<PathBuf>,
+    /// The app the holders of this folder answer macOS's consent as, named
+    /// only by a core no app is above (the one a login item started): its
+    /// panes would otherwise be asked about under the path of each build.
+    /// `None` everywhere else, and the folder is then what it always was.
+    pub identity: Option<Identity<'static>>,
 }
 
 /// The files a folder holds, each by the name it has in the folder and where
@@ -111,17 +124,34 @@ fn collect(dir: &Path, name: &str, found: &mut Vec<(String, PathBuf)>) -> io::Re
 /// The folder name for `source` at protocol `version`: `v<version>-<hash>`,
 /// the hash taken over every file's name and bytes.
 pub fn version_name(version: u16, source: &Source) -> io::Result<String> {
-    name_of(version, &files(source)?)
+    name_of(version, &files(source)?, source.identity.as_ref())
 }
 
-fn name_of(version: u16, files: &[(String, PathBuf)]) -> io::Result<String> {
+fn name_of(
+    version: u16,
+    files: &[(String, PathBuf)],
+    identity: Option<&Identity<'_>>,
+) -> io::Result<String> {
     let mut digest = Sha256::new();
-    for (name, path) in files {
-        digest.update((name.len() as u64).to_le_bytes());
-        digest.update(name.as_bytes());
-        let bytes = fs::read(path)?;
+    let part = |digest: &mut Sha256, bytes: &[u8]| {
         digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(&bytes);
+        digest.update(bytes);
+    };
+    for (name, path) in files {
+        part(&mut digest, name.as_bytes());
+        part(&mut digest, &fs::read(path)?);
+    }
+    // After every file, so a source that names no app hashes as it always
+    // did. The name `privacy::IDENTITY_FILE` cannot be a holder file's.
+    if let Some(identity) = identity {
+        part(&mut digest, privacy::IDENTITY_FILE.as_bytes());
+        part(&mut digest, identity.identifier.as_bytes());
+        part(&mut digest, identity.name.as_bytes());
+        part(&mut digest, identity.requirement.as_bytes());
+        for (key, sentence) in identity.usage {
+            part(&mut digest, key.as_bytes());
+            part(&mut digest, sentence.as_bytes());
+        }
     }
     let hash: String = digest
         .finalize()
@@ -163,7 +193,15 @@ fn stamps(files: &[(String, PathBuf)]) -> io::Result<Vec<Stamp>> {
 /// on disk (an update) is hashed again before its next start.
 #[derive(Default)]
 pub struct VersionNames {
-    last: Mutex<Option<(u16, Vec<Stamp>, String)>>,
+    last: Mutex<Option<Named>>,
+}
+
+/// The name last taken and what it was taken from.
+struct Named {
+    version: u16,
+    stamps: Vec<Stamp>,
+    identity: Option<Identity<'static>>,
+    name: String,
 }
 
 impl VersionNames {
@@ -171,17 +209,23 @@ impl VersionNames {
         let files = files(source)?;
         let before = stamps(&files)?;
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((known, stamps, name)) = last.as_ref()
-            && *known == version
-            && *stamps == before
+        if let Some(named) = last.as_ref()
+            && named.version == version
+            && named.stamps == before
+            && named.identity == source.identity
         {
-            return Ok(name.clone());
+            return Ok(named.name.clone());
         }
-        let name = name_of(version, &files)?;
+        let name = name_of(version, &files, source.identity.as_ref())?;
         // A file written while it was read gives a name for no one state of
         // it: answered, since a start asked, but not kept.
         if stamps(&files)? == before {
-            *last = Some((version, before, name.clone()));
+            *last = Some(Named {
+                version,
+                stamps: before,
+                identity: source.identity,
+                name: name.clone(),
+            });
         }
         Ok(name)
     }
@@ -193,6 +237,12 @@ impl VersionNames {
 pub struct Reservation {
     pub dir: PathBuf,
     pub program: PathBuf,
+    /// Whether the folder's holder has the name of the app its source
+    /// named: only such a holder is told to answer for itself.
+    pub as_app: bool,
+    /// What the system said of the holder when this call made the folder
+    /// for a source that names an app; `None` for a folder found.
+    pub made: Option<Given>,
     _lock: Lock,
 }
 
@@ -220,12 +270,18 @@ pub fn prepare(
         .name(version, source)
         .map_err(|error| format!("the holder's files could not be read: {error}"))?;
     let dir = layout::holder_dir(home, &name);
-    if !is_finished(&dir, &name) {
-        make(&root, &dir, &name, source)?;
-    }
+    let made = if is_finished(&dir, &name) {
+        None
+    } else {
+        make(&root, &dir, &name, source)?
+    };
+    let program = dir.join(program_name());
     Ok(Reservation {
-        program: dir.join(program_name()),
+        // The folder's name takes the identity, so a file here is its.
+        as_app: source.identity.is_some() && privacy::has_identity_file(&program),
+        program,
         dir,
+        made,
         _lock: lock,
     })
 }
@@ -237,28 +293,32 @@ pub fn is_finished(dir: &Path, name: &str) -> bool {
         && dir.join(program_name()).is_file()
 }
 
-fn make(root: &Path, dir: &Path, name: &str, source: &Source) -> Result<(), String> {
+/// Makes the folder; answers what the system said of its holder when the
+/// source names an app.
+fn make(root: &Path, dir: &Path, name: &str, source: &Source) -> Result<Option<Given>, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let staging = root.join(format!(
         ".staging-{name}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let made = copy(source, &staging, name).and_then(|()| {
-        hide_platform::fs::atomic::rename_no_replace_path(&staging, dir).or_else(|error| {
-            // Another prepare made it first: theirs is the same content.
-            if error.kind() == io::ErrorKind::AlreadyExists && is_finished(dir, name) {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+    let made = copy(source, &staging, name).and_then(|given| {
+        hide_platform::fs::atomic::rename_no_replace_path(&staging, dir)
+            .or_else(|error| {
+                // Another prepare made it first: theirs is the same content.
+                if error.kind() == io::ErrorKind::AlreadyExists && is_finished(dir, name) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            })
+            .map(|()| given)
     });
     let _ = fs::remove_dir_all(&staging);
     made.map_err(|error| format!("{} could not be made: {error}", dir.display()))
 }
 
-fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<()> {
+fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<Option<Given>> {
     hide_platform::fs::private::create_dir(staging)?;
     for (relative, from) in files(source)? {
         let to = staging.join(&relative);
@@ -275,7 +335,15 @@ fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<()> {
             fs::set_permissions(&to, permissions)?;
         }
     }
-    fs::write(staging.join(MARKER), name)
+    // Here and only here: the folder appears under its name with the file
+    // in it, before any holder runs from it, and the system is asked once
+    // for a build, not once for a pane.
+    let given = source
+        .identity
+        .as_ref()
+        .map(|identity| privacy::give(&staging.join(program_name()), identity));
+    fs::write(staging.join(MARKER), name)?;
+    Ok(given)
 }
 
 /// Locks the root's lock file in `mode`, waiting up to [`LOCK_WAIT`];

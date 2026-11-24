@@ -149,19 +149,14 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // Off the Workspace screen nothing is drawn, so a chord there opens the lane.
   useLayoutEffect(() => () => useUiStore.getState().setDrawnLane({ mode: "closed", view: "none", tool: null, stacked: false }), []);
   // Focus mode draws its pane and desk unexpanded, and leaving it, even
-  // from a desk expanded over the body, brings back the lane as it was
-  // (PRD lane-desk-pair-view D-51, D-59).
+  // from a desk expanded over the body, leaves the lane closed and
+  // unexpanded (D-59; operator decision 2026-11-24, replacing D-51).
   const pairOn = pair !== null;
   useLayoutEffect(() => {
     const store = useUiStore.getState();
-    const before = store.laneExpandedBeforePair;
-    if (pairOn && before === null) {
-      useUiStore.setState({ laneExpandedBeforePair: store.laneExpanded });
-      store.setLaneExpanded(false);
-    } else if (!pairOn && before !== null) {
-      useUiStore.setState({ laneExpandedBeforePair: null });
-      store.setLaneExpanded(before);
-    }
+    if (pairOn === store.pairDrawn) return;
+    useUiStore.setState({ pairDrawn: pairOn });
+    store.setLaneExpanded(false);
   }, [pairOn]);
   // A closed lane is not expanded when it opens again.
   const closed = frame.mode === "closed";

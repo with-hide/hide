@@ -935,3 +935,136 @@ fn closing_a_pane_still_starting_says_so() {
     // The start finds the record no longer reserves it.
     assert_eq!(folder.record("s1").phase, Phase::Closing);
 }
+
+/// A source that names an app (macOS): the core a login item started names
+/// one, so its panes answer macOS's consent under the app's name. The tests
+/// name an identifier of their own, never the app's, and ask for no consent.
+#[cfg(target_os = "macos")]
+mod named_for_an_app {
+    use hide_kit::holders::Source;
+    use hide_platform::privacy::{IDENTITY_FILE, Identity};
+
+    use super::*;
+
+    const IDENTIFIER: &str = "dev.withhide.test.identity";
+
+    /// An app whose requirement a holder signed under [`IDENTIFIER`] meets.
+    const APP: Identity<'static> = Identity {
+        identifier: IDENTIFIER,
+        name: "hide test",
+        requirement: "identifier \"dev.withhide.test.identity\"",
+        usage: &[],
+    };
+
+    /// This build's holder, copied and signed ad hoc under [`IDENTIFIER`].
+    fn signed_holder(home: &Home) -> PathBuf {
+        let program = home.path().join("signed").join("hide-holder");
+        std::fs::create_dir(program.parent().unwrap()).unwrap();
+        std::fs::copy(source().program, &program).unwrap();
+        let signed = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-", "--identifier", IDENTIFIER])
+            .arg(&program)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            signed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&signed.stderr)
+        );
+        program
+    }
+
+    /// What the diagnostics said of the folder's holder's name.
+    fn said(folder: &Folder) -> Vec<(String, Option<String>)> {
+        EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|event| {
+                event["event"] == "pane_holder.identity"
+                    && event["state_dir"] == serde_json::json!(folder.state)
+            })
+            .map(|event| {
+                (
+                    event["state"].as_str().unwrap().to_owned(),
+                    event["reason"].as_str().map(str::to_owned),
+                )
+            })
+            .collect()
+    }
+
+    fn holder_log(folder: &Folder, pane: &str) -> String {
+        std::fs::read_to_string(layout::holder_log(&folder.state, pane)).unwrap()
+    }
+
+    #[test]
+    fn a_holder_that_is_the_apps_answers_for_itself_and_holds_its_pane() {
+        let folder = Folder::new();
+        let app = Source {
+            program: signed_holder(&folder.home),
+            conpty: None,
+            identity: Some(APP),
+        };
+        let mut records = Vec::new();
+        for pane in ["p1", "p2"] {
+            let request = folder.request(pane, shell(), Vec::new());
+            let record = match folder.panes.start(folder.owner(), &request, &app) {
+                Ok(Started::Started(record)) => record,
+                other => panic!("the pane did not start: {other:?}"),
+            };
+            assert_eq!(record.phase, Phase::Running, "{record:?}");
+            // The holder the record names is the process the node started,
+            // though it started itself again in between.
+            assert!(Running::named(record.holder.unwrap()).is_running());
+            let log = holder_log(&folder, pane);
+            assert!(
+                log.contains("holder.responsible") && log.contains("reexecuted"),
+                "{log}"
+            );
+            records.push(record);
+        }
+        let dir = layout::holder_dir(folder.home.path(), &records[0].version_folder);
+        assert!(dir.join(IDENTITY_FILE).is_file());
+        // Its folder is not the one a source that names no app runs from.
+        let plain = Source {
+            identity: None,
+            ..app.clone()
+        };
+        assert_ne!(
+            records[0].version_folder,
+            folder.panes.folder_of(&plain).unwrap()
+        );
+        // Said once for the folder, not once for each pane.
+        assert_eq!(said(&folder), [("shared".to_owned(), None)]);
+        for pane in ["p1", "p2"] {
+            folder.panes.close(folder.owner(), pane).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_holder_that_is_not_the_apps_starts_as_it_always_did_and_says_why() {
+        let folder = Folder::new();
+        // This build's holder as the linker signed it: not under the app's
+        // identifier, as a development build is not.
+        let other = Source {
+            identity: Some(APP),
+            ..source()
+        };
+        let request = folder.request("p1", shell(), Vec::new());
+        let record = match folder.panes.start(folder.owner(), &request, &other) {
+            Ok(Started::Started(record)) => record,
+            other => panic!("the pane did not start: {other:?}"),
+        };
+        assert_eq!(record.phase, Phase::Running, "{record:?}");
+        let dir = layout::holder_dir(folder.home.path(), &record.version_folder);
+        assert!(!dir.join(IDENTITY_FILE).exists());
+        let log = holder_log(&folder, "p1");
+        assert!(!log.contains("holder.responsible"), "{log}");
+        assert_eq!(
+            said(&folder),
+            [("own".to_owned(), Some("requirement_not_met".to_owned()))]
+        );
+        folder.panes.close(folder.owner(), "p1").unwrap();
+    }
+}

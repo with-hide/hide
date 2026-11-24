@@ -100,7 +100,7 @@ test("an agent's open the operator has not looked at waits on its row until its 
     await expect(front(page)).toHaveAttribute("aria-label", /\/notes\.md/);
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");
 
-    // ⌘. leaves focus mode, the screen as it was before it: the lane folded, as the row's press left it.
+    // ⌘. leaves focus mode for the terminals alone, the lane closed (operator decision 2026-11-24).
     await page.keyboard.press(chord("pair_view"));
     await expect(page.locator("[data-pair-pane]")).toHaveCount(0);
     const documents = page.locator('[data-lane-tool="documents"]');

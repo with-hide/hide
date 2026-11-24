@@ -663,6 +663,29 @@ pub struct LocalTerminals {
     pub holders: Arc<Holders>,
 }
 
+/// The app the holders this process starts answer macOS's consent as, when
+/// it was told one.
+static ANSWERS_AS: std::sync::OnceLock<hide_platform::privacy::Identity<'static>> =
+    std::sync::OnceLock::new();
+
+/// Has every holder this process starts from [`Holders::local_source`]
+/// answer macOS's consent as `app` and for itself, where the system says
+/// the holder is that app's (`hide_kit::holders`). A daemon the account's
+/// login item started says it, and a guest's node such a daemon started: no
+/// app is above their panes, which macOS would otherwise ask about under the
+/// path of each build. A daemon the app started, and a device's node under
+/// its `sshd`, never say it, and their panes start as they always did. It is
+/// said once, at the process's start, before anything starts a pane.
+pub fn answer_consent_as(app: hide_platform::privacy::Identity<'static>) {
+    let _ = ANSWERS_AS.set(app);
+}
+
+/// Whether this process was told an app ([`answer_consent_as`]), which a
+/// daemon tells a guest's node it starts in turn.
+pub fn answers_consent_as_app() -> bool {
+    ANSWERS_AS.get().is_some()
+}
+
 /// Where a node's holder panes live: the home whose version folders the
 /// holders are copied into, and the state folder that keeps their records.
 #[derive(Clone, Copy, Debug)]
@@ -706,10 +729,11 @@ impl Holders {
         })
     }
 
-    /// The local node's holder program: the one beside this program, and on
+    /// The local node's holder program: the one beside this program, on
     /// Windows the pinned ConPTY runtime in the folder beside it the app
     /// package puts it in ([`hide_kit::holders::CONPTY_SOURCE`],
-    /// `scripts/fetch-conpty.py`).
+    /// `scripts/fetch-conpty.py`), and the app its holders answer macOS's
+    /// consent as when this process was told one ([`answer_consent_as`]).
     pub fn local_source() -> Result<Source, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("this program could not be found: {error}"))?;
@@ -719,6 +743,7 @@ impl Holders {
         Ok(Source {
             program: dir.join(hide_kit::holders::program_name()),
             conpty: cfg!(windows).then(|| dir.join(hide_kit::holders::CONPTY_SOURCE)),
+            identity: ANSWERS_AS.get().copied(),
         })
     }
 

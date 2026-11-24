@@ -55,3 +55,13 @@ export function paneMoveStartTarget(header: HTMLElement, target: EventTarget | n
   // The head's left row is header too: its gaps are the header's own.
   return target === header || (target instanceof HTMLElement && target.dataset.paneMoveRow === "true") || !!target.closest("[data-pane-move-grip], [data-pane-move-title], [data-pane-move-blank], [data-pane-record]");
 }
+
+/**
+ * A click on the head's own surface (its gaps, the grip, a plain title, the
+ * agent's mark) picks the pane, as a click in its terminal does; a control
+ * in the head does its own thing, and a click in a menu or popover the head
+ * opened, which React hands up through the head, is not the head's.
+ */
+export function paneHeadPicksPane(header: HTMLElement, target: EventTarget | null): boolean {
+  return target instanceof Element && header.contains(target) && !target.closest("button, a, input, [role='button']");
+}

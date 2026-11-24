@@ -1,4 +1,4 @@
-import { paneMoveStartTarget } from "./paneMove";
+import { paneHeadPicksPane, paneMoveStartTarget } from "./paneMove";
 import { botStarter } from "./bots";
 import { usePaneMove } from "./PaneMoveControls";
 import { keyboardCommandOwner, keyboardInputRevision, useKeyboardOwner } from "./viewFocus";
@@ -407,6 +407,13 @@ export const PaneView = memo(function PaneView({
         }`}
         onPointerDown={(event) => {
           if (paneMoveStartTarget(event.currentTarget, event.target)) move?.press(paneId, title, event);
+        }}
+        // The press kept the keyboard where it was in case it became a drag;
+        // a click that stayed one picks this pane (a drag swallows its click).
+        onClick={(event) => {
+          if (!paneHeadPicksPane(event.currentTarget, event.target)) return;
+          actions.focusPane(paneId);
+          focusTerminal(paneId);
         }}
         onContextMenu={(event) => {
           event.preventDefault();

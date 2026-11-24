@@ -1,11 +1,11 @@
-//! The folder trust Hide records in an agent's own state for the worktrees it
-//! makes. Claude Code, Codex, agy, Grok and Pi each ask, the first time they
-//! start interactively in a folder they have not been told to trust, whether
-//! to trust it, and a delegated child stopped at that question waits for an
-//! answer nobody is there to give. So Hide records that trust before it
-//! starts the agent in a worktree it made, and only there (docs/agent-hooks.md,
-//! Folder trust for the worktrees Hide makes; PRD antigravity-first-class D-08
-//! for agy).
+//! The folder trust Hide records in an agent's own state for the folders it
+//! starts agents in. Claude Code, Codex, agy, Grok and Pi each ask, the first
+//! time they start interactively in a folder they have not been told to
+//! trust, whether to trust it, and a delegated child stopped at that question
+//! waits for an answer nobody is there to give. So Hide records that trust
+//! before it starts the agent in a worktree or in the folder Hide made for an
+//! automation, and only there (docs/agent-hooks.md, Folder trust for the
+//! folders Hide starts agents in; PRD antigravity-first-class D-08 for agy).
 //!
 //! Each agent keeps its trust in its own file and format ([`Agent`]):
 //!
@@ -441,19 +441,38 @@ pub fn trust<'a>(
     folder: &Path,
     tools: Tools,
 ) -> Result<(), InstallFailure> {
-    let at = at.into();
+    trust_in(agent, at.into(), folder, InRepository::Yes, tools)
+}
+
+/// Whether the folder [`trust_in`] trusts is a worktree of a repository,
+/// whose main checkout Codex and Grok read its trust from, or a folder Hide
+/// keeps outside any repository (an automation's), which is its own key
+/// whatever Git finds above it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum InRepository {
+    Yes,
+    No,
+}
+
+fn trust_in(
+    agent: Agent,
+    at: AccountAt,
+    folder: &Path,
+    in_repository: InRepository,
+    tools: Tools,
+) -> Result<(), InstallFailure> {
     let home = at.home();
     let account = key_of(at);
     let settings = agent.settings_path(at);
     let folder_key = agent.spelling(folder)?;
     let repository = match agent {
-        Agent::Codex | Agent::Grok => main_checkout(folder)
+        Agent::Codex | Agent::Grok if in_repository == InRepository::Yes => main_checkout(folder)
             .map(|root| agent.spelling(&root))
             .transpose()?,
         _ => None,
     };
     let key = match agent {
-        Agent::Grok => repository.clone().ok_or_else(|| InstallFailure::UnexpectedShape {
+        Agent::Grok if in_repository == InRepository::Yes => repository.clone().ok_or_else(|| InstallFailure::UnexpectedShape {
             path: folder.display().to_string(),
             detail: "a worktree Grok trusts belongs to a repository with a main checkout, the folder Grok keeps a worktree's trust under".to_owned(),
         })?,
@@ -557,8 +576,8 @@ fn folder_is_gone(entry: &str) -> bool {
     matches!(Path::new(entry).try_exists(), Ok(false))
 }
 
-/// [`trust`] for a worktree Hide made for a start of `agent`, refused unless
-/// the folder is one: a directory with a `.git` entry, named without `.` or
+/// [`trust`] for a Git worktree Hide starts `agent` in, refused unless the
+/// folder is one: a directory with a `.git` entry, named without `.` or
 /// `..`, and neither the filesystem root, the home folder nor a folder above
 /// it. Trust makes the agent load the folder's own settings and hooks
 /// without asking, so a path that is not such a worktree is never trusted,
@@ -570,11 +589,43 @@ pub fn trust_worktree<'a>(
     tools: Tools,
 ) -> Result<(), InstallFailure> {
     let at = at.into();
-    let home = at.home();
-    let refuse = |detail: &str| InstallFailure::UnexpectedShape {
-        path: folder.display().to_string(),
-        detail: format!("a worktree {} trusts {detail}", agent.label()),
-    };
+    let canonical = startable(agent, at.home(), folder)?;
+    if std::fs::symlink_metadata(canonical.join(".git")).is_err() {
+        return Err(refused(agent, folder, "is a Git worktree"));
+    }
+    trust(agent, at, &canonical, tools)
+}
+
+/// [`trust`] for a folder Hide starts `agent` in: the folder Hide keeps for
+/// an automation's runs, one directly inside `automations`
+/// (`hide_kit::layout::automations_home`), which is no Git worktree, or any
+/// other folder as [`trust_worktree`] judges it. Both are judged by their
+/// resolved paths, so another spelling of either, or a link along the way,
+/// decides nothing.
+pub fn trust_started_folder<'a>(
+    agent: Agent,
+    at: impl Into<AccountAt<'a>>,
+    folder: &Path,
+    automations: &Path,
+    tools: Tools,
+) -> Result<(), InstallFailure> {
+    let at = at.into();
+    let canonical = startable(agent, at.home(), folder)?;
+    let automation = hide_platform::fs::identity::canonical(automations)
+        .is_ok_and(|automations| canonical.parent() == Some(automations.as_path()));
+    if automation {
+        return trust_in(agent, at, &canonical, InRepository::No, tools);
+    }
+    trust_worktree(agent, at, folder, tools)
+}
+
+/// The resolved path of `folder`, a directory an agent may be trusted in:
+/// named without `.` or `..`, and neither the filesystem root, `home` nor a
+/// folder above it. The entry is the folder's resolved path, so a link along
+/// the way cannot be pointed elsewhere after it is trusted, and `//` or a
+/// trailing separator never reaches it; [`forget`] takes it out by either
+/// spelling.
+fn startable(agent: Agent, home: &Path, folder: &Path) -> Result<PathBuf, InstallFailure> {
     // Read from the spelling itself: `components()` drops a `.` that is not
     // the first name, and an agent matches the entry as it is written.
     if folder
@@ -582,24 +633,30 @@ pub fn trust_worktree<'a>(
         .split(['/', std::path::MAIN_SEPARATOR])
         .any(|name| name == "." || name == "..")
     {
-        return Err(refuse("is named without . or .."));
+        return Err(refused(agent, folder, "is named without . or .."));
     }
     let canonical = hide_platform::fs::identity::canonical(folder)
-        .map_err(|_| refuse("names a folder that exists"))?;
-    if !canonical.is_dir() || std::fs::symlink_metadata(canonical.join(".git")).is_err() {
-        return Err(refuse("is a Git worktree"));
+        .map_err(|_| refused(agent, folder, "names a folder that exists"))?;
+    if !canonical.is_dir() {
+        return Err(refused(agent, folder, "names a folder that exists"));
     }
     let account =
         hide_platform::fs::identity::canonical(home).unwrap_or_else(|_| home.to_path_buf());
     if canonical.parent().is_none() || account.starts_with(&canonical) {
-        return Err(refuse(
+        return Err(refused(
+            agent,
+            folder,
             "is never the root, the home folder or a folder above it",
         ));
     }
-    // The entry is the folder's resolved path, so a link along the way cannot
-    // be pointed elsewhere after it is trusted, and `//` or a trailing
-    // separator never reaches it; [`forget`] takes it out by either spelling.
-    trust(agent, at, &canonical, tools)
+    Ok(canonical)
+}
+
+fn refused(agent: Agent, folder: &Path, detail: &str) -> InstallFailure {
+    InstallFailure::UnexpectedShape {
+        path: folder.display().to_string(),
+        detail: format!("a folder {} trusts {detail}", agent.label()),
+    }
 }
 
 /// The main checkout of the repository `worktree` belongs to, which Codex

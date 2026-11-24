@@ -581,6 +581,141 @@ fn the_first_run_choice_is_asked_once_applied_everywhere_and_remembered_for_late
     assert_eq!(helper.calls().len(), 2);
 }
 
+/// A pass with these agents, `held` while its machine's record waits for the
+/// first-run choice.
+fn pass_with(held: bool, agents: Vec<hide_kit::AgentReport>) -> KitReport {
+    let mut pass = report(&[(ComponentId::Cli, ComponentState::Installed)]);
+    pass.held_for_onboarding = held;
+    pass.agents = agents;
+    pass
+}
+
+fn device_calls(helper: &KitDevice) -> Vec<KitAction> {
+    helper.calls().into_iter().map(|call| call.0).collect()
+}
+
+fn first_run_apply(on: &[&str], off: &[&str]) -> KitAction {
+    KitAction::Reinstall {
+        components: Vec::new(),
+        agents_on: on.iter().map(|id| (*id).to_owned()).collect(),
+        agents_off: off.iter().map(|id| (*id).to_owned()).collect(),
+        codex_daemon_off: false,
+    }
+}
+
+/// The first-run step offers a switch only for an agent installed on this
+/// Mac, so the choice says nothing about one this Mac lacks: a device that
+/// has it gets it on, as its own first run would, while an agent this Mac
+/// has and the operator left off stays off there. A Windows PC without
+/// Codex left a WSL distribution's Codex off, with no skill or hook.
+#[test]
+fn a_device_gets_the_agents_this_mac_could_not_offer_on() {
+    use hide_kit::Availability::{Available, NotInstalled};
+    let helper = KitDevice::answering(Ok(ran(report(&[(
+        ComponentId::Cli,
+        ComponentState::Installed,
+    )]))));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+    shared.lock().unwrap().ingest_kit_report(
+        crate::node::TEST_NODE,
+        &pass_with(
+            true,
+            vec![
+                agent_report("claude-code", Available, false, ComponentState::Off),
+                agent_report("grok", Available, false, ComponentState::Off),
+                agent_report("codex", NotInstalled, false, ComponentState::Off),
+            ],
+        ),
+    );
+    // The operator leaves Grok off; Codex had no switch.
+    dispatch(
+        &shared,
+        "agent_onboarding_apply",
+        serde_json::json!({ "agents": ["claude-code"] }),
+    );
+    settle(&shared);
+
+    shared.lock().unwrap().ingest_kit_report(
+        DEVICE,
+        &pass_with(
+            true,
+            vec![
+                agent_report("codex", Available, false, ComponentState::Off),
+                agent_report("grok", Available, false, ComponentState::Off),
+                agent_report("claude-code", NotInstalled, false, ComponentState::Off),
+            ],
+        ),
+    );
+    settle(&shared);
+    assert_eq!(
+        device_calls(&helper),
+        vec![first_run_apply(&["claude-code", "codex"], &["antigravity"])]
+    );
+}
+
+/// An answer kept from an earlier run is sent only with this Mac's agents
+/// known: a device that reports before this Mac's first pass of the run
+/// waits for that pass, so an agent the operator left off here is not read
+/// as one this Mac lacks. A call that fails leaves the device waiting for its
+/// own next report, not for this Mac's next pass, which Settings reads every
+/// few seconds.
+#[test]
+fn a_device_that_reports_before_this_macs_first_pass_waits_for_it() {
+    use crate::model::AgentOnboarding::Done;
+    use hide_kit::Availability::Available;
+    let helper = KitDevice::answering(Err("the device went away".to_owned()));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.ui_state.agent_onboarding = Some(Done);
+        runtime.snapshot.ui_state.agent_onboarding_agents = vec!["claude-code".to_owned()];
+    }
+    shared.lock().unwrap().ingest_kit_report(
+        DEVICE,
+        &pass_with(
+            true,
+            vec![
+                agent_report("claude-code", Available, false, ComponentState::Off),
+                agent_report("codex", Available, false, ComponentState::Off),
+            ],
+        ),
+    );
+    settle(&shared);
+    assert!(device_calls(&helper).is_empty());
+
+    let this_mac = pass_with(
+        false,
+        vec![
+            agent_report("claude-code", Available, true, ComponentState::Installed),
+            agent_report("codex", Available, false, ComponentState::Off),
+        ],
+    );
+    shared
+        .lock()
+        .unwrap()
+        .ingest_kit_report(crate::node::TEST_NODE, &this_mac);
+    settle(&shared);
+    let choice = first_run_apply(&["claude-code"], &["antigravity", "codex"]);
+    assert_eq!(device_calls(&helper), vec![choice.clone()]);
+
+    shared
+        .lock()
+        .unwrap()
+        .ingest_kit_report(crate::node::TEST_NODE, &this_mac);
+    settle(&shared);
+    assert_eq!(device_calls(&helper), vec![choice.clone()]);
+
+    shared.lock().unwrap().ingest_kit_report(
+        DEVICE,
+        &pass_with(
+            true,
+            vec![agent_report("codex", Available, false, ComponentState::Off)],
+        ),
+    );
+    settle(&shared);
+    assert_eq!(device_calls(&helper), vec![choice.clone(), choice]);
+}
+
 #[test]
 fn a_machine_that_already_had_the_kit_never_asks() {
     use crate::model::AgentOnboarding::Done;

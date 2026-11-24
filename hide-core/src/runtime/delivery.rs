@@ -539,15 +539,11 @@ impl Runtime {
         }
         // The device's hooks report to the core, never to its engine, so their
         // facts are laid here the way the labels are (`agent_hooks::facts`).
-        let tokens = self
-            .hook_facts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .lay(
-                payload,
-                |pane| crate::address::scoped_pane_id(device, pane),
-                |pane| crate::address::is_pane_of(pane, device),
-            );
+        let tokens = self.lay_hook_facts(
+            payload,
+            |pane| crate::address::scoped_pane_id(device, pane),
+            |pane| crate::address::is_pane_of(pane, device),
+        );
         self.lay_delivery_turns(device, pass, delivery_turns(payload));
         tokens
     }
