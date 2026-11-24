@@ -3692,7 +3692,8 @@ fn desk_files_admitted(
 ) -> Result<(Vec<crate::demand::DeskFileKey>, Vec<Message>), String> {
     let files: Vec<crate::demand::DeskFileKey> = serde_json::from_value(
         event
-            .pointer("/payload/files")
+            .get("payload")
+            .and_then(|payload| payload.get("files"))
             .cloned()
             .ok_or_else(|| "desk_files.files is required".to_owned())?,
     )

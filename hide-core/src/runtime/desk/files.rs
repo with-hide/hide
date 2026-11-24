@@ -46,12 +46,44 @@ pub(in crate::runtime) struct FilePayload {
     close: Vec<DeskFile>,
 }
 
+/// `desk_file_retry`, from a window: the file and the device hided routed
+/// it by, which the core reads from its catalog instead.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::runtime) struct RetryPayload {
+    workspace_id: String,
+    checkout_id: String,
+    path: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    device_id: Option<String>,
+}
+
+impl From<RetryPayload> for DeskFile {
+    fn from(payload: RetryPayload) -> Self {
+        Self {
+            workspace_id: payload.workspace_id,
+            checkout_id: payload.checkout_id,
+            path: payload.path,
+        }
+    }
+}
+
 const NO_CHECKOUT: &str = "The file's project or checkout is no longer available";
 
 impl Runtime {
     pub(in crate::runtime) fn desk_file(&mut self, payload: FilePayload) -> bool {
-        let opened = payload
-            .open
+        let on = self.desk.worker.is_some() && self.desk.stored.settings.enabled;
+        if !on && !payload.open.is_empty() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "desk",
+                "kind": "desk.file_open_refused",
+                "files": payload.open.len(),
+                "reason": "desk_off",
+            }));
+        }
+        let open = if on { payload.open } else { Vec::new() };
+        let opened = open
             .into_iter()
             .fold(false, |changed, file| self.desk_file_open(file) | changed);
         payload

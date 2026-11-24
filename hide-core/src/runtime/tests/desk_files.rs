@@ -205,7 +205,7 @@ fn a_file_desk_cannot_open_is_a_tab_that_says_why_and_retry_reads_it_again() {
     assert!(reason(&runtime).is_some(), "the tab says why");
     assert!(runtime.dispatch_json(&explorer_event(
         "desk_file_retry",
-        serde_json::json!({"workspace_id": "workspace:gone", "checkout_id": "checkout:gone", "path": file.to_string_lossy()}),
+        serde_json::json!({"workspace_id": "workspace:gone", "checkout_id": "checkout:gone", "device_id": "local", "path": file.to_string_lossy()}),
     )));
     assert!(reason(&runtime).is_some(), "still gone, still said");
 
@@ -214,6 +214,48 @@ fn a_file_desk_cannot_open_is_a_tab_that_says_why_and_retry_reads_it_again() {
         close_payload("workspace:gone", "checkout:gone", &file),
     );
     assert_eq!(reason(&runtime), None, "letting it go closes the tab");
+}
+
+/// Switching Desk off with file tabs open: the window's room lets them go,
+/// and that close lands though Desk is off.
+#[test]
+fn desk_switched_off_still_lets_its_files_go_and_opens_none() {
+    let (mut runtime, checkout_id, directory) = desk_runtime("desk-file-switched-off");
+    let file = directory.join("notes.md");
+    let edited = directory.join("edited.md");
+    std::fs::write(&edited, "edited\n").expect("fixture");
+    for one in [&file, &edited] {
+        desk_file(
+            &mut runtime,
+            open_payload("workspace:order", &checkout_id, one),
+        );
+    }
+    let draft = open_tab(&runtime, &edited).expect("open");
+    runtime.dispatch_json(&explorer_event(
+        "file_draft",
+        serde_json::json!({"tab_id": draft, "contents_utf8": "changed\n"}),
+    ));
+    runtime.dispatch_json(&explorer_event(
+        "desk_settings_set",
+        serde_json::json!({"enabled": false}),
+    ));
+    desk_file(
+        &mut runtime,
+        serde_json::json!({"close": [
+            {"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": file.to_string_lossy()},
+            {"workspace_id": "workspace:order", "checkout_id": checkout_id, "path": edited.to_string_lossy()},
+        ]}),
+    );
+    assert_eq!(open_tab(&runtime, &file), None, "the close lands while off");
+    assert!(
+        shown(&mut runtime).contains(&edited.to_string_lossy().into_owned()),
+        "the unsaved one goes to its checkout's View"
+    );
+    desk_file(
+        &mut runtime,
+        open_payload("workspace:order", &checkout_id, &file),
+    );
+    assert_eq!(open_tab(&runtime, &file), None, "an open does not");
 }
 
 #[test]
