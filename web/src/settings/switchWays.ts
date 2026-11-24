@@ -100,7 +100,8 @@ function lookOf(result: PairingResult, admin: { current: string | null }): Switc
 /**
  * One device's read and switch, for its row. While `wanted`, the machine is
  * read once over its own login, again each time the row is opened, and on
- * `read`; what was read stays as it is while the row is open. `press` asks
+ * `read`; what was read stays as it is while the row is open, and a fold
+ * or a reopen also ends how the last press ended. `press` asks
  * for the switch, which reads the machine again first: a machine it leaves
  * answers with what it said, which replaces the look, and any other end
  * that did not switch the device is kept as its outcome (`ui.ts`), a login
@@ -144,7 +145,13 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
   }, [actions, deviceId, unanswered]);
   const asked = useRef(false);
   useEffect(() => {
+    // How the last press ended stands until the row reads its machine again:
+    // a fold, or opening it again, and what that read says is drawn instead.
+    const fresh = () => {
+      if (asked.current) useUiStore.getState().setSwitchOutcome(deviceId, null);
+    };
     if (!wanted) {
+      fresh();
       asked.current = false;
       asks.current.look = null;
       admin.current = null;
@@ -153,9 +160,10 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
     }
     // A fold keeps what was read; opening the row reads again.
     if (!open && asked.current) return;
+    fresh();
     asked.current = true;
     read();
-  }, [wanted, open, read]);
+  }, [deviceId, wanted, open, read]);
   // Subscribed, not selected: two answers in one tick would each replace the store's one slot before a render read it.
   useEffect(
     () =>

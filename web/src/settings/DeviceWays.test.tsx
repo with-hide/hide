@@ -215,6 +215,13 @@ it("ends a press whose login was cut or did not sign in as a failed press to ret
   }
   expect(asked("pairing_switch")).toHaveLength(2);
   expect(q('[data-device-way="mini:ssh"]')).not.toBeNull();
+  // Folded and opened again, the row reads the machine again, and what it says now replaces the failed press.
+  await press(FOLD);
+  await press(FOLD);
+  await answer("look_switch", { ok: false, reason: "ssh_not_reached" });
+  expect(q('[data-device-condition-kind="password"]')?.textContent).toBe("Its SSH login asks for a password, so it cannot be moved to a server");
+  expect(q('[data-device-switch-outcome="mini:failed"]')).toBeNull();
+  expect(q(SWITCH)).toBeNull();
   await unmount();
 });
 
