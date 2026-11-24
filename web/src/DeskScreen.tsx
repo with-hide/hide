@@ -10,7 +10,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Actions } from "./actions";
 import { escapeConsumed } from "./components/ui/tooltip";
 import { askingCount, deskOn, laneCards, sessionFacts, sessionThreadId, threadKeyPane, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, keepTab, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { useDeskLaneStore, activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, keepTab, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
@@ -287,7 +287,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     },
     onHanded: (paneId) => lane.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
   }), [actions, onNoticeAction, lane]);
-  const laneWindow = useUiStore((s) => s.deskLane);
+  const laneWindow = useDeskLaneStore((s) => s.deskLane);
 
   if (!desk) return null;
   const working = jobs.filter((job) => job.state === "working").length;
@@ -402,8 +402,8 @@ type LaneActions = {
 
 function useLaneActions(actions: Actions): LaneActions {
   return useMemo(() => {
-    const set = (change: Parameters<ReturnType<typeof useUiStore.getState>["setDeskLane"]>[0]) => useUiStore.getState().setDeskLane(change);
-    const kept = () => useUiStore.getState().deskLane.kept;
+    const set = (change: Parameters<ReturnType<typeof useDeskLaneStore.getState>["setDeskLane"]>[0]) => useDeskLaneStore.getState().setDeskLane(change);
+    const kept = () => useDeskLaneStore.getState().deskLane.kept;
     const thread = (job: DeskJob, answer = false) => set((lane) => openThread(lane, job.id, { answer }));
     const threadOutput = (job: DeskJob, output: DeskOutput) => set((lane) => showTab(lane, kept(), outputTab(job.id, outputOf(job, output))));
     return {
@@ -450,8 +450,8 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
   const { t } = useInterfaceTranslation();
   const own = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
   const threads = useThreads();
-  const place = useUiStore((s) => s.deskLane);
-  const set = useUiStore((s) => s.setDeskLane);
+  const place = useDeskLaneStore((s) => s.deskLane);
+  const set = useDeskLaneStore((s) => s.setDeskLane);
   const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   const [conductors, setConductors] = useState<ReadonlySet<string>>(() => new Set());
   const kept = place.kept;
@@ -602,5 +602,5 @@ export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: A
   const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   const on = useShellStore((s) => deskOn(s.desk));
   if (!job || !on) return null;
-  return <DeskPaneReturn joined={job.joined} chord={chord} onDesk={() => actions.openDeskThread(job.id)} />;
+  return <DeskPaneReturn joined={job.joined} chord={chord} onDesk={() => (job.pane_id ? actions.openDeskSession(job.pane_id) : undefined)} />;
 }

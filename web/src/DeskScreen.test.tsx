@@ -10,6 +10,7 @@ import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { useDeskLaneStore } from "./deskLane";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 
@@ -320,7 +321,7 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ agents: [row] }));
 
     await press("[data-desk-session-chip]");
-    expect(useUiStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
+    expect(useDeskLaneStore.getState().deskLane.tool).toEqual({ kind: "thread", job: "pane:w1:p2", conductor: null });
     expect(sent("session_thread_open")).toEqual([{ pane_id: "w1:p2" }]);
     expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
     expect(document.body.querySelector("[data-desk-thread-pending]")).not.toBeNull();

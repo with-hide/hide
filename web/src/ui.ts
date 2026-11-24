@@ -13,7 +13,7 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
-import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
+import { DESK_ROOM_CLOSED, type DeskRoomWindow } from "./deskRoom";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -312,9 +312,12 @@ type UiStore = {
   setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
-  /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
-  deskLane: DeskLaneWindow;
-  setDeskLane: (change: (lane: DeskLaneWindow) => DeskLaneWindow) => void;
+  /** Desk's room in this window: the session open beside Desk and its tab panel (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
+  deskRoom: DeskRoomWindow;
+  setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
+  /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
+  deskReturn: string | null;
+  setDeskReturn: (pane: string | null) => void;
   /** Overview is a shell layer; opening it leaves the Workspace mounted. */
   overviewOpen: boolean;
   overview: OverviewPlace;
@@ -555,6 +558,11 @@ export function coveringLayer(layers: readonly (() => void)[]): (() => void) | n
   return [...layers].reverse().find((layer) => !inlineLayers.has(layer)) ?? null;
 }
 
+/** The room's window state reset when the screen leaves Desk (PRD desk-2-ui B26); nothing while it stays. */
+function leftDesk(from: Screen | null, to: Screen | null): Partial<UiStore> {
+  return from?.kind === "desk" && to?.kind !== "desk" ? { deskRoom: DESK_ROOM_CLOSED } : {};
+}
+
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
   remoteScreen: null,
@@ -563,8 +571,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
-  deskLane: DESK_LANE_CLOSED,
-  setDeskLane: (change) => set((state) => ({ deskLane: change(state.deskLane) })),
+  deskRoom: DESK_ROOM_CLOSED,
+  setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
+  deskReturn: null,
+  setDeskReturn: (deskReturn) => set({ deskReturn }),
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,
@@ -636,8 +646,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   tooltips: [],
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
-  setScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
-  restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
+  // Leaving Desk closes its right side, so the room starts closed the next time it is entered (PRD desk-2-ui B26).
+  setScreen: (screen) => set((state) => ({ screen, opening: null, overviewOpen: false, overviewReveal: null, ...leftDesk(state.screen, screen) })),
+  restoreScreen: (screen) => set((state) => ({ screen, opening: null, overviewOpen: false, overviewReveal: null, ...leftDesk(state.screen, screen) })),
   setMainView: (mainView) => set({ mainView }),
   setRelation: (relation) => set({ relation }),
   toggleRaised: (group) => {

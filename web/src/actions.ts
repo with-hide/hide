@@ -92,8 +92,8 @@ import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
-import { deskOn, threadKeyPane } from "./desk";
-import { openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
+import { deskOn } from "./desk";
+import { closePanel as closeDeskPanel, openSession as openDeskSession, openTab as openDeskTab, toggleExplorer as toggleDeskExplorer, type DeskTab } from "./deskRoom";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -470,6 +470,45 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspaceId, checkout_id: checkoutId, ...(expanded === undefined ? {} : { expanded }), ...(projectExpanded === undefined ? {} : { project_expanded: projectExpanded }) } });
   };
 
+  /** Every listed checkout with its project and machine: this machine's, then each connected device's. */
+  const everyCheckout = () => {
+    const node = localDeviceId(rest());
+    const local = (rest()?.navigator?.workspaces ?? []).map((workspace) => ({ device: node, workspace }));
+    const remote = (rest()?.status?.remote ?? []).flatMap((row) => (row.session?.workspaces ?? []).map((workspace) => ({ device: row.target_id, workspace })));
+    return [...local, ...remote].flatMap(({ device, workspace }) => workspace.checkouts.map((checkout) => ({ device, workspace: workspace.id, checkout })));
+  };
+
+  /** The checkout at `root` on `device` (PRD desk-2-ui B19, B37, B38). */
+  const checkoutAt = (device: string, root: string) => {
+    const found = everyCheckout().find((row) => row.device === device && row.checkout.path === root);
+    return found ? { device: found.device, workspace: found.workspace, checkout: found.checkout.id, path: found.checkout.path } : null;
+  };
+
+  /** The checkout whose tab holds `paneId` (PRD desk-2-ui B35). */
+  const checkoutOfPane = (paneId: string) => {
+    const found = everyCheckout().find((row) => row.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId)));
+    return found ? { device: found.device, workspace: found.workspace, checkout: found.checkout.id, path: found.checkout.path } : null;
+  };
+
+  /**
+   * One checkout in front in the core, its device too, with no screen
+   * change: Desk stays on screen while the app's Explorer and file view,
+   * which read the checkout in front, show that checkout (PRD desk-2-ui D-22).
+   */
+  const bringCheckoutForward = (device: string, workspace: string, checkout: string) => {
+    if (frontCheckout(rest())?.id === checkout && frontDeviceId(rest()) === device) return;
+    if (frontDeviceId(rest()) === device) return focusCheckout(workspace, checkout);
+    if (device === localDeviceId(rest())) return dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspace, checkout_id: checkout, focus_device: true } });
+    dispatch(withDeviceForward(remoteControl(device, { action: "focus_workspace", workspace_id: workspace, checkout_id: checkout })));
+  };
+
+  /** Whether ⌘J on `pane` goes back to Desk (B7): the pane `터미널 ⌘J` left Desk for, or a session Desk started. */
+  const deskReturnsTo = (pane: string): boolean => {
+    if (ui().deskReturn === pane) return true;
+    const section = useShellStore.getState().deskJobs;
+    return [...(section?.jobs ?? []), ...(section?.workers ?? [])].some((job) => job.pane_id === pane);
+  };
+
   /**
    * Keyboard focus to one pane. The pane's own id says which host it is on,
    * so a remote pane is focused there and a local one here, whatever the
@@ -709,8 +748,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the keyboard into their active area.
    */
   const toggleLane = () => {
-    // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
-    if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
+    // Desk's room has no lane: ⌘E means nothing there (PRD desk-2-ui D-13).
+    if (ui().screen?.kind === "desk") return diagnostic("toggle_lane: Desk's room has no lane");
     // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
     // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
     const pairView = workspaceViewOf(rest());
@@ -2691,36 +2730,83 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * ⌘J and a thread's `터미널로` (PRD session-docs-and-assistant D-42,
-     * B35): from Desk, the Agent tab of the thread in its tool column; from
-     * a Desk thread's Agent tab, back to Desk as it was left, that thread in
-     * its tool column. Anywhere else there is nowhere to go.
+     * ⌘J and the session panel's `터미널 ⌘J` (PRD desk-2-ui D-04, B7): from
+     * Desk, the Agent tab of the session open beside it, with the keyboard
+     * in its pane; from that pane, or a Desk job's, back to Desk with that
+     * session beside it. Anywhere else there is nowhere to go.
      */
     deskTerminal() {
       // A menu item or a host's chord can still ask while Desk is off; it goes nowhere (D-76).
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk terminal: Desk is switched off");
-      const section = useShellStore.getState().deskJobs;
-      const jobs = [...(section?.jobs ?? []), ...(section?.workers ?? [])];
       const state = ui();
       if (state.screen?.kind === "desk") {
-        const tool = state.deskLane.up ? state.deskLane.tool : null;
-        // A session the conversation names opens in the lane as a thread too (D-86).
-        const job = tool?.kind === "thread" ? [...jobs, ...(section?.named ?? [])].find((one) => one.id === tool.job) : undefined;
-        // A session that is no job opens by its pane, card or not yet (D-87).
-        const pane = job?.pane_id ?? (tool?.kind === "thread" ? threadKeyPane(tool.job) : null);
-        if (!pane) return diagnostic("desk terminal: no thread in Desk's lane");
+        const pane = state.deskRoom.session;
+        if (!pane) return diagnostic("desk terminal: no session open beside Desk");
+        state.setDeskReturn(pane);
         return this.openAgent(pane);
       }
       const pane = useShellStore.getState().focusedPaneId;
-      const job = pane ? jobs.find((one) => one.pane_id === pane) : undefined;
-      if (!job) return diagnostic("desk terminal: the pane in front is not a Desk thread");
-      this.openDeskThread(job.id);
+      if (!pane || !deskReturnsTo(pane)) return diagnostic("desk terminal: the pane in front is no session Desk opened");
+      this.openDeskSession(pane);
     },
 
-    /** Desk as it was left, with `jobId`'s thread in its lane's tool column (B35). */
-    openDeskThread(jobId: string) {
-      ui().setDeskLane((lane) => (lane.up && lane.tool?.kind === "thread" && lane.tool.job === jobId ? lane : openDeskThread(lane, jobId)));
-      this.openDesk();
+    /**
+     * A session opened beside Desk (PRD desk-2-ui B2, B3, B7, B13, B47): Desk
+     * comes to the front with that session's conversation at its right;
+     * `answer` gives the keyboard to its input box. Another session's tab
+     * panel closes (D-14).
+     */
+    openDeskSession(paneId: string, options: { answer?: boolean } = {}) {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
+      if (ui().screen?.kind !== "desk") this.openDesk();
+      ui().setDeskRoom((room) => openDeskSession(room, paneId, options));
+    },
+
+    /**
+     * The tab panel's open contract (PRD desk-2-ui D-05, D-08, D-22-D-24,
+     * B16, B19, B20, B36-B39): `tab` opens in the tab panel, which floats
+     * beside the session open beside Desk, or at the window's right edge when
+     * none is (`deskRoom.ts`, `panelPlace`). A file is the app's own file
+     * view: its checkout comes in front in the core, which places the file in
+     * its preview slot or keeps it (`preview`), and the panel draws that
+     * display, so editing and ⌘S are the app's.
+     */
+    deskOpen(tab: DeskTab, options: { preview?: boolean } = {}) {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
+      if (ui().screen?.kind !== "desk") this.openDesk();
+      if (tab.kind === "file") {
+        const place = checkoutAt(tab.device_id, tab.root);
+        if (!place) return diagnostic("desk file: its checkout is not registered");
+        bringCheckoutForward(place.device, place.workspace, place.checkout);
+        dispatch({
+          schema_version: 2,
+          kind: "file_open",
+          payload: { path: tab.path, workspace_id: place.workspace, checkout_id: place.checkout, preview: options.preview ?? false, ...deviceField(place.device, localDeviceId(rest())) },
+        });
+      }
+      ui().setDeskRoom((room) => openDeskTab(room, tab, options));
+    },
+
+    /**
+     * `파일 ⇧⌘E` beside Desk (PRD desk-2-ui D-22, B35): the Explorer of the
+     * open session's checkout in the tab panel's tool column, or that column
+     * closed. The Explorer is the app's, over the checkout in front, so the
+     * session's checkout comes in front in the core; Desk stays on screen.
+     */
+    deskToggleExplorer() {
+      const room = ui().deskRoom;
+      if (ui().screen?.kind !== "desk" || !room.session) return diagnostic("desk explorer: no session open beside Desk");
+      if (!room.panel?.explorer) {
+        const place = checkoutOfPane(room.session);
+        if (!place) return diagnostic("desk explorer: the session's checkout is not listed");
+        bringCheckoutForward(place.device, place.workspace, place.checkout);
+      }
+      ui().setDeskRoom(toggleDeskExplorer);
+    },
+
+    /** The tab panel's `✕`, Escape or a press on the dimmed outside (B21). */
+    deskClosePanel() {
+      ui().setDeskRoom(closeDeskPanel);
     },
 
     /** One message to Desk's agent with the sessions and projects it names (B7, B18). */

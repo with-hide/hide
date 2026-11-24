@@ -4,8 +4,9 @@
 // this window's and starts closed: the core keeps only the panels' widths
 // (`desk.lane`, PRD desk-2-ui B23, B26).
 
+import { create } from "zustand";
 import type { DeskOutput } from "./snapshot";
-import { absolutePathRoot } from "./terminalLinks";
+export { namesView } from "./deskRoom";
 
 /** A tab of the 보기 column: a job's output as its card listed it, or a mission's map (B34). */
 export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
@@ -151,27 +152,8 @@ export function toggleLane(lane: DeskLaneWindow): DeskLaneWindow {
   return { ...lane, up: true };
 }
 
-/**
- * Whether `written`, a file as a session's call typed it, names the View
- * `made` opened (B31). A View's path is spelled as the wire spells it, `/`
- * between names on every system, so a Windows device's backslashes are read
- * as `/` and its drive letter in either case (docs/ARCHITECTURE.md, The
- * platform layer); a relative path names the View whose path ends with it.
- */
-export function namesView(made: DeskOutput, written: string): boolean {
-  if (made.path === null) return false;
-  const windows = /^[A-Za-z]:\//u.test(made.path) || made.path.startsWith("//");
-  const wire = windows ? written.replaceAll("\\", "/") : written;
-  const root = absolutePathRoot(wire);
-  const parts: string[] = [];
-  for (const part of wire.slice(root?.length ?? 0).split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part !== "..") parts.push(part);
-    else if (!root || parts.pop() === undefined) return false;
-  }
-  if (parts.length === 0) return false;
-  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
-  if (root) return same(`${root}${parts.join("/")}`, made.path);
-  const tail = `/${parts.join("/")}`;
-  return made.path.length > tail.length && same(made.path.slice(-tail.length), tail);
-}
+/** The lane's window state until the room replaces it. */
+export const useDeskLaneStore = create<{ deskLane: DeskLaneWindow; setDeskLane: (change: (lane: DeskLaneWindow) => DeskLaneWindow) => void }>((set) => ({
+  deskLane: DESK_LANE_CLOSED,
+  setDeskLane: (change) => set((state) => ({ deskLane: change(state.deskLane) })),
+}));
