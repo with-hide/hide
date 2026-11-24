@@ -44,9 +44,17 @@ impl NodeLink for Node {
     fn call(&self, call: Call, _timeout: Duration) -> Result<LinkAnswer, LinkError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(LinkAnswer::Parsed(match call {
-            Call::Repository { .. } if self.repository.load(Ordering::SeqCst) => {
-                json!({"root": "/srv/repo", "git_dir": "/srv/repo/.git",
-                       "common_dir": "/srv/repo/.git"})
+            // Git gives a linked worktree a Git directory of its own under
+            // the common one; the main checkout's is the common one, by
+            // whatever spelling the path names it.
+            Call::Repository { path } if self.repository.load(Ordering::SeqCst) => {
+                match path.strip_prefix("/srv/repo.worktrees/") {
+                    Some(name) => json!({"root": path,
+                        "git_dir": format!("/srv/repo/.git/worktrees/{name}"),
+                        "common_dir": "/srv/repo/.git"}),
+                    None => json!({"root": "/srv/repo", "git_dir": "/srv/repo/.git",
+                        "common_dir": "/srv/repo/.git"}),
+                }
             }
             Call::Repository { .. } => Value::Null,
             Call::AgentInstalled { name } => {
@@ -1058,9 +1066,6 @@ fn a_spawn_refuses_a_choice_the_agent_does_not_take_before_anything_is_made() {
     assert_eq!(spawner.node.calls.load(Ordering::SeqCst), 0);
 }
 
-/// A device that cannot record Codex's trust of the worktree refuses the
-/// spawn before Codex starts there, with the device's reason, so no child
-/// waits on its trust question.
 /// #2888: a checker spawned into the worktree an earlier spawn made for a
 /// worker of another kind is trusted there too, since nobody is at its
 /// screen to answer its own question.
@@ -1080,16 +1085,22 @@ fn a_spawn_into_a_worktree_that_already_exists_records_the_agents_trust() {
 }
 
 /// The repository's own folder stays the operator's to trust: a spawn whose
-/// branch is out there records nothing.
+/// branch is out there records nothing, whatever spelling names the folder,
+/// since Git on the device says it is the main checkout.
 #[test]
 fn a_spawn_into_the_repositorys_own_folder_records_no_trust() {
-    let spawner = spawner();
-    *spawner.existing.lock().unwrap() = Some("/srv/repo".to_owned());
-    let child = spawner.spawn(Some("here"), Some(DEVICE), "main").unwrap();
-    assert_eq!(child["project"], "/srv/repo");
-    assert!(spawner.node.trusted.lock().unwrap().is_empty());
+    for main in ["/srv/repo", "/srv/repo/"] {
+        let spawner = spawner();
+        *spawner.existing.lock().unwrap() = Some(main.to_owned());
+        let child = spawner.spawn(Some("here"), Some(DEVICE), "main").unwrap();
+        assert_eq!(child["project"], main);
+        assert!(spawner.node.trusted.lock().unwrap().is_empty(), "{main}");
+    }
 }
 
+/// A device that cannot record Codex's trust of the worktree refuses the
+/// spawn before Codex starts there, with the device's reason, so no child
+/// waits on its trust question.
 #[test]
 fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
     let spawner = spawner();

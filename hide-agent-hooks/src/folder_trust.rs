@@ -596,11 +596,13 @@ pub fn trust_worktree<'a>(
     trust(agent, at, &canonical, tools)
 }
 
-/// [`trust`] for the folder Hide keeps for an automation's runs, one folder
-/// directly inside `automations` (`hide_kit::layout::automations_home`),
-/// which is no Git worktree; refused for any other folder, by the same rules
-/// as [`trust_worktree`] otherwise.
-pub fn trust_automation_folder<'a>(
+/// [`trust`] for a folder Hide starts `agent` in: the folder Hide keeps for
+/// an automation's runs, one directly inside `automations`
+/// (`hide_kit::layout::automations_home`), which is no Git worktree, or any
+/// other folder as [`trust_worktree`] judges it. Both are judged by their
+/// resolved paths, so another spelling of either, or a link along the way,
+/// decides nothing.
+pub fn trust_started_folder<'a>(
     agent: Agent,
     at: impl Into<AccountAt<'a>>,
     folder: &Path,
@@ -609,12 +611,12 @@ pub fn trust_automation_folder<'a>(
 ) -> Result<(), InstallFailure> {
     let at = at.into();
     let canonical = startable(agent, at.home(), folder)?;
-    let automations = hide_platform::fs::identity::canonical(automations)
-        .map_err(|_| refused(agent, folder, "is inside the automations folder"))?;
-    if canonical.parent() != Some(automations.as_path()) {
-        return Err(refused(agent, folder, "is inside the automations folder"));
+    let automation = hide_platform::fs::identity::canonical(automations)
+        .is_ok_and(|automations| canonical.parent() == Some(automations.as_path()));
+    if automation {
+        return trust_in(agent, at, &canonical, InRepository::No, tools);
     }
-    trust_in(agent, at, &canonical, InRepository::No, tools)
+    trust_worktree(agent, at, folder, tools)
 }
 
 /// The resolved path of `folder`, a directory an agent may be trusted in:

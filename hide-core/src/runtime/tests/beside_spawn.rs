@@ -88,6 +88,17 @@ impl NodeLink for Node {
                     "no such ref",
                 )));
             }
+            // Whether a spawn's folder is a linked worktree, as Git reads
+            // it: one under `/srv/repo.worktrees/` is, the repository's own
+            // folder is its main checkout, and any other is in no repository.
+            Call::Repository { path } => match path.strip_prefix("/srv/repo.worktrees/") {
+                Some(name) => json!({"root": path,
+                    "git_dir": format!("/srv/repo/.git/worktrees/{name}"),
+                    "common_dir": "/srv/repo/.git"}),
+                None if path.trim_end_matches('/') == "/srv/repo" => json!({"root": "/srv/repo",
+                    "git_dir": "/srv/repo/.git", "common_dir": "/srv/repo/.git"}),
+                None => Value::Null,
+            },
             // Codex's trust of the worktree a spawn made.
             Call::AgentTrust { trusted: true, .. } => Value::Null,
             other => panic!("unexpected call {other:?}"),

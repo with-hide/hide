@@ -1842,11 +1842,20 @@ fn spawn(
             };
             // Nobody answers a spawned agent's own question whether to trust
             // its folder, so the spawn records that trust before it starts
-            // the agent in a folder Hide keeps: any worktree but the
-            // repository's own folder, which stays the operator's to trust,
-            // and the folder Hide made for an automation (docs/agent-hooks.md,
-            // Folder trust for the folders Hide starts agents in).
-            if checkout.as_str() != repo.as_str() || own_automation_folder(client, task.as_ref())? {
+            // the agent in a folder Hide keeps: a linked worktree, as Git on
+            // the pane's machine reads it, never the repository's main
+            // checkout, which stays the operator's to trust, and the folder
+            // Hide made for an automation (docs/agent-hooks.md, Folder trust
+            // for the folders Hide starts agents in).
+            if made
+                || own_automation_folder(client, task.as_ref())?
+                || crate::agent_start::linked_worktree(
+                    node.as_deref(),
+                    kind,
+                    &checkout,
+                    TARGET_CHECK_TIMEOUT,
+                )?
+            {
                 crate::agent_start::trust_worktree(
                     node.as_deref(),
                     kind,

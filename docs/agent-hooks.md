@@ -542,12 +542,12 @@ Claude Code, Codex, agy, Grok and Pi each ask, the first time they start interac
 Pi 1.0.4 asks only in a folder whose project files it would load: a `.pi/` resource of the folder (`settings.json`, `mcp.json`, `extensions`, `skills`, `prompts`, `themes`, `SYSTEM.md`, `APPEND_SYSTEM.md`), or `.agents/skills` in the folder or one above it other than the account's own (`hasTrustRequiringProjectResources` in its `dist/core/trust-manager.js`); Hide records its trust for every worktree it makes for Pi, since the files can arrive with any commit.
 So before Hide starts one of them in a folder Hide keeps, it records that agent's own trust of the folder on the machine that will run it:
 
-- `hide agent spawn` into any worktree of a repository other than the repository's own folder: one the spawn makes, or one an earlier spawn or the operator made, so a checker of another kind started in a worker's worktree does not stop at the question (#2888);
+- `hide agent spawn` into a linked worktree of a repository, as Git on the pane's machine reads it (its Git directory is not the one the repository's worktrees share), never the repository's main checkout by whatever path names it: one the spawn makes, or one an earlier spawn or the operator made, so a checker of another kind started in a worker's worktree does not stop at the question (#2888);
 - an automation's run in the folder Hide made for that automation (`~/hide/automations/<name>-<id>`, `hide_kit::layout::automations_home`), which is no worktree;
 - a task's agent in the worktree its task made.
 
 The core sends `agent_trust` to the node of the machine that runs the folder's pane, this Mac's or a connected device's, and the node writes it there (`hide_agent_hooks::folder_trust`).
-The node trusts only a Git worktree or a folder directly inside the automations folder, never the filesystem root, the home folder or a folder above it, whoever asks.
+The node trusts only a Git worktree or a folder directly inside the automations folder, both judged by their resolved paths, never the filesystem root, the home folder or a folder above it, whoever asks.
 That node is the pane's, not the one the agent's PATH is checked on (none for a device, whose own helper answers for its PATH), so a worktree made on a device from the screen or the phone gets its trust like one made here; a pane whose machine cannot be reached refuses the start with `agent_trust_unavailable`.
 A start in the repository's own folder, or in any other folder, records nothing: that trust stays the operator's, and the agent asks there as it would outside Hide.
 

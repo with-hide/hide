@@ -1534,11 +1534,9 @@ pub fn handle_with_progress(
             // An automation's own folder is no worktree; any other folder
             // an agent is trusted in is one (docs/agent-hooks.md, Folder
             // trust for the folders Hide starts agents in).
-            let automations = hide_kit::layout::automations_home(home);
-            if trusted && folder.parent() == Some(automations.as_path()) {
-                folder_trust::trust_automation_folder(agent, at, folder, &automations, tools)
-            } else if trusted {
-                folder_trust::trust_worktree(agent, at, folder, tools)
+            if trusted {
+                let automations = hide_kit::layout::automations_home(home);
+                folder_trust::trust_started_folder(agent, at, folder, &automations, tools)
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
