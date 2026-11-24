@@ -1187,8 +1187,9 @@ fn a_switch_cut_before_it_paired_is_ended_by_the_next_one() -> Result<()> {
         let mut start = account.command(&fixture.remote.hide);
         start.arg("connect");
         let started = fixture::capture_within(start, SWITCH_WITHIN)?;
+        let remote_hide = fixture.remote.hide.clone();
         let stop = || {
-            let mut stop = account.command(&fixture.remote.hide);
+            let mut stop = account.command(&remote_hide);
             stop.arg("stop");
             fixture::capture(stop)
         };
