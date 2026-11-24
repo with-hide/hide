@@ -146,6 +146,12 @@ export const REMOTE_STATE_CHANNEL = "hide:remote-state";
  * hears it once it loaded (`REMOTE_WORK_CHANNEL`).
  */
 export const REMOTE_GO_CHANNEL = "hide:remote-go";
+/**
+ * Settings asked from this window's own chrome, the rail's gear (renderer ->
+ * main): it opens as ⌘, does, the Settings of the paired machine's screen in
+ * front (B20), else this window's own.
+ */
+export const REMOTE_SETTINGS_CHANNEL = "hide:remote-settings";
 /** How a start the shell handed to a screen ended, by its request id (main -> renderer). */
 export const REMOTE_WORK_RESULT_CHANNEL = "hide:remote-work-result";
 

@@ -18,7 +18,7 @@ export function SidebarMenus({ actions, place }: { actions: Actions; place: Menu
       <ViewMenu actions={actions} place={place} />
       <HelpMenu actions={actions} place={place} />
       <Hint label={`${t("common.settings")} (${commandLabel("settings")})`} side={hintSide(place)}>
-        <Button variant="ghost" size="icon-sm" data-open-settings="true" onClick={() => actions.openSettings()}>
+        <Button variant="ghost" size="icon-sm" data-open-settings="true" onClick={() => actions.openSettingsInFront()}>
           <SettingsIcon />
         </Button>
       </Hint>

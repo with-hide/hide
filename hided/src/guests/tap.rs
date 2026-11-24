@@ -470,10 +470,13 @@ impl GuestTap {
         }
     }
 
-    /// Writes the node one frame; a node whose tap is not connected hears
-    /// nothing, and one that takes no bytes in time loses the connection.
-    fn send(&self, frame: &ToNode) {
-        let Ok(bytes) = frame.encode() else { return };
+    /// Writes the node one frame, and says whether it was written: a node
+    /// whose tap is not connected hears nothing, and one that takes no
+    /// bytes in time loses the connection.
+    fn send(&self, frame: &ToNode) -> bool {
+        let Ok(bytes) = frame.encode() else {
+            return false;
+        };
         let mut state = lock(&self.state);
         let written = state.writer.as_mut().is_some_and(|writer| {
             writer
@@ -487,14 +490,22 @@ impl GuestTap {
         {
             reader.shutdown();
         }
+        written
     }
 
     /// Ends the guest's pane for this machine's operator (B10): its node
-    /// closes it, whether or not the guest is connected.
-    pub fn terminate(&self, pane: &str) {
-        self.send(&ToNode::Terminate {
+    /// closes it, whether or not the guest is connected. Refused
+    /// `node_unavailable` when the node's tap could not be told, so the
+    /// pane still runs and the window that asked says so.
+    pub fn terminate(&self, pane: &str) -> Result<(), &'static str> {
+        let told = self.send(&ToNode::Terminate {
             pane: pane.to_owned(),
         });
+        if told {
+            Ok(())
+        } else {
+            Err("node_unavailable")
+        }
     }
 
     fn resize(&self, pane: &str, size: GridSize) {
@@ -766,7 +777,7 @@ pub(crate) mod tests {
                 pane: "w1:p1".to_owned()
             }
         );
-        tap.terminate("w1:p1");
+        assert_eq!(tap.terminate("w1:p1"), Ok(()));
         assert_eq!(
             heard(&mut node),
             ToNode::Terminate {
@@ -815,6 +826,16 @@ pub(crate) mod tests {
         changed.recv_timeout(WITHIN).expect("a pane left");
         assert_eq!(saved(&file), [("w1:p2".to_owned(), 0, 0)]);
 
+        // The node's end of the connection goes: a close written into it
+        // fails, or finds the connection already ended, and either way no
+        // close is claimed for a pane that still runs.
+        drop(node);
+        assert_eq!(
+            tap.terminate("w1:p2"),
+            Err("node_unavailable"),
+            "a close its node could not hear is no close"
+        );
+
         // The node ends; the list is the file's, for the next start of
         // this daemon.
         tap.detach();
@@ -822,6 +843,7 @@ pub(crate) mod tests {
             !hide_node_link::terminal::wait_for_input_permit(tap.as_ref(), "w1:p2", 3).is_ok(),
             "a pane whose node is away takes no input"
         );
+        assert_eq!(tap.terminate("w1:p2"), Err("node_unavailable"));
         let (again, _drawn, _changed) = self::tap(&file);
         let listed = again.panes();
         assert_eq!(listed.len(), 1);
