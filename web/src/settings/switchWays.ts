@@ -57,11 +57,12 @@ export function switchFailureKey(reason: string): MessageKey {
     case "ssh_core_not_started":
     case "ssh_hide_not_running":
       return "devices.ways.failed.start";
+    // A press whose own read did not sign in (the login asked, or the
+    // machine went away, after the row read it) is tried again like any
+    // other connection: another press reads again.
     case "switch_not_connected":
     case "switch_not_moved":
     case "switch_cut":
-    // The press's own read did not sign in: the login asked, or the
-    // machine went away, after the row read it. Another press reads again.
     case "ssh_not_reached":
     case "wsl_not_reached":
       return "devices.ways.failed.connect";
