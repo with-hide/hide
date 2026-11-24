@@ -226,6 +226,75 @@ fn a_moved_core_keeps_its_item_while_its_node_still_dials_it() {
     assert!(!machine.installed() && !machine.kept());
 }
 
+/// An idle daemon asks whether the folder is paired every few seconds: while
+/// none of the files that decide it changed it gives the last answer without
+/// reading them again, and a pairing made or ended, or a moved core's node
+/// coming or going, is read on the next ask with the answer `paired` gives.
+#[test]
+fn an_idle_probe_reads_the_pairing_files_only_when_they_change() {
+    let machine = Machine::new();
+    let reads = std::cell::Cell::new(0);
+    let mut probe = PairedProbe::default();
+    let mut ask = |expected: bool| {
+        let answer = probe
+            .answer(&machine.state, |state| {
+                reads.set(reads.get() + 1);
+                paired(state)
+            })
+            .unwrap();
+        assert_eq!(answer, expected);
+        assert_eq!(answer, paired(&machine.state).unwrap());
+    };
+
+    ask(false);
+    ask(false);
+    ask(false);
+    assert_eq!(reads.get(), 1, "an unchanged folder is read once");
+
+    machine.pair();
+    ask(true);
+    ask(true);
+    assert_eq!(reads.get(), 2, "a pairing is read when it is made");
+
+    machine.unpair();
+    ask(false);
+    ask(false);
+    assert_eq!(reads.get(), 3, "a pairing is read when it ends");
+
+    std::fs::write(
+        machine.state.join(hide_core::node_migration::CORE_STATE),
+        serde_json::json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "device_registrations": [{"id": "macbook", "label": "MacBook", "inbound": true}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    ask(true);
+    ask(true);
+    assert_eq!(
+        reads.get(),
+        4,
+        "a moved core's node is read when it appears"
+    );
+}
+
+/// A look that fails is asked again, never remembered as an answer.
+#[test]
+fn an_idle_probe_does_not_remember_a_failed_read() {
+    let machine = Machine::new();
+    let mut probe = PairedProbe::default();
+    assert!(
+        probe
+            .answer(&machine.state, |_| Err("unreadable".to_owned()))
+            .is_err()
+    );
+    assert!(!probe.answer(&machine.state, paired).unwrap());
+}
+
 /// The first pairing's item is put in by the core running on the folder,
 /// which nothing stops: the item's core only waits on the folder's lock
 /// (S1). On Windows the item's start once ended the running core by its

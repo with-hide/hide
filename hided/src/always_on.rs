@@ -39,6 +39,60 @@ pub fn paired(state_dir: &Path) -> Result<bool, String> {
         .map(|nodes| !nodes.is_empty())
 }
 
+/// The three files [`paired`] reads, as the filesystem last recorded them:
+/// the peer grants, the known hosts and the core's state. A file that is not
+/// there has no stamp.
+type Stamps = [Option<hide_platform::fs::identity::Stamp>; 3];
+
+fn stamps(state_dir: &Path) -> Result<Stamps, String> {
+    let stamp = |path: PathBuf| match hide_platform::fs::open_regular(&path)
+        .and_then(|file| hide_platform::fs::identity::stamp_of(&file))
+    {
+        Ok(stamp) => Ok(Some(stamp)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    };
+    Ok([
+        stamp(hide_kit::layout::peer_grants(state_dir))?,
+        stamp(hide_kit::layout::peer_known(state_dir))?,
+        stamp(state_dir.join(hide_core::node_migration::CORE_STATE))?,
+    ])
+}
+
+/// [`paired`] for a daemon that asks every few seconds (`server::watch_idle`):
+/// the answer of the last look is given again while none of the files it was
+/// read from has changed, so an idle daemon does not parse the core's state
+/// (hundreds of KB) each time. The files are stamped before they are read, so
+/// a write that lands during a read shows in the next stamp and is read then.
+/// A failed look is not remembered.
+#[derive(Default)]
+pub struct PairedProbe {
+    last: Option<(Stamps, bool)>,
+}
+
+impl PairedProbe {
+    pub fn paired(&mut self, state_dir: &Path) -> Result<bool, String> {
+        self.answer(state_dir, paired)
+    }
+
+    fn answer(
+        &mut self,
+        state_dir: &Path,
+        read: impl FnOnce(&Path) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let now = stamps(state_dir)?;
+        if let Some((then, answer)) = &self.last
+            && *then == now
+        {
+            return Ok(*answer);
+        }
+        self.last = None;
+        let answer = read(state_dir)?;
+        self.last = Some((now, answer));
+        Ok(answer)
+    }
+}
+
 /// What [`reconcile`] found or did.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
