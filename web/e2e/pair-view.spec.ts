@@ -139,9 +139,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     // The pane on screen becomes the tab's keyboard pane, so pane commands reach it; the keys stay on the desk.
     await expect(paneView(page, other!)).toHaveAttribute("data-focused", "true");
-    // The grid it is drawn at on the left, which it keeps out of sight until the mode ends.
-    await expect.poll(() => grid(page, other!)).not.toEqual(null);
-    const otherOnLeft = await grid(page, other!);
+    const otherOnLeft = await grid(page, other!); // drawn on the left, kept out of sight until the mode ends
     await expect(paneView(page, other!).locator(".xterm-helper-textarea")).not.toBeFocused();
     // B24, D-21: a tab the operator opened belongs to nobody, so the left pane stays.
     await showTool(page, "explorer");
@@ -155,8 +153,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(page.locator(`[data-pair-pane="${left}"] .xterm-helper-textarea`), "the keys follow the pane chosen").toBeFocused();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
-    // ⌘. leaves for the tab's terminals alone: the lane closed, the Explorer opened meanwhile with it, and every pane at the
-    // place and grid it had, one resize for the left terminal (operator decision 2026-11-24, replacing D-51).
+    // ⌘. leaves for the terminals alone, the Explorer closed too, each pane at its place and grid, one resize for the left one.
     const beforeLeave = new Map(resizes);
     await page.keyboard.press(chord("pair_view"));
     // B26: the keyboard goes back to the pane that held it before entering.
@@ -169,8 +166,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
       expect(await box(page, pane)).toEqual(before[pane]!.box);
       expect(await grid(page, pane)).toEqual(before[pane]!.grid);
     }
-    // The shell never left its canvas; the other agent's pane was last drawn on the left (B24), so it takes its grid back
-    // with one resize, or none when the left half was already its grid beside the left pane with the lane closed.
+    // The shell never left its canvas; the other agent's pane, last on the left (B24), resizes back once if that grid differs.
     expect(resizes.get(shell) ?? 0).toBe(beforeLeave.get(shell) ?? 0);
     const otherBack = JSON.stringify(otherOnLeft) === JSON.stringify(before[other!]!.grid) ? 0 : 1;
     expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(otherBack);
