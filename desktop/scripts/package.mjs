@@ -35,6 +35,7 @@ import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
+import { APP_IDENTITY, SIGNED_AS_APP, identityDrift } from "./app-identity.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
 import { DEVICE_BUNDLE_MANIFEST, DEVICE_KITS } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries, RELEASE_PROGRAMS } from "./release-binaries.mjs";
@@ -175,8 +176,12 @@ extraResource.push(path.join(resources, "app-update.yml"));
 
 const APP_BUNDLE_ID = APP_ID;
 
-/** What macOS shows when Hide first reaches another machine on the same network. */
-const LOCAL_NETWORK_REASON = "Hide connects directly to your other computers on this network.";
+/**
+ * What macOS shows when Hide first reaches another machine on the same
+ * network. The contract states it, because a core that runs outside the app
+ * shows the same sentence from the identity file beside it.
+ */
+const LOCAL_NETWORK_REASON = APP_IDENTITY.usage.NSLocalNetworkUsageDescription;
 
 /**
  * macOS's notification permission helper (PRD first-run-onboarding D-12):
@@ -271,7 +276,7 @@ const [outputDir] = await packager({
   ],
   ...(signing && signing.mode !== "adhoc"
     ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"),
-        { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
+        { [path.basename(notificationHelper)]: APP_BUNDLE_ID }, Object.fromEntries(SIGNED_AS_APP.map((name) => [name, APP_BUNDLE_ID])))
     : {}),
 });
 
@@ -300,6 +305,10 @@ if (platform === "darwin") {
   // Read back from the built app, like the fuses: a bundle without it ships a Mac that never connects directly.
   const reason = spawnSync("/usr/bin/plutil", ["-extract", "NSLocalNetworkUsageDescription", "raw", path.join(bundle, "Contents", "Info.plist")], { encoding: "utf8" });
   if (reason.status !== 0 || reason.stdout.trim() !== LOCAL_NETWORK_REASON) throw new Error("hide.app's Info.plist does not carry NSLocalNetworkUsageDescription");
+  // A core and a pane holder that run outside the app get their identity
+  // file from the contract, so the app has to say what the contract says.
+  const drift = identityDrift(JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", path.join(bundle, "Contents", "Info.plist")])));
+  if (drift.length > 0) throw new Error(`hide.app's Info.plist differs from contracts/app-identity.json:\n${drift.join("\n")}`);
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
   // A Developer ID bundle was signed inside the packager; a release's is notarized below.
@@ -309,6 +318,15 @@ if (platform === "darwin") {
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;
   if (!signed.includes(`Identifier=${APP_BUNDLE_ID}\n`)) throw new Error(`the notification permission helper is not signed as ${APP_BUNDLE_ID}: ${signed.trim()}`);
   if (signing.mode !== "adhoc" && !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signed)) throw new Error(`the notification permission helper is not signed under the hardened runtime: ${signed.trim()}`);
+  // The programs that answer consent as the app outside it meet the
+  // requirement the app's consent is kept under; one that does not would be
+  // asked about under the path of each build, as before 1.3.0.
+  if (signing.mode !== "adhoc") {
+    for (const name of SIGNED_AS_APP) {
+      const met = spawnSync("/usr/bin/codesign", ["--verify", "-R", `=${APP_IDENTITY.requirement}`, path.join(bundledResources, name)], { encoding: "utf8" });
+      if (met.status !== 0) throw new Error(`${name} does not meet the app's code requirement (contracts/app-identity.json): ${met.stderr.trim()}`);
+    }
+  }
   // Apple notarizes the checked bundle before any installer wraps it.
   if (signing.mode === "developer-id") notarizeApp(bundle, signing, out);
 }
