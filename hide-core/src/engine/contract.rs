@@ -425,7 +425,11 @@ fn built_node(
         });
     let terminals = Holders::start_from(
         HolderFolders { home, state_dir },
-        hide_kit::holders::Source { program, conpty },
+        hide_kit::holders::Source {
+            program,
+            conpty,
+            identity: None,
+        },
         Arc::new(Nowhere) as Arc<dyn OutputSink>,
         Arc::new(Nowhere) as Arc<dyn ReportSink>,
     )

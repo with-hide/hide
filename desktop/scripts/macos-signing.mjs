@@ -72,9 +72,10 @@ function hasIdentity(identity) {
  * Contents/Resources, `entitlements` is the folder holding the two
  * entitlement files, and `helpers` maps each program placed beside the app's
  * executable in Contents/MacOS to the code-signing identifier it is signed
- * under.
+ * under, and `identifiers` does the same for the programs in
+ * Contents/Resources that are not signed under their own name.
  */
-export function developerIdOptions(signing, executables, entitlements, helpers = {}) {
+export function developerIdOptions(signing, executables, entitlements, helpers = {}, identifiers = {}) {
   return {
     osxSign: {
       identity: signing.identity,
@@ -83,7 +84,8 @@ export function developerIdOptions(signing, executables, entitlements, helpers =
       continueOnError: false,
       optionsForFile: (file) => {
         if (path.basename(path.dirname(file)) === "Resources" && executables.includes(path.basename(file))) {
-          return { entitlements: path.join(entitlements, "executable.plist") };
+          const identifier = identifiers[path.basename(file)];
+          return { entitlements: path.join(entitlements, "executable.plist"), ...(identifier ? { additionalArguments: ["--identifier", identifier] } : {}) };
         }
         if (path.basename(path.dirname(file)) === "MacOS" && Object.hasOwn(helpers, path.basename(file))) {
           return { entitlements: path.join(entitlements, "executable.plist"), additionalArguments: ["--identifier", helpers[path.basename(file)]] };

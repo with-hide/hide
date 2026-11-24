@@ -43,6 +43,15 @@ fn main() {
         // started and nothing reads the environment concurrently.
         unsafe { std::env::set_var(hided::env::HIDE_STATE_DIR, dir) };
     }
+    // A core the login item started has no app above it, and neither has a
+    // guest's node such a core started, which the core tells by a variable:
+    // their panes answer macOS's consent as the app and for themselves.
+    let told = std::env::var_os(hided::env::HIDE_PANES_ANSWER_AS_APP).is_some();
+    // SAFETY: as above, nothing else runs yet in this process.
+    unsafe { std::env::remove_var(hided::env::HIDE_PANES_ANSWER_AS_APP) };
+    if let Some(app) = hided::login_item::pane_identity(matches!(role, Role::CoreLogin(_)), told) {
+        hide_node::terminal::holder::answer_consent_as(app);
+    }
     // Taken before daemon-role work, as every cooperative child takes it: a
     // starter that passes an owner channel (the web e2e fixture) ends this
     // daemon and what it started by ending itself, even when it is killed.

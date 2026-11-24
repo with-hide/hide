@@ -27,13 +27,16 @@ class PackageTypecheck(unittest.TestCase):
         self.repo = Path(self.temp.name)
         scripts = self.repo / "desktop/scripts"
         scripts.mkdir(parents=True)
-        for name in ("package", "build-identity", "copy-tree", "device-helpers", "fuses", "installers", "macos-signing", "release-binaries"):
+        for name in ("package", "app-identity", "build-identity", "copy-tree", "device-helpers", "fuses", "installers", "macos-signing",
+                     "release-binaries"):
             shutil.copyfile(ROOT / f"desktop/scripts/{name}.mjs", scripts / f"{name}.mjs")
         (self.repo / "scripts").mkdir()
         shutil.copyfile(ROOT / "scripts/check-release-assets.mjs", self.repo / "scripts/check-release-assets.mjs")
-        # device-helpers.mjs reads every device kit from the contract.
+        # device-helpers.mjs reads every device kit from its contract, and
+        # app-identity.mjs the Mac app's identity from its own.
         (self.repo / "contracts").mkdir()
-        shutil.copyfile(ROOT / "contracts/device-kits.json", self.repo / "contracts/device-kits.json")
+        for name in ("device-kits", "app-identity"):
+            shutil.copyfile(ROOT / f"contracts/{name}.json", self.repo / f"contracts/{name}.json")
         (self.repo / "web").mkdir()
         shutil.copyfile(ROOT / "web/package.json", self.repo / "web/package.json")
         (self.repo / "web/source.ts").write_text("const value: number = 1;\n")

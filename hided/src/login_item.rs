@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use hide_platform::privacy::{self, Given, Identity};
 use hide_platform::user_agents::{Login, LoginAgent, UserAgents};
 use serde_json::json;
 
@@ -94,6 +95,7 @@ fn put_in(
         environment: &environment,
         log: &log,
     };
+    name_core(program, &hide_kit::app_identity::app());
     keep(state_dir)?;
     // A core still running when the item is replaced is the one the old
     // item ran; Task Scheduler ends a run without its program, so it is
@@ -117,6 +119,32 @@ fn put_in(
         crate::core_install::starter::stop_pid(previous.pid)?;
     }
     Ok(())
+}
+
+/// Gives the core `program` the name of `app` for macOS's consent, before
+/// the item that runs it is put in: the item's core is the program macOS
+/// holds responsible for what it reads, named by the path of its build
+/// unless an identity file is beside it when it starts, and a file written
+/// later changes nothing for a core that already runs. Asked once for a
+/// build, of a program the system says is the app's
+/// (`hide_platform::privacy::give`); any other keeps its own name and the
+/// item is put in all the same. Answers what the system said, and nothing
+/// where it was not asked: a build that has its file, and a system that
+/// keeps no consent per program.
+fn name_core(program: &Path, app: &Identity<'_>) -> Option<Given> {
+    if !privacy::keeps_consent_per_program() || privacy::has_identity_file(program) {
+        return None;
+    }
+    let given = privacy::give(program, app);
+    hide_core::diagnostic!(json!({
+        "component": "login_item",
+        "kind": "login_item.identity",
+        "program": program,
+        "state": given.state(),
+        "reason": given.reason(),
+        "detail": given.detail(),
+    }));
+    Some(given)
 }
 
 /// What the item runs the core with besides its arguments: the account's
@@ -317,6 +345,19 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
     }
 }
 
+/// The app this process's panes answer macOS's consent as and for
+/// themselves (`hide_node::terminal::holder::answer_consent_as`), by how the
+/// process was started: a core the login item started (`login_core`), and a
+/// guest's node such a core started, which the core told by a variable
+/// (`told`, `env::HIDE_PANES_ANSWER_AS_APP`). No app is above either, so
+/// macOS would ask about their panes under the path of each build, in a
+/// window nobody may be there to answer. A daemon the app started names
+/// none, and neither does any process on a system that keeps no consent per
+/// program, whose panes start as they always did.
+pub fn pane_identity(login_core: bool, told: bool) -> Option<Identity<'static>> {
+    ((login_core || told) && privacy::keeps_consent_per_program()).then(hide_kit::app_identity::app)
+}
+
 /// What `hided core-login` does once [`at_login`] has looked.
 #[derive(Debug, Eq, PartialEq)]
 pub enum AtLogin {
@@ -360,4 +401,70 @@ fn wait_for_the_folder(state_dir: &Path) -> Result<(), String> {
             .map_err(|error| format!("{}: {error}", lock.display()))?;
     drop(held);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A core the login item started names the app for its panes, and so
+    /// does a guest's node such a core told; a daemon the app started names
+    /// none, and no process does on a system that keeps no consent per
+    /// program, where a pane's holder folder keeps the name it always had.
+    #[test]
+    fn only_a_process_with_no_app_above_it_names_the_app_for_its_panes() {
+        assert_eq!(pane_identity(false, false), None);
+        let named = privacy::keeps_consent_per_program().then(hide_kit::app_identity::app);
+        assert_eq!(pane_identity(true, false), named);
+        assert_eq!(pane_identity(false, true), named);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_core_is_given_no_name_on_a_system_that_keeps_no_consent_per_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("hided");
+        std::fs::write(&program, "x").unwrap();
+        assert_eq!(name_core(&program, &hide_kit::app_identity::app()), None);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// With an identifier of the test's own: a program that claimed the
+    /// app's on a developer's Mac would be read against the installed app's
+    /// consent.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_core_the_system_says_is_the_app_s_is_named_once_and_any_other_keeps_its_name() {
+        let app = |requirement: &'static str| Identity {
+            identifier: "dev.withhide.test.core",
+            name: "hide test",
+            requirement,
+            usage: &[],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("hided");
+        std::fs::copy("/usr/bin/true", &program).unwrap();
+        let signed = std::process::Command::new("/usr/bin/codesign")
+            .args([
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "dev.withhide.test.core",
+            ])
+            .arg(&program)
+            .output()
+            .unwrap();
+        assert!(signed.status.success(), "{signed:?}");
+
+        let other = name_core(&program, &app("identifier \"dev.withhide.test.another\""));
+        assert_eq!(other, Some(Given::Own(privacy::Refusal::RequirementNotMet)));
+        assert!(!privacy::has_identity_file(&program));
+
+        let own = app("identifier \"dev.withhide.test.core\"");
+        assert_eq!(name_core(&program, &own), Some(Given::Shared));
+        assert!(privacy::has_identity_file(&program));
+        // A build that has its file is not asked about again.
+        assert_eq!(name_core(&program, &own), None);
+    }
 }

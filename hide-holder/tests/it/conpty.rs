@@ -93,6 +93,7 @@ fn a_changed_conpty_runtime_refuses_the_start() {
         &Source {
             program: pinned.program,
             conpty: Some(changed),
+            identity: None,
         },
     );
     assert!(reason.contains("conpty.dll has hash"), "{reason}");
