@@ -193,12 +193,14 @@ test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the 
     await page.keyboard.press("ControlOrMeta+Home");
     await page.keyboard.press("End");
     await page.keyboard.type(" saved");
-    // The edit is kept in the browser until it is saved, as a Workspace View keeps it.
-    await expect.poll(async () => (await storedDrafts(page)).some((draft) => draft.path === file)).toBe(true);
+    // The edit is kept in the browser until it is saved, as a Workspace View keeps it. A draft names its file the
+    // core's way, `/` between names on every system.
+    const kept = async () => (await storedDrafts(page)).some((draft) => draft.path.endsWith("/plan.md"));
+    await expect.poll(kept).toBe(true);
     await page.keyboard.press(chord("save_file"));
     await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
     // The saved file's copy goes with the save that landed.
-    await expect.poll(async () => (await storedDrafts(page)).some((draft) => draft.path === file)).toBe(false);
+    await expect.poll(kept).toBe(false);
 
     await page.reload();
     await page.locator("[data-desk-sidebar-row]").click();
@@ -278,9 +280,10 @@ test("a session beside Desk that sleeps in its own pane offers 에이전트 깨�
   }
 });
 
-test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43) @platform", async ({ page }) => {
+test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43)", async ({ page }) => {
   test.setTimeout(180_000);
-  // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`).
+  // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`). Its
+  // stand-in reports its session for a Unix shell, so no Windows lane runs this.
   const engine = await startFixture({ agents: false });
   const daemon = await startHided(engine, "desk-room-pi-sleep", path.join(engine.root, "home"));
   try {
