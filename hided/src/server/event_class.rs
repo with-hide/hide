@@ -249,6 +249,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("file_draft", Screen),
     ("file_focus", Screen),
     ("file_index", Screen),
+    ("file_index_all", Screen),
     ("file_keep_open", Screen),
     ("file_list", Screen),
     ("file_open", Screen),

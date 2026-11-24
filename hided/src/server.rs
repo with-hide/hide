@@ -2868,6 +2868,9 @@ fn handle_client_text(
     if event.get("kind").and_then(Value::as_str) == Some("file_index") {
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
+    if event.get("kind").and_then(Value::as_str) == Some("file_index_all") {
+        return Ok(ClientAction::Replies(handle_file_index_all(state, &event)));
+    }
     match event.get("kind").and_then(Value::as_str) {
         Some("home_folder_list" | "importable_projects") => {
             return Ok(ClientAction::NodeAsk(event));
@@ -4237,25 +4240,117 @@ fn handle_path_import(state: &AppState, event: &Value) -> Vec<Message> {
 fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     let root = payload_str(event, "root");
     let query = payload_str(event, "query");
-    if let Some(device) = event_device(&state.boundary, event) {
-        return vec![Message::Text(
-            device_file_index(state, &device, &root, &query)
-                .to_string()
-                .into(),
-        )];
+    let answer = match event_device(&state.boundary, event) {
+        Some(device) => device_file_index(state, &device, &root, &query),
+        None => local_file_index(state, &root, &query),
+    };
+    vec![Message::Text(answer.to_string().into())]
+}
+
+/// A `file_index_all` query (PRD desk-2-ui B38, D-23): the palette's search
+/// across every checkout the catalog carries, this machine's and each
+/// device's, at once. Each checkout is asked of its own index exactly as a
+/// `file_index` asks it, so a first query starts the walks it needs and the
+/// next one has their lists; the matches are merged by the palette's score,
+/// each naming its checkout, and capped at `RESULT_LIMIT`. Nothing here
+/// takes the core's lock: the roots are the boundary's, kept from the
+/// snapshot.
+fn handle_file_index_all(state: &AppState, event: &Value) -> Vec<Message> {
+    let query = payload_str(event, "query");
+    // The roots follow the snapshot while a window is connected; one that
+    // just connected may ask before the first read landed.
+    if state.boundary.root_paths().is_empty() && state.boundary.device_root_list().is_empty() {
+        roots_current(&state.roots);
     }
-    let found = match state.boundary.open_directory(Path::new(&root), &root) {
+    let answers = state
+        .boundary
+        .root_paths()
+        .iter()
+        .map(|root| local_file_index(state, &hide_platform::path::to_wire_lossy(root), &query))
+        .chain(
+            state
+                .boundary
+                .device_root_list()
+                .iter()
+                .map(|root| device_file_index(state, &root.device_id, &root.path, &query)),
+        )
+        .collect::<Vec<_>>();
+    vec![Message::Text(
+        merged_index_result(&query, &answers, crate::index::RESULT_LIMIT)
+            .to_string()
+            .into(),
+    )]
+}
+
+/// The `file_index_all_result` frame: every checkout's `file_index_result`
+/// merged, best match first, at most `limit`. A checkout the boundary no
+/// longer holds (its answer is a refusal) is left out; one whose device walk
+/// failed is named in `unavailable` and the others still answer.
+fn merged_index_result(query: &str, answers: &[Value], limit: usize) -> Value {
+    let needle = query.trim().to_lowercase();
+    let mut files = Vec::new();
+    let (mut truncated, mut indexing) = (false, false);
+    let mut unavailable = Vec::new();
+    for answer in answers {
+        if answer["type"] != "file_index_result" {
+            continue;
+        }
+        let payload = &answer["payload"];
+        truncated |= payload["truncated"] == true;
+        indexing |= payload["indexing"] == true;
+        if let Some(code) = payload["unavailable"].as_str() {
+            unavailable.push(json!({
+                "device_id": payload["device_id"],
+                "root_path": payload["root_path"],
+                "code": code,
+            }));
+        }
+        for file in payload["files"].as_array().into_iter().flatten() {
+            let relative = file["relative_path"].as_str().unwrap_or_default();
+            let Some(score) = crate::index::fuzzy_score(&relative.to_lowercase(), &needle) else {
+                continue;
+            };
+            files.push((
+                score,
+                json!({
+                    "device_id": payload["device_id"],
+                    "root_path": payload["root_path"],
+                    "path": file["path"],
+                    "relative_path": relative,
+                }),
+            ));
+        }
+    }
+    files.sort_by(|left, right| {
+        right.0.cmp(&left.0).then_with(|| {
+            hide_host::list::natural_cmp(
+                left.1["relative_path"].as_str().unwrap_or_default(),
+                right.1["relative_path"].as_str().unwrap_or_default(),
+            )
+        })
+    });
+    truncated |= files.len() > limit;
+    files.truncate(limit);
+    json!({"type": "file_index_all_result", "payload": {
+        "query": query,
+        "files": files.into_iter().map(|(_, file)| file).collect::<Vec<_>>(),
+        "truncated": truncated,
+        "indexing": indexing,
+        "unavailable": unavailable,
+    }})
+}
+
+/// A `file_index` query for a checkout of this machine: the root is checked
+/// against the registered checkouts and the daemon answers from its index.
+fn local_file_index(state: &AppState, root: &str, query: &str) -> Value {
+    let found = match state.boundary.open_directory(Path::new(root), root) {
         Err(_) if roots_current(&state.roots) => {
-            state.boundary.open_directory(Path::new(&root), &root)
+            state.boundary.open_directory(Path::new(root), root)
         }
         found => found,
     };
     let Ok((known, opened)) = found else {
-        return vec![Message::Text(
-            refused("file_index", &root, Refusal::OutsideCheckout)
-                .to_string()
-                .into(),
-        )];
+        return refused("file_index", root, Refusal::OutsideCheckout);
     };
     let root_path = hide_platform::path::to_wire_lossy(&known);
     let walk_root = known.clone();
@@ -4267,7 +4362,7 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     let answer = state.index.query(
         state.boundary.node().as_str(),
         &root_path,
-        &query,
+        query,
         move || {
             // The other projects of this machine, which the home project's
             // walk leaves to their own (PRD home-folder-project D-05); asked
@@ -4285,21 +4380,17 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
             ))
         },
     );
-    vec![Message::Text(
-        index_result(
-            state.boundary.node().as_str(),
-            &root_path,
-            &query,
-            answer,
-            |relative| {
-                let relative = hide_platform::path::RelPath::parse(relative).ok()?;
-                let path = hide_platform::path::wire_join(&root_path, &relative);
-                state.boundary.resolve_target(&path).ok().map(|_| path)
-            },
-        )
-        .to_string()
-        .into(),
-    )]
+    index_result(
+        state.boundary.node().as_str(),
+        &root_path,
+        query,
+        answer,
+        |relative| {
+            let relative = hide_platform::path::RelPath::parse(relative).ok()?;
+            let path = hide_platform::path::wire_join(&root_path, &relative);
+            state.boundary.resolve_target(&path).ok().map(|_| path)
+        },
+    )
 }
 
 /// The `file_index_result` frame for one answer. `path_of` gives an entry's

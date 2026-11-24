@@ -152,16 +152,19 @@ pub(super) enum DeskEvent {
     JobRead(JobPayload),
     /// The operator looked at a job's output in the lane's 보기 column (B31).
     OutputSeen(OutputPayload),
-    /// The lane's pin, or a tab kept or closed in its 보기 column (B31, B32).
+    /// A panel width the operator dragged and let go (PRD desk-2-ui B22):
+    /// one event per drag.
     Lane(LanePayload),
 }
 
+/// The width a drag set; the one it did not move is absent.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(super) enum LanePayload {
-    Pin { pinned: bool },
-    Keep { tab: crate::model::DeskKeptTab },
-    Close { tab: crate::model::DeskKeptTab },
+#[serde(deny_unknown_fields)]
+pub(super) struct LanePayload {
+    #[serde(default)]
+    view_width: Option<u32>,
+    #[serde(default)]
+    session_width: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,6 +338,8 @@ impl Runtime {
                 | DeskEvent::JobRead(_)
                 | DeskEvent::OutputSeen(_)
         );
+        // A width moves only the `desk` section's lane.
+        let jobs = !matches!(event, DeskEvent::Lane(_));
         // An output seen moves the View's seen state, which the core keeps
         // with the View, not in Desk's store.
         let stored = !matches!(event, DeskEvent::OutputSeen(_));
@@ -374,39 +379,30 @@ impl Runtime {
             if room {
                 self.compose_desk();
             }
-            self.compose_desk_jobs();
+            if jobs {
+                self.compose_desk_jobs();
+            }
         }
         changed
     }
 
-    /// The lane's pin, or a kept tab (B31, B32). Keeping a kept tab or
-    /// closing one not kept changes nothing; one past the cap is refused.
+    /// The widths the operator dragged Desk's panels to (B22, B23). A drag
+    /// that names no width, or one outside what the core keeps, is refused.
     fn desk_lane(&mut self, payload: LanePayload) -> bool {
-        let lane = &mut self.desk.stored.lane;
-        match payload {
-            LanePayload::Pin { pinned } => {
-                let changed = lane.pinned != pinned;
-                lane.pinned = pinned;
-                changed
-            }
-            LanePayload::Keep { tab } => {
-                let key = tab.key();
-                if lane.kept.iter().any(|kept| kept.key() == key) {
-                    return false;
-                }
-                if lane.kept.len() >= crate::model::DESK_KEPT_TABS_MAX {
-                    return refused("desk_tabs_full");
-                }
-                lane.kept.push(tab);
-                true
-            }
-            LanePayload::Close { tab } => {
-                let key = tab.key();
-                let before = lane.kept.len();
-                lane.kept.retain(|kept| kept.key() != key);
-                lane.kept.len() != before
-            }
+        let valid = |width: Option<u32>| {
+            width.is_none_or(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(&width))
+        };
+        if payload.view_width.is_none() && payload.session_width.is_none()
+            || !valid(payload.view_width)
+            || !valid(payload.session_width)
+        {
+            return refused("desk_lane_width_invalid");
         }
+        let lane = &mut self.desk.stored.lane;
+        let before = *lane;
+        lane.view_width = payload.view_width.or(lane.view_width);
+        lane.session_width = payload.session_width.or(lane.session_width);
+        *lane != before
     }
 
     /// Whether this daemon runs Desk: its queued spawns start as
@@ -1857,7 +1853,7 @@ mod tests {
         for (kind, payload) in [
             ("desk_select", json!({"agent": "claude"})),
             ("desk_send", json!({"text": "start something"})),
-            ("desk_lane", json!({"action": "pin", "pinned": true})),
+            ("desk_lane", json!({"view_width": 640})),
         ] {
             assert!(!event(&mut runtime, kind, payload), "{kind}");
         }
@@ -2353,88 +2349,62 @@ mod tests {
         );
     }
 
-    fn kept_output(job: &str, id: &str) -> serde_json::Value {
-        json!({"kind": "output", "job": job, "output": {
-            "id": id, "kind": "image", "label": id, "thumb": null, "seen": true, "pr_state": null,
-            "device_id": "node", "checkout": "/repo", "path": format!("/repo/{id}"), "url": null,
-        }})
-    }
-
     fn lane(runtime: &Runtime) -> crate::model::DeskLane {
-        runtime.snapshot.desk.as_ref().unwrap().lane.clone()
+        runtime.snapshot.desk.as_ref().unwrap().lane
     }
 
     #[test]
-    fn the_lanes_pin_and_kept_tabs_are_kept_in_desks_store() {
+    fn a_dragged_width_is_kept_in_desks_store_and_the_other_width_stays() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _) = runtime(root.path());
-        // B32: the pin is kept; pressing it again where it is changes nothing.
+        assert_eq!(lane(&runtime), crate::model::DeskLane::default());
+        assert!(event(&mut runtime, "desk_lane", json!({"view_width": 720})));
         assert!(event(
             &mut runtime,
             "desk_lane",
-            json!({"action": "pin", "pinned": true})
+            json!({"session_width": 480})
         ));
+        // Letting go where it already was changes nothing.
         assert!(!event(
             &mut runtime,
             "desk_lane",
-            json!({"action": "pin", "pinned": true})
+            json!({"session_width": 480})
         ));
-        // B31: a kept tab is kept once, and closing it lets it go.
-        let tab = kept_output("job-1", "compare.png");
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": tab})
-        ));
-        assert!(!event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": tab})
-        ));
-        let mission = json!({"kind": "mission", "mission": "mission-1", "title": "Desk 1차"});
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": mission})
-        ));
-        assert_eq!(lane(&runtime).kept.len(), 2);
-        assert!(lane(&runtime).pinned);
-        assert!(event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "close", "tab": mission})
-        ));
-        let kept = lane(&runtime);
+        let expected = crate::model::DeskLane {
+            view_width: Some(720),
+            session_width: Some(480),
+        };
+        assert_eq!(lane(&runtime), expected);
         assert_eq!(
-            kept.kept.iter().map(|tab| tab.key()).collect::<Vec<_>>(),
-            ["output:job-1:compare.png"]
-        );
-        assert_eq!(
-            runtime.desk.stored.lane, kept,
+            runtime.desk.stored.lane, expected,
             "the store saves what the room shows"
         );
     }
 
     #[test]
-    fn a_tab_past_the_lanes_cap_is_refused_and_the_kept_ones_stay() {
+    fn a_width_event_without_a_width_or_out_of_range_or_from_desk_1_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, _) = runtime(root.path());
-        for index in 0..crate::model::DESK_KEPT_TABS_MAX {
-            let tab = kept_output("job", &format!("{index}.png"));
-            assert!(event(
-                &mut runtime,
-                "desk_lane",
-                json!({"action": "keep", "tab": tab})
-            ));
+        for payload in [
+            json!({}),
+            json!({"view_width": 0}),
+            json!({"session_width": crate::model::DESK_LANE_WIDTH_MAX + 1}),
+        ] {
+            assert!(
+                !event(&mut runtime, "desk_lane", payload.clone()),
+                "{payload}"
+            );
         }
-        let past = kept_output("job", "past.png");
-        assert!(!event(
-            &mut runtime,
-            "desk_lane",
-            json!({"action": "keep", "tab": past})
-        ));
-        let kept = lane(&runtime).kept;
-        assert_eq!(kept.len(), crate::model::DESK_KEPT_TABS_MAX);
-        assert_eq!(kept[0].key(), "output:job:0.png");
+        // Desk 1차's pin and kept tabs are no event any more.
+        for payload in [
+            json!({"action": "pin", "pinned": true}),
+            json!({"action": "keep", "tab": {"kind": "mission", "mission": "m", "title": "t"}}),
+        ] {
+            assert!(
+                DeskEvent::decode("desk_lane", payload.clone()).is_none(),
+                "{payload}"
+            );
+        }
+        assert_eq!(lane(&runtime), crate::model::DeskLane::default());
     }
 }

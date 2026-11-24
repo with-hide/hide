@@ -24,37 +24,22 @@ pub struct DeskSnapshot {
     pub lane: DeskLane,
 }
 
-/// Desk's lane as the core keeps it across a restart (D-64, B31, B32): its
-/// pin, and the tabs the operator kept in its 보기 column. Which columns
-/// show, the preview tab and the thread in the tool column are the window's.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+/// The widths of Desk's two panels as the operator last dragged them (PRD
+/// desk-2-ui D-06, D-07, B22, B23), in CSS pixels; `None` until dragged, so
+/// the shell draws its own first width. Which session is open beside Desk,
+/// whether the tab panel shows and which tab is in front are the window's,
+/// never the core's (B26).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeskLane {
-    pub pinned: bool,
-    /// Oldest first, at most `DESK_KEPT_TABS_MAX`.
-    pub kept: Vec<DeskKeptTab>,
+    /// The tab panel's width: its left edge.
+    pub view_width: Option<u32>,
+    /// The session panel's width: the edge between it and the tab panel.
+    pub session_width: Option<u32>,
 }
 
-/// Tabs the 보기 column keeps; keeping one more is refused `desk_tabs_full`.
-pub const DESK_KEPT_TABS_MAX: usize = 16;
-
-/// A tab kept in Desk's 보기 column: a job's output as its card listed it
-/// when it was kept, or a mission's map (B34).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DeskKeptTab {
-    Output { job: String, output: DeskJobOutput },
-    Mission { mission: String, title: String },
-}
-
-impl DeskKeptTab {
-    /// The tab's identity: one tab per output of a job, one per mission.
-    pub fn key(&self) -> String {
-        match self {
-            Self::Output { job, output } => format!("output:{job}:{}", output.id),
-            Self::Mission { mission, .. } => format!("mission:{mission}"),
-        }
-    }
-}
+/// The widest a stored panel width may be; a wider one is refused
+/// `desk_lane_width_invalid`, as is zero.
+pub const DESK_LANE_WIDTH_MAX: u32 = 8192;
 
 /// The `desk_jobs` section: the sessions Desk started and the ones waiting
 /// in its queue, newest first (B20-B24, B36-B39).

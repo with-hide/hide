@@ -42,7 +42,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   conversation: { generation: 1, items, dropped: 0 },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
-  lane: { pinned: false, kept: [] },
+  lane: { view_width: null, session_width: null },
 });
 
 const fixer = { kind: "session" as const, id: "w1:p2", name: "fixer" };

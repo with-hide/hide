@@ -1,11 +1,17 @@
 // Desk's lane in this window (PRD session-docs-and-assistant D-64, B28-B35):
 // which of its two columns show, what the tool column holds (the Threads
-// list or one thread) and the preview tab of the 보기 column. The pin and the
-// kept tabs are the core's (`desk.lane`), kept across a restart; everything
-// here is this window's and starts closed.
+// list or one thread), the pin, and the tabs of the 보기 column. All of it is
+// this window's and starts closed: the core keeps only the panels' widths
+// (`desk.lane`, PRD desk-2-ui B23, B26).
 
-import type { DeskKeptTab, DeskOutput } from "./snapshot";
+import type { DeskOutput } from "./snapshot";
 import { absolutePathRoot } from "./terminalLinks";
+
+/** A tab of the 보기 column: a job's output as its card listed it, or a mission's map (B34). */
+export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
+
+/** Tabs the 보기 column keeps; keeping one more lets the oldest go. */
+export const DESK_KEPT_TABS_MAX = 16;
 
 /** What the tool column holds: the Threads list, or one thread, with the Conductor a worker's thread steps back to (B34). */
 export type DeskTool = { kind: "threads" } | { kind: "thread"; job: string; conductor: string | null };
@@ -17,6 +23,10 @@ export type DeskLaneWindow = {
   tool: DeskTool | null;
   /** The 보기 column shows. */
   view: boolean;
+  /** The lane docks beside the chat rather than over it (B32). */
+  pinned: boolean;
+  /** The tabs kept in the 보기 column, oldest first, at most `DESK_KEPT_TABS_MAX`. */
+  kept: DeskKeptTab[];
   /** The italic tab the next output pressed replaces (B31). */
   preview: DeskKeptTab | null;
   /** The key of the tab in front. */
@@ -26,9 +36,9 @@ export type DeskLaneWindow = {
   answer: { job: string; seq: number } | null;
 };
 
-export const DESK_LANE_CLOSED: DeskLaneWindow = { up: false, tool: null, view: false, preview: null, active: null, expanded: false, answer: null };
+export const DESK_LANE_CLOSED: DeskLaneWindow = { up: false, tool: null, view: false, pinned: false, kept: [], preview: null, active: null, expanded: false, answer: null };
 
-/** A tab's identity, the core's `DeskKeptTab::key`: one tab per output of a job, one per mission. */
+/** A tab's identity: one tab per output of a job, one per mission. */
 export function tabKey(tab: DeskKeptTab): string {
   return tab.kind === "output" ? `output:${tab.job}:${tab.output.id}` : `mission:${tab.mission}`;
 }
@@ -100,9 +110,11 @@ export function showTab(lane: DeskLaneWindow, kept: readonly DeskKeptTab[], tab:
   return { ...raise(lane, "view"), view: true, active: key, preview: isKept ? lane.preview : tab };
 }
 
-/** A tab the core now keeps stops being the preview. */
-export function afterKeep(lane: DeskLaneWindow, tab: DeskKeptTab): DeskLaneWindow {
-  return lane.preview && tabKey(lane.preview) === tabKey(tab) ? { ...lane, preview: null, active: tabKey(tab) } : lane;
+/** A tab kept (a double click or ↵ on the preview) stops being the preview; past the cap the oldest kept tab goes. */
+export function keepTab(lane: DeskLaneWindow, tab: DeskKeptTab): DeskLaneWindow {
+  const key = tabKey(tab);
+  const kept = lane.kept.some((one) => tabKey(one) === key) ? lane.kept : [...lane.kept, tab].slice(-DESK_KEPT_TABS_MAX);
+  return lane.preview && tabKey(lane.preview) === key ? { ...lane, kept, preview: null, active: key } : { ...lane, kept };
 }
 
 /** A mission chip (B34): its map in the 보기 column and its Conductor's thread beside it. */
@@ -111,11 +123,11 @@ export function openMission(lane: DeskLaneWindow, kept: readonly DeskKeptTab[], 
   return conductor ? { ...shown, tool: { kind: "thread", job: conductor, conductor: null } } : shown;
 }
 
-/** A tab's `✕`: the preview goes, a kept one is let go by the caller; the column closes with its last tab. */
+/** A tab's `✕`: the preview or the kept tab goes; the column closes with its last tab. */
 export function closeTab(lane: DeskLaneWindow, kept: readonly DeskKeptTab[], tab: DeskKeptTab): DeskLaneWindow {
   const key = tabKey(tab);
   const left = viewTabs(kept.filter((one) => tabKey(one) !== key), { ...lane, preview: lane.preview && tabKey(lane.preview) === key ? null : lane.preview });
-  const next = { ...lane, preview: lane.preview && tabKey(lane.preview) === key ? null : lane.preview, active: lane.active === key ? (left.at(-1) ? tabKey(left.at(-1)!.tab) : null) : lane.active };
+  const next = { ...lane, kept: lane.kept.filter((one) => tabKey(one) !== key), preview: lane.preview && tabKey(lane.preview) === key ? null : lane.preview, active: lane.active === key ? (left.at(-1) ? tabKey(left.at(-1)!.tab) : null) : lane.active };
   return left.length === 0 ? closeView(next) : next;
 }
 

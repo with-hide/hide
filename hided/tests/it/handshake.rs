@@ -1700,6 +1700,92 @@ async fn the_file_index_answers_the_ranked_matches_for_a_checkout() {
     running.stop();
 }
 
+/// Desk's ⌘P with no session open (PRD desk-2-ui B38): one query searches
+/// every registered project at once and each match names its project.
+#[tokio::test]
+async fn the_file_index_of_every_project_answers_each_match_with_its_project() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    let alpha = home.join("projects/alpha");
+    let beta = home.join("projects/beta");
+    for (checkout, file) in [(&alpha, "src/login.rs"), (&beta, "web/login.tsx")] {
+        std::fs::create_dir_all(checkout.join(file).parent().unwrap()).unwrap();
+        std::fs::write(checkout.join(file), "x").unwrap();
+        std::fs::write(checkout.join("readme.md"), "x").unwrap();
+    }
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": Value::Null,
+            "selected_pane_id": Value::Null,
+            "workspace_registrations": [
+                {"id": "w-alpha", "label": "alpha", "path": wire(&alpha)},
+                {"id": "w-beta", "label": "beta", "path": wire(&beta)},
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+
+    async fn ask(socket: &mut Socket) -> Value {
+        send_event_expecting(
+            socket,
+            "file_index_all",
+            json!({"query": "login"}),
+            |frame| frame["type"] == "file_index_all_result",
+        )
+        .await
+    }
+    let mut result = ask(&mut socket).await;
+    for _ in 0..40 {
+        if result["payload"]["indexing"] == json!(false)
+            && result["payload"]["files"]
+                .as_array()
+                .is_some_and(|files| files.len() == 2)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        result = ask(&mut socket).await;
+    }
+    assert_eq!(result["payload"]["indexing"], json!(false), "{result}");
+    let mut found: Vec<(String, String)> = result["payload"]["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|file| {
+            assert_eq!(
+                file["path"].as_str().unwrap(),
+                format!(
+                    "{}/{}",
+                    file["root_path"].as_str().unwrap(),
+                    file["relative_path"].as_str().unwrap()
+                ),
+                "a match carries the absolute path to open"
+            );
+            (
+                file["root_path"].as_str().unwrap().to_owned(),
+                file["relative_path"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (wire(&alpha), "src/login.rs".to_owned()),
+            (wire(&beta), "web/login.tsx".to_owned()),
+        ],
+        "both projects' matches, and no readme"
+    );
+    assert_eq!(result["payload"]["unavailable"], json!([]));
+    running.stop();
+}
+
 #[tokio::test]
 async fn browser_socket_cannot_start_a_host_file_handler() {
     let (dir, mut env) = test_env(true);

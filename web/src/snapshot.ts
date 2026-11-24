@@ -3464,7 +3464,8 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
 /** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
-export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
+/** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
+export type DeskLane = { view_width: number | null; session_width: number | null };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
@@ -3643,7 +3644,7 @@ export type DeskSection = {
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
-  lane: { pinned: boolean; kept: DeskKeptTab[] };
+  lane: DeskLane;
 };
 
 /** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */

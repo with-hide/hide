@@ -194,9 +194,68 @@ pub(crate) struct Stored {
     /// What the core remembers of each job beyond the ledger, by intent.
     #[serde(default)]
     pub marks: Vec<JobMark>,
-    /// The lane's pin and kept tabs (B31, B32).
-    #[serde(default)]
+    /// The widths of Desk's two panels (PRD desk-2-ui B23).
+    #[serde(default, with = "stored_lane")]
     pub lane: crate::model::DeskLane,
+}
+
+/// Desk's lane as the store writes it. Desk 2차 (PRD desk-2-ui B29) keeps
+/// two widths where Desk 1차 kept a pin and up to 16 kept tabs: an older
+/// record is read once into the new shape, its pin and tabs dropped, and
+/// the next save writes the new one. The save still writes an empty pin and
+/// tab list, because Desk 1차 reads `lane` with both fields required and a
+/// store it cannot read starts Desk empty and is written over, conversation
+/// and queue with it (the same reason as [`StoredJob`]).
+mod stored_lane {
+    use crate::model::DeskLane;
+    use serde::de::IgnoredAny;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize)]
+    struct Written {
+        view_width: Option<u32>,
+        session_width: Option<u32>,
+        /// Read by Desk 1차 only.
+        pinned: bool,
+        /// Read by Desk 1차 only.
+        kept: [(); 0],
+    }
+
+    #[derive(Deserialize)]
+    struct Read {
+        #[serde(default)]
+        view_width: Option<u32>,
+        #[serde(default)]
+        session_width: Option<u32>,
+        /// Desk 1차's pin and kept tabs, whatever shape they had: dropped.
+        #[serde(default, rename = "pinned")]
+        _pinned: Option<IgnoredAny>,
+        #[serde(default, rename = "kept")]
+        _kept: Option<IgnoredAny>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        lane: &DeskLane,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Written {
+            view_width: lane.view_width,
+            session_width: lane.session_width,
+            pinned: false,
+            kept: [],
+        }
+        .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<DeskLane, D::Error> {
+        let read = Read::deserialize(deserializer)?;
+        Ok(DeskLane {
+            view_width: read.view_width,
+            session_width: read.session_width,
+        })
+    }
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -336,12 +395,6 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.queue.truncate(MAX_QUEUE);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
-    let excess = stored
-        .lane
-        .kept
-        .len()
-        .saturating_sub(crate::model::DESK_KEPT_TABS_MAX);
-    stored.lane.kept.drain(..excess);
     stored.choices.truncate(AdapterId::all().count());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);
@@ -549,21 +602,64 @@ mod tests {
     }
 
     #[test]
-    fn the_lane_comes_back_after_a_restart_within_its_cap() {
-        let tab = |index: usize| crate::model::DeskKeptTab::Mission {
-            mission: format!("mission-{index}"),
-            title: "Desk".into(),
-        };
+    fn the_lanes_widths_come_back_after_a_restart_and_desk_1_still_reads_the_store() {
+        /// Desk 1차's lane as its reader takes it, kept as it shipped.
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        struct Released {
+            pinned: bool,
+            kept: Vec<serde_json::Value>,
+        }
         let mut stored = Stored::default();
-        stored.lane.pinned = true;
-        stored.lane.kept = (0..crate::model::DESK_KEPT_TABS_MAX + 2).map(tab).collect();
-        let restored = decode(&encode(&stored).unwrap()).unwrap();
-        assert!(restored.lane.pinned);
-        assert_eq!(restored.lane.kept.len(), crate::model::DESK_KEPT_TABS_MAX);
+        stored.lane = crate::model::DeskLane {
+            view_width: Some(720),
+            session_width: Some(480),
+        };
+        let bytes = encode(&stored).unwrap();
+        assert_eq!(decode(&bytes).unwrap().lane, stored.lane);
+        let written: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            serde_json::from_value::<Released>(written["lane"].clone()).is_ok(),
+            "{written}"
+        );
+    }
+
+    /// B29: a store Desk 1차 wrote, its lane pinned with sixteen kept tabs,
+    /// opens in the new shape with its conversation and queue, and the next
+    /// save writes no tab.
+    #[test]
+    fn an_old_lane_with_a_pin_and_sixteen_kept_tabs_loads_as_two_unset_widths() {
+        let output = |index: usize| {
+            serde_json::json!({"kind": "output", "job": format!("desk:{index}"), "output": {
+                "id": format!("view-{index}"), "kind": "image", "label": "shot.png",
+                "thumb": null, "seen": true, "pr_state": null, "device_id": "node",
+                "checkout": "/repo", "path": "/repo/shot.png", "url": null,
+            }})
+        };
+        let mission = |index: usize| serde_json::json!({"kind": "mission", "mission": format!("mission-{index}"), "title": "Desk"});
+        let kept: Vec<_> = (0..16)
+            .map(|index| {
+                if index % 2 == 0 {
+                    output(index)
+                } else {
+                    mission(index)
+                }
+            })
+            .collect();
+        let mut stored = Stored::default();
+        stored.conversation.push(user(1, "what runs now?"));
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        file["lane"] = serde_json::json!({"pinned": true, "kept": kept});
+
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(restored.lane, crate::model::DeskLane::default());
+        assert_eq!(restored.conversation, stored.conversation);
+        let written: serde_json::Value =
+            serde_json::from_slice(&encode(&restored).unwrap()).unwrap();
         assert_eq!(
-            restored.lane.kept[0],
-            tab(2),
-            "the oldest kept tabs go first"
+            written["lane"],
+            serde_json::json!({"view_width": null, "session_width": null, "pinned": false, "kept": []})
         );
     }
 }
