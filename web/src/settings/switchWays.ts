@@ -131,6 +131,13 @@ export function useDeviceSwitch(deviceId: string, actions: Actions, wanted: bool
   useEffect(
     () =>
       useShellStore.subscribe((state, before) => {
+        // A daemon that went away answers nothing it was asked: the press is over, and a read under way was not made.
+        if (state.connection !== before.connection && state.connection !== "live") {
+          if (asks.current.press !== null) setPressed(false);
+          if (asks.current.look !== null) setLook({ state: "unread", reason: "hide_unavailable" });
+          asks.current = { look: null, press: null };
+          return;
+        }
         const result = state.pairingResult;
         if (!result || result === before.pairingResult || !result.request_id) return;
         if (result.request_id === asks.current.look) {

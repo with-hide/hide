@@ -200,6 +200,19 @@ it("says why a press did not switch the device and offers it again", async () =>
   await unmount();
 });
 
+it("gives the button back when the daemon went away with a press unanswered", async () => {
+  const { q, answer, press, unmount } = await mount([helper()]);
+  await press(FOLD);
+  await answer("look_switch", { condition: { kind: "auto_login_on" } });
+  await press(SWITCH);
+  expect(q(SWITCH)).toBeNull();
+  expect(q('[data-switch-step="checking:on"]')).not.toBeNull();
+  await act(async () => { useShellStore.setState({ connection: "reconnecting" } as never); });
+  expect(q("[data-switch-step]")).toBeNull();
+  expect(q(SWITCH)?.hasAttribute("disabled")).toBe(false);
+  await unmount();
+});
+
 it("says once, on the row of a device switched while this window watched, what starts fresh there (D-48)", async () => {
   const { q, answer, press, show, unmount } = await mount([helper()]);
   await press(FOLD);

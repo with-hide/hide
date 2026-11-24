@@ -886,7 +886,7 @@ fn device_row(snapshot: &Value) -> Result<Value> {
 /// it, after a start and after a connection, it is still the helper's.
 /// A switch that runs is held against stand-ins: `pairing_wsl`'s
 /// `a_distribution_is_switched_through_wsl` and
-/// `a_distribution_is_switched_only_when_its_hide_is_back_unattended`, and
+/// `a_distribution_is_read_without_change_and_asked_to_linger_only_by_a_switch`, and
 /// `hide-core`'s `device_switch_folder` tests.
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
