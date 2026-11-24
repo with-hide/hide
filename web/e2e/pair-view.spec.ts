@@ -139,6 +139,9 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     // The pane on screen becomes the tab's keyboard pane, so pane commands reach it; the keys stay on the desk.
     await expect(paneView(page, other!)).toHaveAttribute("data-focused", "true");
+    // The grid it is drawn at on the left, which it keeps out of sight until the mode ends.
+    await expect.poll(() => grid(page, other!)).not.toEqual(null);
+    const otherOnLeft = await grid(page, other!);
     await expect(paneView(page, other!).locator(".xterm-helper-textarea")).not.toBeFocused();
     // B24, D-21: a tab the operator opened belongs to nobody, so the left pane stays.
     await showTool(page, "explorer");
@@ -166,9 +169,11 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
       expect(await box(page, pane)).toEqual(before[pane]!.box);
       expect(await grid(page, pane)).toEqual(before[pane]!.grid);
     }
-    // The shell never left its canvas; the other agent's pane was last drawn on the left (B24), so it takes its grid back once.
+    // The shell never left its canvas; the other agent's pane was last drawn on the left (B24), so it takes its grid back
+    // with one resize, or none when the left half was already its grid beside the left pane with the lane closed.
     expect(resizes.get(shell) ?? 0).toBe(beforeLeave.get(shell) ?? 0);
-    expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(1);
+    const otherBack = JSON.stringify(otherOnLeft) === JSON.stringify(before[other!]!.grid) ? 0 : 1;
+    expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(otherBack);
     expect((await live(page)).sort()).toEqual(liveBefore);
     await screenshot(page, "pair-left");
   } finally {
