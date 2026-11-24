@@ -397,7 +397,7 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
             "daemon-reload",
             "enable example.agent.service",
             "start --no-block example.agent.service",
-            "daemon-reload",
+            // Forgotten while it runs: the manager keeps the unit it read.
             // A replacement has the manager read the new unit before it
             // stops the old run, which is stopped by the unit last read.
             "daemon-reload",
@@ -663,9 +663,10 @@ fn a_login_agent_restarts_while_its_marker_exists_and_ends_when_removed() {
 }
 
 /// What an agent's run started to outlive it (`start_resident`, as a pane's
-/// holder is) goes on when the run's program ends and when a replacement
+/// holder is) goes on when the run's program ends, when a replacement
 /// stops the run, which is what a core's update does to the core it
-/// replaces. On Linux the same holds for a run a unit of an earlier build
+/// replaces, and when the run of an agent that was forgotten ends, which
+/// is a core that stops after its last pairing went. On Linux the same holds for a run a unit of an earlier build
 /// started: systemd ends every process of a unit it stops unless the unit
 /// says otherwise, and it stops a run by the unit it last read.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -799,6 +800,23 @@ fn what_an_agents_run_started_to_outlive_it_outlives_its_end_and_its_replacement
                 "ended by the replacement of a run an earlier unit started"
             );
         }
+        // An agent forgotten while it runs keeps its run, and that run's
+        // end is like any other's: with its marker gone nothing starts it
+        // again, and what it started to outlive it goes on.
+        let (last_program, last) = *runs().last().unwrap();
+        let last = pinned(last);
+        std::fs::remove_file(&marker).unwrap();
+        agents.forget(&label, home, &stop).unwrap();
+        hide_platform::process::kill_tree(last_program).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        #[allow(clippy::disallowed_methods)] // a bounded poll of another process
+        while hide_platform::process::is_alive(last_program) {
+            assert!(Instant::now() < deadline, "the run's program did not end");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        #[allow(clippy::disallowed_methods)] // past the manager's handling of the exit
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(runs_still(last), "ended with a forgotten agent's run");
     }));
     let removal = agents.remove(&label, home, &stop);
     // A resident lives a minute by itself; end the ones still there now.

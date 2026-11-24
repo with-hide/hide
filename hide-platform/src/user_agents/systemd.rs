@@ -265,7 +265,10 @@ impl Systemd {
     }
 
     /// Removes the unit and its link, so the manager starts nothing of it
-    /// again; a running process is left running until it exits.
+    /// again; a running process is left running until it exits. The manager
+    /// is told to read its units again only when it runs nothing of this
+    /// one: it ends a run by the unit it last read, and reads a unit whose
+    /// file is gone as one whose end ends everything its run started.
     pub(super) fn forget(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         let mut removed = false;
         for path in [Self::wanted_link(home, label), Self::unit_file(home, label)] {
@@ -275,7 +278,7 @@ impl Systemd {
                 Err(error) => return Err(error),
             }
         }
-        if removed && self.manager_runs() {
+        if removed && self.manager_runs() && !self.is_loaded(label, home, stop)? {
             self.check(&["daemon-reload"], home, stop)?;
         }
         Ok(())
