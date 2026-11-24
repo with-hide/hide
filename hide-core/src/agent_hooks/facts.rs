@@ -461,15 +461,19 @@ impl HookFacts {
         Ok(Recorded { changed })
     }
 
-    /// Each pane's account as its agent's latest session start reported it
-    /// (`SessionFact::account`).
+    /// Each pane's account as its agent's session start reported it
+    /// (`SessionFact::account`), from the session that speaks for the pane's
+    /// agent ([`speaking`]), the same one a projection lays: a session another
+    /// program in the pane starts (a `claude -p` the agent runs with another
+    /// `CLAUDE_CONFIG_DIR`) reports its own account through the same hooks,
+    /// and taking it would wake the agent in an account its conversation is
+    /// not in (#2889).
     pub(crate) fn reported_accounts(&self) -> impl Iterator<Item = Reported<'_>> {
         self.panes.iter().filter_map(|(pane, facts)| {
-            let fact = facts
-                .sessions
-                .iter()
-                .rev()
-                .find(|fact| fact.account.is_some())?;
+            let at = speaking(facts, facts.engine_session.as_deref(), |fact| {
+                fact.account.is_some()
+            })?;
+            let fact = &facts.sessions[at];
             Some(Reported {
                 pane,
                 runtime: &fact.runtime,
@@ -701,26 +705,36 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 /// there.
 fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let reported = engine_session(agent);
-    let named = facts.sessions.iter().rposition(|fact| {
-        fact.runtime == runtime
-            && match (reported, fact.session.as_deref()) {
-                (Some(reported), Some(kept)) => reported == kept,
-                _ => true,
-            }
-    });
-    let at = named.or_else(|| {
-        facts
-            .reported_since_engine
-            .then(|| {
-                facts
-                    .sessions
-                    .iter()
-                    .rposition(|fact| fact.runtime == runtime)
-            })
-            .flatten()
-    })?;
+    let at = speaking(facts, engine_session(agent), |fact| fact.runtime == runtime)?;
     facts.sessions.get_mut(at)
+}
+
+/// Where the session that speaks for a pane's agent is among `facts`'
+/// sessions that `of` takes: the last one with the id the engine names for
+/// the agent (`named`), or with none to compare; where none has that id and
+/// a hook reported since the engine last changed the id it names, the one
+/// that reported last.
+fn speaking(
+    facts: &PaneFacts,
+    named: Option<&str>,
+    of: impl Fn(&SessionFact) -> bool,
+) -> Option<usize> {
+    facts
+        .sessions
+        .iter()
+        .rposition(|fact| {
+            of(fact)
+                && match (named, fact.session.as_deref()) {
+                    (Some(named), Some(kept)) => named == kept,
+                    _ => true,
+                }
+        })
+        .or_else(|| {
+            facts
+                .reported_since_engine
+                .then(|| facts.sessions.iter().rposition(&of))
+                .flatten()
+        })
 }
 
 /// A pane's facts from the records its hooks kept: no turn, which no record
@@ -987,6 +1001,47 @@ mod tests {
         };
 
         assert_eq!(older.reported_accounts().count(), 0);
+    }
+
+    /// #2889: a session another program in the pane starts (a `claude -p`
+    /// the agent runs with another `CLAUDE_CONFIG_DIR`) reports its own
+    /// account after the agent's, through the same hooks; the pane keeps the
+    /// account of the session the engine names for its agent, and takes the
+    /// new one once the engine names that session.
+    #[test]
+    fn the_pane_s_account_is_its_agent_s_session_s_not_a_later_one_s_in_the_pane() {
+        let started = |session: &str, folder: &str| {
+            let mut started = report(Some(session), None);
+            started.session_start = true;
+            started.account = Some(vec![("CLAUDE_CONFIG_DIR".into(), folder.into())]);
+            started
+        };
+        let account = |facts: &HookFacts| {
+            facts
+                .reported_accounts()
+                .map(|r| (r.session.map(str::to_owned), r.variables[0].1.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &started("own", "/accounts/a"), 0)
+            .unwrap();
+        lay(&mut facts, &mut payload("own"));
+        facts
+            .record("w1:p1", &started("nested", "/accounts/b"), 0)
+            .unwrap();
+        assert_eq!(
+            account(&facts),
+            [(Some("own".to_owned()), "/accounts/a".to_owned())]
+        );
+
+        // The agent started again in the pane with the other account: the
+        // engine names its session, and its account is the pane's.
+        lay(&mut facts, &mut payload("nested"));
+        assert_eq!(
+            account(&facts),
+            [(Some("nested".to_owned()), "/accounts/b".to_owned())]
+        );
     }
 
     /// A session's report names its running subagents with its counts: the
