@@ -117,13 +117,18 @@ test("@platform session records by goal flow, ended work and search render in bo
       await page.locator('[data-ai-agent-summary="false"]').click();
       await page.keyboard.press("Escape");
     }
-    // Resolve from the row's ⋯ menu puts the task under 쉬는 중 once it is saved (B18).
-    // The summaries turned back on, the record's ask returns and the core moves the row to 내 차례; the menu opens on that row.
-    await hoverSettledTaskRow(root, "needs_you");
+    // The summaries back on, the record's ask returns. Read in the pane the operator typed in, it keeps the row out of 내 차례:
+    // the row rests at the top of 쉬는 중 with the hollow `!` until it is answered (status-model, A question still waiting).
+    await expect(record.locator("[data-record-ask]")).toHaveCount(1, { timeout: 45_000 }); // wait-ok: the record's ask returns with the summaries
+    await openTaskFolds(page);
+    await expect(root).toHaveAttribute("data-task-read", "true", { timeout: 45_000 }); // wait-ok: the core lays the read ask on the row
+    await expect(tasks.locator('[data-task-fold="rest"] [data-task-row]').first()).toHaveAttribute("data-task-row", pane);
+    await expect(root.locator('[data-mark="turn"]')).toHaveAttribute("data-mark-read", "true");
+    await hoverSettledTaskRow(root, "resting");
+    // Resolve from the row's ⋯ menu takes the question away once it is saved (B18): the row rests, no longer a read ask.
     await page.locator(`[data-task-more="${pane}"]`).click();
     await page.locator(`[data-task-menu="${pane}"] [data-menu-item="resolve"]`).click();
-    await expect(tasks.locator('[data-task-fold="rest"]')).toBeVisible({ timeout: 30_000 });
-    await openTaskFolds(page);
+    await expect(root).not.toHaveAttribute("data-task-read", "true", { timeout: 30_000 }); // wait-ok: the core saves the resolve and takes the ask away
     await expect(root).toHaveAttribute("data-task-state", "resting");
     for (const theme of ["light", "dark"] as const) {
       await page.locator('[data-open-settings]').click();
