@@ -29,7 +29,8 @@ pub struct DeskSnapshot {
 /// the shell draws its own first width. Which session is open beside Desk,
 /// whether the tab panel shows and which tab is in front are the window's,
 /// never the core's (B26).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeskLane {
     /// The tab panel's width: its left edge.
     pub view_width: Option<u32>,

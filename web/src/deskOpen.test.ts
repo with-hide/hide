@@ -90,4 +90,13 @@ describe("what Desk opens in its tab panel", () => {
     actions.openDesk();
     expect(useUiStore.getState().deskRoom).toEqual(DESK_ROOM_CLOSED);
   });
+
+  it("opens a sidebar row's session beside Desk while Desk is in front, and its tab on a ⌘-click (B3, B5)", () => {
+    actions.openListedAgent("p-session");
+    expect(useUiStore.getState().deskRoom.session).toBe("p-session");
+    expect(useUiStore.getState().screen).toEqual({ kind: "desk" });
+    expect(actions.rowOpensBesideDesk({ tab: true })).toBe(false);
+    useUiStore.getState().setScreen({ kind: "workspace" });
+    expect(actions.rowOpensBesideDesk()).toBe(false);
+  });
 });

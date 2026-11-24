@@ -342,6 +342,8 @@ export function installKeyboard(actions: Actions): () => void {
       case "toggle_lane_memory":
         return actions.toggleTool("memory");
       case "toggle_lane_explorer":
+        // In Desk's room ⇧⌘E is the session panel's `파일`: the Explorer column of the tab panel (PRD desk-2-ui B35).
+        if (useUiStore.getState().screen?.kind === "desk") return actions.deskToggleExplorer();
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":
         return actions.toggleTool("changes");

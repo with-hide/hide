@@ -2817,6 +2817,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setDeskRoom(toggleDeskExplorer);
     },
 
+    /** Whether a sidebar row's press opens its session beside Desk: Desk in front and no ⌘-click (PRD desk-2-ui B3, B5, B44). */
+    rowOpensBesideDesk(how?: { tab: boolean }): boolean {
+      return ui().screen?.kind === "desk" && deskOn(useShellStore.getState().desk) && how?.tab !== true;
+    },
+
     /** The tab panel's `✕`, Escape or a press on the dimmed outside (B21). */
     deskClosePanel() {
       ui().setDeskRoom(closeDeskPanel);
@@ -2884,11 +2889,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23): one event per drag, naming
-     * only the width it moved; the core keeps it across a restart.
+     * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23), in whole CSS pixels from 1 to
+     * 8192, which this rounds and clamps to: the core refuses any other. One event per drag, and a
+     * keyboard handle's ←→ commits once, on key up, never per key repeat: each event resends the `desk`
+     * section, conversation included. The core keeps it across a restart.
      */
-    deskLaneWidth(width: { view_width: number } | { session_width: number }) {
-      dispatch({ schema_version: 2, kind: "desk_lane", payload: width });
+    deskLaneWidth(panel: "view_width" | "session_width", width: number) {
+      const whole = Math.min(8192, Math.max(1, Math.round(width)));
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { [panel]: whole } });
     },
 
     /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */
@@ -3008,7 +3016,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * other row does (PRD hide-ai-work-home B11, PRD hide-ai-suggestions
      * B11).
      */
-    openListedAgent(paneId: string) {
+    openListedAgent(paneId: string, how?: { tab: boolean }) {
+      // While Desk is in front a row opens its session beside Desk; a ⌘-click goes to its tab as anywhere else (PRD desk-2-ui D-03, D-04, B3, B5).
+      if (this.rowOpensBesideDesk(how)) return this.openDeskSession(paneId);
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
@@ -4027,9 +4037,28 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
     },
 
-    /** Asks every registered checkout's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38). */
-    requestFileIndexAll(query: string) {
-      dispatch({ schema_version: 2, kind: "file_index_all", payload: { query } });
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
+    /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
+    askPane(deviceId: string, paneId: string) {
+      dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
+    },
+
+    /**
+     * Answers the ask a `pane_ask` frame showed with one of its choice ids, as the phone does: the daemon types the
+     * keys the agent's screen takes for it. Returns the request id the `pane_choice_result` frame names, or null when
+     * nothing could be sent.
+     */
+    answerPane(deviceId: string, paneId: string, ask: { turn: string; kind: "question" | "plan_approval" | "permission" }, choice: string): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "pane_choice", payload: { request_id: requestId, device_id: deviceId, pane_id: paneId, turn: ask.turn, kind: ask.kind, choice } });
+      return sent === false ? null : requestId;
+    },
+
+    requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
+      dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },
 
     /** A palette pick opens in the checkout's preview tab (B12) and closes the palette. */

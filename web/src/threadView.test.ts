@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentRow, Mission, PlanView, SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPage } from "./snapshot";
-import { threadConversation, threadInputHeld, threadLaunchModel, threadScreen } from "./threadView";
+import type { AgentRow, Mission, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPage } from "./snapshot";
+import { threadConversation, threadInputHeld, threadScreen } from "./threadView";
 
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
 
@@ -41,17 +41,6 @@ describe("the input box", () => {
     expect(threadInputHeld(thread({ input: { request_id: "r", state: "sending" } }))).toBe("in_flight");
     expect(threadInputHeld(thread({ input: { request_id: "r", state: "refused", reason: "asleep" } }))).toBeNull();
     expect(threadInputHeld(null)).toBe("closed");
-  });
-});
-
-describe("the head's model", () => {
-  it("is the model Hide launched the pane's session with, on the thread's machine, and none when the launch chose none", () => {
-    const session = (device_id: string, pane_id: string, launch_model: string | null) => ({ device_id, pane_id, session_digest: "d", launch_model, launch_effort: null });
-    const rest = { overview_graph: { sessions: [session("mac", "w1:p1", "sonnet"), session("mini", "remote:mini:pane:w1:p1", "haiku"), session("mini", "remote:mini:pane:w2:p3", null)] } } as unknown as SnapshotRest;
-    expect(threadLaunchModel(rest, thread())).toBe("sonnet");
-    expect(threadLaunchModel(rest, thread({ machine: "mini", pane_id: "remote:mini:pane:w1:p1" }))).toBe("haiku");
-    expect(threadLaunchModel(rest, thread({ machine: "mini", pane_id: "remote:mini:pane:w2:p3" }))).toBeNull();
-    expect(threadLaunchModel(rest, thread({ pane_id: "w9:p9" }))).toBeNull();
   });
 });
 

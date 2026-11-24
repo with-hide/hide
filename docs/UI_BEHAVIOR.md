@@ -1206,6 +1206,11 @@ The core derives the counts and 흘린 것 only on a publish whose inputs moved,
 
 Moved to a private document: `docs/desk.md` in with-hide/hide-private.
 
+Web owner: `web/src/DeskScreen.tsx`, `web/src/deskRoom.ts`, `web/src/components/desk/`, the Desk row in `web/src/components/sidebar-header.tsx`, the row click in `web/src/components/sidebar-agent-row.tsx`.
+While Settings › Labs › Desk is on, the sidebar's Desk row sits on its own line between the Overview row and the `미션` row, with the warning mark while a session Desk started asks the operator, and is drawn selected while Desk is in front; with the switch off there is no row.
+While Desk is in front, pressing an agent's row in the sidebar opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
+What the room beside Desk holds and how it opens and closes is `docs/desk.md`'s.
+
 ## Hide AI: the Hide AI tool
 
 Moved to a private document: `docs/hide-ai-tool.md` in with-hide/hide-private.
@@ -1220,7 +1225,7 @@ Every mission is listed on a screen of the page's own beside the Overview and De
 A mission pressed anywhere else opens its map as a card tab on the desk of its Conductor's Agent tab, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19; PRD lane-desk-pair-view D-13).
 There is no Mission tool in the right lane (B18).
 
-The sidebar's `미션` row sits on its own line under the Overview row and above `Add project`, the waypoints mark before it and, on its right, the warning-coloured count of the device's open missions with anything in their 내 차례 (a decision, letters the Conductor has not got, a worker the core raised, a person's turn a worker declared, a merge or join order, the safety net, no Conductor), none at 0, its hint `미션 · 내 차례 N`; the tabs below stay 프로젝트, 태스크 and PR (B1).
+The sidebar's `미션` row sits on its own line under the Overview row (under the Desk row while Desk is on, see Desk) and above `Add project`, the waypoints mark before it and, on its right, the warning-coloured count of the device's open missions with anything in their 내 차례 (a decision, letters the Conductor has not got, a worker the core raised, a person's turn a worker declared, a merge or join order, the safety net, no Conductor), none at 0, its hint `미션 · 내 차례 N`; the tabs below stay 프로젝트, 태스크 and PR (B1).
 Pressing it replaces the center, whatever was there, with the screen on its table, every project and 끝남 folded, never on the last mission shown, and the row is drawn selected while the screen shows (B2, D-04); `Open missions` (미션 열기) in the command palette and the View menu does the same and has no chord until one is bound (B21).
 Every `터미널로 이동` on the screen (the Conductor's row, a row of 내 차례, a node's panel, a checker) asks the core for that pane as a sidebar row does, a device's pane on its device, and the screen gives way to the Workspace once the pane is in front.
 While it is on its way a quiet `여는 중…` line stands at the top of the screen, and when the pane does not come (its terminal closed, which reads `그 터미널은 이제 열려 있지 않아요.`, its device or the core refused it, or no answer within 15 seconds) the screen stays and that line says why with Dismiss; it is the same line All projects, the Overview page and Desk draw for an open pressed there (`web/src/OpeningStatus.tsx`, drawn by `CenterScreen` in `web/src/App.tsx`; with-hide/hide#2505).

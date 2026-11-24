@@ -1,4 +1,4 @@
-import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
+import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
@@ -395,7 +395,7 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
  * as plain rows a press sends, and while threads run their real marks and
  * counts with the way to them. ◆ stays in the sidebar (D-38).
  */
-export function DeskEmpty({ working, asking, onExample, onShowThreads }: { working: number; asking: number; onExample: (text: string) => void; onShowThreads?: () => void }) {
+export function DeskEmpty({ working, asking, onExample }: { working: number; asking: number; onExample: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
   const examples = [t("desk.empty.example1"), t("desk.empty.example2"), t("desk.empty.example3")];
   return (
@@ -417,15 +417,6 @@ export function DeskEmpty({ working, asking, onExample, onShowThreads }: { worki
           {working > 0 ? <span className="flex items-center gap-xxs"><StatusMark mark="going" />{t("desk.empty.working", { count: working })}</span> : null}
           {working > 0 && asking > 0 ? <span aria-hidden="true">·</span> : null}
           {asking > 0 ? <span className="flex items-center gap-xxs text-warning"><StatusMark mark="turn" />{t("desk.empty.asking", { count: asking })}</span> : null}
-          {onShowThreads ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <Button variant="text" size="inline" className="gap-0 text-caption" onClick={onShowThreads}>
-                {t("desk.empty.showThreads")}
-                <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-              </Button>
-            </>
-          ) : null}
         </p>
       ) : null}
     </div>

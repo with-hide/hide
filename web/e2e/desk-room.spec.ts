@@ -6,10 +6,10 @@ import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
 
-// PRD session-docs-and-assistant B28, B29, B32, B35, B41: Desk's lane, its
-// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Labs › Desk's
-// switch, off on a new install. Each test starts one stack and asserts one
-// contract.
+// PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
+// Desk's room with a session opened beside it from the sidebar, ⌘J between
+// that session and its Agent tab, and Settings › Labs › Desk's switch, off on
+// a new install. Each test starts one stack and asserts one contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -31,10 +31,10 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
     watches: [],
     agents: [
       { id: "agent-1", name: "hide:desk", machine: node, host_scope: "hide", native_machine: "hide", session: "hide:desk", instance: "hide:desk", pane: "hide:desk", parent: null, origin: null, project: null, actor: desk, ended: false, forked: false },
-      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "desk-lane-session", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("desk-lane-session") }, ended: false, forked: false },
+      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "desk-room-session", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("desk-room-session") }, ended: false, forked: false },
     ],
     spawns: [
-      { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-lane-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
+      { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-room-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
     ],
     spawn_placement_revision: 1,
   };
@@ -71,79 +71,41 @@ async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
 }
 
 const room = (page: Page) => page.locator("[data-desk-room]");
-const rail = (page: Page, key: "threads" | "outputs") => page.locator(`[data-desk-rail="${key}"]`);
+const row = (page: Page, pane: string) => page.locator(`[data-agent-open="${pane}"]`);
 
-test("☰ opens the Threads list over the chat and a row opens its thread in the tool column (PRD session-docs-and-assistant B28, B25) @platform", async ({ page }) => {
+test("a sidebar row opens its session beside Desk, marked on its row, Escape closes it, and a ⌘-click goes to its tab (PRD desk-2-ui B2-B6, B21) @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const desk = await startDesk(page, "desk-lane-threads");
+  const desk = await startDesk(page, "desk-room-beside");
   try {
     await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
-    await rail(page, "threads").click();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "over");
-    await expect(rail(page, "threads")).toHaveAttribute("aria-pressed", "true");
-    const row = page.locator('[data-desk-thread="desk-lane-intent"]');
-    await expect(row).toBeVisible();
-    await row.click();
+    await row(page, desk.pane).click();
+    await expect(room(page)).toHaveAttribute("data-desk-room", "session");
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
     await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
-    // ‹ goes back to the list; ☰ pressed again closes the column and the lane with it.
-    await page.locator("[data-desk-thread-back]").click();
-    await expect(row).toBeVisible();
-    await rail(page, "threads").click();
+    await expect(page.locator("[data-desk-session-panel]")).toHaveAttribute("data-desk-session-panel", "docked");
+    await expect(row(page, desk.pane)).toHaveAttribute("data-desk-beside", "true");
+
+    await page.locator("[data-desk-chat-column] [data-desk-composer-input]").focus();
+    await page.keyboard.press("Escape");
     await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
-    // ▣ opens the 보기 column alone, with every thread's outputs, none yet.
-    await rail(page, "outputs").click();
-    await expect(page.locator("[data-desk-lane-column]")).toHaveAttribute("data-desk-lane-column", "view");
-    await expect(page.locator('[data-desk-view-column] [data-desk-outputs="0"]')).toBeVisible();
+    await expect(row(page, desk.pane)).not.toHaveAttribute("data-desk-beside", "true");
+
+    await row(page, desk.pane).click({ modifiers: [process.platform === "darwin" ? "Meta" : "Control"] });
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     desk.daemon.stop();
     desk.engine.stop();
   }
 });
 
-test("📌 beside ✕ docks Desk's lane beside the chat, and Escape closes only an unpinned lane (PRD session-docs-and-assistant B32) @platform", async ({ page }) => {
+test("⌘J goes from the session beside Desk to its Agent tab and back to Desk with the session beside it again (PRD desk-2-ui B7) @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const desk = await startDesk(page, "desk-lane-pin");
+  const desk = await startDesk(page, "desk-room-terminal");
   try {
-    await rail(page, "threads").click();
-    const pin = page.locator('[data-desk-lane-column="tool"] [data-lane-pin]');
-    await expect(pin).toHaveAttribute("data-lane-pin", "off");
-    const over = await page.locator("[data-desk-chat-column]").boundingBox();
-    await pin.click();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "pinned");
-    await expect(pin).toHaveAttribute("data-lane-pin", "on");
-    const docked = await page.locator("[data-desk-chat-column]").boundingBox();
-    expect(docked!.width).toBeLessThan(over!.width);
-    // Escape leaves a pinned lane where it is. A row's hint opens with its
-    // focus and takes the first Escape, as any popover does.
-    const row = page.locator('[data-desk-thread="desk-lane-intent"]');
-    const escape = async () => {
-      await row.focus();
-      await page.keyboard.press("Escape");
-      await page.keyboard.press("Escape");
-    };
-    await escape();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "pinned");
-
-    await pin.click();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "over");
-    await escape();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "closed");
-    await expect(page.locator("[data-desk-chat-column] [data-desk-composer-input]")).toBeFocused();
-  } finally {
-    desk.daemon.stop();
-    desk.engine.stop();
-  }
-});
-
-test("⌘J goes from a thread to its Agent tab and back to Desk with the thread still open (PRD session-docs-and-assistant B35) @platform", async ({ page }) => {
-  test.setTimeout(120_000);
-  const desk = await startDesk(page, "desk-lane-terminal");
-  try {
-    await rail(page, "threads").click();
-    await page.locator('[data-desk-thread="desk-lane-intent"]').click();
+    await row(page, desk.pane).click();
     const panel = page.locator(`[data-desk-thread-panel="${desk.pane}"]`);
     await expect(panel).toBeVisible();
-    await expect(panel.locator("[data-desk-thread-terminal-chord]")).toBeVisible();
 
     await page.keyboard.press(chord("desk_terminal"));
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
@@ -154,8 +116,8 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
     await expect(page.locator("[data-desk-screen]")).toBeVisible();
     await expect(panel).toBeVisible();
 
-    // `터미널로` does what ⌘J does.
-    await panel.locator("[data-desk-thread-terminal]").click();
+    // `터미널` in the session head does what ⌘J does.
+    await page.locator("[data-desk-session-terminal]").click();
     await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     desk.daemon.stop();
@@ -165,7 +127,7 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
 
 test("Desk is off on a new install, its switch in Settings shows it without a restart, and switching it off in the room goes back to the tab before it with Desk's session kept (PRD session-docs-and-assistant B41) @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const desk = await startDesk(page, "desk-lane-switch", false);
+  const desk = await startDesk(page, "desk-room-switch", false);
   try {
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);

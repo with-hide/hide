@@ -194,68 +194,13 @@ pub(crate) struct Stored {
     /// What the core remembers of each job beyond the ledger, by intent.
     #[serde(default)]
     pub marks: Vec<JobMark>,
-    /// The widths of Desk's two panels (PRD desk-2-ui B23).
-    #[serde(default, with = "stored_lane")]
+    /// The widths of Desk's two panels (PRD desk-2-ui B23), under a key of
+    /// their own: Desk 1차 kept a pin and kept tabs under `lane`, which this
+    /// build does not read and the next save leaves out, and Desk 1차 reads a
+    /// store with no `lane` as an empty one, so a downgrade keeps the
+    /// conversation and queue (B29).
+    #[serde(default, rename = "panel_widths")]
     pub lane: crate::model::DeskLane,
-}
-
-/// Desk's lane as the store writes it. Desk 2차 (PRD desk-2-ui B29) keeps
-/// two widths where Desk 1차 kept a pin and up to 16 kept tabs: an older
-/// record is read once into the new shape, its pin and tabs dropped, and
-/// the next save writes the new one. The save still writes an empty pin and
-/// tab list, because Desk 1차 reads `lane` with both fields required and a
-/// store it cannot read starts Desk empty and is written over, conversation
-/// and queue with it (the same reason as [`StoredJob`]).
-mod stored_lane {
-    use crate::model::DeskLane;
-    use serde::de::IgnoredAny;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    #[derive(Serialize)]
-    struct Written {
-        view_width: Option<u32>,
-        session_width: Option<u32>,
-        /// Read by Desk 1차 only.
-        pinned: bool,
-        /// Read by Desk 1차 only.
-        kept: [(); 0],
-    }
-
-    #[derive(Deserialize)]
-    struct Read {
-        #[serde(default)]
-        view_width: Option<u32>,
-        #[serde(default)]
-        session_width: Option<u32>,
-        /// Desk 1차's pin and kept tabs, whatever shape they had: dropped.
-        #[serde(default, rename = "pinned")]
-        _pinned: Option<IgnoredAny>,
-        #[serde(default, rename = "kept")]
-        _kept: Option<IgnoredAny>,
-    }
-
-    pub(super) fn serialize<S: Serializer>(
-        lane: &DeskLane,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        Written {
-            view_width: lane.view_width,
-            session_width: lane.session_width,
-            pinned: false,
-            kept: [],
-        }
-        .serialize(serializer)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<DeskLane, D::Error> {
-        let read = Read::deserialize(deserializer)?;
-        Ok(DeskLane {
-            view_width: read.view_width,
-            session_width: read.session_width,
-        })
-    }
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -395,6 +340,11 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.queue.truncate(MAX_QUEUE);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
+    let width = |width: Option<u32>| {
+        width.filter(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(width))
+    };
+    stored.lane.view_width = width(stored.lane.view_width);
+    stored.lane.session_width = width(stored.lane.session_width);
     stored.choices.truncate(AdapterId::all().count());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);
@@ -603,10 +553,18 @@ mod tests {
 
     #[test]
     fn the_lanes_widths_come_back_after_a_restart_and_desk_1_still_reads_the_store() {
-        /// Desk 1차's lane as its reader takes it, kept as it shipped.
+        /// The store as Desk 1차's reader takes it, kept as it shipped: a
+        /// `lane` it requires the fields of, defaulted when absent.
         #[allow(dead_code)]
         #[derive(serde::Deserialize)]
         struct Released {
+            conversation: serde_json::Value,
+            #[serde(default)]
+            lane: Option<ReleasedLane>,
+        }
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        struct ReleasedLane {
             pinned: bool,
             kept: Vec<serde_json::Value>,
         }
@@ -619,16 +577,25 @@ mod tests {
         };
         let bytes = encode(&stored).unwrap();
         assert_eq!(decode(&bytes).unwrap().lane, stored.lane);
-        let written: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(
-            serde_json::from_value::<Released>(written["lane"].clone()).is_ok(),
-            "{written}"
+            serde_json::from_slice::<Released>(&bytes).is_ok(),
+            "{}",
+            String::from_utf8_lossy(&bytes)
         );
     }
 
+    #[test]
+    fn a_width_out_of_range_in_the_file_reads_as_unset() {
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&Stored::default()).unwrap()).unwrap();
+        file["panel_widths"] = serde_json::json!({"view_width": 0, "session_width": 99_999});
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(restored.lane, crate::model::DeskLane::default());
+    }
+
     /// B29: a store Desk 1차 wrote, its lane pinned with sixteen kept tabs,
-    /// opens in the new shape with its conversation and queue, and the next
-    /// save writes no tab.
+    /// opens as it was but for two unset widths, its conversation, queue,
+    /// marks and settings kept, and the next save writes no tab.
     #[test]
     fn an_old_lane_with_a_pin_and_sixteen_kept_tabs_loads_as_two_unset_widths() {
         let output = |index: usize| {
@@ -650,18 +617,53 @@ mod tests {
             .collect();
         let mut stored = Stored::default();
         stored.conversation.push(user(1, "what runs now?"));
+        stored.settings.cap = 3;
+        stored.queue.push(QueuedJob {
+            intent: "desk:1".into(),
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                parent: None,
+                machine: None,
+                name: "worker".into(),
+                intent: "desk:1".into(),
+                kind: "codex".into(),
+                repo: Some("/r".into()),
+                branch: Some("main".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: Some("go".into()),
+                beside: false,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                profile: None,
+            },
+            queued_at_ms: 1,
+            state: QueuedState::Waiting,
+            code: None,
+        });
+        stored.marks.push(JobMark {
+            intent: "desk:0".into(),
+            grouped: true,
+            watched: true,
+            changed_at_ms: 2,
+            ..JobMark::default()
+        });
         let mut file: serde_json::Value =
             serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("panel_widths");
         file["lane"] = serde_json::json!({"pinned": true, "kept": kept});
 
         let restored = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
-        assert_eq!(restored.lane, crate::model::DeskLane::default());
-        assert_eq!(restored.conversation, stored.conversation);
+        assert_eq!(restored, stored);
         let written: serde_json::Value =
             serde_json::from_slice(&encode(&restored).unwrap()).unwrap();
+        assert_eq!(written.get("lane"), None);
         assert_eq!(
-            written["lane"],
-            serde_json::json!({"view_width": null, "session_width": null, "pinned": false, "kept": []})
+            written["panel_widths"],
+            serde_json::json!({"view_width": null, "session_width": null})
         );
     }
 }

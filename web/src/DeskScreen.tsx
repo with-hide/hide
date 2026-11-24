@@ -1,54 +1,50 @@
-// Desk's room on screen (PRD session-docs-and-assistant, Desk 1차 B1-B24):
-// the `desk`, `desk_live`, `desk_jobs` and `desk_mentions` sections drawn
-// with the Desk parts, and each press sent as one `desk_*` event. The core
-// decides every state; this screen keeps only what the operator is writing
-// and where the `@` menu is. The lane (B28-B35) is `DeskLaneColumns` below:
-// its pin and kept tabs are the core's, its columns this window's.
+// Desk's room on screen (PRD session-docs-and-assistant, Desk 1차; PRD
+// desk-2-ui): the `desk`, `desk_live`, `desk_jobs` and `desk_mentions`
+// sections drawn with the Desk parts, each press sent as one `desk_*` event,
+// and at the chat's right the session opened beside Desk with the tab panel
+// floating at its left edge (`DeskRoom`). The core decides every state; this
+// screen keeps what the operator is writing, where the `@` menu is, and the
+// room's window state (`deskRoom.ts`), which the core keeps only the widths of.
 
 import { MapIcon } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { escapeConsumed } from "./components/ui/tooltip";
-import { askingCount, deskOn, laneCards, sessionFacts, sessionThreadId, threadKeyPane, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { useDeskLaneStore, activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, keepTab, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
+import { activeTab, closePanel, closeSession, closeTab, keepTab, namesView, openSession, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
+import { DisplayEditor } from "./Editor";
+import { ExplorerTree } from "./ExplorerTree";
 import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
-import { EveryOutput } from "./components/desk/desk-outputs";
-import { ThreadList } from "./components/desk/thread-list";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { allAgents } from "./paneAgents";
+import { SessionAskCard, SessionHead, SessionQuestionCard, SessionSleepingFoot, sessionQuestion } from "./components/desk/desk-session";
+import { useElapsed } from "./components/elapsed";
+import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
+import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
 import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
 import type { MentionInputHandle } from "./components/desk/mention-input";
-import { DeskPaneReturn, DeskSidebarRow } from "./components/desk/desk-entry";
-import { DeskChatColumn, DeskChatHead, DeskRail, DeskRoom, DeskViewColumn, LaneColumnHead, LaneHeadControls, type ViewTab } from "./components/desk/desk-lane";
+import { DeskPaneReturn } from "./components/desk/desk-entry";
+import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "./components/desk/desk-room";
 import { DeskMentionMenu, type MentionProject, type MentionSession } from "./components/desk/desk-mention-menu";
 import { DeskSettingsTab } from "./components/desk/desk-settings";
+import { FileMark } from "./components/file-mark";
+import { fileIcon } from "./fileIcons";
+import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
-import { catalogWorkspaces } from "./snapshot";
+import { machineName } from "./screenMachine";
+import { catalogWorkspaces, explorerContext, frontCheckout, localDeviceId, type AgentRow, type PaneRow, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { areasOf, placeKey, workspaceKey } from "./viewLayout";
 import { windowIsActive } from "./viewFocus";
+import { workspaceViewOf } from "./workspace";
 
 const NO_JOBS: DeskJob[] = [];
-
-/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Labs › Desk switched it on (B41). */
-export function DeskSidebarEntry({ actions }: { actions: Actions }) {
-  const shown = useShellStore((s) => deskOn(s.desk));
-  const selected = useUiStore((s) => s.screen?.kind === "desk");
-  const asking = useShellStore((s) => askingCount(s.deskJobs?.jobs ?? NO_JOBS));
-  if (!shown) return null;
-  return (
-    <div className="shrink-0 px-xs pt-xs">
-      <DeskSidebarRow selected={selected} asking={asking} onOpen={actions.openDesk} />
-    </div>
-  );
-}
 
 /** Settings › Labs › Desk (B4, B19, B21). */
 export function DeskSettingsPage({ actions }: { actions: Actions }) {
@@ -265,35 +261,36 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       }
     }
   }, [actions]);
-  const lane = useLaneActions(actions);
-  const chipSource = useSessionChipSource(lane);
+  const room = useRoomActions(actions);
+  const chipSource = useSessionChipSource(room);
   const chatActions = useMemo<DeskChatActions>(() => ({
-    onOpen: (job) => lane.thread(job),
-    onAnswer: (job) => lane.thread(job, true),
+    onOpen: (job) => room.job(job),
+    onAnswer: (job) => room.job(job, true),
     onCancel: (job) => actions.deskJobCancel(job.id),
     onRequeue: (job) => actions.deskJobRequeue(job.id),
     onRetry: (job) => actions.deskJobRequeue(job.id),
-    onOutput: lane.output,
-    onMission: lane.mission,
+    onOutput: room.output,
+    onMission: room.mission,
     onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
     onNoticeAction,
     onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
     onMention: (mention) => {
-      if (mention.kind === "session") return lane.session({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id });
+      if (mention.kind === "session") return room.session({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id });
       const rest = useShellStore.getState().rest;
       const project = catalogWorkspaces(rest).find((row) => row.checkouts.some((checkout) => checkout.path === mention.id));
       const checkout = project?.checkouts.find((row) => row.path === mention.id);
       if (project && checkout) actions.openWorkspace(project.device_id, project.id, checkout.id);
     },
-    onHanded: (paneId) => lane.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
-  }), [actions, onNoticeAction, lane]);
-  const laneWindow = useDeskLaneStore((s) => s.deskLane);
+    onHanded: (paneId) => room.session({ name: "", mark: null, agent_kind: null, pane_id: paneId }),
+  }), [actions, onNoticeAction, room]);
+  const place = useUiStore((s) => s.deskRoom);
+  const front = activeTab(place.panel);
 
   if (!desk) return null;
   const working = jobs.filter((job) => job.state === "working").length;
-  const shownThread = laneWindow.up && laneWindow.tool?.kind === "thread" ? laneWindow.tool.job : null;
-  const shownTab = laneWindow.up && laneWindow.view ? activeTab(laneWindow.kept, laneWindow) : null;
-  const shownOutput = shownTab?.kind === "output" ? shownTab.output.id : null;
+  // The card or chip that opened what shows is marked (B16).
+  const shownJob = place.session ? (jobs.find((job) => job.pane_id === place.session)?.id ?? null) : null;
+  const shownOutput = front?.kind === "output" ? front.output.id : null;
   const composer = (
     <DeskComposer
       value={draft.text}
@@ -335,272 +332,399 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   );
   return (
     <SessionChipProvider source={chipSource}>
-    <div className="flex min-h-0 min-w-0 flex-1" data-desk-screen="true">
-      <DeskLaneColumns
-        actions={actions}
-        lane={lane}
-        chat={(
-          <DeskChatColumn head={<DeskChatHead onNewConversation={actions.deskNewConversation} />} composer={composer} scrollRef={scroller}>
-            {shown.length === 0 && !answering ? (
-              <DeskEmpty working={working} asking={askingCount(jobs)} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} onShowThreads={lane.threads} />
-            ) : (
-              <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownThread} selectedOutput={shownOutput} {...chatActions} />
-            )}
-          </DeskChatColumn>
-        )}
-      />
-    </div>
+      <div className="flex min-h-0 min-w-0 flex-1" data-desk-screen="true">
+        <DeskRoomView
+          actions={actions}
+          room={room}
+          chat={(
+            <DeskChatColumn head={<DeskChatHead onNewConversation={actions.deskNewConversation} />} composer={composer} scrollRef={scroller}>
+              {shown.length === 0 && !answering ? (
+                <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
+              ) : (
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+              )}
+            </DeskChatColumn>
+          )}
+        />
+      </div>
     </SessionChipProvider>
   );
 }
 
 /**
  * Where Desk's chips read their sessions (D-86): the sidebar's rows and
- * every card the lane can open, so a chip in the chat or a thread shows its
+ * every card Desk has, so a chip in the chat or the session panel shows its
  * row's mark, dims once the row is gone, and opens its card under the
- * pointer; a press opens its thread.
+ * pointer; a press opens the session beside Desk.
  */
-function useSessionChipSource(lane: LaneActions): SessionChipSource {
+function useSessionChipSource(room: RoomActions): SessionChipSource {
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   const section = useShellStore((s) => s.deskJobs);
   return useMemo(() => {
     const byPane = new Map(rows.map((row) => [row.pane_id, row]));
     const cards = laneCards(section);
-    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: lane.session };
-  }, [rows, section, lane]);
+    return { facts: (session) => sessionFacts(byPane, cards, session), onOpen: room.session };
+  }, [rows, section, room]);
 }
 
-const NO_WORKERS: DeskJob[] = [];
-
-/** Every thread Desk shows: its jobs, then the workers of the missions they conduct (B28, B34). */
-function useThreads(): readonly DeskJob[] {
-  const jobs = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
-  const workers = useShellStore((s) => s.deskJobs?.workers ?? NO_WORKERS);
-  return useMemo(() => (workers.length ? [...jobs, ...workers] : jobs), [jobs, workers]);
-}
-
-/** Every card the lane opens as a thread: the Threads list's, and the other sessions the conversation names (D-86). */
-function everyThread(): DeskJob[] {
+/** Every card Desk has: its jobs, their missions' workers, and the other sessions its conversation names. */
+function everyCard(): DeskJob[] {
   return laneCards(useShellStore.getState().deskJobs);
 }
 
-/** The output a thread's own line names, as its card lists it when it does: the View's id, or its address or file. */
-function outputOf(job: DeskJob, output: DeskOutput): DeskOutput {
-  return job.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
+/** The output a session's own line names, as its card lists it when it does: the View's id, or its address or file. */
+function outputOf(job: DeskJob | undefined, output: DeskOutput): DeskOutput {
+  return job?.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
 }
 
-/** What a press in Desk opens in its lane (B25, B28, B29, B31, B34). */
-type LaneActions = {
-  thread: (job: DeskJob, answer?: boolean) => void;
-  threads: () => void;
+/** A mission's title as the mission list names it, else as its Conductor's card does. */
+function missionTitle(missionId: string): string {
+  return useShellStore.getState().rest?.missions?.items.find((one) => one.id === missionId)?.title ?? everyCard().find((job) => job.mission?.id === missionId)?.mission?.title ?? missionId;
+}
+
+/** What a press in Desk opens (PRD desk-2-ui B2, B13, B16, B20, B47). */
+type RoomActions = {
+  /** A card: its session beside Desk; `답하기` gives its input box the keyboard. */
+  job: (job: DeskJob, answer?: boolean) => void;
+  /** An output: its session beside Desk, the output in front of the tab panel. */
   output: (output: DeskOutput) => void;
-  threadOutput: (job: DeskJob, output: DeskOutput) => void;
+  /** A mission chip: its map in the tab panel, beside its Conductor when Desk started it. */
   mission: (missionId: string) => void;
+  /** A chip, a letter's name, a handed line: that session beside Desk, by its pane, or by the name its sidebar row carries. */
   session: (session: DeskSessionRef) => void;
-  node: (paneId: string | null, conductor: string | null) => void;
 };
 
-function useLaneActions(actions: Actions): LaneActions {
+function useRoomActions(actions: Actions): RoomActions {
   return useMemo(() => {
-    const set = (change: Parameters<ReturnType<typeof useDeskLaneStore.getState>["setDeskLane"]>[0]) => useDeskLaneStore.getState().setDeskLane(change);
-    const kept = () => useDeskLaneStore.getState().deskLane.kept;
-    const thread = (job: DeskJob, answer = false) => set((lane) => openThread(lane, job.id, { answer }));
-    const threadOutput = (job: DeskJob, output: DeskOutput) => set((lane) => showTab(lane, kept(), outputTab(job.id, outputOf(job, output))));
+    const open = (pane: string, answer = false) => actions.openDeskSession(pane, { answer });
     return {
-      thread,
-      threads: () => set(showThreads),
+      job: (job, answer = false) => {
+        if (job.pane_id) open(job.pane_id, answer);
+        else useShellStore.getState().noteDiagnostic("desk job: no pane behind the card pressed");
+      },
       output: (output) => {
-        const job = everyThread().find((one) => one.outputs.some((made) => made.id === output.id));
-        if (job) threadOutput(job, output);
+        const job = everyCard().find((one) => one.outputs.some((made) => made.id === output.id));
+        if (job?.pane_id) open(job.pane_id);
+        actions.deskOpen({ kind: "output", output: outputOf(job, output) });
       },
-      threadOutput,
       mission: (missionId) => {
-        const conductor = everyThread().find((job) => job.mission?.id === missionId) ?? null;
-        const title = conductor?.mission?.title ?? useShellStore.getState().rest?.missions?.items.find((one) => one.id === missionId)?.title ?? missionId;
-        set((lane) => openMission(lane, kept(), { id: missionId, title }, conductor?.id ?? null));
+        actions.deskOpen({ kind: "mission", mission: missionId, title: missionTitle(missionId) });
       },
-      // Any session opens as its thread in the lane and Desk stays in front (D-87, B51): a job or a
-      // worker by its card, any other by its pane; its tab is the thread's `터미널로` and ⌘J.
+      // D-09, B9: a session is its sidebar row's; by its pane, else by the work name the row shows.
       session: (session) => {
-        const job = everyThread().find((one) => (session.pane_id ? one.pane_id === session.pane_id : one.title === session.name));
-        if (job) return thread(job);
         const state = useShellStore.getState();
-        const pane = session.pane_id
-          ?? allAgents(state.agents, state.rest?.status?.remote).find((row) => row.identity_label === session.name)?.pane_id
-          ?? state.deskMentions?.sessions.find((one) => one.name === session.name)?.id;
+        const pane = session.pane_id ?? allAgents(state.agents, state.rest?.status?.remote).find((row) => row.identity_label === session.name)?.pane_id;
         if (!pane) return state.noteDiagnostic("desk session: no pane for the session pressed");
-        set((lane) => openThread(lane, sessionThreadId(pane)));
-      },
-      // A mission map's node (B34): the tool column turns to its worker's thread, the path line leading back to the Conductor.
-      node: (paneId, conductor) => {
-        const job = paneId ? everyThread().find((one) => one.pane_id === paneId) : undefined;
-        if (job) set((lane) => openThread(lane, job.id, { conductor }));
+        open(pane);
       },
     };
   }, [actions]);
 }
 
 /**
- * Desk's room with its lane (D-64, D-73, D-74, B28-B35): the chat, the 보기
- * column with the outputs and mission maps as tabs, the tool column with
- * the Threads list or one thread, and the rail. Escape on an unpinned lane
- * takes it down as ⌘E does and gives the keyboard back to the composer.
+ * The app's actions as Desk's parts call them (PRD desk-2-ui D-21, B8,
+ * B20, B47): the pane head's chips, the ancestor path, the children chip and
+ * the Explorer are the app's own, and only where they open something does
+ * Desk differ: a mission or a PR opens in the tab panel, a session beside
+ * Desk, a file in the tab panel as the app's file view.
  */
-function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: LaneActions; chat: ReactNode }) {
+function useDeskPartActions(actions: Actions, room: RoomActions): Actions {
+  return useMemo(() => ({
+    ...actions,
+    openMission: (missionId: string) => room.mission(missionId),
+    openSessionPullRequest: (pull: { url: string; number: number }) => actions.deskOpen({ kind: "output", output: { id: `pr:${pull.url}`, kind: "pr", label: `#${pull.number}`, thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url: pull.url } }),
+    followRelation: (_source: string, target: string) => actions.openDeskSession(target),
+    openAgent: (pane: string) => actions.openDeskSession(pane),
+    openFile: (path: string, preview: boolean) => openExplorerFile(actions, path, preview),
+    openFileBeside: (path: string) => openExplorerFile(actions, path, false),
+  }) as Actions, [actions, room]);
+}
+
+/** A file the Explorer opened: in the tab panel, under the checkout the Explorer shows (B36). */
+function openExplorerFile(actions: Actions, path: string, preview: boolean) {
+  const context = explorerContext(useShellStore.getState().rest);
+  if (!context.checkout) return useShellStore.getState().noteDiagnostic("desk explorer: no checkout in front");
+  actions.deskOpen({ kind: "file", device_id: context.device, root: context.checkout.path, path }, { preview });
+}
+
+/** The pane row of `paneId`, as its tab lists it, for the ancestor path (B47). */
+function paneRowOf(rest: SnapshotRest | null, paneId: string): PaneRow | null {
+  const local = rest?.navigator?.workspaces ?? [];
+  const remote = (rest?.status?.remote ?? []).flatMap((row) => row.session?.workspaces ?? []);
+  for (const workspace of [...local, ...remote]) {
+    for (const checkout of workspace.checkouts) {
+      for (const tab of checkout.tabs) {
+        const pane = tab.panes.find((one) => one.id === paneId);
+        if (pane) return pane as PaneRow;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Desk's room with the session beside it and the tab panel (PRD desk-2-ui
+ * B1-B26): Escape closes the tab panel first, then the session panel, each
+ * through the shell's Escape owner; closing the tab panel gives the keyboard
+ * back to what opened it (B21).
+ */
+function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomActions; chat: React.ReactNode }) {
+  const place = useUiStore((s) => s.deskRoom);
+  const set = useUiStore((s) => s.setDeskRoom);
+  const lane = useShellStore((s) => s.desk?.lane ?? NO_WIDTHS);
+  const deskActions = useDeskPartActions(actions, room);
+  const panelOpen = place.panel !== null;
+  useEscapeLayer(place.session !== null, () => set(closeSession));
+  useEscapeLayer(panelOpen, () => set(closePanel));
+  // B21: the keyboard goes back to the card or chip that opened the tab panel.
+  const opener = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (panelOpen) {
+      if (!opener.current) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      return;
+    }
+    const back = opener.current;
+    opener.current = null;
+    if (back?.isConnected) back.focus();
+  }, [panelOpen]);
+  return (
+    <DeskRoom
+      chat={chat}
+      widths={lane}
+      session={place.session ? <DeskSessionPanel key={place.session} paneId={place.session} actions={actions} deskActions={deskActions} room={room} /> : null}
+      panel={place.panel ? <DeskPanelView actions={actions} deskActions={deskActions} room={room} /> : null}
+      onDim={() => set(closePanel)}
+      onWidth={actions.deskLaneWidth}
+    />
+  );
+}
+
+const NO_WIDTHS = { view_width: null, session_width: null };
+
+/**
+ * The session open beside Desk (PRD desk-2-ui D-01, D-09-D-11, D-20, D-28,
+ * B2, B6-B15, B27, B30, B34, B43, B47): its head as the pane head draws it,
+ * its conversation read from its pane, the question it waits on as a card,
+ * and its input box, or `에이전트 깨우기` in the box's place while it sleeps.
+ */
+function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: string; actions: Actions; deskActions: Actions; room: RoomActions }) {
   const { t } = useInterfaceTranslation();
-  const own = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
-  const threads = useThreads();
-  const place = useDeskLaneStore((s) => s.deskLane);
-  const set = useDeskLaneStore((s) => s.setDeskLane);
-  const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
-  const [conductors, setConductors] = useState<ReadonlySet<string>>(() => new Set());
-  const kept = place.kept;
-  const pinned = place.pinned;
-  const pin = () => set((now) => ({ ...now, pinned: !now.pinned }));
-  const expand = () => set((now) => ({ ...now, expanded: !now.expanded }));
-  const tabs = viewTabs(kept, place);
-  const active = activeTab(kept, place);
-  const named = useShellStore((s) => s.deskJobs?.named ?? NO_WORKERS);
-  const byId = new Map([...threads, ...named].map((job) => [job.id, job]));
-  // Opening a thread reads it, as reading its card does; a worker is not Desk's job and has no card to read.
-  const openJob = place.up && place.tool?.kind === "thread" ? place.tool.job : null;
-  const unread = openJob !== null && own.some((job) => job.id === openJob && !job.read) ? openJob : null;
+  const job = useShellStore((s) => (s.deskJobs ? laneCards(s.deskJobs).find((one) => one.pane_id === paneId) ?? null : null));
+  const ownJob = useShellStore((s) => s.deskJobs?.jobs.some((one) => one.pane_id === paneId) ?? false);
+  const row = useShellStore((s) => agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId) ?? null);
+  const pane = useShellStore((s) => paneRowOf(s.rest, paneId));
+  const machine = useShellStore((s) => (row ? machineName(s.rest?.navigator?.devices, row.device_id, t) : null));
+  const panel = useUiStore((s) => s.deskRoom.panel);
+  const answer = useUiStore((s) => s.deskRoom.answer);
+  const filesChord = useShellStore((s) => commandLabel("toggle_lane_explorer", s.rest?.ui_state)) || null;
+  const terminalChord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
+  const sleeping = job?.state === "sleeping";
+  const asleep = useSleepingOf(sleeping ? job : null, row);
+  const front = activeTab(panel);
+  // Reading the session's card reads its row, as reading it in the chat does.
+  const unread = ownJob && job && !job.read ? job.id : null;
   useEffect(() => {
     if (unread) actions.deskJobRead(unread);
   }, [actions, unread]);
-
-  const list = (
-    <>
-      <LaneColumnHead pinned={pinned} expanded={place.expanded} onExpand={expand} onPin={pin} onClose={() => set(closeTool)}>
-        <span className="font-semibold text-foreground">{t("desk.threads.title")}</span>
-      </LaneColumnHead>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-        <ThreadList
-          jobs={threads}
-          expanded={conductors}
-          onOpen={(job) => lane.thread(job)}
-          onMission={lane.mission}
-          onOutput={lane.output}
-          onToggle={(id) => setConductors((open) => {
-            const next = new Set(open);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-          })}
-        />
-      </div>
-    </>
-  );
-  let tool: ReactNode = null;
-  if (place.up && place.tool) {
-    const key = place.tool.kind === "thread" ? place.tool.job : null;
-    const shown = key !== null ? byId.get(key) : undefined;
-    // A session that is no job of Desk's opens by its pane before its card arrives (D-87).
-    const paneId = shown?.pane_id ?? (key !== null ? threadKeyPane(key) : null);
-    if (key !== null && paneId && place.tool.kind === "thread") {
-      const conductor = place.tool.conductor ? byId.get(place.tool.conductor) : undefined;
-      tool = (
-        <ThreadPanel
-          key={key}
-          job={shown ?? null}
-          paneId={paneId}
-          actions={actions}
-          conductor={conductor ? { title: conductor.title, onOpen: () => set(backFromThread) } : null}
-          pinned={pinned}
-          startedByDesk={own.some((job) => job.id === key)}
-          selectedOutput={active?.kind === "output" && active.job === key ? active.output.id : null}
-          answer={place.answer?.job === key ? place.answer.seq : 0}
-          terminalChord={chord}
-          onBack={() => set(backFromThread)}
-          onPin={pin}
-          onClose={() => set(closeTool)}
-          onTerminal={() => actions.openAgent(paneId)}
-          onMission={lane.mission}
-          onOutput={(output) => (shown ? lane.threadOutput(shown, output) : undefined)}
-          onSession={lane.session}
-        />
-      );
-    } else {
-      // A thread that left Desk (moved out, past the cards' cap) gives its place back to the list.
-      tool = list;
-    }
-  }
-
-  let view: ReactNode = null;
-  if (place.up && place.view) {
-    const viewTabsShown: ViewTab[] = tabs.map(({ tab, preview }) => ({
-      id: tabKey(tab),
-      label: tab.kind === "output" ? tab.output.label : t("desk.lane.missionMap", { title: tab.title }),
-      preview,
-      icon: tab.kind === "output" ? <OutputMark output={tab.output} /> : <MapIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />,
-    }));
-    const tabOf = (key: string) => tabs.find(({ tab }) => tabKey(tab) === key);
-    let body: ReactNode;
-    if (active?.kind === "output") {
-      // The card's value now, so a View seen since shows no dot; a kept tab whose View
-      // closed has no View left to mark, so it reads as seen and asks the core nothing.
-      const output = byId.get(active.job)?.outputs.find((one) => one.id === active.output.id) ?? { ...active.output, seen: true };
-      body = <DeskOutputView key={tabKey(active)} output={output} viewKey={tabKey(active)} actions={actions} />;
-    } else if (active?.kind === "mission") {
-      const conductor = threads.find((job) => job.mission?.id === active.mission)?.id ?? null;
-      body = <MissionMap missionId={active.mission} actions={actions} onNode={(node) => lane.node(node.pane_id ?? null, conductor)} />;
-    } else {
-      body = <EveryOutput threads={threads} onOpen={lane.threadOutput} />;
-    }
-    view = (
-      <DeskViewColumn
-        tabs={viewTabsShown}
-        active={active ? tabKey(active) : null}
-        onTab={(key) => set((now) => ({ ...now, view: true, active: key }))}
-        onKeep={(key) => {
-          const found = tabOf(key);
-          if (found?.preview) set((now) => keepTab(now, found.tab));
-        }}
-        onCloseTab={(key) => {
-          const found = tabOf(key);
-          if (!found) return;
-          set((now) => closeTab(now, now.kept, found.tab));
-        }}
-        controls={<LaneHeadControls edge={tool === null} expanded={place.expanded} pinned={pinned} onExpand={expand} onPin={pin} onClose={() => set(closeView)} />}
-      >
-        {body}
-      </DeskViewColumn>
-    );
-  }
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || escapeConsumed(event)) return;
-    if (place.expanded) set((now) => ({ ...now, expanded: false }));
-    else if (place.up && !pinned) {
-      set(closeLane);
-      document.querySelector<HTMLTextAreaElement>("[data-desk-screen] [data-desk-chat-column] [data-desk-composer-input]")?.focus();
-    } else return;
-    event.preventDefault();
-    event.stopPropagation();
-  };
+  const write = () => useUiStore.getState().setDeskRoom((now) => openSession(now, paneId, { answer: true }));
   return (
-    <div className="contents" onKeyDown={onKeyDown}>
-      <DeskRoom
-        chat={chat}
-        view={view}
-        tool={tool}
-        pinned={pinned}
-        expanded={place.expanded}
-        rail={<DeskRail asking={askingCount(threads)} unseen={unseenOutputs(threads)} threads={place.up && place.tool !== null} outputs={place.up && place.view} onThreads={() => set(toggleThreads)} onOutputs={() => set(toggleOutputs)} />}
-      />
-    </div>
+    <ThreadPanel
+      job={job}
+      paneId={paneId}
+      actions={actions}
+      startedByDesk={ownJob}
+      selectedOutput={front?.kind === "output" ? front.output.id : null}
+      answer={answer}
+      head={job ? (
+        <SessionHead
+          paneId={paneId}
+          job={job}
+          row={row}
+          pane={pane}
+          machine={machine}
+          disconnected={job.disconnected}
+          sleeping={sleeping}
+          selectedOutput={front?.kind === "output" ? front.output.id : null}
+          explorerOpen={panel?.explorer === true}
+          filesChord={filesChord}
+          terminalChord={terminalChord}
+          deskActions={deskActions}
+          onOutput={(output) => actions.deskOpen({ kind: "output", output })}
+          onFiles={actions.deskToggleExplorer}
+          onTerminal={actions.deskTerminal}
+          onClose={() => useUiStore.getState().setDeskRoom(closeSession)}
+        />
+      ) : null}
+      ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
+      foot={sleeping ? <SessionSleepingFoot title={row?.identity_label ?? job.title} session={asleep} onWake={(id) => wake(actions, id, job.title, paneId)} /> : null}
+      onTerminal={actions.deskTerminal}
+      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output) })}
+      onMission={room.mission}
+      onSession={room.session}
+    />
   );
 }
 
 /**
- * At the head of a Desk thread's Agent tab (D-42, B35, B36): `나도 참여 중`
- * once the operator typed into it, and `Desk로`, which ⌘J also presses, back
- * to Desk as it was left with this thread in its lane.
+ * What the session beside Desk asks, read from its screen with `pane_ask`
+ * each time its ask changes (PRD desk-2-ui B14), and answered with
+ * `pane_choice` as the phone answers it: a choice is marked, `답하기` sends
+ * it once, and one that may have landed or that the screen no longer shows
+ * is answered in the terminal from then on. Until the read lands, the card
+ * says what its row or card says, with `직접 쓰기` only.
+ */
+function DeskSessionAsk({ paneId, deviceId, job, row, actions, onWrite }: { paneId: string; deviceId: string | null; job: DeskJob; row: AgentRow | null; actions: Actions; onWrite: () => void }) {
+  const { t } = useInterfaceTranslation();
+  // A new ask moves the row's turn or the card's change time; each is read again.
+  const turn = row?.user_turn ? JSON.stringify(row.user_turn) : null;
+  useEffect(() => {
+    if (deviceId) actions.askPane(deviceId, paneId);
+  }, [actions, deviceId, paneId, turn, job.changed_at_unix_ms]);
+  const read = useShellStore((s) => (s.paneAsk && s.paneAsk.pane_id === paneId && s.paneAsk.device_id === deviceId ? s.paneAsk : null));
+  const [marked, setMarked] = useState<{ ask: string; id: string } | null>(null);
+  const [sent, setSent] = useState<{ ask: string; choice: string; request: string | null } | null>(null);
+  const result = useShellStore((s) => (sent?.request && s.paneChoice?.request_id === sent.request ? s.paneChoice : null));
+  const ask = read?.ask ?? null;
+  const waited = useElapsed(ask?.since_ms ?? null);
+  if (!ask || !deviceId) {
+    const question = sessionQuestion(job, row);
+    return question ? <SessionQuestionCard question={question} onWrite={onWrite} /> : null;
+  }
+  const identity = askIdentity({ device_id: deviceId, pane_id: paneId }, ask);
+  const mine = sent?.ask === identity ? sent : null;
+  const answer = !mine ? null : mine.request === null || (result && !result.ok) ? "failed" : result ? "sent" : "sending";
+  const reason = mine?.request === null ? "offline" : result && !result.ok ? result.reason : null;
+  const inTerminal = answer === "failed" && (reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown");
+  return (
+    <SessionAskCard
+      ask={ask}
+      disabled={false}
+      waited={waited}
+      picked={marked?.ask === identity ? marked.id : (mine?.choice ?? null)}
+      answer={answer}
+      error={answer === "failed" ? noticeText(t, inputFailure(reason)) : null}
+      inTerminal={inTerminal}
+      onPick={(id) => setMarked({ ask: identity, id })}
+      onAnswer={(choice) => {
+        // An answer sent, or one that may have landed, is never sent again from here: a second send would be a second press.
+        if (answer === "sending" || answer === "sent" || inTerminal) return;
+        setSent({ ask: identity, choice, request: actions.answerPane(deviceId, paneId, ask, choice) });
+      }}
+      onTerminal={actions.deskTerminal}
+      onWrite={onWrite}
+    />
+  );
+}
+
+/** The sidebar's sleeping row of a session asleep beside Desk: its work name in its checkout (B43). */
+function useSleepingOf(job: DeskJob | null, row: AgentRow | null) {
+  return useShellStore((s) => (job ? s.rest?.navigator?.sleeping_sessions?.find((one) => one.identity_label === (row?.identity_label ?? job.title)) ?? null : null));
+}
+
+/**
+ * `에이전트 깨우기` (B43): the session wakes in a new pane, which takes the
+ * place of the one that slept beside Desk once the sidebar lists it.
+ */
+function wake(actions: Actions, sleepId: string, title: string, oldPane: string) {
+  actions.wakeSleepingSession(sleepId);
+  const follow = useShellStore.subscribe((state) => {
+    const woke = allAgents(state.agents, state.rest?.status?.remote).find((one) => one.identity_label === title && one.pane_id !== oldPane);
+    if (!woke) return;
+    follow();
+    window.clearTimeout(limit);
+    if (useUiStore.getState().deskRoom.session === oldPane) useUiStore.getState().setDeskRoom((now) => openSession(now, woke.pane_id));
+  });
+  // A wake that never lists the session stops being followed.
+  const limit = window.setTimeout(follow, WAKE_FOLLOW_MS);
+}
+
+/** How long a wake is followed before Desk stops looking for its new pane. */
+const WAKE_FOLLOW_MS = 60_000;
+
+/**
+ * The tab panel (PRD desk-2-ui D-05, D-08, D-22, D-25, B16-B21, B35, B36,
+ * B40): its tabs, the Explorer's column when `파일` opened it, and the tab in
+ * front drawn with the app's own viewer: the file view, Desk's output
+ * viewer, the mission map.
+ */
+function DeskPanelView({ actions, deskActions, room }: { actions: Actions; deskActions: Actions; room: RoomActions }) {
+  const { t } = useInterfaceTranslation();
+  const panel = useUiStore((s) => s.deskRoom.panel);
+  const set = useUiStore((s) => s.setDeskRoom);
+  const rest = useShellStore((s) => s.rest);
+  if (!panel) return null;
+  const projects = catalogWorkspaces(rest);
+  const projectOf = (tab: Extract<DeskTab, { kind: "file" }>) => projects.find((project) => project.checkouts.some((checkout) => checkout.path === tab.root))?.label ?? tab.root;
+  const names = tabNames(panel.tabs, projectOf);
+  const front = activeTab(panel);
+  const tabs: PanelTab[] = panel.tabs.map((tab) => {
+    const key = tabKey(tab);
+    const name = names.get(key)!;
+    return {
+      id: key,
+      label: tab.kind === "mission" ? t("desk.lane.missionMap", { title: name.name }) : name.name,
+      project: name.project,
+      preview: panel.preview === key,
+      icon: tab.kind === "output" ? <OutputMark output={tab.output} /> : tab.kind === "file" ? <FileMark icon={fileIcon(tab.path)} /> : <MapIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />,
+    };
+  });
+  let body: React.ReactNode;
+  if (front?.kind === "output") body = <DeskOutputView key={tabKey(front)} output={front.output} viewKey={tabKey(front)} actions={actions} />;
+  else if (front?.kind === "mission") body = <MissionMap missionId={front.mission} actions={deskActions} onNode={(node) => (node.pane_id ? room.session({ name: "", mark: null, agent_kind: null, pane_id: node.pane_id }) : undefined)} />;
+  else if (front?.kind === "file") body = <DeskFileView key={tabKey(front)} tab={front} actions={actions} />;
+  else body = <p className="m-auto px-md text-caption text-muted-foreground" data-desk-panel-empty="true">{t("desk.room.explorerEmpty")}</p>;
+  return (
+    <DeskTabPanel
+      tabs={tabs}
+      active={front ? tabKey(front) : null}
+      tool={panel.explorer ? <ExplorerTree actions={deskActions} /> : null}
+      onTab={(key) => {
+        const tab = panel.tabs.find((one) => tabKey(one) === key);
+        // A file's tab brings its checkout's file view in front again (`deskOpen` keeps its place).
+        if (tab?.kind === "file") actions.deskOpen(tab, { preview: panel.preview === key });
+        else set((now) => showTab(now, key));
+      }}
+      onKeep={(key) => {
+        const tab = panel.tabs.find((one) => tabKey(one) === key);
+        if (tab?.kind === "file" && panel.preview === key) actions.deskOpen(tab);
+        else set((now) => keepTab(now, key));
+      }}
+      onCloseTab={(key) => set((now) => closeTab(now, key))}
+      onClose={() => set(closePanel)}
+    >
+      {body}
+    </DeskTabPanel>
+  );
+}
+
+/**
+ * A file's tab (PRD desk-2-ui D-22, B19, B36): the app's own file view of
+ * the display the core placed for it in its checkout, with editing and ⌘S;
+ * while the core has not placed it yet, or the checkout is not in front, the
+ * file view's own loading line.
+ */
+function DeskFileView({ tab, actions }: { tab: Extract<DeskTab, { kind: "file" }>; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const view = useShellStore((s) => workspaceViewOf(s.rest));
+  const front = useShellStore((s) => frontCheckout(s.rest)?.path ?? null);
+  const node = useShellStore((s) => localDeviceId(s.rest));
+  const here = view !== null && front === tab.root && (view.device_id === tab.device_id || (tab.device_id === node && !view.device_id));
+  const display = here && view.layout ? areasOf(view.layout.root).flatMap((area) => area.displays).find((one) => one.kind === "file" && one.path === tab.path) ?? null : null;
+  if (!view || !display) return <p role="status" className="m-auto text-caption text-muted-foreground" data-desk-file-loading={tab.path}>{t("common.loading")}</p>;
+  const workspace = { device_id: view.device_id, path: view.path };
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-file={tab.path}><DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} /></div>;
+}
+
+/**
+ * At the head of an Agent tab Desk sent the operator to (PRD desk-2-ui B7):
+ * `나도 참여 중` once the operator typed into a Desk job's, and `Desk로`,
+ * which ⌘J also presses, back to Desk with this session beside it.
  */
 export function PaneDeskReturn({ paneId, actions }: { paneId: string; actions: Actions }) {
   const job = useShellStore((s) => s.deskJobs?.jobs.find((one) => one.pane_id === paneId) ?? s.deskJobs?.workers.find((one) => one.pane_id === paneId) ?? null);
+  const returns = useUiStore((s) => s.deskReturn === paneId);
   const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   const on = useShellStore((s) => deskOn(s.desk));
-  if (!job || !on) return null;
-  return <DeskPaneReturn joined={job.joined} chord={chord} onDesk={() => (job.pane_id ? actions.openDeskSession(job.pane_id) : undefined)} />;
+  if ((!job && !returns) || !on) return null;
+  return <DeskPaneReturn joined={job?.joined ?? false} chord={chord} onDesk={() => actions.openDeskSession(paneId)} />;
 }

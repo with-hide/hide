@@ -11,6 +11,7 @@ import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
+import { askingCount, deskOn, type DeskJob } from "./desk";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
@@ -81,7 +82,6 @@ import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, 
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
-import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
 function engineRowLabel(state: string | null, t: TFunction<"translation">): string | null {
@@ -117,6 +117,10 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const automationsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "automations");
+  // Desk's row stands only while Settings › Labs › Desk has it on (PRD desk-2-ui D-32, B44, B46).
+  const deskShown = useShellStore((s) => deskOn(s.desk));
+  const deskSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "desk");
+  const deskAsking = useShellStore((s) => askingCount(s.deskJobs?.jobs ?? NO_DESK_JOBS));
   // The runs no one has looked at yet (B1); a tool's cell keeps the operator's numbers off its screen (B41).
   const operatorAutomationsCount = useShellStore((s) => s.automations?.unseen ?? 0);
   const automationsCount = tool ? 0 : operatorAutomationsCount;
@@ -174,13 +178,13 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            desk={deskShown ? { selected: deskSelected, asking: deskAsking, chord: null, onOpen: () => actions.openDesk() } : undefined}
             missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />
-          <DeskSidebarEntry actions={actions} />
           {status ? (
             <div className="border-b border-border px-md py-sm text-caption text-muted-foreground">{status}</div>
           ) : null}
@@ -750,7 +754,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       depth={0}
       ask={agent.state.needs_you}
       selected={agent.pane_id === context.focusRowPane}
-      onOpen={(id) => context.actions.openListedAgent(id)}
+      onOpen={(id, how) => context.actions.openListedAgent(id, how)}
       onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
@@ -1779,7 +1783,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             tree={tree}
             remote={remote}
             selected={agent.pane_id === context.focusRowPane}
-            onOpen={depth === 0 || !parent ? (id) => context.actions.openListedAgent(id) : (id) => context.actions.followRelation(parent.pane_id, id, agent.identity_label)}
+            onOpen={depth === 0 || !parent ? (id, how) => context.actions.openListedAgent(id, how) : (id, how) => (context.actions.rowOpensBesideDesk(how) ? context.actions.openDeskSession(id) : context.actions.followRelation(parent.pane_id, id, agent.identity_label))}
             onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
             inset={inset}
             // A tree row is one line with no branch (B14); the popover names a differing branch.
@@ -1797,6 +1801,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
 }
 
 const NO_PANES: ReadonlySet<string> = new Set();
+const NO_DESK_JOBS: DeskJob[] = [];
 
 /** What a row's menu reads from the host when it opens: the OS file manager, and the new-tab chord the registry binds here. */
 function menuHost(): MenuHost {

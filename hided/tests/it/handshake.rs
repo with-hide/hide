@@ -1749,7 +1749,7 @@ async fn the_file_index_of_every_project_answers_each_match_with_its_project() {
         {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: every project's walk landed (the answer drops `indexing`)
         result = ask(&mut socket).await;
     }
     assert_eq!(result["payload"]["indexing"], json!(false), "{result}");
@@ -1783,6 +1783,8 @@ async fn the_file_index_of_every_project_answers_each_match_with_its_project() {
         "both projects' matches, and no readme"
     );
     assert_eq!(result["payload"]["unavailable"], json!([]));
+    assert_eq!(result["payload"]["more"], json!(false));
+    assert_eq!(result["payload"]["index_truncated"], json!(false));
     running.stop();
 }
 

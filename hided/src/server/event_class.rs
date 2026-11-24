@@ -325,6 +325,9 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("overview_refresh", Screen),
     ("pair_view", Screen),
     ("pair_view_desk", Screen),
+    // A window's answer to an agent's ask, as a phone's (PRD desk-2-ui B14).
+    ("pane_ask", Screen),
+    ("pane_choice", Screen),
     ("pane_find", Screen),
     ("pane_find_open", Screen),
     ("pane_input_sent", Daemon),
