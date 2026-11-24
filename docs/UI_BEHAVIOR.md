@@ -79,9 +79,10 @@ Windows, Linux and a browser tab keep their own window frame and draw the same r
 
 ### Notices
 
-Web owner: `web/src/components/ui/toast.tsx` (`Toast`, `ToastStack`), `web/src/ui.ts` (`notices`), `web/src/Overlays.tsx` (`NoticeToasts`), `web/src/App.tsx`.
+Web owner: `web/src/components/ui/toast.tsx` (`Toast`, `ToastStack`), `web/src/ui.ts` (`notices`), `web/src/Overlays.tsx` (`NoticeToasts`), `web/src/noticeFloor.ts`, `web/src/App.tsx`.
 
 A notice the operator can act on stands in the window's lower right corner over the screen, the newest nearest the corner, and the screen under it never moves to make room.
+An input box a screen keeps at the window's foot is never covered: while Desk's input boxes, or the sleeping session's `에이전트 깨우기` in a box's place, are drawn, the corner stands above the highest of them, and it comes back down when they go (`useNoticeFloor`).
 It is one of two levels.
 An info notice tells the operator something that already happened (a page that did not open, a command a device that is not connected did not take, a View action refused) on the popover surface with a plain line, and leaves 10 seconds after it appears, counted down by a thin bar along its foot that shrinks to nothing as it goes; the pointer or the keyboard inside it holds the count, which goes on from where it stopped once they leave, and with reduced motion the bar stands still while the notice still leaves on time.
 An important notice waits for the operator: it carries an action (check the status, Don't save, retry a close, review drafts) or a state that lasts (typed input lost, an agent Reopen ended and could not start again, agents waiting for room, a worktree removal that failed, an agent that did not start), is drawn with the warning colour's border and mark, and stays until it is dismissed or its cause clears.

@@ -13,7 +13,7 @@ import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type Desk
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, namesView, openSession, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
-import { DisplayEditor } from "./Editor";
+import { DisplayEditor, DocumentKeeper } from "./Editor";
 import { Button } from "./components/ui/button";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
 import { MissionMap } from "./MissionMap";
@@ -779,7 +779,17 @@ function DeskFileView({ tab, side, actions, onClose }: { tab: Extract<DeskTab, {
         <Button variant="ghost" onClick={() => actions.deskFileRetry(file)} data-desk-file-retry={tab.path}>{t("common.retry")}</Button>
       </AreaEmpty>
     );
-  } else if (held) body = <DisplayEditor display={display} workspace={workspace} placeKey={key} actions={actions} root={tab.root} trailing={close} />;
+  } else if (held) {
+    // The document's keeper, one per document as a Workspace's View mounts it (`ViewAreas.tsx`): its autosave, the
+    // save of a draft left behind, and the stored draft's restore and its removal once a save lands, which without it
+    // stayed in the browser and came back as an unsaved draft after a reload.
+    body = (
+      <>
+        <DocumentKeeper tabId={held.id} actions={actions} />
+        <DisplayEditor display={display} workspace={workspace} placeKey={key} actions={actions} root={tab.root} trailing={close} />
+      </>
+    );
+  }
   else body = <p role="status" className="m-auto text-caption text-muted-foreground" data-desk-file-loading={tab.path}>{t("common.loading")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-file={tab.path} data-desk-file-side={side}>

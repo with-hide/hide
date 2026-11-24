@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, ImageIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import type { KeyboardEvent, ReactNode, Ref } from "react";
+import { useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { Hint } from "../ui/tooltip";
+import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
@@ -67,8 +68,11 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
     event.preventDefault();
     if (!blocked) onSend();
   };
+  // A notice in the window's corner stands above the box, never over it.
+  const box = useRef<HTMLDivElement>(null);
+  useNoticeFloor(box);
   return (
-    <div className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
+    <div ref={box} className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
         <PopoverAnchor asChild>
           <div className={cn("flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen ? "border-ring ring-1 ring-ring" : "border-input")} data-desk-composer-frame={focused ? "focused" : "rest"}>

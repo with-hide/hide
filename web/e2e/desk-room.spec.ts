@@ -5,6 +5,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
+import { draftId, seedDraft, storedDrafts } from "./drafts";
 import { enterWorkspace, screenshot } from "./wire";
 
 // PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
@@ -80,6 +81,15 @@ async function startDesk(page: Page, name: string, open = true, agents = true): 
 const room = (page: Page) => page.locator("[data-desk-room]");
 const row = (page: Page, pane: string) => page.locator(`[data-agent-open="${pane}"]`);
 
+/** Opens `name` from the session's Explorer in Desk's tab panel, with the session beside Desk, and gives its editor. */
+async function openDeskFile(page: Page, desk: Desk, name: string) {
+  await row(page, desk.pane).click();
+  await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
+  await page.locator("[data-desk-session-files]").click();
+  await page.locator(`[data-desk-tab-panel] [data-explorer-row$="/${name}"]`).dblclick();
+  return page.locator(`[data-desk-file$="/${name}"] [data-editor-body] .cm-content`);
+}
+
 test("a sidebar row opens its session beside Desk, marked on its row, Escape closes it, and a ⌘-click goes to its tab (PRD desk-2-ui B2-B6, B21) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-beside");
@@ -138,12 +148,7 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   try {
     const file = path.join(desk.engine.root, "fixture", "plan.md");
     fs.writeFileSync(file, "plan\n");
-    await row(page, desk.pane).click();
-    await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
-    await page.locator("[data-desk-session-files]").click();
-    const entry = page.locator('[data-desk-tab-panel] [data-explorer-row$="/plan.md"]');
-    await entry.dblclick();
-    const editor = page.locator('[data-desk-file$="/plan.md"] [data-editor-body] .cm-content');
+    const editor = await openDeskFile(page, desk, "plan.md");
     await expect(editor).toContainText("plan");
     await editor.click();
     await page.keyboard.press("ControlOrMeta+Home");
@@ -173,6 +178,70 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
     desk.engine.stop();
   }
 });
+
+test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-saved-draft");
+  try {
+    const file = path.join(desk.engine.root, "fixture", "plan.md");
+    fs.writeFileSync(file, "plan\n");
+    const editor = await openDeskFile(page, desk, "plan.md");
+    await expect(editor).toContainText("plan");
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+Home");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" saved");
+    // The edit is kept in the browser until it is saved, as a Workspace View keeps it.
+    await expect.poll(async () => (await storedDrafts(page)).some((draft) => draft.path === file)).toBe(true);
+    await page.keyboard.press(chord("save_file"));
+    await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
+    // The saved file's copy goes with the save that landed.
+    await expect.poll(async () => (await storedDrafts(page)).some((draft) => draft.path === file)).toBe(false);
+
+    await page.reload();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
+    expect(await storedDrafts(page)).toEqual([]);
+    await expect(page.locator("[data-draft-recovery]")).toHaveCount(0);
+    await screenshot(page, "desk-room-saved-reload");
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+test("a draft notice stands above Desk's input boxes, never over them (PRD desk-2-ui B36, UI_BEHAVIOR Notices) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-notice");
+  try {
+    // A draft of another host's document: kept for recovery, and its notice stays until the operator acts.
+    const repo = path.join(desk.engine.root, "fixture");
+    const elsewhere = `${repo}/plan.md`;
+    await seedDraft(page, { id: draftId("host-another", repo, elsewhere, "local"), host: "host-another", device: "local", root: repo, path: elsewhere, contents: "other host\n", updated_at: 1 });
+    await page.reload();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await row(page, desk.pane).click();
+    await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
+    const notice = page.locator("[data-draft-recovery]");
+    await expect(notice).toBeVisible({ timeout: 20_000 });
+    await screenshot(page, "desk-room-notice");
+
+    // Desk's own box and the session's beside it are both drawn, and the notice covers neither.
+    const boxes = page.locator("[data-desk-composer]");
+    await expect(boxes).toHaveCount(2);
+    const over = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    await expect.poll(async () => {
+      const shown = (await notice.boundingBox())!;
+      const drawn = await Promise.all((await boxes.all()).map(async (box) => (await box.boundingBox())!));
+      return drawn.filter((box) => over(shown, box)).length;
+    }).toBe(0);
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+type Box = { x: number; y: number; width: number; height: number };
 
 test("a child session beside Desk names its ancestors before its name, as its pane head does, and an ancestor's name opens it beside Desk (PRD desk-2-ui B47) @platform", async ({ page }) => {
   test.setTimeout(120_000);
