@@ -8,10 +8,11 @@
 //! a file or a process: a worker takes its job under the lock, runs it with
 //! the lock released, and hands the report back.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hide_kit::{ComponentId, KitReport, Scope};
+use hide_kit::{Availability, ComponentId, KitReport, Scope};
 
 use super::Runtime;
 use super::hosts::HostPhase;
@@ -73,6 +74,15 @@ fn trust_unrecorded(kit: &KitSnapshot) -> bool {
     kit.agents.iter().any(|agent| {
         agent.hook.as_ref().map(piece_start) == Some(StartHook::Pass(HookRefusal::Untrusted))
     })
+}
+
+/// The agents a kit pass found installed on its machine, by id.
+fn installed<'a>(agents: impl IntoIterator<Item = (&'a String, Availability)>) -> BTreeSet<String> {
+    agents
+        .into_iter()
+        .filter(|(_, availability)| *availability == Availability::Available)
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 /// A piece of the agent that waited for the agent to make its own folder
@@ -685,8 +695,10 @@ impl Runtime {
     /// a device that connects later receives. This Mac's record waiting asks;
     /// a record that never waited is an existing install, which is never
     /// asked and keeps what it has on as the saved choice. A device whose own
-    /// record waits, once this Mac has answered, gets that choice sent once
-    /// per run by its own detection; before that nothing is installed there.
+    /// record waits, once this Mac has answered and its own agents are known,
+    /// gets that choice sent once per run by its own detection
+    /// ([`Self::send_first_run_choice`]); before that nothing is installed
+    /// there.
     fn decide_agent_onboarding(
         &mut self,
         device_id: &str,
@@ -723,11 +735,18 @@ impl Runtime {
             self.device_first_run_choice
                 .entry(device_id.to_owned())
                 .or_insert(FirstRunChoice::Waiting);
-            if self.snapshot.ui_state.agent_onboarding == Some(AgentOnboarding::Done) {
-                self.send_first_run_choice(device_id);
+            // Until this Mac's own agents are known, which a pass that lists
+            // them says, the device waits for the report that brings them.
+            if self.snapshot.ui_state.agent_onboarding == Some(AgentOnboarding::Done)
+                && let Some(here) = self.installed_here()
+            {
+                let there = installed(report.agents.iter().map(|a| (&a.id, a.availability)));
+                self.send_first_run_choice(device_id, &here, &there);
             }
             return false;
         }
+        let here = installed(report.agents.iter().map(|a| (&a.id, a.availability)));
+        let first_listing = self.installed_here().is_none();
         let before = self.snapshot.ui_state.agent_onboarding;
         let after = if report.held_for_onboarding {
             // An Apply just pressed has its install queued here: a report that
@@ -744,6 +763,13 @@ impl Runtime {
         // question as its first step (PRD first-run-onboarding D-08).
         let opened = after == AgentOnboarding::Pending && self.open_first_run();
         if before == Some(after) {
+            // An answer kept from an earlier run: a device that reported
+            // before this Mac's first pass of this run waits for that pass.
+            // Only that one, since a device waits again after a call that
+            // failed, which its own next report sends again.
+            if after == AgentOnboarding::Done && first_listing {
+                self.send_first_run_choice_to_waiting_devices(&here);
+            }
             if opened {
                 self.persist_ui_state();
             }
@@ -760,16 +786,35 @@ impl Runtime {
                 .filter(|agent| agent.enabled)
                 .map(|agent| agent.id.clone())
                 .collect();
-            self.send_first_run_choice_to_waiting_devices();
+            self.send_first_run_choice_to_waiting_devices(&here);
         }
         self.persist_ui_state();
         true
     }
 
+    /// The agents this Mac's last pass found installed, or `None` before a
+    /// pass of this run listed them.
+    fn installed_here(&self) -> Option<BTreeSet<String>> {
+        let state = self.kit_states.get(self.node.as_str())?;
+        (!state.agents.is_empty())
+            .then(|| installed(state.agents.iter().map(|a| (&a.id, a.availability))))
+    }
+
     /// Sends the saved choice to a device that waits for it, once per run;
     /// a second report from the same device that still waits is a failure
     /// to answer, logged and not retried (engineering rules 11 and 15).
-    fn send_first_run_choice(&mut self, device_id: &str) {
+    ///
+    /// The choice decides every agent installed on this Mac (`here`), which
+    /// the operator could switch in the first-run step. An agent this Mac
+    /// does not have had no switch there, so the choice says nothing about
+    /// it: one the device has (`there`) is on, as that device's own first
+    /// run would have it.
+    fn send_first_run_choice(
+        &mut self,
+        device_id: &str,
+        here: &BTreeSet<String>,
+        there: &BTreeSet<String>,
+    ) {
         if self.device_first_run_choice.get(device_id) == Some(&FirstRunChoice::Sent) {
             crate::diagnostic!(serde_json::json!({
                 "component": "kit",
@@ -780,7 +825,14 @@ impl Runtime {
         }
         self.device_first_run_choice
             .insert(device_id.to_owned(), FirstRunChoice::Sent);
-        let agents = self.snapshot.ui_state.agent_onboarding_agents.clone();
+        let mut agents: BTreeSet<String> = self
+            .snapshot
+            .ui_state
+            .agent_onboarding_agents
+            .iter()
+            .cloned()
+            .collect();
+        agents.extend(there.difference(here).cloned());
         self.queue_device_kit(
             device_id,
             KitJob::Apply(Scope::first_run(agents.iter().map(String::as_str))),
@@ -794,7 +846,10 @@ impl Runtime {
         }
     }
 
-    fn send_first_run_choice_to_waiting_devices(&mut self) {
+    /// Sends the saved choice to every device that waits for it, with the
+    /// agents installed on this Mac (`here`) and on each device by its last
+    /// report.
+    fn send_first_run_choice_to_waiting_devices(&mut self, here: &BTreeSet<String>) {
         let waiting = self
             .device_first_run_choice
             .iter()
@@ -802,7 +857,13 @@ impl Runtime {
             .map(|(device_id, _)| device_id.clone())
             .collect::<Vec<_>>();
         for device_id in waiting {
-            self.send_first_run_choice(&device_id);
+            let there = installed(
+                self.kit_state(&device_id)
+                    .agents
+                    .iter()
+                    .map(|a| (&a.id, a.availability)),
+            );
+            self.send_first_run_choice(&device_id, here, &there);
         }
     }
 
@@ -923,7 +984,11 @@ impl Runtime {
             node.as_str(),
             Scope::first_run(agents.iter().map(String::as_str)),
         );
-        self.send_first_run_choice_to_waiting_devices();
+        // The step drew its tiles from a pass that listed this Mac's agents;
+        // without one, the next pass sends the choice.
+        if let Some(here) = self.installed_here() {
+            self.send_first_run_choice_to_waiting_devices(&here);
+        }
         true
     }
 
