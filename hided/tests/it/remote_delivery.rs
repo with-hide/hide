@@ -1161,3 +1161,85 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         ended
     })
 }
+
+/// A switch that was cut after it started the account's Hide and before it
+/// paired leaves a Hide there that is not running and that no app opens.
+/// The next switch starts it again and ends, with no `hide connect` typed
+/// on the device and no second allowance: the operator allowed a Hide
+/// there when the cut switch started it.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_switch_cut_before_it_paired_is_ended_by_the_next_one() -> Result<()> {
+    Fixture::journey(|fixture| {
+        let ran = fixture.remote.run_in_pane("echo $PPID")?;
+        ensure!(ran.status == 0, "the pane's command failed: {}", ran.stderr);
+        let before = ran.stdout.trim().to_owned();
+        let account = fixture.remote.environment.clone();
+        let state = std::path::PathBuf::from(
+            account
+                .var("HIDE_STATE_DIR")
+                .context("the device account's state folder")?,
+        );
+        let programs = fixture.hide.parent().context("the staged build")?;
+        crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
+        // What the cut switch did there, by the command it runs and from
+        // the `hide` it runs it from: a Hide started, and never paired.
+        let mut start = account.command(&fixture.remote.hide);
+        start.arg("connect");
+        let started = fixture::capture_within(start, SWITCH_WITHIN)?;
+        let stop = || {
+            let mut stop = account.command(&fixture.remote.hide);
+            stop.arg("stop");
+            fixture::capture(stop)
+        };
+        let journey = (|| -> Result<()> {
+            ensure!(
+                started.status.success() && state.join("hided.json").exists(),
+                "the account's Hide did not start: {}",
+                String::from_utf8_lossy(&started.stderr)
+            );
+            let stopped = stop()?;
+            ensure!(
+                stopped.status.success(),
+                "the account's Hide did not stop: {}",
+                String::from_utf8_lossy(&stopped.stderr)
+            );
+            let (ok, answer) = switch_device(fixture, fixture::DEVICE, &[])?;
+            ensure!(
+                ok && answer["value"]["switch"] == "done" && answer["value"]["folder"] == "taken",
+                "the switch after a cut one: {answer}"
+            );
+            wait_for("the device on its machine's connection", || {
+                let snapshot = fixture.snapshot()?;
+                let row = device_row(&snapshot)?;
+                let connected = snapshot
+                    .pointer("/status/remote")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                        })
+                    });
+                Ok((row["peer_key"].is_string() && connected).then_some(()))
+            })?;
+            let ran = fixture.remote.run_in_pane("echo $PPID")?;
+            ensure!(
+                ran.status == 0 && ran.stdout.trim() == before,
+                "the pane's program was started again: {before} then {:?}",
+                ran.stdout
+            );
+            Ok(())
+        })();
+        // The account's Hide and the terminal it opened for the project it
+        // was handed are this journey's to end, as in the switch above.
+        let stopped = stop()?;
+        let ended = fixture::end_holders(&state);
+        journey?;
+        ensure!(
+            stopped.status.success(),
+            "the account's own Hide did not stop: {}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        ended
+    })
+}
