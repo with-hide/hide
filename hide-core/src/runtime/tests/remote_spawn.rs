@@ -165,9 +165,10 @@ fn device_engine(
     list_fails: Arc<AtomicUsize>,
     full: Arc<AtomicBool>,
     screen: Arc<AtomicUsize>,
+    existing: Arc<Mutex<Option<String>>>,
 ) -> Fake {
     FakeEngine::start(move |method, _| match method {
-        "worktree_path" => reply(None::<String>),
+        "worktree_path" => reply(existing.lock().unwrap().clone()),
         "create_worktree" if full.load(Ordering::SeqCst) => self::refused(
             hide_node_link::holders::HOLDER_CAP_REFUSAL,
             "128 holders are recorded in this state folder, the most it keeps (128)",
@@ -180,6 +181,17 @@ fn device_engine(
             path: WORKTREE.into(),
             branch: Some("topic".into()),
         }),
+        // A branch the device already has out opens in its own tab.
+        "open_worktree" => reply(crate::engine::OpenedWorktree {
+            tab_label: "hide".into(),
+            workspace_id: "w2".into(),
+            label: "topic".into(),
+            tab_id: "w2:t1".into(),
+            pane_id: "w2:p1".into(),
+            already_open: false,
+        }),
+        // A repository's own folder opens under the folder's name.
+        "rename_workspace" => reply(()),
         "launch_tab" => reply(("w2:t2".to_owned(), "w2:p1".to_owned())),
         "pane_terminal" => reply("device-terminal".to_owned()),
         "pane_token" => {
@@ -287,6 +299,8 @@ struct Spawner {
     /// (`delivery_agent`): `SCREEN_STARTING` as the start left it,
     /// `SCREEN_ASKING` a question of its own, `SCREEN_READY` its composer.
     screen: Arc<AtomicUsize>,
+    /// The folder the device already has the spawn's branch out in, if any.
+    existing: Arc<Mutex<Option<String>>>,
     fake: Fake,
     path: PathBuf,
     _worker: Worker,
@@ -328,6 +342,7 @@ fn spawner() -> Spawner {
     let list_fails = Arc::new(AtomicUsize::new(0));
     let full = Arc::new(AtomicBool::new(false));
     let screen = Arc::new(AtomicUsize::new(SCREEN_STARTING));
+    let existing = Arc::new(Mutex::new(None));
     let fake = device_engine(
         started,
         session.clone(),
@@ -338,6 +353,7 @@ fn spawner() -> Spawner {
         list_fails.clone(),
         full.clone(),
         screen.clone(),
+        existing.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
@@ -460,6 +476,7 @@ fn spawner() -> Spawner {
         list_fails,
         full,
         screen,
+        existing,
         fake,
         path,
         _worker: worker,
@@ -1044,6 +1061,35 @@ fn a_spawn_refuses_a_choice_the_agent_does_not_take_before_anything_is_made() {
 /// A device that cannot record Codex's trust of the worktree refuses the
 /// spawn before Codex starts there, with the device's reason, so no child
 /// waits on its trust question.
+/// #2888: a checker spawned into the worktree an earlier spawn made for a
+/// worker of another kind is trusted there too, since nobody is at its
+/// screen to answer its own question.
+#[test]
+fn a_spawn_into_a_worktree_that_already_exists_records_the_agents_trust() {
+    let spawner = spawner();
+    *spawner.existing.lock().unwrap() = Some(WORKTREE.to_owned());
+    let child = spawner
+        .spawn(Some("here"), Some(DEVICE), "checker")
+        .unwrap();
+    assert_eq!(child["project"], WORKTREE);
+    assert_eq!(spawner.count("create_worktree"), 0);
+    assert_eq!(
+        *spawner.node.trusted.lock().unwrap(),
+        [("codex".to_owned(), WORKTREE.to_owned())]
+    );
+}
+
+/// The repository's own folder stays the operator's to trust: a spawn whose
+/// branch is out there records nothing.
+#[test]
+fn a_spawn_into_the_repositorys_own_folder_records_no_trust() {
+    let spawner = spawner();
+    *spawner.existing.lock().unwrap() = Some("/srv/repo".to_owned());
+    let child = spawner.spawn(Some("here"), Some(DEVICE), "main").unwrap();
+    assert_eq!(child["project"], "/srv/repo");
+    assert!(spawner.node.trusted.lock().unwrap().is_empty());
+}
+
 #[test]
 fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
     let spawner = spawner();
@@ -2373,6 +2419,33 @@ fn brief_cause(refusal: &str) -> (String, Value) {
     let (code, detail) = split_refusal(refusal);
     let detail: Value = serde_json::from_str(detail.expect("the spawn is named")).unwrap();
     (code.to_owned(), detail["cause"].clone())
+}
+
+/// #2888: a spawned agent that stops at a question of its own screen (its
+/// folder's trust) before it reports a session says so in the spawn's
+/// answer, rather than only that it has no session yet; one at rest gives no
+/// cause.
+#[test]
+fn a_child_whose_screen_asks_before_its_session_says_so() {
+    let spawner = spawner();
+    *spawner.session.lock().unwrap() = None;
+    spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    let ask = || {
+        brief_cause(
+            &spawner
+                .spawn(Some("here"), Some(DEVICE), "asking")
+                .expect_err("no session yet"),
+        )
+    };
+    assert_eq!(
+        ask(),
+        ("native_identity_unavailable".to_owned(), json!("question"))
+    );
+    spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    assert_eq!(
+        ask(),
+        ("native_identity_unavailable".to_owned(), Value::Null)
+    );
 }
 
 /// with-hide/hide-private#717: an agent whose screen asks a question when

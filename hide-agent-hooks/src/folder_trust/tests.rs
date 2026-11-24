@@ -997,3 +997,80 @@ fn a_record_entry_of_an_earlier_build_reads_as_the_default_account_s() {
     assert_eq!(read[1].account(), &account.key);
     assert_eq!(read[1].folder(), key);
 }
+
+/// The automations folder (`~/hide/automations`) of a home, as
+/// `hide_kit::layout::automations_home` names it, and one automation's own
+/// folder inside it.
+fn automation_folder(home: &Path) -> (PathBuf, PathBuf) {
+    let automations = home.join("hide").join("automations");
+    let own = automations.join("daily-ab12");
+    std::fs::create_dir_all(&own).unwrap();
+    (automations, own)
+}
+
+/// #2888: the folder Hide made for an automation is no worktree, so it has a
+/// gate of its own, and only a folder directly inside the automations folder
+/// passes it.
+#[test]
+fn only_a_folder_directly_inside_the_automations_folder_is_trusted_as_an_automation_s() {
+    let home = home();
+    let (automations, own) = automation_folder(home.path());
+    std::fs::create_dir_all(own.join("nested")).unwrap();
+    let notes = real(home.path(), "notes");
+    for refused in [
+        automations.clone(),
+        own.join("nested"),
+        notes,
+        automations
+            .join("..")
+            .join("automations")
+            .join("daily-ab12"),
+        automations.join("missing"),
+        home.path().to_path_buf(),
+    ] {
+        assert!(
+            trust_automation_folder(
+                Agent::Antigravity,
+                home.path(),
+                &refused,
+                &automations,
+                none()
+            )
+            .is_err(),
+            "{}",
+            refused.display()
+        );
+    }
+    assert!(
+        read_record(Agent::Antigravity, home.path())
+            .unwrap()
+            .is_empty()
+    );
+
+    trust_automation_folder(Agent::Antigravity, home.path(), &own, &automations, none()).unwrap();
+    let resolved = hide_platform::fs::identity::canonical(&own).unwrap();
+    assert_eq!(
+        recorded(Agent::Antigravity, home.path()),
+        [resolved.to_str().unwrap()]
+    );
+}
+
+/// Grok keeps a worktree's trust under its repository's main checkout, but
+/// an automation's folder is in no repository of Hide's: its entry names the
+/// folder itself, even in a home that is a repository of its own.
+#[test]
+fn grok_trusts_an_automation_s_folder_under_the_folder_itself() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".git")).unwrap();
+    std::fs::write(home.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let settings = Agent::Grok.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (automations, own) = automation_folder(home.path());
+
+    trust_automation_folder(Agent::Grok, home.path(), &own, &automations, none()).unwrap();
+    let own = hide_platform::fs::identity::canonical(&own).unwrap();
+    assert_eq!(
+        grok_decisions(home.path()),
+        [(Agent::Grok.spelling(&own).unwrap(), true)]
+    );
+}

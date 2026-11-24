@@ -540,7 +540,7 @@ fn real(path: &Path) -> PathBuf {
 }
 
 /// The pieces the kit keeps in an account, and the folder trust the node
-/// writes there for the worktrees Hide makes (`hide_agent_hooks::folder_trust`),
+/// writes there for the folders Hide starts agents in (`hide_agent_hooks::folder_trust`),
 /// which every write in a profile account is judged like.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PieceKind {

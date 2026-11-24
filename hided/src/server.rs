@@ -1631,7 +1631,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"
         }
         "native_identity_unavailable" => {
-            "The agent started and has not reported its session yet (Codex and OpenCode 2 report theirs at their first turn); Hide registers it with its parent and watch when it does, and the same command with the same intent then answers it"
+            "The agent started and has not reported its session yet (Codex and OpenCode 2 report theirs at their first turn); Hide registers it with its parent and watch when it does, and the same command with the same intent then answers it. When error.spawn.cause is question, its screen asks a question of its own, such as whether to trust its folder: answer it in its pane, or ask a person to with hide agent ask-human permission <pane>, then run the same command again"
         }
         "identity_waits_full" => {
             "Too many agents Hide started are waiting to report their session; give one of them a first prompt or close its pane, then run the same command again"

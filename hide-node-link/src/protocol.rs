@@ -160,7 +160,7 @@ use crate::error::HostError;
 /// node on 40 would draw none of it, so it is refused at Hello and upgraded.
 /// 42: `antigravity_trust` becomes `agent_trust`, which names the agent whose
 /// folder trust it records or takes out, for Claude Code and Codex as for agy
-/// (docs/agent-hooks.md, Folder trust for the worktrees Hide makes). A helper
+/// (docs/agent-hooks.md, Folder trust for the folders Hide starts agents in). A helper
 /// on 41 would refuse the call, so a Claude Code or Codex start in a worktree
 /// Hide made on that device would wait at the agent's own trust question; it
 /// is refused at Hello and upgraded.

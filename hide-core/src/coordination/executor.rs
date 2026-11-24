@@ -511,6 +511,33 @@ fn brief_refused_because(
     super::refusal("brief_not_submitted", cause)
 }
 
+/// The answer of a spawn whose agent runs but has not reported its session:
+/// `native_identity_unavailable`, with the cause `question` while the agent's
+/// screen asks a question of its own (#2888: a folder's trust it was given
+/// none of), which only someone at its pane answers and the agent would
+/// otherwise wait on unseen. A screen the engine cannot read gives no cause,
+/// logged, since the agent may still report its session.
+fn identity_unavailable(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> String {
+    const CODE: &str = "native_identity_unavailable";
+    match engine.delivery_agent(Wait::Each(Duration::from_secs(2)), pane) {
+        Ok(agent) if agent.pane_id == pane && agent.name == name && agent.status == "blocked" => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "identity.question", "spawn": spawn,
+                "pane_id": pane,
+            }));
+            super::refusal(CODE, "question")
+        }
+        Ok(_) => CODE.to_owned(),
+        Err(error) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "identity.screen_unread", "spawn": spawn,
+                "pane_id": pane, "detail": error.to_string(),
+            }));
+            CODE.to_owned()
+        }
+    }
+}
+
 /// The program the engine starts `kind` by (the definition's first
 /// executable, `start_prompt::program_of`) and how the pane's node starts it
 /// now, asked before every start of the spawn: what the start names and
@@ -1600,9 +1627,7 @@ fn spawn(
                 None => Some(repo.clone()),
             };
             // `made`: this spawn made the worktree, now or in an attempt whose
-            // reply was lost; only such a worktree is trusted for an agent
-            // that asks (agy), as for a task's worktree. A worktree that was
-            // already the operator's keeps whatever trust they gave it.
+            // reply was lost.
             let (checkout, pane, seed_tab, made) = if let Some(existing) = existing {
                 if path.as_ref().is_some_and(|path| path != &existing) {
                     return Err("checkout_path_conflict".into());
@@ -1815,7 +1840,13 @@ fn spawn(
                 });
                 (created.path, tab.pane_id, seed_tab, true)
             };
-            if made {
+            // Nobody answers a spawned agent's own question whether to trust
+            // its folder, so the spawn records that trust before it starts
+            // the agent in a folder Hide keeps: any worktree but the
+            // repository's own folder, which stays the operator's to trust,
+            // and the folder Hide made for an automation (docs/agent-hooks.md,
+            // Folder trust for the folders Hide starts agents in).
+            if checkout.as_str() != repo.as_str() || own_automation_folder(client, task.as_ref())? {
                 crate::agent_start::trust_worktree(
                     node.as_deref(),
                     kind,
@@ -2199,7 +2230,12 @@ fn spawn(
                     kind,
                     &reserved.id,
                 )?;
-                return Err(reason);
+                return Err(identity_unavailable(
+                    engine.as_ref(),
+                    &reserved.id,
+                    pane,
+                    name,
+                ));
             }
             native => native?,
         };
@@ -2747,6 +2783,24 @@ pub(crate) fn link_fork(
         },
     )
     .map(drop)
+}
+
+/// Whether `task` is a run of an automation that works in the folder Hide
+/// made for it (`Runtime::automation_in_own_folder`).
+fn own_automation_folder(client: &Client, task: Option<&super::SpawnTask>) -> Result<bool, String> {
+    let Some(id) = task
+        .filter(|task| task.kind == super::TaskKind::Automation)
+        .and_then(|task| task.target.as_deref())
+    else {
+        return Ok(false);
+    };
+    Ok(client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .automation_in_own_folder(id))
 }
 
 /// Whether the existing worktree `existing` of `repo` is one this spawn

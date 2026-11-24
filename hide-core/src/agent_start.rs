@@ -237,7 +237,7 @@ pub(crate) enum StartError {
 
 /// Records, on the node that will run it, that `kind` may work in `path`, a
 /// worktree Hide made, before Hide starts it there (the agent's own folder
-/// trust: docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
+/// trust: docs/agent-hooks.md, Folder trust for the folders Hide starts agents in).
 /// Nothing is asked for a kind that never asks; a trust that cannot be
 /// recorded refuses the start with its reason, so no agent waits unseen on
 /// its trust question (PRD antigravity-first-class B20).
