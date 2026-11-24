@@ -197,6 +197,27 @@ fn a_device_is_moved_once_the_kit_pass_after_its_connection_answers() {
     );
 }
 
+/// The operator's press asks on the device's row, as its connection
+/// attempts do; a move nobody pressed hands its login nobody to ask, so a
+/// login that would need a password, a passphrase or an answer about the
+/// server's key ends instead of waiting (PRD system-ssh-device-link B14).
+#[test]
+fn a_move_by_itself_hands_its_login_nobody_to_ask() {
+    let shared = with_consent(None);
+    connects(&shared, kit_in_place());
+    let runtime = shared.lock().unwrap();
+    let asks = |pressed: bool| match runtime
+        .device_switch_source(DEVICE, pressed)
+        .expect("a device to switch")
+        .via
+    {
+        crate::SwitchVia::Ssh { sign_in, .. } => sign_in.is_some(),
+        crate::SwitchVia::Wsl { .. } => panic!("the device is dialed over SSH"),
+    };
+    assert!(asks(true), "a press asks on the device's row");
+    assert!(!asks(false), "a move by itself was given someone to ask");
+}
+
 /// A device this build registered was never listed, one added to be
 /// switched has its own press under way, and a connection whose kit did
 /// not go in left an older `hide` on the machine: none is asked for.

@@ -1189,14 +1189,15 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
                 .context("the device account's state folder")?,
         );
         // What the daemon itself said it did, in its diagnostic log.
-        let moved = |fixture: &Fixture| -> Result<Vec<Value>> {
+        let said = |fixture: &Fixture, kind: &str| -> Result<Vec<Value>> {
             let log = fixture.state.join("Logs/core.jsonl");
             Ok(String::from_utf8(fixture::read(&log)?)?
                 .lines()
                 .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .filter(|row| row["kind"] == "pairing.moved_by_itself")
+                .filter(|row| row["kind"] == kind)
                 .collect())
         };
+        let moved = |fixture: &Fixture| said(fixture, "pairing.moved_by_itself");
         // The devices the core's store still has to move.
         let due = |fixture: &Fixture| -> Result<Value> {
             let store = fixture.state.join(hide_core::node_migration::CORE_STATE);
@@ -1222,7 +1223,12 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
         let programs = fixture.hide.parent().context("the staged build")?;
         crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
         // The same state folder as an earlier build left it: its store
-        // says nothing about which devices are still to move.
+        // says nothing about which devices are still to move. The device
+        // is off when this build first starts (mission remote-1-3-0 R05):
+        // the core lists it and does not reach it, so nothing is asked of
+        // its machine and nothing is started there.
+        let retries = said(fixture, "host.retry_scheduled")?.len();
+        fixture.ssh.online(false)?;
         fixture.restart_core(|store| {
             store
                 .as_object_mut()
@@ -1231,6 +1237,21 @@ fn a_device_an_earlier_build_added_moves_to_its_machines_own_hide_with_nothing_p
                 .context("this build wrote no list of the devices to move")?;
             Ok(())
         })?;
+        wait_for("a connection attempt that did not reach the device", || {
+            Ok((said(fixture, "host.retry_scheduled")?.len() > retries).then_some(()))
+        })?;
+        let row = device_row(&fixture.snapshot()?)?;
+        ensure!(
+            row["peer_key"].is_null() && row["switch"].is_null() && moved(fixture)?.is_empty(),
+            "a device that was not reached was moved: {row}"
+        );
+        ensure!(
+            !state.join("hided.json").exists(),
+            "a Hide was started on a device that was not reached"
+        );
+        // It is back: the helper's link returns, and with it the move.
+        fixture.ssh.online(true)?;
+        fixture.reconnect_device()?;
 
         let on_its_machines_connection = |fixture: &Fixture| -> Result<Option<Value>> {
             let snapshot = fixture.snapshot()?;
