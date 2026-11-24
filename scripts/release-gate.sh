@@ -35,7 +35,7 @@ bash scripts/verify-cargo.sh cli
 # waits for a guest's node to end finds it by its build's name, which the
 # fault run's guest node carries too.
 
-scenes='test(=remote_delivery::an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_on)'
+scenes='test(=remote_delivery::a_device_whose_hide_would_not_be_back_alone_is_left_on_its_helper_at_each_connection)'
 scenes+=' | test(/^pairing::moved_core::/)'
 scenes+=' | test(=pairing::a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes)'
 scenes+=' | test(=pairing::a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs)'

@@ -518,9 +518,10 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             }
             let lines = match answer["switch"].as_str() {
                 Some("held") => format!(
-                    "{} switched {device} first, and its terminals there carry on. Hide switches {device} by itself once every terminal this machine runs there is closed.\n",
+                    "{} switched {device} first, and its terminals there carry on. Once every terminal this machine runs there is closed, Hide switches {device} by itself if it is still a device Hide moves.\n",
                     answer["by"].as_str().unwrap_or("Another computer"),
                 ),
+                Some("left") => left_line(device, &answer["needs"]),
                 Some("install_needed") => format!(
                     "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
                 ),
@@ -789,12 +790,12 @@ fn add_alias(
         _ => {}
     }
     // The line says how an SSH device becomes its machine's own Hide: by
-    // itself when that machine can take it, or by the operator's command.
+    // itself when that machine can take it, which the command reads now.
     match core(env, command, wait)? {
         Printed::Value(value, lines) => Ok(Printed::Value(
             value,
             format!(
-                "{lines}{alias} is used over SSH. Hide connects the two as Hides by itself once the Hide on that machine would be back after a restart with nobody there; hide device switch {alias} --install does it now.\n"
+                "{lines}{alias} is used over SSH. Hide connects the two as Hides by itself once the Hide on that machine would be back after a restart with nobody there; hide device switch {alias} reads that now.\n"
             ),
         )),
         printed => Ok(printed),
@@ -1150,6 +1151,10 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
             };
             peers
                 .iter()
+                // A machine that is still a helper device of this computer
+                // is that device's line below, and has none of its own
+                // (`PeerMachine::helper_device`).
+                .filter(|peer| peer["helper_device"].is_null())
                 .map(|peer| {
                     let panes: String = guests
                         .iter()
@@ -1171,7 +1176,8 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
                 // one machine, one line, whatever id each goes by. A device
                 // that was switched to its machine's own Hide is such a
                 // device; one the core still dials itself keeps its line,
-                // beside its machine's when that is paired too.
+                // which is its machine's only one while a move that paired
+                // the two has not taken the device (the filter above).
                 .chain(
                     devices
                         .iter()
@@ -1200,6 +1206,27 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
             },
             device_line(&value["device"])
         ),
+    }
+}
+
+/// Why a switch left `device` on SSH, and the one thing that changes it
+/// (operator decision 2026-11-24): the rule Hide's own move follows, said
+/// to the one who asked at a terminal. `needs` is what the machine said it
+/// needs (`pairing_ssh::Needs::payload`), null where nothing set there
+/// would move it or it could not be read.
+fn left_line(device: &str, needs: &Value) -> String {
+    let stays = format!(
+        "{device} is not switched and is used over SSH as before: the Hide on its machine would not be back after a restart with nobody there."
+    );
+    let then = format!("then run hide device switch {device} again");
+    match (needs["kind"].as_str(), needs["command"].as_str()) {
+        (Some("auto_login"), _) => {
+            format!("{stays} Turn on automatic login for that account on the Mac, {then}.\n")
+        }
+        (Some("linger"), Some(command)) => {
+            format!("{stays} Run {command} on that machine, {then}.\n")
+        }
+        _ => format!("{stays}\n"),
     }
 }
 
@@ -1465,7 +1492,8 @@ mod tests {
     /// which serves its panes, and the list draws the paired machine alone,
     /// whatever id each goes by (a distribution's own Hide names itself by
     /// another). A device the core still dials itself keeps its line with
-    /// what it waits on, beside its machine's when that is paired too.
+    /// what it waits on, and that line is its machine's only one when a
+    /// move paired the two and the device did not take the connection.
     #[test]
     fn the_list_draws_a_paired_machines_device_once_and_a_dialed_one_on_its_own_line() {
         let text = draw(
@@ -1483,12 +1511,21 @@ mod tests {
                     {"id": "distribution-own-id", "name": "WSL Ubuntu", "connection_id": "aa",
                         "connected": true, "path": "direct", "opens": "active"},
                     {"id": "build-id", "name": "build-box", "connection_id": "bb",
-                        "connected": false, "path": null, "opens": "active"},
+                        "connected": false, "path": null, "opens": "active",
+                        "helper_device": "build-id"},
                 ],
                 "guest_panes": [],
             }),
         );
         let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("build-box"))
+                .count(),
+            1,
+            "{text}"
+        );
         assert_eq!(
             lines
                 .iter()

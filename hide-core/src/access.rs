@@ -1514,6 +1514,7 @@ mod tests {
             reason: None,
             update: None,
             wsl: None,
+            helper_device: None,
         };
         // Standing follows the active pairings only.
         for (opens, opened_by, standing) in [

@@ -282,8 +282,13 @@ enum Command {
     },
     DeviceSwitchSource {
         device: String,
-        pressed: bool,
+        by: hide_core::SwitchBy,
         reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
+    },
+    DeviceSwitchLanded {
+        device: String,
+        key: String,
+        reply: Sender<Option<bool>>,
     },
     InboundNode {
         node: String,
@@ -1381,17 +1386,34 @@ impl CoreHandle {
     pub fn device_switch_source(
         &self,
         device: &str,
-        pressed: bool,
+        by: hide_core::SwitchBy,
     ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::DeviceSwitchSource {
                 device: device.to_owned(),
-                pressed,
+                by,
                 reply,
             })
             .map_err(|_| "hide_unavailable")?;
         rx.recv().map_err(|_| "hide_unavailable")?
+    }
+
+    /// Whether `device` took the connection of the machine under `key`,
+    /// `None` while its switch is under way; see
+    /// `Core::device_switch_landed`. A core that does not answer has not
+    /// switched it.
+    pub fn device_switch_landed(&self, device: &str, key: &str) -> Option<bool> {
+        let (reply, rx) = mpsc::channel();
+        let asked = self.commands.send(Command::DeviceSwitchLanded {
+            device: device.to_owned(),
+            key: key.to_owned(),
+            reply,
+        });
+        match asked {
+            Ok(()) => rx.recv().unwrap_or(Some(false)),
+            Err(_) => Some(false),
+        }
     }
 
     /// Why a node dialing this core would be refused, before its link is
@@ -2133,12 +2155,11 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::DeviceSwitchSource {
-                device,
-                pressed,
-                reply,
-            } => {
-                let _ = reply.send(core.device_switch_source(&device, pressed));
+            Command::DeviceSwitchSource { device, by, reply } => {
+                let _ = reply.send(core.device_switch_source(&device, by));
+            }
+            Command::DeviceSwitchLanded { device, key, reply } => {
+                let _ = reply.send(core.device_switch_landed(&device, &key));
             }
             Command::InboundNode {
                 node,

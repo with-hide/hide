@@ -2701,10 +2701,11 @@ impl Runtime {
             Event::PeerWork(payload) => self.take_peer_work(&payload.key, payload.work),
             Event::DeviceSwitch(payload) => self.device_switch(payload),
             Event::PeerMachines(payload) => {
-                let changed = self.snapshot.navigator.peers != payload.machines;
+                let mut machines = payload.machines;
+                self.name_helper_devices(&mut machines);
+                let changed = self.snapshot.navigator.peers != machines;
                 if changed {
-                    let before =
-                        std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
+                    let before = std::mem::replace(&mut self.snapshot.navigator.peers, machines);
                     self.list_peer_work();
                     self.reconcile_peer_devices(&before);
                 }

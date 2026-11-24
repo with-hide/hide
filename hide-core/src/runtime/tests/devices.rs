@@ -1107,7 +1107,7 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
         serde_json::json!([{
             "id": "windows-pc", "name": "Windows PC", "connection_id": "ab".repeat(32),
             "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
-            "reason": null, "update": null,
+            "reason": null, "update": null, "helper_device": null,
         }])
     );
     // The machine this one opens is a device too, under the same id: one
@@ -1679,7 +1679,7 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
         // The release left a project on the device, which its machine's own
         // Hide is handed (D-48).
         let source = runtime
-            .device_switch_source(&helper.id, true)
+            .device_switch_source(&helper.id, crate::SwitchBy::Operator)
             .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
         assert!(
             !source.projects.is_empty(),
@@ -1896,7 +1896,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         let devices = runtime.snapshot.ui_state.device_registrations.len();
         for named in [helper.id.as_str(), "Ubuntu"] {
             let source = runtime
-                .device_switch_source(named, true)
+                .device_switch_source(named, crate::SwitchBy::Operator)
                 .unwrap_or_else(|code| panic!("{tag}: {named} cannot be switched: {code}"));
             assert_eq!(source.device_id, helper.id, "{tag}: {named}");
             assert!(
@@ -1965,7 +1965,9 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
         );
         // A switched device is no helper any more: nothing is left to switch.
         assert_eq!(
-            runtime.device_switch_source(&helper.id, true).err(),
+            runtime
+                .device_switch_source(&helper.id, crate::SwitchBy::Operator)
+                .err(),
             Some("switch_unsupported"),
             "{tag}"
         );
@@ -2046,13 +2048,15 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     }
     for named in ["build-box-id", "build-box"] {
         let source = runtime
-            .device_switch_source(named, true)
+            .device_switch_source(named, crate::SwitchBy::Operator)
             .expect("a device to switch");
         assert_eq!(source.device_id, "build-box-id", "{named}");
         assert_eq!(source.projects, ["/home/me/app"], "{named}");
     }
     assert_eq!(
-        runtime.device_switch_source("nowhere", true).err(),
+        runtime
+            .device_switch_source("nowhere", crate::SwitchBy::Operator)
+            .err(),
         Some("device_unknown")
     );
 
@@ -2329,7 +2333,7 @@ fn a_switch_names_no_more_projects_than_its_machine_takes() {
         );
     }
     let source = runtime
-        .device_switch_source("build-box-id", true)
+        .device_switch_source("build-box-id", crate::SwitchBy::Operator)
         .expect("a device to switch");
     assert_eq!(source.projects.len(), crate::SWITCHED_PROJECTS);
     let first: Vec<String> = (0..crate::SWITCHED_PROJECTS)

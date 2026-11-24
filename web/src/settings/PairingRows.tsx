@@ -18,7 +18,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../ui";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
-import { guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, relayTip, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
+import { guestPaneCount, machinesWithOwnRow, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, relayTip, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { DeviceNeedsLine, DeviceNotCarriedLine } from "./DeviceSwitch";
 import { askForFirewallOnce, useFirewall } from "./firewall";
@@ -372,7 +372,8 @@ function RemovedWork({ panes, end, onEnd }: { panes: number; end: boolean; onEnd
 export function PeerRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const own = useShellStore((s) => ownWindow(s.pairing));
-  const listed = useShellStore((s) => pairedMachines(s.rest));
+  const paired = useShellStore((s) => pairedMachines(s.rest));
+  const listed = useMemo(() => machinesWithOwnRow(paired), [paired]);
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   // A machine the core made a device of goes by that device's name, as on
   // the rail and in its tabs: one switched onto it keeps the operator's (B36).

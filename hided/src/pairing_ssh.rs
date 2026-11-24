@@ -326,10 +326,16 @@ fn install_refusal(target: &str, from: &str, desktop: Option<bool>) -> Option<&'
     if target != "macos" {
         return None;
     }
-    if from != "macos" {
+    if !takes_hide_from(target, from) {
         return Some("ssh_mac_from_mac_only");
     }
     (desktop == Some(false)).then_some("ssh_mac_signed_out")
+}
+
+/// Whether a machine that runs `target` takes a Hide from one that runs
+/// `from`: a Mac only from a Mac (D-45), any other from any.
+fn takes_hide_from(target: &str, from: &str) -> bool {
+    target != "macos" || from == "macos"
 }
 
 /// Starts a Hide of the target account's own from the `hide` this
@@ -618,7 +624,10 @@ fn needs_of(login: &dyn Login, reach: &Reach, started: bool) -> Option<Needs> {
     if login.channel() == Channel::Wsl && !runs_systemd(login) {
         return Some(Needs::OpenDistribution);
     }
-    started.then(|| may_move(login, reach).needs).flatten()
+    started
+        .then(|| read_move(login, reach).ok())
+        .flatten()
+        .and_then(|moves| moves.needs)
 }
 
 /// Whether a helper device moves to its machine's own Hide by itself, and
@@ -642,43 +651,52 @@ pub struct Move {
 /// `hide always-on linger`: where the account lingers (Linux, which that
 /// turns on when the account may: only asking says whether it may), or the
 /// machine logs it in by itself (a Mac's automatic login). The call starts
-/// no Hide and saves nothing of this machine's. A target that does not
-/// answer, or whose `hide` does not say, is not known to be back and is
-/// left on its login.
-pub(crate) fn may_move(login: &dyn Login, reach: &Reach) -> Move {
+/// no Hide; on Linux it leaves lingering on for an account that may turn
+/// it on, whether or not the device then moves, and writes nothing else
+/// there. A target whose `hide` does not say is not known to be back and
+/// is left on its login, which the log says; one the login did not reach
+/// was not read, and the code says so.
+pub(crate) fn may_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
+    let moves = read_move(login, reach)?;
+    if !moves.back {
+        hide_core::diagnostic!(serde_json::json!({
+            "component": "pairing",
+            "kind": "pairing.device_left",
+            "alias": login.name(),
+            "reason": "not_back_unattended",
+        }));
+    }
+    Ok(moves)
+}
+
+/// What the target says of itself for [`may_move`], with nothing logged
+/// about a device: a switch that already moved one reads it for what the
+/// Hide it started still needs ([`needs_of`]).
+fn read_move(login: &dyn Login, reach: &Reach) -> Result<Move, &'static str> {
     let answer = match run_hide(login, reach, &["always-on", "linger", "--json"]) {
         Ok(Said::Answer(answer)) if answer["ok"] == true => answer,
-        Ok(_) => return Move::default(),
-        Err(error) => {
-            not_reached(login, "linger", &error);
-            return Move::default();
-        }
+        Ok(_) => return Ok(Move::default()),
+        Err(error) => return Err(not_reached(login, "linger", &error)),
     };
     if answer["value"]["unattended"] == true {
-        return Move {
+        return Ok(Move {
             back: true,
             needs: None,
-        };
+        });
     }
-    hide_core::diagnostic!(serde_json::json!({
-        "component": "pairing",
-        "kind": "pairing.device_left",
-        "alias": login.name(),
-        "reason": "not_back_unattended",
-    }));
     let needs = match login.system().ok().as_deref() {
-        // A Mac takes a Hide only from a Mac ([`install_refusal`]): from
-        // any other system its automatic login would move nothing.
-        Some("macos") if std::env::consts::OS == "macos" => Some(Needs::AutoLogin),
+        // A Mac takes a Hide only from a Mac: from any other system its
+        // automatic login would move nothing.
+        Some("macos") if takes_hide_from("macos", std::env::consts::OS) => Some(Needs::AutoLogin),
         Some("linux") => linger_needs(&answer),
         _ => None,
     };
-    Move { back: false, needs }
+    Ok(Move { back: false, needs })
 }
 
 /// [`may_move`] for the helper device `alias` names, over a login of its
 /// own that asks nobody.
-pub fn may_move_device(reach: &Reach, alias: &str) -> Move {
+pub fn may_move_device(reach: &Reach, alias: &str) -> Result<Move, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
     let moves = may_move(&Ssh(&upstream), reach);
     upstream.close();

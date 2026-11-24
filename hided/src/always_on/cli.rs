@@ -343,7 +343,10 @@ mod tests {
     }
 
     /// Linux: an account that may not turn linger on itself is told the
-    /// command an administrator runs, and one that lingers is `on`.
+    /// command an administrator runs, and one that lingers is `on`. An
+    /// account that may turn it on has it turned on by the asking and
+    /// answers as one that lingers, and a machine whose `loginctl` cannot
+    /// be run answers nothing, which the one who asked reads as not back.
     #[cfg(unix)]
     #[test]
     fn linger_names_the_command_an_administrator_runs() {
@@ -373,6 +376,18 @@ mod tests {
             linger(&on, home.path()).unwrap(),
             json!({ "linger": "on", "unattended": true })
         );
+        // Off, and the account may turn it on: the stand-in remembers
+        // `enable-linger` beside itself and answers `yes` from then on.
+        let turned_on = stand_in(
+            "#!/bin/sh\ncase \"$1\" in\n  show-user) [ -e \"$0.on\" ] && echo yes || echo no ;;\n  enable-linger) : > \"$0.on\" ;;\nesac\n",
+        );
+        assert_eq!(
+            linger(&turned_on, home.path()).unwrap(),
+            json!({ "linger": "on", "unattended": true })
+        );
+        std::fs::remove_file(home.path().join("loginctl")).unwrap();
+        let absent = UserAgents::fixture_of(Kind::Systemd, home.path());
+        assert!(linger(&absent, home.path()).is_err());
     }
 
     /// `remove` takes the item, its marker and the builds; a folder that

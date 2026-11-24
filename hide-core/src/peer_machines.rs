@@ -51,6 +51,14 @@ pub struct PeerMachine {
     /// the two are one machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl: Option<String>,
+    /// The device of this computer that is this machine and still reaches
+    /// it over SSH or WSL: a move paired the two and the device has not
+    /// taken the connection. That device's row and tile are the machine's
+    /// only ones, so the machine has none of its own in Settings, on the
+    /// rail or in `hide device list`. Written by the core, which knows its
+    /// devices (`name_helper_devices`); the daemon leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper_device: Option<String>,
 }
 
 /// Where the direction "this machine opens it" stands.
@@ -167,6 +175,7 @@ pub fn answer(machine: &PeerMachine) -> serde_json::Value {
         "path": machine.path,
         "reason": machine.reason,
         "update": machine.update,
+        "helper_device": machine.helper_device,
     })
 }
 
@@ -187,6 +196,7 @@ mod tests {
             reason: None,
             update: None,
             wsl: None,
+            helper_device: None,
         }
     }
 

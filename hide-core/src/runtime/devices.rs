@@ -451,6 +451,11 @@ impl Runtime {
             }
         }
         self.snapshot.navigator.devices = devices;
+        // Which paired machine is a helper device here follows the
+        // registrations, as the rows do.
+        let mut peers = std::mem::take(&mut self.snapshot.navigator.peers);
+        self.name_helper_devices(&mut peers);
+        self.snapshot.navigator.peers = peers;
         self.refresh_device_snapshots();
         self.refresh_agent_scopes();
     }

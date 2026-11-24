@@ -126,6 +126,15 @@ it("names a paired machine's system as its device reports it, and none before th
   await unmount();
 });
 
+it("lists no row for a machine that is still a helper device of this computer: its device's row is its one row", async () => {
+  const unmoved = peer({ helper_device: "windows-pc" });
+  const other = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook" });
+  const { q, unmount } = await mount(idle, [unmoved, other], [], [{ id: "windows-pc", label: "Windows PC", kind: "remote", state: "ready", ssh_alias: "win" }]);
+  expect(q('[data-peer-row="windows-pc"]')).toBeNull();
+  expect(q('[data-peer-row="macbook"]')).not.toBeNull();
+  await unmount();
+});
+
 it("names a machine a device was switched onto by that device's name, as the rail does (B36)", async () => {
   const switched = peer({ name: "DESKTOP-7Q2" });
   const { q, unmount } = await mount(idle, [switched], [], [{ id: "build-box", label: "빌드 서버", kind: "remote", state: "ready", peer_key: switched.key }]);

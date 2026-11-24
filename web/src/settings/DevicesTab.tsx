@@ -138,8 +138,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   );
   // The list stands in two groups (operator review 2026-11-23): this
   // computer, with its share; then every other machine, the Hides it is
-  // paired with and the devices it still reaches the old way, over SSH or
-  // WSL, each of those marked so. One Add device above them adds either kind.
+  // paired with and the devices it reaches over SSH or WSL, with no mark
+  // that tells the two apart. One Add device above them adds either kind.
   const ownRows = listed.filter((device) => device.id === own);
   const otherRows = listed.filter((device) => device.id !== own);
   const peerCount = useShellStore((s) => pairedMachines(s.rest).length);

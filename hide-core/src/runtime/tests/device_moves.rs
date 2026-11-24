@@ -291,7 +291,13 @@ fn a_move_by_itself_hands_its_login_nobody_to_ask() {
     connects(&shared, kit_in_place());
     let runtime = shared.lock().unwrap();
     let asks = |pressed: bool| match runtime
-        .device_switch_source(DEVICE, pressed)
+        .device_switch_source(
+            DEVICE,
+            match pressed {
+                true => crate::SwitchBy::Operator,
+                false => crate::SwitchBy::Rule { own_folder: false },
+            },
+        )
         .expect("a device to switch")
         .via
     {
@@ -312,7 +318,7 @@ fn a_device_without_the_operators_consent_is_not_moved() {
         shared
             .lock()
             .unwrap()
-            .device_switch_source(DEVICE, false)
+            .device_switch_source(DEVICE, crate::SwitchBy::Rule { own_folder: false })
             .map(|_| ())
     };
     let shared = with_consent(None);
@@ -327,7 +333,7 @@ fn a_device_without_the_operators_consent_is_not_moved() {
         shared
             .lock()
             .unwrap()
-            .device_switch_source(DEVICE, true)
+            .device_switch_source(DEVICE, crate::SwitchBy::Operator)
             .is_ok()
     );
 }
@@ -400,18 +406,49 @@ fn a_terminal_opened_while_its_move_ran_keeps_the_device_on_its_helper() {
     step(&shared, serde_json::json!({"step": "held"}));
     assert_eq!((asked.count(), asked.last()), (2, Some(true)));
 
+    // Opened before the daemon's turn came: the switch is refused before
+    // its login pairs the two machines. A switch that keeps the helper's
+    // folder is not, since it carries the terminal on.
     lists(&shared, true);
+    let source = |own_folder| {
+        shared
+            .lock()
+            .unwrap()
+            .device_switch_source(DEVICE, crate::SwitchBy::Rule { own_folder })
+            .map(|_| ())
+    };
+    assert_eq!(source(true), Err("terminals_open"));
+    assert_eq!(source(false), Ok(()));
+
+    // Opened after that, while the two were being paired: the core
+    // refuses the connection, the daemon reads that the device did not
+    // take it, and the pairing left behind is no second row: the machine
+    // is named as the device's, which keeps the one row and tile.
+    let landed = || shared.lock().unwrap().device_switch_landed(DEVICE, &key);
+    let row_of_its_own = || {
+        let runtime = shared.lock().unwrap();
+        let machine = &runtime.snapshot().navigator.peers[0];
+        machine.helper_device.is_none()
+    };
     paired(&shared, &key, DEVICE);
+    assert!(!row_of_its_own());
     let connecting = serde_json::json!({"step": "connecting", "key": key, "own_folder": true});
     step(&shared, connecting.clone());
     assert!(is_helper(&shared), "a switch closed a terminal");
+    assert_eq!(landed(), Some(false));
+    assert!(!row_of_its_own());
 
     // It closed: asked for again, and this time the device takes its
-    // machine's connection.
+    // machine's connection, whose row is then the pairing's.
     lists(&shared, false);
     assert_eq!((asked.count(), asked.last()), (3, Some(true)));
+    assert_eq!(source(true), Ok(()));
     step(&shared, connecting);
     assert!(!is_helper(&shared));
+    // Under way until its save is acknowledged, then landed.
+    wait_for("the switch to land", || landed().is_some());
+    assert_eq!(landed(), Some(true));
+    assert!(row_of_its_own());
 
     // A switch that keeps the helper's folder carries the terminals on,
     // and waits for none of them.

@@ -87,6 +87,17 @@ pub struct DeviceSwitchSource {
     pub projects: Vec<String>,
 }
 
+/// Who asks for a device's switch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SwitchBy {
+    /// The operator, with `hide device switch`: its login may ask them.
+    Operator,
+    /// The core's rule, with nobody asked; with `own_folder`, for a device
+    /// another computer switched first, which goes on with a folder of
+    /// this computer's own.
+    Rule { own_folder: bool },
+}
+
 /// What hided reaches the machine a helper device is through.
 pub enum SwitchVia {
     /// Over the SSH alias the device is dialed by.
@@ -159,15 +170,16 @@ impl Runtime {
     /// under its machine's own id, which the paired machine's device then
     /// has too, or a WSL distribution of this PC. `device` is its id, or
     /// the SSH alias or the distribution it is dialed by, which is what a
-    /// terminal knows of a device it has just added. `pressed` is a switch
-    /// the operator asked for (`hide device switch`), whose login may ask
-    /// them; one the core asked for by itself asks nobody, as Hide's own
-    /// connection attempts do not (PRD system-ssh-device-link B14).
+    /// terminal knows of a device it has just added. A switch the operator
+    /// asked for (`hide device switch`) has a login that may ask them; one
+    /// the core asked for by itself asks nobody, as Hide's own connection
+    /// attempts do not (PRD system-ssh-device-link B14).
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
-        pressed: bool,
+        by: SwitchBy,
     ) -> Result<DeviceSwitchSource, &'static str> {
+        let pressed = by == SwitchBy::Operator;
         let registration = self
             .device_registration(device)
             .or_else(|| {
@@ -189,6 +201,14 @@ impl Runtime {
         // taken their consent back in between.
         if !pressed && !self.due_to_move(device_id) {
             return Err("switch_not_due");
+        }
+        // And a terminal may have opened there: a folder of this
+        // computer's own takes up none, so the switch is refused before
+        // its login pairs the two machines.
+        if by == (SwitchBy::Rule { own_folder: true })
+            && self.device_terminals(device_id) != Some(0)
+        {
+            return Err("terminals_open");
         }
         // The operator asked for the switch, so its login asks on the
         // device's row, as the device's own connection attempts do (D-45).
@@ -330,6 +350,25 @@ impl Runtime {
         self.device_moves_held.remove(device_id);
         if self.due_to_move(device_id) {
             self.ask_move(device_id, true);
+        }
+    }
+
+    /// Where the switch of `device_id` to the machine under `key` stands,
+    /// for the daemon that waits on it: `Some(true)` once the registration
+    /// is that machine's and saved, `Some(false)` once the core refused it
+    /// or the device is gone, and `None` while it is under way. A paired
+    /// machine alone is no switched device: the daemon answers a switch
+    /// done, and hands the machine its projects, only on `Some(true)`.
+    pub(crate) fn device_switch_landed(&self, device_id: &str, key: &str) -> Option<bool> {
+        if self.device_switch_saving.contains_key(device_id) {
+            return None;
+        }
+        let landed = self
+            .device_registration(device_id)
+            .is_some_and(|registration| registration.origin.peer_key() == Some(key));
+        match landed || !self.device_switches.contains_key(device_id) {
+            true => Some(landed),
+            false => None,
         }
     }
 

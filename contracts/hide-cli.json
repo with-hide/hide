@@ -7039,6 +7039,7 @@
                 "switch_unsupported",
                 "switch_running",
                 "switch_not_connected",
+                "switch_not_moved",
                 "ssh_core_not_started",
                 "ssh_not_reached",
                 "ssh_busy",
@@ -7049,6 +7050,7 @@
                 "ssh_hide_not_running",
                 "wsl_not_reached",
                 "wsl_unavailable",
+                "wsl_off",
                 "device_already_connected"
             ],
             "repeats_at_most": null,
@@ -9789,7 +9791,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c44b9ac43387df5f50a99913e2241cc8857d4880af54760dfa3943b7b2d7ad09",
+    "digest": "sha256:d5999c4f4281cd7711d8da4a21d00c377c60b684c51b6c6cad653c81303b5085",
     "envelopes": {
         "access": {
             "answer": "value",

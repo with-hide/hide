@@ -1401,12 +1401,21 @@ impl Core {
     pub fn device_switch_source(
         &self,
         device: &str,
-        pressed: bool,
+        by: crate::SwitchBy,
     ) -> Result<crate::DeviceSwitchSource, &'static str> {
         if !check_owner_thread(self, "device_switch_source") {
             return Err("hide_unavailable");
         }
-        lock_recover(&self.runtime).device_switch_source(device, pressed)
+        lock_recover(&self.runtime).device_switch_source(device, by)
+    }
+
+    /// Whether the helper device `device` took the connection of the
+    /// machine under `key`: `None` while its switch is under way.
+    pub fn device_switch_landed(&self, device: &str, key: &str) -> Option<bool> {
+        if !check_owner_thread(self, "device_switch_landed") {
+            return Some(false);
+        }
+        lock_recover(&self.runtime).device_switch_landed(device, key)
     }
 
     /// Gives the core what switches a helper device by itself (operator

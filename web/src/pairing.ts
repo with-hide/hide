@@ -86,6 +86,12 @@ export type Peer = {
    * update of the Hide it started there stands (B23).
    */
   update?: "here" | "there" | "here_asked" | "there_asked" | "updating" | "update_not_reached" | "update_rolled_back" | "update_busy" | "update_failed" | null;
+  /**
+   * The device of this computer that is this machine and still reaches it
+   * over SSH or WSL (hide-core `PeerMachine::helper_device`): that device's
+   * row and tile are the machine's only ones.
+   */
+  helper_device?: string | null;
 };
 
 /** Why this machine's update of the Hide it started on `peer` did not happen; none when it did not fail. */
@@ -126,6 +132,17 @@ export function pairedMachines(rest: SnapshotRest | null | undefined): readonly 
   return rest?.navigator?.peers ?? NONE;
 }
 
+/**
+ * The paired machines that have a row of their own in Settings and may have
+ * a tile of their own on the rail: every one but a machine that is still a
+ * helper device of this computer (`Peer.helper_device`, which the core
+ * writes), whose device's row and tile are its only ones. A move that paired
+ * the two and did not take the device leaves it so until the next one.
+ */
+export function machinesWithOwnRow(peers: readonly Peer[]): readonly Peer[] {
+  return peers.some((peer) => peer.helper_device != null) ? peers.filter((peer) => peer.helper_device == null) : peers;
+}
+
 /** One empty list, so a store selector answers the same value while nothing is paired. */
 const NONE: readonly Peer[] = [];
 
@@ -140,7 +157,7 @@ const NONE: readonly Peer[] = [];
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
   const devices = rest?.navigator?.devices ?? [];
-  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
+  return machinesWithOwnRow(pairedMachines(rest)).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
 }
 
 /**

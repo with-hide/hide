@@ -121,6 +121,31 @@ impl Runtime {
         taker
     }
 
+    /// Writes on each of `machines` the helper device of this computer
+    /// that it is (`PeerMachine::helper_device`): the one registered under
+    /// the machine's id, or as the WSL distribution it is, that the core
+    /// still dials itself. The one place that says such a machine has no
+    /// row or tile of its own. A machine that opens this computer keeps its
+    /// own: that direction is the operator's to see, pause and remove.
+    pub(super) fn name_helper_devices(&self, machines: &mut [PeerMachine]) {
+        for machine in machines {
+            let helper = self
+                .snapshot
+                .ui_state
+                .device_registrations
+                .iter()
+                .find(|registration| {
+                    registration.origin.dials_helper()
+                        && (registration.id == machine.device_id
+                            || machine.wsl.as_deref().is_some_and(|distro| {
+                                registration.origin.wsl_distro() == Some(distro)
+                            }))
+                })
+                .filter(|_| machine.opens.is_some() && machine.opened_by.is_none());
+            machine.helper_device = helper.map(|registration| registration.id.clone());
+        }
+    }
+
     /// Whether the paired machine under `key` may be opened now.
     pub(super) fn peer_opens(&self, key: &str) -> bool {
         self.snapshot
