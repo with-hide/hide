@@ -3463,7 +3463,6 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  * carry `url`.
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
-/** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
 /** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
 export type DeskLane = { view_width: number | null; session_width: number | null };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
@@ -3643,7 +3642,7 @@ export type DeskSection = {
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
-  /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
+  /** The panels' widths the core keeps (PRD desk-2-ui B23); which session, panel and tab show is the window's. */
   lane: DeskLane;
 };
 
