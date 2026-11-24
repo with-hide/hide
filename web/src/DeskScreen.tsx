@@ -574,7 +574,9 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       foot={sleeping ? (
         <SessionSleepingFoot
           title={title}
-          state={inPane?.state ?? asleep?.phase ?? "unknown"}
+          sleep={inPane}
+          state={asleep?.phase ?? "unknown"}
+          onFresh={() => actions.wakeAgent(paneId, true)}
           onWake={
             inPane
               ? inPane.state === "waking" ? null : () => actions.wakeAgent(paneId)
