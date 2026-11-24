@@ -2168,6 +2168,22 @@ impl Runtime {
         Ok((json!({"id": id, "run": number, "on": on}), laid))
     }
 
+    /// The window moved the focus to `pane` to show it: when it is the
+    /// terminal of a run the screen shows, its desk gets the summary card and
+    /// what the agent opened unwatched, as when the screen said it shows the
+    /// run. The word can come before the run has a pane or a tab (a run
+    /// still starting), so the pane arriving is the second moment it is laid.
+    pub(super) fn lay_viewed_run_desk(&mut self, pane: &str) {
+        let Some(key) = self
+            .run_of_pane(pane)
+            .filter(|key| self.automations.viewing.contains_key(key))
+        else {
+            return;
+        };
+        self.place_run_summary(pane, &key.0, key.1);
+        self.gather_run_views(pane);
+    }
+
     /// The pane of the run `number` of `id` while it has one.
     pub(super) fn viewed_run_pane(&self, id: &str, number: u64) -> Option<String> {
         let id = self.automations.book.find(id)?.id.clone();

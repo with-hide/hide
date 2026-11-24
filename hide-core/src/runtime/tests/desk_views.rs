@@ -3778,3 +3778,42 @@ fn a_runs_results_are_what_its_agent_opened_and_open_again_on_its_desk() {
     );
     assert_eq!(desk_marks(&runtime, &directory, TABS[1]), desk);
 }
+
+/// The screen can say it shows a run before the run's pane has a tab (a run
+/// still starting), so the focus the window then moves to the pane lays the
+/// run's desk too, and only for a run the screen shows.
+#[test]
+fn the_focus_the_window_moves_to_a_shown_runs_pane_lays_its_desk() {
+    let (mut runtime, checkout, directory) = setup("run-summary-focus");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    runs_in_panes(&mut runtime, &[("w-order:t2:p", 1)]);
+    let lose_summary = |runtime: &mut Runtime| {
+        let summary = runtime
+            .view_displays(&key(&directory))
+            .find(|display| display.is_run_summary())
+            .expect("the card is placed")
+            .id
+            .clone();
+        let place = Place::Tray(TABS[1].to_owned());
+        runtime
+            .change_view_layout(&key(&directory), &place, |layout, _| {
+                layout.remove(&summary);
+                Ok(((), true))
+            })
+            .expect("the card leaves its desk");
+    };
+
+    run_shown(&mut runtime, 1, true);
+    lose_summary(&mut runtime);
+    assert!(desk_marks(&runtime, &directory, TABS[1]).is_empty());
+    runtime.lay_viewed_run_desk("w-order:t2:p");
+    assert_eq!(desk_marks(&runtime, &directory, TABS[1]), ["summary"]);
+
+    run_shown(&mut runtime, 1, false);
+    lose_summary(&mut runtime);
+    runtime.lay_viewed_run_desk("w-order:t2:p");
+    assert!(
+        desk_marks(&runtime, &directory, TABS[1]).is_empty(),
+        "a run the screen does not show gets no desk laid"
+    );
+}
