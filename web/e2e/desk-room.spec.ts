@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
@@ -31,7 +32,7 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
     watches: [],
     agents: [
       { id: "agent-1", name: "hide:desk", machine: node, host_scope: "hide", native_machine: "hide", session: "hide:desk", instance: "hide:desk", pane: "hide:desk", parent: null, origin: null, project: null, actor: desk, ended: false, forked: false },
-      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "desk-room-session", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("desk-room-session") }, ended: false, forked: false },
+      { id: "agent-3", name: "gallery-compare", machine: node, host_scope: "claude", native_machine: "claude", session: "fixture-two", instance: pane, pane, parent: null, origin: "agent-1", project: repo, actor: { pane_id: pane, name: "gallery-compare", kind: "claude", device_id: node, session: digest("fixture-two") }, ended: false, forked: false },
     ],
     spawns: [
       { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-room-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
@@ -51,9 +52,15 @@ async function switchDesk(page: Page, on: boolean) {
   await expect(page.locator("[data-settings]")).toHaveCount(0);
 }
 
-/** A Workspace whose second pane is a thread Desk started, Desk switched on, and the page on Desk's room unless `open` is false. */
-async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
-  const engine = await startFixture({ agents: false });
+/**
+ * A Workspace whose second pane is a session Desk started, Desk switched on,
+ * and the page on Desk's room unless `open` is false. The sidebar lists an
+ * agent's pane as its row, so a spec that presses a row runs the fixture's
+ * stand-in agents (`agents`); its second agent resumes `fixture-two`, the
+ * session the ledger names for Desk's spawn.
+ */
+async function startDesk(page: Page, name: string, open = true, agents = true): Promise<Desk> {
+  const engine = await startFixture({ agents });
   const repo = path.join(engine.root, "fixture");
   let daemon = await startHided(engine, name);
   const pane = engine.panes[1];
@@ -125,9 +132,37 @@ test("⌘J goes from the session beside Desk to its Agent tab and back to Desk w
   }
 });
 
+test("the session's Explorer opens a file in the tab panel as its checkout's own document, ⌘S saves it, and no Workspace View takes it in (PRD desk-2-ui B19, B35, B36) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-file");
+  try {
+    const file = path.join(desk.engine.root, "fixture", "plan.md");
+    fs.writeFileSync(file, "plan\n");
+    await row(page, desk.pane).click();
+    await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
+    await page.locator("[data-desk-session-files]").click();
+    const entry = page.locator('[data-desk-tab-panel] [data-explorer-row$="/plan.md"]');
+    await entry.dblclick();
+    const editor = page.locator('[data-desk-file$="/plan.md"] [data-editor-body] .cm-content');
+    await expect(editor).toContainText("plan");
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+Home");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" saved");
+    await page.keyboard.press(chord("save_file"));
+    await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
+    // Desk is still in front, and the Workspace's View never showed the file.
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
+    await expect(page.locator('[data-view-area] [data-editor-path]')).toHaveCount(0);
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
 test("Desk is off on a new install, its switch in Settings shows it without a restart, and switching it off in the room goes back to the tab before it with Desk's session kept (PRD session-docs-and-assistant B41) @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const desk = await startDesk(page, "desk-room-switch", false);
+  const desk = await startDesk(page, "desk-room-switch", false, false);
   try {
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator("[data-desk-sidebar-row]")).toHaveCount(0);
