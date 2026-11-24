@@ -14,7 +14,7 @@ import { countSent, enterWorkspace, screenshot } from "./wire";
 // `SearchPalette.desk.test.tsx` hold the rules; this holds the wire and the
 // screen). Captured for the design comparison.
 
-test.describe.configure({ timeout: 120_000 });
+test.describe.configure({ timeout: 120_000 }); // wait-ok: a daemon, a page and the engine finish their real startup before Desk shows the files
 
 /** Settings › Labs › Desk's switch turned on, as an operator does. */
 async function switchDeskOn(page: Page) {
