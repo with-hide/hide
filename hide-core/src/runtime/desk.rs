@@ -14,6 +14,7 @@
 //! never in the agent: `allow_always` is never chosen. A new conversation, a
 //! restart or the process's end closes a waiting card as a refusal.
 
+mod files;
 pub(super) mod jobs;
 mod worker;
 
@@ -70,6 +71,9 @@ pub(super) struct Desk {
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
     watch_asks: HashMap<String, jobs::WatchAsk>,
+    /// The files Desk's tab panel holds open, oldest first (`files.rs`);
+    /// the window's, so never stored.
+    files: Vec<files::DeskFile>,
 }
 
 /// One of Desk's agents as Hide's catalog says it on the core's own
@@ -155,6 +159,8 @@ pub(super) enum DeskEvent {
     /// A panel width the operator dragged and let go (PRD desk-2-ui B22):
     /// one event per drag.
     Lane(LanePayload),
+    /// A file pressed or let go in the tab panel (PRD desk-2-ui B19, B36).
+    File(files::FilePayload),
 }
 
 /// The width a drag set; the one it did not move is absent.
@@ -238,7 +244,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 13] = [
+    pub(super) const KINDS: [&'static str; 14] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -252,6 +258,7 @@ impl DeskEvent {
         "desk_job_read",
         "desk_output_seen",
         "desk_lane",
+        "desk_file",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -272,6 +279,7 @@ impl DeskEvent {
             "desk_job_read" => Self::JobRead(parse(payload)?),
             "desk_output_seen" => Self::OutputSeen(parse(payload)?),
             "desk_lane" => Self::Lane(parse(payload)?),
+            "desk_file" => Self::File(parse(payload)?),
             _ => return None,
         })
     }
@@ -338,11 +346,13 @@ impl Runtime {
                 | DeskEvent::JobRead(_)
                 | DeskEvent::OutputSeen(_)
         );
-        // A width moves only the `desk` section's lane.
-        let jobs = !matches!(event, DeskEvent::Lane(_));
+        // A width moves only the `desk` section's lane; a file Desk holds
+        // moves the editor's documents, no section of Desk's.
+        let jobs = !matches!(event, DeskEvent::Lane(_) | DeskEvent::File(_));
+        let room = room && !matches!(event, DeskEvent::File(_));
         // An output seen moves the View's seen state, which the core keeps
-        // with the View, not in Desk's store.
-        let stored = !matches!(event, DeskEvent::OutputSeen(_));
+        // with the View, not in Desk's store; a file held is the window's.
+        let stored = !matches!(event, DeskEvent::OutputSeen(_) | DeskEvent::File(_));
         let changed = match event {
             DeskEvent::Send(payload) => {
                 // Only the Desk composer sends it.
@@ -371,6 +381,7 @@ impl Runtime {
                 self.mark_view_seen(&(payload.device_id, payload.checkout), &payload.id)
             }
             DeskEvent::Lane(payload) => self.desk_lane(payload),
+            DeskEvent::File(payload) => self.desk_file(payload),
         };
         if changed {
             if stored {

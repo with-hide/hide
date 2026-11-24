@@ -4690,7 +4690,11 @@ impl Runtime {
             "operation": request.change.kind().as_str(),
             "waiting": self.explorer_queue.len() + 1,
         }));
-        let owner = self.front_checkout_owned();
+        // Desk's Explorer shows its session's checkout whatever is in front,
+        // so its changes are planned against that checkout at their turn.
+        let owner = (!request.desk)
+            .then(|| self.front_checkout_owned())
+            .flatten();
         self.explorer_queue
             .push_back(WaitingExplorerChange { owner, request });
         false
@@ -4714,7 +4718,7 @@ impl Runtime {
         let Some(next) = self.explorer_queue.pop_front() else {
             return;
         };
-        if next.owner != self.front_checkout_owned() {
+        if !next.request.desk && next.owner != self.front_checkout_owned() {
             self.explorer_queue.push_front(next);
             self.drop_explorer_queue("the checkout they were asked in is no longer in front");
             return;
@@ -4767,17 +4771,22 @@ impl Runtime {
         self.next_explorer_operation_id = self.next_explorer_operation_id.wrapping_add(1).max(1);
         let id = self.next_explorer_operation_id;
         let device = device.unwrap_or(self.node.as_str());
-        let target = self
-            .front_checkout_owned()
-            .and_then(|(workspace_id, checkout_id)| {
-                self.catalog_checkout(&workspace_id, &checkout_id)
-                    .map(|(workspace, checkout)| ExplorerTarget {
-                        workspace_id: workspace_id.clone(),
-                        checkout_id: checkout_id.clone(),
-                        device_id: workspace.device_id.clone(),
-                        root: checkout.path.clone(),
-                    })
-            });
+        let target = if request.desk {
+            self.desk_explorer_target(device, root)
+        } else {
+            self.front_checkout_owned()
+                .and_then(|(workspace_id, checkout_id)| {
+                    self.catalog_checkout(&workspace_id, &checkout_id).map(
+                        |(workspace, checkout)| ExplorerTarget {
+                            workspace_id: workspace_id.clone(),
+                            checkout_id: checkout_id.clone(),
+                            device_id: workspace.device_id.clone(),
+                            root: checkout.path.clone(),
+                            desk: false,
+                        },
+                    )
+                })
+        };
         let planned = match target {
             Some(target) if target.device_id != device => Err(files::ExplorerFailure::new(
                 "explorer.not_in_front",
@@ -4793,6 +4802,10 @@ impl Runtime {
             Some(target) => Err(files::ExplorerFailure::new(
                 "explorer.not_in_front",
                 format!("{root} is not the focused checkout {}", target.root),
+            )),
+            None if request.desk => Err(files::ExplorerFailure::new(
+                "explorer.not_in_front",
+                format!("{root} is not a registered checkout on that device; nothing was changed"),
             )),
             None => Err(files::ExplorerFailure::new(
                 "explorer.not_in_front",
@@ -5022,7 +5035,9 @@ impl Runtime {
                 // cannot serve the file it still exists there, so
                 // `explorer.created_not_opened` rides the finished slot and the
                 // tree keeps the created file (B10 pattern).
-                if operation.kind == files::ExplorerOperationKind::FileCreate {
+                if operation.kind == files::ExplorerOperationKind::FileCreate && target.desk {
+                    self.desk_open_created(&target, &destination);
+                } else if operation.kind == files::ExplorerOperationKind::FileCreate {
                     match self.prepare_file_tab(
                         &target.workspace_id,
                         &target.checkout_id,

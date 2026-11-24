@@ -2829,7 +2829,7 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 12] = [
+const DEVICE_FILE_EVENTS: [&str; 13] = [
     "create_workspace",
     "clone_repository",
     "file_list",
@@ -2842,6 +2842,7 @@ const DEVICE_FILE_EVENTS: [&str; 12] = [
     "path_move",
     "path_copy",
     "path_trash",
+    "desk_file",
 ];
 
 /// The SSH device a file event names, or `None` for this machine. Any id
@@ -5087,6 +5088,11 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
+        // A file Desk opens is checked as an open is; letting files go names
+        // only files Desk already holds.
+        "desk_file" if event.pointer("/payload/action").and_then(Value::as_str) == Some("open") => {
+            explorer_open(boundary, event, &kind)
+        }
         "file_save" => explorer_save(boundary, event, &kind),
         "file_create" | "dir_create" => explorer_create(boundary, event, &kind),
         "path_rename" => explorer_rename(boundary, event, &kind),
