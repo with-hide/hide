@@ -138,6 +138,7 @@ const NOTICE: Record<Extract<DeskItem, { kind: "notice" }>["notice"], MessageKey
   resume_failed: "desk.notice.resume_failed",
   no_ask_mode: "desk.notice.no_ask_mode",
   turn_failed: "desk.notice.turn_failed",
+  attachments_gone: "desk.notice.attachments_gone",
 };
 
 export type DeskNoticeAction = "retry" | "restart" | "reinstall";

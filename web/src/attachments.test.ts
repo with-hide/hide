@@ -228,7 +228,7 @@ describe("thread input (B29)", () => {
 
   it("answers hided's refusal of an input to its thread, never to a pane", () => {
     capture();
-    const requestId = submitThreadInput(3, "w1:p1", "봐줘", [{ name: "a.png", bytes: new Uint8Array([1]) }])!;
+    const requestId = submitThreadInput(3, "w1:p1", "봐줘", [{ name: "a.png", bytes: new Uint8Array([1]) }]) as string;
     receiveAttachmentRefusal({ request_id: `${requestId}-0`, reason: "staging_full" });
     expect(useShellStore.getState().composerRefusal).toEqual({ request_id: requestId, reason: "staging_full" });
     expect(useShellStore.getState().attachmentRefusal).toBeNull();
@@ -237,9 +237,8 @@ describe("thread input (B29)", () => {
   it("refuses files over the cap before a byte leaves the page", () => {
     const { events } = capture();
     const big = { name: "big.bin", bytes: new Uint8Array(21 * 1024 * 1024) };
-    expect(submitThreadInput(3, "w1:p1", "", [big])).toBeNull();
+    expect(submitThreadInput(3, "w1:p1", "", [big])).toEqual({ refused: "too_large" });
     expect(events).toEqual([]);
-    expect(useShellStore.getState().composerRefusal?.reason).toBe("too_large");
   });
 });
 

@@ -3400,7 +3400,7 @@ export type DeskIrreversible = "end_working_session" | "force_push" | "delete_re
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
-export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
+export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed" | "attachments_gone";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };

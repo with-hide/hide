@@ -107,18 +107,15 @@ export function stageDeskFiles(files: AttachmentInput[]): { request_id: string; 
 /**
  * A thread's input box (B29): the files stage as an attachment's do, then one
  * `thread_input` names them with the words. Answers the input's request id,
- * which the thread section's `input` settles, or null when there is no
- * connection or a cap refuses the files before a byte leaves the page.
+ * which the thread section's `input` settles, the reason a cap refuses the
+ * files before a byte leaves the page, or null when there is no connection.
  */
-export function submitThreadInput(generation: number, paneId: string, text: string, files: AttachmentInput[]): string | null {
+export function submitThreadInput(generation: number, paneId: string, text: string, files: AttachmentInput[]): string | { refused: string } | null {
   if (!sender) return null;
   const requestId = crypto.randomUUID();
   if (files.length > 0) {
     const reason = preflightRefusal(files);
-    if (reason) {
-      useShellStore.getState().setComposerRefusal({ request_id: requestId, reason });
-      return null;
-    }
+    if (reason) return { refused: reason };
   }
   rememberComposer(requestId);
   const stages = files.map((file, index) => {

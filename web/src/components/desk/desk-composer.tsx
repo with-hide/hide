@@ -1,6 +1,6 @@
 import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
 import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import { MAX_FILE_BYTES } from "../../attachments";
+import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
 import { dragHasFiles, traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
@@ -22,6 +22,7 @@ import type { DeskDraft } from "../../ui";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
 const MIB = MAX_FILE_BYTES / (1024 * 1024);
+const BATCH_MIB = MAX_BATCH_BYTES / (1024 * 1024);
 
 function useByteSize(): (bytes: number) => string {
   const { i18n } = useInterfaceTranslation();
@@ -46,9 +47,8 @@ export function AttachmentTile({ name, size, preview, state = "ready", read = 0,
 }) {
   const { t } = useInterfaceTranslation();
   const bytes = useByteSize();
-  const tooLarge = state === "too_large";
-  const refused = tooLarge || state === "unreadable";
-  const why = tooLarge ? t("desk.composer.tooLarge", { limit: MIB }) : state === "unreadable" ? t("desk.composer.unreadable") : null;
+  const refused = state === "too_large" || state === "over_batch" || state === "unreadable";
+  const why = state === "too_large" ? t("desk.composer.tooLarge", { limit: MIB }) : state === "over_batch" ? t("desk.composer.overBatch", { count: MAX_FILES, limit: BATCH_MIB }) : state === "unreadable" ? t("desk.composer.unreadable") : null;
   const share = size && size > 0 ? Math.min(100, Math.round((read / size) * 100)) : 0;
   const band = state === "reading" ? (
     <span className="absolute inset-x-xs bottom-xxs h-xxs overflow-hidden rounded-full bg-border" role="progressbar" aria-label={name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={share}>

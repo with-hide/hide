@@ -150,31 +150,53 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
   });
 
+  const dropFile = async (name: string, bytes: number[]) => {
+    const file = new File([new Uint8Array(bytes)], name);
+    file.stream = () => new NodeBlob([new Uint8Array(bytes)]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
+    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="reading"]')).toBeNull());
+  };
+  const tiles = () => [...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent]);
+
   it("sends a dropped file's stage with the words, keeps it in the box until the conversation shows the message, and draws it on the bubble (desk-2-ui B41)", async () => {
     configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
     useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
     await render(desk([]));
-    const file = new File([new Uint8Array([7, 8])], "install.log");
-    file.stream = () => new NodeBlob([new Uint8Array([7, 8])]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
-    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
-    await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="ready"]')).not.toBeNull());
+    await dropFile("install.log", [7, 8]);
 
     await press("[data-desk-composer-send]");
     const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];
     expect(message).toEqual({ text: "왜 끊기는지 봐 줘", mentions: [], request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), stages: [`${message!.request_id}-0`] });
     expect(sent("attachment_stage")).toEqual([{ request_id: `${message!.request_id}-0`, name: "install.log", size: 2, clipboard: false }]);
-    expect(document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")).toHaveLength(1);
+    expect(tiles()).toHaveLength(1);
+    // A file dropped while the message is on its way stays for the next one.
+    await dropFile("later.txt", [1]);
 
-    await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/attachments/${message!.request_id}-0-install.log` }] }]));
-    expect(document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")).toHaveLength(0);
+    await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-install.log` }] }]));
+    expect(tiles()).toEqual([["ready", expect.stringContaining("later.txt")]]);
     expect(document.body.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("install.log");
 
     // The agent was not signed in: the core takes the message out, and its words and its file come back to send again (B6).
     await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }]));
     expect(useUiStore.getState().deskDraft.text).toBe("왜 끊기는지 봐 줘");
-    expect([...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent])).toEqual([["ready", expect.stringContaining("install.log")]]);
+    expect(tiles()).toEqual([["ready", expect.stringContaining("later.txt")], ["ready", expect.stringContaining("install.log")]]);
+  });
+
+  it("puts the words back and says so when a file the message named is gone", async () => {
+    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+    useUiStore.setState({ deskDraft: { text: "이거 봐 줘", mentions: [] } });
+    await render(desk([]));
+    await dropFile("shot.png", [1, 2]);
+    await press("[data-desk-composer-send]");
+    const [message] = sent("desk_send") as { request_id: string }[];
+    await show(desk([{ kind: "user", id: 1, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "shot.png", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-shot.png` }] }]));
+
+    await show(desk([{ kind: "notice", id: 2, notice: "attachments_gone", agent: "claude", detail: null }]));
+    expect(useUiStore.getState().deskDraft.text).toBe("이거 봐 줘");
+    expect(tiles()).toEqual([]);
+    expect(document.body.querySelector("[data-desk-notice='attachments_gone']")).not.toBeNull();
   });
 
   it("names the agent's own reason on a failed turn when it gave one", async () => {

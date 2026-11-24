@@ -8,7 +8,7 @@
 // as one chip (D-85); the send carries the text as it is.
 
 import { useEffect, useRef, useState } from "react";
-import { MAX_FILE_BYTES, safeName, type AttachmentInput } from "./attachments";
+import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES, safeName, type AttachmentInput } from "./attachments";
 import { markedMention, type DeskMention } from "./desk";
 import { attachedOf } from "./mobile/sentReplies";
 import type { DeskMentions } from "./snapshot";
@@ -148,16 +148,31 @@ export type TrayFile = {
   size: number;
   /** An image's thumbnail (an object URL the tray owns), else null. */
   preview: string | null;
-  /** `reading` while its bytes come in; `too_large` past the cap, never read; `unreadable` when the system would not give its bytes. Neither of the last two is sent. */
-  state: "reading" | "ready" | "too_large" | "unreadable";
+  /** `reading` while its bytes come in; `too_large` past a file's cap and `over_batch` past a message's (count or bytes), neither ever read; `unreadable` when the system would not give its bytes. None of the last three is sent. */
+  state: "reading" | "ready" | "too_large" | "over_batch" | "unreadable";
   /** Bytes read in so far. */
   read: number;
 };
 
-/** A file as the tray first takes it: its state from its size alone, before a byte is read (B42). */
-export function trayEntry(file: { name: string; size: number }, id: string, preview: string | null): TrayFile {
-  const tooLarge = file.size > MAX_FILE_BYTES;
-  return { id, name: file.name, size: file.size, preview: tooLarge ? null : preview, state: tooLarge ? "too_large" : "reading", read: 0 };
+/**
+ * Files as the tray first takes them, after the ones it holds: each one's
+ * state from sizes alone, before a byte is read (B42). A file past 20 MB is
+ * `too_large`; one that would take the message past `MAX_FILES` files or
+ * `MAX_BATCH_BYTES` is `over_batch`, so a drop of fifty photos reads none
+ * of the ones a send could not carry.
+ */
+export function trayEntries(held: readonly TrayFile[], picked: readonly { id: string; name: string; size: number }[]): TrayFile[] {
+  const sent = held.filter((file) => file.state === "reading" || file.state === "ready");
+  let files = sent.length;
+  let bytes = sent.reduce((total, file) => total + file.size, 0);
+  return picked.map(({ id, name, size }) => {
+    const state = size > MAX_FILE_BYTES ? "too_large" : files + 1 > MAX_FILES || bytes + size > MAX_BATCH_BYTES ? "over_batch" : "reading";
+    if (state === "reading") {
+      files += 1;
+      bytes += size;
+    }
+    return { id, name, size, preview: null, state, read: 0 };
+  });
 }
 
 /**
@@ -179,7 +194,7 @@ export type ComposerTray = {
   add: (files: readonly File[]) => void;
   remove: (id: string) => void;
   /** The files' names and bytes, each picture also as an image the sent bubble can draw, or null while the tray holds the send (`traySendable`). */
-  outgoing: () => (AttachmentInput & { type: string; image: Blob | null })[] | null;
+  outgoing: () => (AttachmentInput & { id: string; type: string; image: Blob | null })[] | null;
   clear: () => void;
   /** Puts files a send carried back as they were read, ready to send again, when the message did not reach its agent. */
   restore: (files: readonly (AttachmentInput & { type: string })[]) => void;
@@ -236,7 +251,13 @@ export function useComposerTray(): ComposerTray {
   return {
     files,
     add: (picked) => {
-      const entries = picked.map((file) => ({ file, entry: trayEntry(file, crypto.randomUUID(), file.type.startsWith("image/") && file.size <= MAX_FILE_BYTES ? URL.createObjectURL(file) : null) }));
+      const decided = trayEntries(live.current, picked.map((file) => ({ id: crypto.randomUUID(), name: file.name, size: file.size })));
+      const entries = decided.map((entry, index) => {
+        const file = picked[index]!;
+        return { file, entry: entry.state === "reading" && file.type.startsWith("image/") ? { ...entry, preview: URL.createObjectURL(file) } : entry };
+      });
+      // A second drop before the next render counts the first.
+      live.current = [...live.current, ...entries.map(({ entry }) => entry)];
       setFiles((current) => [...current, ...entries.map(({ entry }) => entry)]);
       for (const { file, entry } of entries) if (entry.state === "reading") void read(entry.id, file);
     },
@@ -246,7 +267,7 @@ export function useComposerTray(): ComposerTray {
       if (!ready) return null;
       return ready.map((file) => {
         const read = bytes.current.get(file.id)!;
-        return { name: safeName(file.name), bytes: read.bytes, type: read.type, image: file.preview ? new Blob([read.bytes as BlobPart], { type: read.type }) : null };
+        return { id: file.id, name: safeName(file.name), bytes: read.bytes, type: read.type, image: file.preview ? new Blob([read.bytes as BlobPart], { type: read.type }) : null };
       });
     },
     clear: () => {

@@ -128,7 +128,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
   const box = useRef<MentionInputHandle>(null);
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box; its files' request, when it had files.
-  const pending = useRef<{ text: string; after: number; request: string | null } | null>(null);
+  const pending = useRef<{ text: string; after: number; request: string | null; tiles: string[] } | null>(null);
   const tray = useComposerTray();
   const [notice, setNotice] = useState<string | null>(null);
   const refusal = useShellStore((s) => s.composerRefusal);
@@ -153,7 +153,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text)) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
-      if (sent.request) tray.clear();
+      // Only the files this send carried: one dropped since stays for the next.
+      sent.tiles.forEach(tray.remove);
     }
   }, [items, setDraft]);
   // hided refused the files before Desk's agent saw the message: the words and the files stay, and the line says why.
@@ -165,10 +166,12 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   }, [refusal, t]);
   useEffect(() => {
     const sent = lastSent.current;
-    if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
+    const back = items?.find((item) => item.kind === "notice" && (item.notice === "login_needed" || item.notice === "attachments_gone") && item.id > (sent?.after ?? Infinity));
+    if (!sent || !back || back.kind !== "notice") return;
     lastSent.current = null;
     if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
-    if (tray.files.length === 0 && sent.files.length > 0) tray.restore(sent.files);
+    // A file that is gone cannot come back; the notice asks for it again.
+    if (back.notice === "login_needed" && sent.files.length > 0) tray.restore(sent.files);
   }, [items, setDraft]);
 
   useLayoutEffect(() => {
@@ -194,12 +197,12 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (!files || (!out.text && files.length === 0)) return;
     const stagedOrRefused = files.length > 0 ? stageDeskFiles(files.map(({ name, bytes }) => ({ name, bytes }))) : null;
     if (stagedOrRefused && "refused" in stagedOrRefused) return setNotice(refusalText(stagedOrRefused.refused, t));
-    if (files.length > 0 && !stagedOrRefused) return;
+    if (files.length > 0 && !stagedOrRefused) return setNotice(refusalText("forward_failed", t));
     const staged = stagedOrRefused;
     // The pictures this window sent stay drawn on their bubble while the page lives.
     if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.image));
     setNotice(null);
-    pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null };
+    pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null, tiles: files.map((file) => file.id) };
     lastSent.current = { words, files: files.map(({ name, bytes, type }) => ({ name, bytes, type })), after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions, staged);

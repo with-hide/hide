@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipDelete, chipStep, keepSent, mentionAt, mentionTree, outgoing, pickMention, sentAttachment, sentWords, traySendable, trayEntry, type MentionSession, type TrayFile } from "./deskComposer";
+import { chipDelete, chipStep, keepSent, mentionAt, mentionTree, outgoing, pickMention, sentAttachment, sentWords, traySendable, trayEntries, type MentionSession, type TrayFile } from "./deskComposer";
 
 const session = { kind: "session" as const, id: "w1:p2", name: "record-now", mark: "going" as const, agent_kind: "codex" };
 const project = { kind: "project" as const, id: "/work/herdr-ide", name: "herdr-ide" };
@@ -107,16 +107,26 @@ describe("what a Desk send carries (B49)", () => {
 describe("a composer's tray (desk-2-ui B41, B42)", () => {
   const MIB20 = 20 * 1024 * 1024;
 
-  it("takes a file of 20 MiB to read and holds one byte past it red, unread, with no thumbnail", () => {
-    expect(trayEntry({ name: "edge.bin", size: MIB20 }, "a", null)).toMatchObject({ state: "reading", read: 0 });
-    expect(trayEntry({ name: "big.png", size: MIB20 + 1 }, "b", "blob:shot")).toMatchObject({ state: "too_large", preview: null });
+  it("takes a file of 20 MiB to read and holds one byte past it red and unread", () => {
+    expect(trayEntries([], [{ id: "a", name: "edge.bin", size: MIB20 }, { id: "b", name: "big.png", size: MIB20 + 1 }]).map((one) => one.state)).toEqual(["reading", "too_large"]);
+  });
+
+  it("reads no file a message could not carry: past 8 files or 40 MiB with the ones it holds, the rest are held red and unread", () => {
+    const held = (id: string, state: TrayFile["state"], size: number): TrayFile => ({ id, name: id, size, preview: null, state, read: 0 });
+    const photos = Array.from({ length: 50 }, (_, index) => ({ id: `p${index}`, name: `p${index}.jpg`, size: 1024 }));
+    const fifty = trayEntries([], photos).map((one) => one.state);
+    expect(fifty.filter((state) => state === "reading")).toHaveLength(8);
+    expect(fifty.slice(8).every((state) => state === "over_batch")).toBe(true);
+    // Bytes count what the tray already holds; a file past 20 MiB or a red one does not.
+    const holding = [held("a", "ready", MIB20), held("x", "too_large", MIB20 + 1), held("y", "over_batch", 1)];
+    expect(trayEntries(holding, [{ id: "b", name: "b", size: MIB20 }, { id: "c", name: "c", size: 1 }]).map((one) => one.state)).toEqual(["reading", "over_batch"]);
   });
 
   it("sends every file once all are read, and holds the send while one reads, is past the cap or could not be read", () => {
     const file = (id: string, state: TrayFile["state"]): TrayFile => ({ id, name: id, size: 1, preview: null, state, read: 0 });
     expect(traySendable([])).toEqual([]);
     expect(traySendable([file("a", "ready"), file("b", "ready")])?.map((one) => one.id)).toEqual(["a", "b"]);
-    for (const held of ["reading", "too_large", "unreadable"] as const) expect(traySendable([file("a", "ready"), file("b", held)])).toBeNull();
+    for (const held of ["reading", "too_large", "over_batch", "unreadable"] as const) expect(traySendable([file("a", "ready"), file("b", held)])).toBeNull();
   });
 
   it("names a sent file by the name the operator's file had, whichever machine staged it", () => {

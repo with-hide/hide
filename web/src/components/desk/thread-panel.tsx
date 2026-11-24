@@ -66,7 +66,8 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
 
   const [text, setText] = useState("");
   const tray = useComposerTray();
-  const [sent, setSent] = useState<string | null>(null);
+  // The request a send is waiting on and the tiles it carried.
+  const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
@@ -76,18 +77,19 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
   // answered there, as closed.
   const input = useShellStore((s) => s.sessionThread?.input ?? null);
   useEffect(() => {
-    if (!sent || input?.request_id !== sent || input.state === "sending") return;
+    if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
     setSent(null);
     if (input.state === "sent") {
       setText("");
-      tray.clear();
+      // Only the files this send carried: one dropped since stays for the next.
+      sent.tiles.forEach(tray.remove);
       setNotice(null);
     } else {
       setNotice(input.reason ? words(input.reason) : null);
     }
   }, [input, sent]);
   useEffect(() => {
-    if (!sent || refusal?.request_id !== sent) return;
+    if (!sent || refusal?.request_id !== sent.request) return;
     setSent(null);
     setNotice(words(refusal.reason));
   }, [refusal, sent]);
@@ -97,11 +99,15 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
     const files = tray.outgoing();
     if (!thread?.pane_id || held !== null || sent || !files) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
-    if (request) {
+    if (request && typeof request === "object") {
+      setNotice(words(request.refused));
+    } else if (request) {
       // The bubble the record will show names these files by their stages, here and on a device.
       files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
-      setSent(request);
+      setSent({ request, tiles: files.map((file) => file.id) });
       setNotice(null);
+    } else {
+      setNotice(words("forward_failed"));
     }
   };
   // One ask per state the core shows: scroll events at the top come faster
