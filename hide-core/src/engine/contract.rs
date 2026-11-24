@@ -711,9 +711,8 @@ impl Drop for RecordedProcesses {
 /// pane no one closed runs on.
 #[test]
 #[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
-#[allow(clippy::disallowed_methods)] // polls the watch, bounded by a deadline
 fn a_pane_its_node_ends_for_a_host_is_told_ended_once_and_one_its_engine_ends_is_not() {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
 
     let (_root, [home, state_dir, folder]) = holder_root();
     let _processes = RecordedProcesses(state_dir.clone());
@@ -724,13 +723,11 @@ fn a_pane_its_node_ends_for_a_host_is_told_ended_once_and_one_its_engine_ends_is
         .recovered(Duration::from_secs(120))
         .expect("the test acquires pane ownership");
     let engine = super::own::OwnEngine::new(Arc::clone(&linked));
-    let told = Arc::new(Mutex::new(Vec::<String>::new()));
-    {
-        let told = Arc::clone(&told);
-        linked.watch_ends(Arc::new(move |pane: &str| {
-            told.lock().unwrap().push(pane.to_owned());
-        }));
-    }
+    let (tell, told) = mpsc::channel::<String>();
+    let tell = Mutex::new(tell);
+    linked.watch_ends(Arc::new(move |pane: &str| {
+        let _ = tell.lock().unwrap().send(pane.to_owned());
+    }));
     let (workspace, _tab, by_engine) = engine
         .create_workspace(WAIT, &folder, "ends", true, BTreeMap::new())
         .unwrap();
@@ -746,16 +743,17 @@ fn a_pane_its_node_ends_for_a_host_is_told_ended_once_and_one_its_engine_ends_is
     for pane in [&by_engine, &by_host, &last, &kept] {
         prompted(&engine, pane);
     }
+    // Each end the watch is told, in order, until `wanted` has been heard.
     let heard = |what: &str, wanted: &[&str]| {
         let deadline = Instant::now() + SHOWN_WITHIN;
-        loop {
-            let now = told.lock().unwrap().clone();
-            if now == wanted {
-                return;
+        let mut now = Vec::new();
+        while now.len() < wanted.len() {
+            match told.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(pane) => now.push(pane),
+                Err(_) => break,
             }
-            assert!(Instant::now() < deadline, "{what}: heard {now:?}");
-            std::thread::sleep(Duration::from_millis(20));
         }
+        assert_eq!(now, wanted, "{what}");
     };
 
     engine.close_pane(WAIT, &by_engine).unwrap();
