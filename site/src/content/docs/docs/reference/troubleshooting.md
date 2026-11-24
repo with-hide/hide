@@ -178,20 +178,18 @@ The machine's row in Settings > Devices says what to do: **Sign in**, check a ch
 **Test** runs the SSH, authentication, protocol, PTY and Git stages one after another and names the first one that needs attention.
 What ssh asks, such as a password or a key's passphrase, is answered on the machine's row; hide does not store, log or copy an answer.
 
-### A Mac over SSH works only while this computer is on
+### A machine over SSH works only while this computer is on
 
 A machine you add over SSH is used through this computer, so the work on it goes on only while this computer is on and connected.
-hide moves such a machine to a connection of its own, by itself, once the hide it starts there can come back after a restart with nobody at that machine.
-On a Mac that needs automatic login, because macOS starts your programs only after you log in.
+To let it work on its own, connect the two as hides: once the machine is connected, run `hide device switch <name> --install` in a terminal on this computer.
+hide switches a machine only when the hide it starts there comes back after a restart with nobody at that machine, and otherwise says the one thing to change:
 
-1. On that Mac, open **System Settings**, then **Users & Groups**.
-2. Set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
+- A Mac needs automatic login, because macOS starts your programs only after you log in. Open **System Settings**, then **Users & Groups**, and set **Automatically log in as** to your account. macOS offers this only while FileVault is off.
+- A Linux machine needs lingering for your user. hide turns it on when your account may; when it may not, hide prints the command an administrator runs there.
+- A WSL distribution needs systemd: set `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown`.
 
-The next time that Mac connects, hide moves it, and the line under it in Settings > Devices goes away.
-Until then the Mac keeps working over SSH as before.
-
-A Linux machine shows a command under its name instead, when hide could not turn on lingering for your user by itself.
-Run that command there once, and the next connection moves it.
+Then run the command again.
+Until then the machine keeps working over SSH as before, and an update switches no machine by itself.
 
 ### The phone says "The code expired"
 
