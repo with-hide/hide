@@ -243,6 +243,7 @@ export const deskEnglish = {
   "desk.room.explorerEmpty": "Pick a file on the left to open it here",
   "desk.room.besideHint": "Open beside Desk",
   "desk.room.closeSide": "Close {{name}} on this side",
+  "desk.room.fileNotListed": "{{path}} cannot open here: its project is no longer listed",
   "desk.room.moreChips": "{{count}} more",
 };
 
@@ -485,6 +486,7 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.room.explorerEmpty": "왼쪽에서 파일을 고르면 여기에 열려요",
   "desk.room.besideHint": "Desk 옆에 열려 있어요",
   "desk.room.closeSide": "이쪽 {{name}} 닫기",
+  "desk.room.fileNotListed": "{{path}}의 프로젝트가 목록에 없어 열 수 없어요",
   "desk.room.moreChips": "{{count}}개 더 보기",
 };
 
@@ -727,6 +729,7 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.room.explorerEmpty": "在左侧选择文件即可在此打开",
   "desk.room.besideHint": "已在 Desk 旁打开",
   "desk.room.closeSide": "关闭这一侧的 {{name}}",
+  "desk.room.fileNotListed": "{{path}} 无法打开：它的项目已不在列表中",
   "desk.room.moreChips": "另外 {{count}} 个",
 };
 
@@ -969,6 +972,7 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.room.explorerEmpty": "左でファイルを選ぶとここに開きます",
   "desk.room.besideHint": "Desk の横に開いています",
   "desk.room.closeSide": "こちら側の {{name}} を閉じる",
+  "desk.room.fileNotListed": "{{path}} を開けません。プロジェクトが一覧にありません",
   "desk.room.moreChips": "ほか {{count}} 件",
 };
 

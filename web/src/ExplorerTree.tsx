@@ -319,6 +319,9 @@ export function ExplorerTree({ actions, hint, footer, scope }: { actions: Action
       const matches = operation.path === expected || (operation.kind === "refused" && operation.path === submitted.parent);
       if (matches) {
         pendingName.current = null;
+        // Desk's Explorer opens the file it created in the tab panel; the
+        // Workspace's core opens its own from the same result.
+        if (scope && submitted.kind === "file" && operation.phase === "finished") actions.openFile(operation.destination, false);
         // The failed operation leaves its typed name in an editable row, so
         // the operator can correct a collision without starting over (B10).
         if (operation.phase === "failed") setDraft(submitted);
@@ -335,7 +338,7 @@ export function ExplorerTree({ actions, hint, footer, scope }: { actions: Action
       if (operation.kind === "path_copy" || operation.kind === "path_import") expand(parentPath(operation.destination));
     }
     setRefreshTick((tick) => tick + 1);
-  }, [operation, refreshListings, setSelection]);
+  }, [operation, refreshListings, setSelection, scope, actions]);
 
   const virtualizer = useVirtualizer({
     count: shown.length,

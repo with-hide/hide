@@ -1,71 +1,69 @@
 // The files Desk's room holds in the core (PRD desk-2-ui D-22, B19, B36,
 // B37). The room's tabs are the window's (`deskRoom.ts`); each file tab's
-// document is the core's, held by one `desk_file` event per change of the
-// room: a file tab added opens its document, letting go the preview it
-// replaced in the same event, and file tabs gone (a tab's `✕`, the panel
-// closed, another session, the room left) let theirs go together. The same
+// document is the core's. hided owns the hold for this window's connection:
+// the window sends the whole set of files its room shows (`desk_files`)
+// whenever that set changes and each time it connects, and hided lets the
+// set go when the connection closes, however the window went away. The same
 // file shown twice is one document, and a tab brought to the front sends
 // nothing.
 
 import { tabKey, type DeskRoomWindow, type DeskTab } from "./deskRoom";
+import { checkoutAtRoot, type SnapshotRest } from "./snapshot";
+import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
 type FileTab = Extract<DeskTab, { kind: "file" }>;
 
-/** A file named as the core holds it: its checkout's ids and its path. */
-export type DeskFileRef = { workspace_id: string; checkout_id: string; path: string };
-
-export type DeskFilePayload =
-  | ({ action: "open"; device_id?: string; replace?: DeskFileRef } & DeskFileRef)
-  | { action: "close"; files: DeskFileRef[] };
-
-function fileTabs(room: DeskRoomWindow): Map<string, FileTab> {
-  return new Map((room.panel?.tabs ?? []).filter((tab): tab is FileTab => tab.kind === "file").map((tab) => [tabKey(tab), tab]));
-}
+/** A file as hided holds it: its checkout's ids, the checkout's device, and its path. */
+export type DeskFileRef = { workspace_id: string; checkout_id: string; device_id: string; path: string };
 
 /**
- * The one `desk_file` payload a room change sends, or null when its file
- * tabs did not change. `place` names a tab's checkout, null when it is no
- * longer listed: such a file opens nothing, and the core forgets it with
- * its checkout. `remote` gives the device id an open names for a device's
- * file, absent for this machine's.
+ * The files `room` shows, each named by the checkout the catalog lists at
+ * its root. A tab whose checkout is not listed is left out; its view says so.
  */
-export function deskFileChange(
-  before: DeskRoomWindow,
-  after: DeskRoomWindow,
-  place: (tab: FileTab) => { workspace: string; checkout: string } | null,
-  remote: (tab: FileTab) => string | undefined,
-): DeskFilePayload | null {
-  const was = fileTabs(before);
-  const now = fileTabs(after);
-  if (was.size === 0 && now.size === 0) return null;
-  const ref = (tab: FileTab): DeskFileRef | null => {
-    const at = place(tab);
-    return at ? { workspace_id: at.workspace, checkout_id: at.checkout, path: tab.path } : null;
-  };
-  const gone = [...was].filter(([key]) => !now.has(key)).flatMap(([, tab]) => ref(tab) ?? []);
-  const added = [...now].filter(([key]) => !was.has(key)).map(([, tab]) => tab);
-  const opened = added.length === 1 ? ref(added[0]!) : null;
-  if (opened) {
-    const device = remote(added[0]!);
-    // An open replaces at most the preview tab (B36).
-    return { action: "open", ...opened, ...(device ? { device_id: device } : {}), ...(gone.length === 1 ? { replace: gone[0] } : {}) };
+export function deskRoomFiles(room: DeskRoomWindow, rest: SnapshotRest): DeskFileRef[] {
+  const seen = new Set<string>();
+  const files: DeskFileRef[] = [];
+  for (const tab of room.panel?.tabs ?? []) {
+    if (tab.kind !== "file" || seen.has(tabKey(tab))) continue;
+    seen.add(tabKey(tab));
+    const at = checkoutAtRoot(rest, (tab as FileTab).device_id, tab.root);
+    if (at) files.push({ workspace_id: at.workspace, checkout_id: at.checkout.id, device_id: tab.device_id, path: tab.path });
   }
-  return gone.length > 0 ? { action: "close", files: gone } : null;
+  return files;
 }
 
 /**
- * Calls `changed` once for each room this window moves to, with the room it
- * left. It keeps the last room it saw itself: a store change made while the
- * store announces another (the room closing as the screen leaves Desk, in
- * `ui.ts`) would otherwise reach a listener twice.
+ * Calls `send` with the room's whole file set each time it changes, and
+ * again each time the connection comes live, once a snapshot names the
+ * checkouts: sent before that, the set would be empty and let every file go.
+ * A tab whose checkout appears later is sent then.
  */
-export function watchDeskRoom(changed: (before: DeskRoomWindow, after: DeskRoomWindow) => void): () => void {
-  let last = useUiStore.getState().deskRoom;
-  return useUiStore.subscribe((state) => {
-    if (state.deskRoom === last) return;
-    const before = last;
-    last = state.deskRoom;
-    changed(before, last);
+export function watchDeskFiles(send: (files: DeskFileRef[]) => void): () => void {
+  let sent: string | null = null;
+  const check = () => {
+    const shell = useShellStore.getState();
+    if (shell.connection !== "live") {
+      // The next connection holds nothing until this window says so.
+      sent = null;
+      return;
+    }
+    if (!shell.rest) return;
+    const files = deskRoomFiles(useUiStore.getState().deskRoom, shell.rest);
+    const key = JSON.stringify(files);
+    if (key === sent) return;
+    sent = key;
+    send(files);
+  };
+  const unsubscribeRoom = useUiStore.subscribe((state, previous) => {
+    if (state.deskRoom !== previous.deskRoom) check();
   });
+  const unsubscribeShell = useShellStore.subscribe((state, previous) => {
+    if (state.connection !== previous.connection || state.rest?.navigator !== previous.rest?.navigator || state.rest?.status?.remote !== previous.rest?.status?.remote) check();
+  });
+  check();
+  return () => {
+    unsubscribeRoom();
+    unsubscribeShell();
+  };
 }

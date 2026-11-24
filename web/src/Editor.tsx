@@ -361,7 +361,8 @@ function EditorHeader({
           </Button>
         </Hint>
       ) : null}
-      {file && (document?.document_kind === "image" || document?.document_kind === "pdf") && !isVideoPath(display.path) ? (
+      {/* A region comment is left on a View's display, which Desk's file view (`root`) is not. */}
+      {file && shownRoot === undefined && (document?.document_kind === "image" || document?.document_kind === "pdf") && !isVideoPath(display.path) ? (
         <RegionCommentButton displayId={display.id} kind={document.document_kind} />
       ) : null}
       {file ? (
