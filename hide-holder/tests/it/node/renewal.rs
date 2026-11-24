@@ -36,6 +36,7 @@ fn earlier_build(folder: &Folder) -> hide_kit::holders::Source {
     hide_kit::holders::Source {
         program,
         conpty: built.conpty,
+        identity: None,
     }
 }
 
@@ -263,6 +264,7 @@ fn a_renewal_that_cannot_happen_leaves_the_earlier_holder_running() {
     let missing = hide_kit::holders::Source {
         program: folder.home.path().join("gone").join("hide-holder"),
         conpty: source().conpty,
+        identity: None,
     };
     {
         let broken = Connection::of_build(folder.home.path(), &folder.state, missing);
@@ -426,6 +428,7 @@ fn failing_build(folder: &Folder) -> hide_kit::holders::Source {
     hide_kit::holders::Source {
         program,
         conpty: source().conpty,
+        identity: None,
     }
 }
 

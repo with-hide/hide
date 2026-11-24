@@ -719,6 +719,7 @@ impl Holders {
         Ok(Source {
             program: dir.join(hide_kit::holders::program_name()),
             conpty: cfg!(windows).then(|| dir.join(hide_kit::holders::CONPTY_SOURCE)),
+            identity: None,
         })
     }
 

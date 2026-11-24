@@ -89,6 +89,7 @@ pub fn source() -> Source {
     Source {
         program: PathBuf::from(env!("CARGO_BIN_EXE_hide-holder")),
         conpty,
+        identity: None,
     }
 }
 

@@ -41,6 +41,7 @@ use hide_holder_protocol::{
     ClientMessage, CloseReason, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError,
     PROTOCOL_VERSION, Size, Theme, read_holder, write_client,
 };
+use hide_platform::privacy::Given;
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -108,6 +109,10 @@ const LEFTOVER_LIMIT: Duration = Duration::from_secs(5);
 
 /// Where diagnostics go: one JSON record each.
 pub type Sink = fn(serde_json::Value);
+
+/// What tells a holder to answer macOS's consent for itself; the holder
+/// reads it as its first argument.
+pub const ANSWER_FOR_ITSELF: &str = "--answer-for-itself";
 
 /// The holders that still run among the panes `state_dir` records, by pid,
 /// read without the records lock: a caller that only asks whose pane a
@@ -339,6 +344,10 @@ pub struct Panes {
     sink: Sink,
     /// The version folder names this process took (`holders::prepare`).
     names: holders::VersionNames,
+    /// The folder whose holder's name was last written to the diagnostics
+    /// (`pane_holder.identity`), so it is said once per folder and not for
+    /// every pane.
+    identity_said: Mutex<Option<String>>,
     /// Incarnations this process took from the folder's file and has not
     /// given yet ([`Panes::next_incarnation`]).
     incarnations: Mutex<std::ops::Range<u64>>,
@@ -364,6 +373,7 @@ impl Panes {
             boot,
             sink,
             names: holders::VersionNames::default(),
+            identity_said: Mutex::new(None),
             incarnations: Mutex::new(0..0),
         };
         Ok(panes)
@@ -487,7 +497,40 @@ impl Panes {
     /// Makes or finds `source`'s version folder and holds it as used until
     /// the answer is dropped, as a start does ([`holders::prepare`]).
     pub fn prepare_folder(&self, source: &holders::Source) -> Result<holders::Reservation, String> {
-        holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
+        let reservation = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)?;
+        self.say_identity(&reservation);
+        Ok(reservation)
+    }
+
+    /// Writes whose name `reservation`'s holder answers macOS's consent
+    /// under, once per folder: a source that names no app says nothing.
+    fn say_identity(&self, reservation: &holders::Reservation) {
+        let Some(given) = &reservation.given else {
+            return;
+        };
+        let folder = reservation
+            .dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        {
+            let mut said = self
+                .identity_said
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if said.as_deref() == Some(folder.as_str()) {
+                return;
+            }
+            *said = Some(folder.clone());
+        }
+        let (state, reason, detail) = match given {
+            Given::Shared => ("shared", None, None),
+            Given::Own(refusal) => ("own", Some(refusal.reason()), refusal.detail()),
+        };
+        self.emit(
+            "pane_holder.identity",
+            json!({ "folder": folder, "state": state, "reason": reason, "detail": detail }),
+        );
     }
 
     fn emit(&self, event: &str, fields: serde_json::Value) {
@@ -765,8 +808,15 @@ impl Panes {
     ) -> Result<PaneRecord, String> {
         let pane = &request.pane;
         let mut command = ResidentCommand::new(&reservation.program);
+        command.current_dir(&reservation.dir);
+        // First, where the holder looks for it before it reads anything
+        // else (`hide-holder`, `answer_for_itself`): only a holder that has
+        // the app's name answers for itself, because one that answered
+        // under its own path would be asked about once per build as now.
+        if reservation.given.as_ref().is_some_and(Given::is_shared) {
+            command.arg(ANSWER_FOR_ITSELF);
+        }
         command
-            .current_dir(&reservation.dir)
             .arg("--socket")
             .arg(layout::holder_socket(&self.state_dir, pane))
             .arg("--rows")

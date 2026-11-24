@@ -37,10 +37,21 @@ fn a_holder_replaced_on_disk_starts_from_a_folder_named_for_its_new_bytes() {
     let source = Source {
         program: program.clone(),
         conpty: None,
+        identity: None,
     };
     let names = VersionNames::default();
     let first = prepare(home.path(), 7, &source, &names).unwrap();
     assert_eq!(name_of(&first.dir), version_name(7, &source).unwrap());
+    // The name a source that names no app has always had: the hash of each
+    // file's name and bytes, and nothing else. A build that named it
+    // otherwise would leave every running pane on "another build's" holder.
+    let always = if cfg!(windows) {
+        "v7-95773048cf5296bd"
+    } else {
+        "v7-8d15435a7997d6fb"
+    };
+    assert_eq!(name_of(&first.dir), always);
+    assert!(first.given.is_none());
     drop(first);
 
     let replacement = home.path().join("holder-source.new");
@@ -74,6 +85,7 @@ fn a_cleanup_removes_only_the_old_folders_nothing_runs_from() {
     let unused = Source {
         program: unused_program,
         conpty: current.conpty.clone(),
+        identity: None,
     };
     let unused_name = name_of(&home.prepare(0, &unused).dir);
 

@@ -40,7 +40,7 @@ pub const IDENTITY_FILE: &str = "Info.plist";
 pub const VERIFIED_FROM_MACOS: u32 = 15;
 
 /// The app a program answers as.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Identity<'a> {
     /// The app's bundle identifier.
     pub identifier: &'a str,

@@ -131,6 +131,8 @@ fn parse(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Conf
                         .map_err(|error| format!("--theme: {error}"))?,
                 )
             }
+            // Read by `answer_for_itself` before anything else is.
+            Some(ANSWER | ANSWERED) => {}
             Some("--") => break,
             _ => return Err(format!("unknown argument {argument:?}")),
         }
@@ -251,6 +253,42 @@ fn console_input_helper(pid: Option<std::ffi::OsString>) -> ExitCode {
     }
 }
 
+/// The first argument of a holder its starter tells to answer macOS's
+/// consent for itself, and what the start it then makes of itself carries in
+/// its place, so that start does not start again.
+const ANSWER: &str = "--answer-for-itself";
+const ANSWERED: &str = "--answered-for-itself";
+
+/// What became of the starter's word to answer for itself.
+enum Answering {
+    /// This is the second start: the program macOS holds responsible for
+    /// what the pane's program asks is this holder.
+    Itself,
+    /// Asked, and it could not be done; the holder goes on as it was.
+    Refused(hide_platform::privacy::NotAnswering),
+}
+
+/// Starts this holder again as the program responsible for itself when its
+/// starter asked (`hide_platform::privacy`). Only a core no app is above
+/// asks: its panes are otherwise asked about under the path of each build.
+/// It runs before anything is opened or taken, because the second start
+/// takes over only what is not marked to close.
+fn answer_for_itself() -> Option<Answering> {
+    let mut arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    match arguments.first()?.to_str()? {
+        ANSWERED => Some(Answering::Itself),
+        ANSWER => {
+            arguments[0] = ANSWERED.into();
+            let refused = match std::env::current_exe() {
+                Ok(program) => hide_platform::privacy::answer_for_itself(&program, &arguments),
+                Err(error) => hide_platform::privacy::NotAnswering::Start(error),
+            };
+            Some(Answering::Refused(refused))
+        }
+        _ => None,
+    }
+}
+
 fn main() -> ExitCode {
     let begun = std::time::Instant::now();
     #[cfg(windows)]
@@ -260,6 +298,7 @@ fn main() -> ExitCode {
             return console_input_helper(arguments.next());
         }
     }
+    let answering = answer_for_itself();
     std::panic::set_hook(Box::new(on_panic));
     // The pipe the starter reads this holder's start from; a holder started
     // by hand has none and says it on its standard error instead.
@@ -291,6 +330,25 @@ fn main() -> ExitCode {
         }
     };
     let _ = LOG.set(log.clone());
+    match &answering {
+        None => {}
+        Some(Answering::Itself) => {
+            log.event("holder.responsible", &[("outcome", "reexecuted".into())]);
+        }
+        Some(Answering::Refused(refused)) => {
+            let error = match refused {
+                hide_platform::privacy::NotAnswering::Start(error) => Some(error.to_string()),
+                _ => None,
+            };
+            log.event(
+                "holder.responsible",
+                &[
+                    ("outcome", refused.reason().into()),
+                    ("error", error.into()),
+                ],
+            );
+        }
+    }
     if let Err(reason) = leave_start_folder() {
         log.event("holder.start_failed", &[("reason", reason.as_str().into())]);
         report(&format!("failed {reason}"));

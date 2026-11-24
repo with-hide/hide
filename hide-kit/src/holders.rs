@@ -21,6 +21,13 @@
 //!
 //! The runtime copies (`crate::runtime`) live under `~/.hide/runtime`, a
 //! different root with its own lock, so neither cleanup touches the other's.
+//!
+//! A source that names an app ([`Source::identity`], macOS, the core a login
+//! item started) gets a folder of its own, with the app's identity file
+//! beside the holder when the system says the holder is the app's
+//! (`hide_platform::privacy::give`). Its name takes the identity into the
+//! hash, so the folder a core the app started copies is the one it always
+//! was, byte for byte.
 
 use std::fs;
 use std::io;
@@ -30,6 +37,7 @@ use std::time::{Duration, SystemTime};
 
 use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::lock::{Lock, Mode, Waited, lock_file};
+use hide_platform::privacy::{self, Given, Identity};
 use sha2::{Digest, Sha256};
 
 use crate::layout;
@@ -74,6 +82,11 @@ pub const FOLDERS_CAP: usize = 8;
 pub struct Source {
     pub program: PathBuf,
     pub conpty: Option<PathBuf>,
+    /// The app the holders of this folder answer macOS's consent as, named
+    /// only by a core no app is above (the one a login item started): its
+    /// panes would otherwise be asked about under the path of each build.
+    /// `None` everywhere else, and the folder is then what it always was.
+    pub identity: Option<Identity<'static>>,
 }
 
 /// The files a folder holds, each by the name it has in the folder and where
@@ -111,17 +124,34 @@ fn collect(dir: &Path, name: &str, found: &mut Vec<(String, PathBuf)>) -> io::Re
 /// The folder name for `source` at protocol `version`: `v<version>-<hash>`,
 /// the hash taken over every file's name and bytes.
 pub fn version_name(version: u16, source: &Source) -> io::Result<String> {
-    name_of(version, &files(source)?)
+    name_of(version, &files(source)?, source.identity.as_ref())
 }
 
-fn name_of(version: u16, files: &[(String, PathBuf)]) -> io::Result<String> {
+fn name_of(
+    version: u16,
+    files: &[(String, PathBuf)],
+    identity: Option<&Identity<'_>>,
+) -> io::Result<String> {
     let mut digest = Sha256::new();
-    for (name, path) in files {
-        digest.update((name.len() as u64).to_le_bytes());
-        digest.update(name.as_bytes());
-        let bytes = fs::read(path)?;
+    let part = |digest: &mut Sha256, bytes: &[u8]| {
         digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(&bytes);
+        digest.update(bytes);
+    };
+    for (name, path) in files {
+        part(&mut digest, name.as_bytes());
+        part(&mut digest, &fs::read(path)?);
+    }
+    // After every file, so a source that names no app hashes as it always
+    // did. The name `privacy::IDENTITY_FILE` cannot be a holder file's.
+    if let Some(identity) = identity {
+        part(&mut digest, privacy::IDENTITY_FILE.as_bytes());
+        part(&mut digest, identity.identifier.as_bytes());
+        part(&mut digest, identity.name.as_bytes());
+        part(&mut digest, identity.requirement.as_bytes());
+        for (key, sentence) in identity.usage {
+            part(&mut digest, key.as_bytes());
+            part(&mut digest, sentence.as_bytes());
+        }
     }
     let hash: String = digest
         .finalize()
@@ -163,7 +193,15 @@ fn stamps(files: &[(String, PathBuf)]) -> io::Result<Vec<Stamp>> {
 /// on disk (an update) is hashed again before its next start.
 #[derive(Default)]
 pub struct VersionNames {
-    last: Mutex<Option<(u16, Vec<Stamp>, String)>>,
+    last: Mutex<Option<Named>>,
+}
+
+/// The name last taken and what it was taken from.
+struct Named {
+    version: u16,
+    stamps: Vec<Stamp>,
+    identity: Option<Identity<'static>>,
+    name: String,
 }
 
 impl VersionNames {
@@ -171,17 +209,23 @@ impl VersionNames {
         let files = files(source)?;
         let before = stamps(&files)?;
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((known, stamps, name)) = last.as_ref()
-            && *known == version
-            && *stamps == before
+        if let Some(named) = last.as_ref()
+            && named.version == version
+            && named.stamps == before
+            && named.identity == source.identity
         {
-            return Ok(name.clone());
+            return Ok(named.name.clone());
         }
-        let name = name_of(version, &files)?;
+        let name = name_of(version, &files, source.identity.as_ref())?;
         // A file written while it was read gives a name for no one state of
         // it: answered, since a start asked, but not kept.
         if stamps(&files)? == before {
-            *last = Some((version, before, name.clone()));
+            *last = Some(Named {
+                version,
+                stamps: before,
+                identity: source.identity,
+                name: name.clone(),
+            });
         }
         Ok(name)
     }
@@ -193,6 +237,10 @@ impl VersionNames {
 pub struct Reservation {
     pub dir: PathBuf,
     pub program: PathBuf,
+    /// Whose name the folder's holder answers macOS's consent under, when
+    /// the source named an app: a holder is told to answer for itself only
+    /// where this is [`Given::Shared`].
+    pub given: Option<Given>,
     _lock: Lock,
 }
 
@@ -223,9 +271,19 @@ pub fn prepare(
     if !is_finished(&dir, &name) {
         make(&root, &dir, &name, source)?;
     }
+    let program = dir.join(program_name());
+    // Asked on every start: a folder whose identity file could not be
+    // written when it was made gets it now. With the file there this reads
+    // it, and a holder the system refused is not asked about again in this
+    // process (`privacy::give`).
+    let given = source
+        .identity
+        .as_ref()
+        .map(|identity| privacy::give(&program, identity));
     Ok(Reservation {
-        program: dir.join(program_name()),
+        program,
         dir,
+        given,
         _lock: lock,
     })
 }
@@ -274,6 +332,11 @@ fn copy(source: &Source, staging: &Path, name: &str) -> io::Result<()> {
             permissions.set_readonly(false);
             fs::set_permissions(&to, permissions)?;
         }
+    }
+    // Here, so the folder appears under its name with the file in it. What
+    // was given is asked again where the folder is reserved (`prepare`).
+    if let Some(identity) = &source.identity {
+        privacy::give(&staging.join(program_name()), identity);
     }
     fs::write(staging.join(MARKER), name)
 }
