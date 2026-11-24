@@ -127,7 +127,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
       <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
         {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
         <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
-          {pane ? <AncestorPath pane={pane} actions={deskActions} /> : null}
+          {pane ? <AncestorPath pane={pane} actions={deskActions} names="always" /> : null}
           <Hint label={title} reveals>
             <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
           </Hint>

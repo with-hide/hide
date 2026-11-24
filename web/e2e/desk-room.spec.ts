@@ -5,7 +5,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { enterWorkspace } from "./wire";
+import { enterWorkspace, screenshot } from "./wire";
 
 // PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
 // Desk's room with a session opened beside it from the sidebar, ⌘J between
@@ -171,6 +171,36 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   } finally {
     desk.daemon.stop();
     desk.engine.stop();
+  }
+});
+
+test("a child session beside Desk names its ancestors before its name, as its pane head does, and an ancestor's name opens it beside Desk (PRD desk-2-ui B47) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const engine = await startFixture({ family: true });
+  const daemon = await startHided(engine, "desk-room-ancestors");
+  try {
+    const [parent, child] = engine.panes;
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // The child's row stands under its parent's.
+    if (!(await row(page, child!).count())) await page.locator(`[data-tree-chevron="${parent}"]`).click();
+    await row(page, child!).click();
+    await expect(page.locator(`[data-desk-thread-panel="${child}"]`)).toBeVisible();
+
+    const head = page.locator("[data-desk-session-head]");
+    const ancestor = head.locator(`[data-pane-return="${parent}"]`);
+    await expect(head.locator("[data-desk-session-title]")).toHaveText("Agent two");
+    await screenshot(page, "desk-room-ancestors");
+    await expect(ancestor.getByText("Agent one", { exact: true })).toBeVisible();
+    await ancestor.click();
+    await expect(page.locator(`[data-desk-thread-panel="${parent}"]`)).toBeVisible();
+    await expect(head.locator("[data-pane-return]")).toHaveCount(0);
+  } finally {
+    daemon.stop();
+    engine.stop();
   }
 });
 
