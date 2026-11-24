@@ -1902,8 +1902,6 @@ impl Pairing {
         }
     }
 
-    /// Who holds the device helper's folder on this machine, as `guest`
-    /// finds it; with `take`, `guest` takes it when it is free.
     /// [`Ask::ReleaseHelper`]: gives the device helper's folder back from a
     /// machine that holds no grant here any more, or names the paired
     /// machine that still holds it. It opens no endpoint: the machine that
@@ -1945,6 +1943,8 @@ impl Pairing {
         })
     }
 
+    /// Who holds the device helper's folder on this machine, as `guest`
+    /// finds it; with `take`, `guest` takes it when it is free.
     async fn helper(
         self: &Arc<Self>,
         peers: &HostPeers,
