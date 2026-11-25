@@ -25,7 +25,7 @@ import { ThreadView } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
 import { mentionTree } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -55,6 +55,7 @@ export const DESK_SCENES = [
   { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
+  { state: "mention-empty", label: "@ 맞는 것이 없을 때" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
@@ -73,7 +74,7 @@ const noop = () => undefined;
 
 const CHAT_ACTIONS: DeskChatActions = {
   onOpen: noop, onAnswer: noop, onCancel: noop, onRequeue: noop, onRetry: noop, onOutput: noop, onMission: noop,
-  onApproval: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
+  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
 };
 
 const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop };
@@ -185,9 +186,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -245,12 +246,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "mention":
     case "mention-open":
     case "mention-search":
+    case "mention-empty":
     case "mention-project": {
-      const query = state === "mention-search" ? "리뷰" : "";
-      const section = { sessions: menuSessions(now), projects: MENU_PROJECTS };
+      const query = state === "mention-search" ? "리뷰" : state === "mention-empty" ? "zzzz" : "";
+      const section = state === "mention-empty" ? { sessions: [], projects: [] } : { sessions: menuSessions(now), projects: MENU_PROJECTS };
       const tree = mentionTree(section, query, state === "mention-open" ? { "agent-holder": true } : {});
       const entered = state === "mention-project" ? { project: MENU_PROJECTS[0]!, sessions: enteredSessions(now) } : null;
-      const active = state === "mention-project" ? "session:agent-record-now" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
+      const active = state === "mention-project" ? "session:agent-record-now" : state === "mention-empty" ? "" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
       const menu = <DeskMentionMenu tree={tree} searching={query !== ""} entered={entered} active={active} onActive={noop} onSession={noop} onProject={noop} onFold={noop} onBack={noop} />;
       body = <Room chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : `@${query}`} mention={menu} />)} />;
       break;
@@ -287,7 +289,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <OutputsCriteria />;
       break;
     case "chat-states":
-      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고" })} />;
+      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고", queued: [{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }] })} />;
       break;
     case "thread-states": {
       const fresh = deskJob(jobs.mention!, { id: "fresh", title: "로그 정리", state: "starting", now: null, plan: null, pull_requests: [], outputs: [] });

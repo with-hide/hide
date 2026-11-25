@@ -321,6 +321,9 @@ type UiStore = {
   /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
   deskReturn: string | null;
   setDeskReturn: (pane: string | null) => void;
+  /** How far above the window's foot the corner's notices stand: the top of the input boxes drawn there (`noticeFloor.ts`). */
+  noticeFloor: number;
+  setNoticeFloor: (floor: number) => void;
   /** Overview is a shell layer; opening it leaves the Workspace mounted. */
   overviewOpen: boolean;
   overview: OverviewPlace;
@@ -574,6 +577,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
   deskReturn: null,
   setDeskReturn: (deskReturn) => set({ deskReturn }),
+  noticeFloor: 0,
+  setNoticeFloor: (noticeFloor) => set({ noticeFloor }),
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,

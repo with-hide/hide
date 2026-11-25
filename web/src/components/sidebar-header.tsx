@@ -1,5 +1,5 @@
 import { useInterfaceTranslation } from "../i18n/client";
-import { ChevronDownIcon, DiamondIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, RepeatIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
+import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, RepeatIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
 import { BotFace } from "./bot-mark";
 import { cn } from "../lib/utils";
 import { Kbd } from "./ui/kbd";
@@ -7,6 +7,7 @@ import { RowButton } from "./ui/row-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
 import { StatusMark } from "./status-mark";
+import { DeskMark } from "./desk/desk-entry";
 
 
 /** A device the hidden rail's menu lists. */
@@ -111,7 +112,7 @@ export function SidebarHeader({
         <Hint label={desk.asking > 0 ? `${t("desk.name")} · ${t("desk.lane.threadsCount", { count: desk.asking })}` : t("desk.name")} shortcut={desk.chord}>
           <RowButton aria-current={desk.selected ? "page" : undefined} data-sidebar-desk="true" data-desk-sidebar-row="true" onClick={desk.onOpen}
             className={cn("h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", desk.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
-            <DiamondIcon aria-hidden="true" className="size-(--size-icon) shrink-0 fill-current" />
+            <DeskMark size="md" />
             <span className="min-w-0 flex-1 truncate text-left">{t("desk.name")}</span>
             {desk.asking > 0 ? <StatusMark mark="turn" data-desk-sidebar-asking={desk.asking} /> : null}
           </RowButton>

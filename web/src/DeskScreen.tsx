@@ -9,11 +9,11 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, namesView, openSession, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
+import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
-import { DisplayEditor } from "./Editor";
+import { DisplayEditor, DocumentKeeper } from "./Editor";
 import { Button } from "./components/ui/button";
 import { ExplorerTree, type ExplorerScope } from "./ExplorerTree";
 import { MissionMap } from "./MissionMap";
@@ -38,8 +38,9 @@ import { FileMark } from "./components/file-mark";
 import { fileIcon } from "./fileIcons";
 import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
+import { composingKey } from "./keys";
 import { machineName } from "./screenMachine";
-import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
+import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
@@ -121,9 +122,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
   const box = useRef<MentionInputHandle>(null);
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
-  const pending = useRef<{ text: string; after: number } | null>(null);
-  // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
-  const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
+  const pending = useRef<{ text: string; after: number; queued: ReadonlySet<number> } | null>(null);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -134,28 +133,29 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const liveText = live?.text ? live.text : null;
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
-  const canSend = !answering && agent?.state === "ready";
+  // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
+  // A message the agent could not take (its sign-in, a session that did not open) comes back as the first waiting one, so
+  // the box never gets it again (B6). The core refuses one more when the line is full: then the words stay in the box.
+  const queued = desk?.conversation.queued ?? NO_QUEUED;
+  const queuedFull = desk?.conversation.queued_full ?? false;
+  const queuedHeld = desk?.conversation.queued_held ?? false;
+  const canSend = agent?.state === "ready" && !queuedFull;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
     const sent = pending.current;
     if (!sent || !items) return;
-    if (items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text)) {
+    const shown = items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text) || queued.some((one) => !sent.queued.has(one.id) && one.text === sent.text);
+    if (shown) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
     }
-  }, [items, setDraft]);
-  useEffect(() => {
-    const sent = lastSent.current;
-    if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
-    lastSent.current = null;
-    if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
-  }, [items, setDraft]);
+  }, [items, queued, setDraft]);
 
   useLayoutEffect(() => {
     const box = scroller.current;
     if (box && stick.current) box.scrollTop = box.scrollHeight;
-  }, [shown, liveText, answering]);
+  }, [shown, liveText, answering, queued]);
   useEffect(() => {
     const box = scroller.current;
     if (!box) return;
@@ -172,19 +172,19 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (!canSend || !items) return;
     const out = outgoing(words);
     if (!out.text) return;
-    pending.current = { text: out.text, after: lastUserId(items) };
-    lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
+    pending.current = { text: out.text, after: lastUserId(items), queued: new Set(queued.map((one) => one.id)) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions);
   };
 
-  // The `@` menu: open while the caret ends an `@` word Esc did not close, and something matches it.
+  // The `@` menu: open while the caret ends an `@` word Esc did not close; when nothing matches it says so in one row.
   const at = mentionAt(draft.text, caret);
   const entered = menu.entered !== null ? mentions?.projects.find((project) => project.id === menu.entered) ?? null : null;
   const tree = at && mentions ? mentionTree(mentions, at.query, menu.folds) : null;
   const enteredSessions = entered && mentions ? mentions.sessions.filter((session) => entered.sessions.includes(session.id)) : [];
   const values = entered ? [`new:${entered.id}`, ...enteredSessions.map((session) => `session:${session.id}`)] : tree ? [...tree.rows, ...tree.found].map((row) => `session:${row.session.id}`).concat(tree.projects.map((project) => `project:${project.id}`)) : [];
-  const menuOpen = at !== null && menu.dismissed !== at.start && values.length > 0;
+  const menuOpen = at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null);
+  const menuEmpty = menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
 
   const pick = (mention: DeskMention) => {
@@ -213,8 +213,17 @@ export function DeskScreen({ actions }: { actions: Actions }) {
 
   // The `@` menu's keys; the composer sends on ↵ when the menu is closed.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.nativeEvent.isComposing || !menuOpen) return;
+    if (composingKey(event) || !menuOpen) return;
     const key = event.key;
+    // With nothing to choose the menu has no keys of its own but Esc, which closes it; ↵ sends the words.
+    if (menuEmpty) {
+      if (key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({ ...menu, dismissed: at!.start });
+      }
+      return;
+    }
     const row = tree?.rows.find((one) => `session:${one.session.id}` === active);
     if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
@@ -272,6 +281,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onOutput: room.output,
     onMission: room.mission,
     onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
+    onQueuedRemove: (id) => actions.deskQueuedRemove(id),
     onNoticeAction,
     onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
     onMention: (mention) => {
@@ -293,6 +303,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const shownOutput = front?.kind === "output" ? front.output.id : null;
   const composer = (
     <DeskComposer
+      notice={queuedFull ? t("desk.queued.full") : null}
       value={draft.text}
       draft={draft}
       inputRef={box}
@@ -302,6 +313,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       held={!canSend}
       focused={menuOpen}
       menuOpen={menuOpen}
+      menuEmpty={menuEmpty}
       menu={menuOpen && tree ? (
         <DeskMentionMenu
           tree={tree}
@@ -338,10 +350,10 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           room={room}
           chat={(
             <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} />} composer={composer} scrollRef={scroller}>
-              {shown.length === 0 && !answering ? (
+              {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}
@@ -372,9 +384,9 @@ function everyCard(): DeskJob[] {
   return laneCards(useShellStore.getState().deskJobs);
 }
 
-/** The output a session's own line names, as its card lists it when it does: the View's id, or its address or file. */
-function outputOf(job: DeskJob | undefined, output: DeskOutput): DeskOutput {
-  return job?.outputs.find((made) => made.id === output.id || (output.url !== null && made.url === output.url) || (output.path !== null && namesView(made, output.path))) ?? output;
+/** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
+function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
+  return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
 }
 
 /** A mission's title as the mission list names it, else as its Conductor's card does. */
@@ -501,6 +513,7 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   );
 }
 
+const NO_QUEUED: readonly DeskQueuedMessage[] = [];
 const NO_WIDTHS = { view_width: null, session_width: null };
 
 /**
@@ -527,7 +540,10 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
   if (row && checkoutPath) known.current = { title: row.identity_label, node: row.device_id, checkout: checkoutPath };
   const identity = known.current;
   const asleep = useShellStore((s) => (identity ? sleepingOf(s.rest?.navigator?.sleeping_sessions, identity) : null));
-  const sleeping = job?.state === "sleeping" || (!row && asleep !== null);
+  // Most agents sleep in their own pane, which stays (PRD agent-sleep) and wakes there; an agent whose sleep closes
+  // its pane (Pi's) is found among the sleeping sessions and wakes in a new one (B43).
+  const inPane = row?.sleep ?? null;
+  const sleeping = inPane !== null || job?.state === "sleeping" || (!row && asleep !== null);
   const title = row?.identity_label ?? job?.title ?? identity?.title ?? "";
   const [waking, setWaking] = useState<SessionIdentity | null>(null);
   useWakeFollow(waking, paneId, () => setWaking(null));
@@ -571,15 +587,23 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       foot={sleeping ? (
         <SessionSleepingFoot
           title={title}
-          session={asleep}
-          onWake={(id) => {
-            actions.wakeSleepingSession(id);
-            setWaking(identity);
-          }}
+          sleep={inPane}
+          state={asleep?.phase ?? "unknown"}
+          onFresh={() => actions.wakeAgent(paneId, true)}
+          onWake={
+            inPane
+              ? inPane.state === "waking" ? null : () => actions.wakeAgent(paneId)
+              : asleep?.wake_available
+                ? () => {
+                    actions.wakeSleepingSession(asleep.sleep_id);
+                    setWaking(identity);
+                  }
+                : null
+          }
         />
       ) : null}
       onTerminal={() => actions.deskTerminal()}
-      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output) })}
+      onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null) })}
       onMission={room.mission}
       onSession={room.session}
     />
@@ -719,10 +743,13 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
     };
   });
   let body: React.ReactNode;
+  let keepers: React.ReactNode = null;
   if (front?.kind === "output") body = <DeskOutputView key={tabKey(front)} output={front.output} viewKey={tabKey(front)} actions={actions} />;
   else if (front?.kind === "mission") body = <MissionMap missionId={front.mission} actions={deskActions} onNode={(node) => (node.pane_id ? room.session({ name: "", mark: null, agent_kind: null, pane_id: node.pane_id }) : undefined)} />;
   else if (front?.kind === "file") {
     const beside = panel.beside ? panel.tabs.find((one) => tabKey(one) === panel.beside) : undefined;
+    const shown = beside?.kind === "file" ? [front, beside] : [front];
+    keepers = <DeskDocumentKeepers files={shown} actions={deskActions} />;
     body = beside?.kind === "file" ? (
       <div className="flex min-h-0 min-w-0 flex-1" data-desk-file-split="true">
         <DeskFileView key={`front:${tabKey(front)}`} tab={front} side="front" actions={deskActions} onClose={() => set((now) => closeSide(now, "front"))} />
@@ -744,9 +771,29 @@ function DeskPanelView({ actions, deskActions, room, scope }: { actions: Actions
       onCloseTab={(key) => set((now) => closeTab(now, key))}
       onClose={() => set(closePanel)}
     >
+      {keepers}
       {body}
     </DeskTabPanel>
   );
+}
+
+type FileTab = Extract<DeskTab, { kind: "file" }>;
+
+/** The document the core holds for a Desk file tab: the editor tab of its checkout's file, once the core has opened it. */
+function heldDocument(state: ReturnType<typeof useShellStore.getState>, tab: FileTab) {
+  const checkoutId = checkoutAtRoot(state.rest, tab.device_id, tab.root)?.checkout.id ?? null;
+  return state.editor?.tabs.find((one) => one.kind === "file" && one.checkout_id === checkoutId && one.path === tab.path) ?? null;
+}
+
+/**
+ * One keeper per document the panel shows, however many of its sides show it, as a Workspace's View mounts one
+ * (`ViewAreas.tsx`): its autosave, the save of a draft left behind, and the stored draft's restore and its removal once
+ * a save lands, which without it stayed in the browser and came back as an unsaved draft after a reload.
+ */
+function DeskDocumentKeepers({ files, actions }: { files: FileTab[]; actions: Actions }) {
+  // One string, so the selector reads the same value until a held document changes.
+  const held = useShellStore((s) => [...new Set(files.map((tab) => heldDocument(s, tab)?.id).filter((id) => id !== undefined))].join("\n"));
+  return held ? held.split("\n").map((tabId) => <DocumentKeeper key={tabId} tabId={tabId} actions={actions} />) : null;
 }
 
 /**
@@ -761,7 +808,7 @@ function DeskFileView({ tab, side, actions, onClose }: { tab: Extract<DeskTab, {
   // Plain ids, so the selectors read the same value until the catalog moves.
   const workspaceId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.workspace ?? null);
   const checkoutId = useShellStore((s) => checkoutAtRoot(s.rest, tab.device_id, tab.root)?.checkout.id ?? null);
-  const held = useShellStore((s) => s.editor?.tabs.find((one) => one.kind === "file" && one.checkout_id === checkoutId && one.path === tab.path) ?? null);
+  const held = useShellStore((s) => heldDocument(s, tab));
   const key = `desk:${side}:${tabKey(tab)}`;
   const display = useMemo<ViewDisplaySnapshot>(
     () => ({ id: key, tab_id: held?.id ?? null, path: tab.path, label: fileName(tab.path), kind: "file", committed: null, preview: false, state: "open", reason: null }),

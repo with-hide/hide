@@ -2,15 +2,21 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { enterWorkspace } from "./wire";
+import { draftId, seedDraft, storedDrafts } from "./drafts";
+import { nativeSessionId, prepareEngineWriter } from "./session-reader-fixture";
+import { enterWorkspace, screenshot } from "./wire";
 
-// PRD desk-2-ui B2-B7, B21, B44 and PRD session-docs-and-assistant B41:
-// Desk's room with a session opened beside it from the sidebar, ⌘J between
-// that session and its Agent tab, and Settings › Labs › Desk's switch, off on
-// a new install. Each test starts one stack and asserts one contract.
+// PRD desk-2-ui B2-B7, B19, B21, B28, B35, B36, B43, B44, B47 and PRD
+// session-docs-and-assistant B41: Desk's room with a session opened beside it
+// from the sidebar, ⌘J between that session and its Agent tab, a file of the
+// tab panel saved without leaving a draft behind, the corner's notices above
+// Desk's input boxes, a sleeping session woken from beside Desk, a child's
+// ancestors in its head, and Settings › Labs › Desk's switch, off on a new
+// install. Each test starts one stack and asserts one contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
@@ -80,6 +86,15 @@ async function startDesk(page: Page, name: string, open = true, agents = true): 
 const room = (page: Page) => page.locator("[data-desk-room]");
 const row = (page: Page, pane: string) => page.locator(`[data-agent-open="${pane}"]`);
 
+/** Opens `name` from the session's Explorer in Desk's tab panel, with the session beside Desk, and gives its editor. */
+async function openDeskFile(page: Page, desk: Desk, name: string) {
+  await row(page, desk.pane).click();
+  await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
+  await page.locator("[data-desk-session-files]").click();
+  await page.locator(`[data-desk-tab-panel] [data-explorer-row$="/${name}"]`).dblclick();
+  return page.locator(`[data-desk-file$="/${name}"] [data-editor-body] .cm-content`);
+}
+
 test("a sidebar row opens its session beside Desk, marked on its row, Escape closes it, and a ⌘-click goes to its tab (PRD desk-2-ui B2-B6, B21) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-room-beside");
@@ -138,12 +153,7 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   try {
     const file = path.join(desk.engine.root, "fixture", "plan.md");
     fs.writeFileSync(file, "plan\n");
-    await row(page, desk.pane).click();
-    await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
-    await page.locator("[data-desk-session-files]").click();
-    const entry = page.locator('[data-desk-tab-panel] [data-explorer-row$="/plan.md"]');
-    await entry.dblclick();
-    const editor = page.locator('[data-desk-file$="/plan.md"] [data-editor-body] .cm-content');
+    const editor = await openDeskFile(page, desk, "plan.md");
     await expect(editor).toContainText("plan");
     await editor.click();
     await page.keyboard.press("ControlOrMeta+Home");
@@ -171,6 +181,185 @@ test("the session's Explorer opens a file in the tab panel as its checkout's own
   } finally {
     desk.daemon.stop();
     desk.engine.stop();
+  }
+});
+
+test("a file saved with ⌘S in Desk's tab panel leaves no unsaved draft in the browser, so a reload raises no draft notice (PRD desk-2-ui B36) @platform", async ({ page }) => {
+  // e2e: the draft lives in the page's IndexedDB across a save through the core and a reload of the page.
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-saved-draft");
+  try {
+    const file = path.join(desk.engine.root, "fixture", "plan.md");
+    fs.writeFileSync(file, "plan\n");
+    const editor = await openDeskFile(page, desk, "plan.md");
+    await expect(editor).toContainText("plan");
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+Home");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" saved");
+    // The edit is kept in the browser until it is saved, as a Workspace View keeps it. A draft names its file the
+    // core's way, `/` between names on every system.
+    const kept = async () => (await storedDrafts(page)).some((draft) => draft.path.endsWith("/plan.md"));
+    await expect.poll(kept).toBe(true);
+    await page.keyboard.press(chord("save_file"));
+    await expect.poll(() => fs.readFileSync(file, "utf8")).toBe("plan saved\n");
+    // The saved file's copy goes with the save that landed.
+    await expect.poll(kept).toBe(false);
+
+    await page.reload();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await expect(page.locator("[data-desk-screen]")).toBeVisible();
+    expect(await storedDrafts(page)).toEqual([]);
+    await expect(page.locator("[data-draft-recovery]")).toHaveCount(0);
+    await screenshot(page, "desk-room-saved-reload");
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+test("a draft notice stands above Desk's input boxes, never over them (PRD desk-2-ui B36, UI_BEHAVIOR Notices) @platform", async ({ page }) => {
+  // e2e: whether the notice covers a box is the drawn layout of the real window, which jsdom does not lay out.
+  test.setTimeout(120_000);
+  const desk = await startDesk(page, "desk-room-notice");
+  try {
+    // A draft of another host's document: kept for recovery, and its notice stays until the operator acts.
+    const repo = path.join(desk.engine.root, "fixture");
+    const elsewhere = `${repo}/plan.md`;
+    await seedDraft(page, { id: draftId("host-another", repo, elsewhere, "local"), host: "host-another", device: "local", root: repo, path: elsewhere, contents: "other host\n", updated_at: 1 });
+    await page.reload();
+    await page.locator("[data-desk-sidebar-row]").click();
+    await row(page, desk.pane).click();
+    await expect(page.locator(`[data-desk-thread-panel="${desk.pane}"]`)).toBeVisible();
+    const notice = page.locator("[data-draft-recovery]");
+    await expect(notice).toBeVisible({ timeout: 20_000 }); // wait-ok: the stored drafts read once the reloaded page is live
+    await screenshot(page, "desk-room-notice");
+
+    // Desk's own box and the session's beside it are both drawn, and the notice covers neither.
+    const boxes = page.locator("[data-desk-composer]");
+    await expect(boxes).toHaveCount(2);
+    const over = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    await expect.poll(async () => {
+      const shown = (await notice.boundingBox())!;
+      const drawn = await Promise.all((await boxes.all()).map(async (box) => (await box.boundingBox())!));
+      return drawn.filter((box) => over(shown, box)).length;
+    }).toBe(0);
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+type Box = { x: number; y: number; width: number; height: number };
+
+test("a session beside Desk that sleeps in its own pane offers 에이전트 깨우기 in its input box's place, which wakes it in that pane (PRD desk-2-ui B43) @platform", async ({ page }) => {
+  // e2e: the sleep and the wake are the engine ending and restarting the agent in its pane.
+  test.setTimeout(150_000);
+  const desk = await startDesk(page, "desk-room-sleep");
+  try {
+    await row(page, desk.pane).click();
+    const panel = page.locator(`[data-desk-thread-panel="${desk.pane}"]`);
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
+    // Sleep agent from the session head's own pane menu: the agent ends and its pane stays.
+    await page.locator(`[data-desk-session-menu="${desk.pane}"]`).click();
+    const item = page.locator('[data-menu-item="sleep_agent"]');
+    await expect(item).toBeEnabled({ timeout: 20_000 }); // wait-ok: the stand-in's session report, which makes it sleepable
+    await item.click();
+
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", /.+/, { timeout: 30_000 }); // wait-ok: the engine ending the agent
+    await screenshot(page, "desk-room-sleep");
+    const wake = panel.locator("[data-desk-session-wake]");
+    await expect(wake).toBeVisible();
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveAttribute("data-desk-session-sleeping", "sleeping");
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(0);
+    await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
+
+    await wake.click();
+    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible({ timeout: 40_000 }); // wait-ok: the agent started again in its pane
+    await expect(panel.locator("[data-desk-session-sleeping]")).toHaveCount(0);
+    await expect(panel.locator("[data-desk-composer]")).toHaveCount(1);
+    await screenshot(page, "desk-room-woke");
+  } finally {
+    desk.daemon.stop();
+    desk.engine.stop();
+  }
+});
+
+test("a session beside Desk whose sleep closes its pane keeps its conversation above 에이전트 깨우기, which wakes it in a new pane beside Desk (PRD desk-2-ui B43)", async ({ page }) => {
+  // e2e: the pane closes, the core keeps the sleeping session and the read conversation, and the wake starts a new pane.
+  test.setTimeout(180_000);
+  // Pi's sleep closes its pane and keeps a sleeping session to wake in a new one (`session-readers.spec.ts`). Its
+  // stand-in reports its session for a Unix shell, so no Windows lane runs this.
+  const engine = await startFixture({ agents: false });
+  const daemon = await startHided(engine, "desk-room-pi-sleep", path.join(engine.root, "home"));
+  try {
+    const pane = engine.panes[0]!;
+    const session = prepareEngineWriter(engine, "pi");
+    await withControl(daemon, (control) => sendKeys(control, pane, "pi\r"));
+    await expect.poll(() => fs.existsSync(session)).toBe(true);
+    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId("pi") ? true : undefined), `${pane} on its pi session`, 30_000));
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // A quiet agent's project can be folded before the page first reads its session.
+    const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
+    await expect(row(page, pane).or(folded)).toBeVisible();
+    if (!(await row(page, pane).isVisible())) await folded.click();
+    await row(page, pane).click();
+    const panel = page.locator(`[data-desk-thread-panel="${pane}"]`);
+    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible({ timeout: 30_000 }); // wait-ok: the core's first read of the Pi session file
+
+    await page.locator(`[data-desk-session-menu="${pane}"]`).click();
+    await expect(page.locator('[data-menu-item="sleep_agent"]')).toBeEnabled({ timeout: 20_000 }); // wait-ok: the agent row the pane menu reads
+    await page.locator('[data-menu-item="sleep_agent"]').click();
+    await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
+    const wake = panel.locator("[data-desk-session-wake]");
+    await expect(wake).toBeVisible();
+    await screenshot(page, "desk-room-pi-asleep");
+    await expect(panel.locator("[data-desk-thread-lines]")).toBeVisible();
+    await expect(page.locator("[data-desk-session-terminal]")).toHaveCount(0);
+
+    await wake.click();
+    const fresh = await withControl(daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; agent_kind: string | null }[] } | undefined)?.agents ?? []).find((agent) => agent.agent_kind === "pi" && agent.pane_id !== pane)?.pane_id, "a fresh pi agent", 30_000));
+    await expect(page.locator(`[data-desk-thread-panel="${fresh}"]`)).toBeVisible();
+    await expect(page.locator("[data-desk-session-terminal]")).toBeVisible();
+  } finally {
+    daemon.stop();
+    engine.stop();
+  }
+});
+
+test("a child session beside Desk names its ancestors before its name, as its pane head does, and an ancestor's name opens it beside Desk (PRD desk-2-ui B47) @platform", async ({ page }) => {
+  // e2e: the names hide by a container query, which only a laid-out page answers; the lineage is the core's from a real spawn.
+  test.setTimeout(120_000);
+  const engine = await startFixture({ family: true });
+  const daemon = await startHided(engine, "desk-room-ancestors");
+  try {
+    const [parent, child] = engine.panes;
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await switchDesk(page, true);
+    await page.locator("[data-desk-sidebar-row]").click();
+    // The child's row stands under its parent's.
+    if (!(await row(page, child!).count())) await page.locator(`[data-tree-chevron="${parent}"]`).click();
+    await row(page, child!).click();
+    await expect(page.locator(`[data-desk-thread-panel="${child}"]`)).toBeVisible();
+
+    const head = page.locator("[data-desk-session-head]");
+    const ancestor = head.locator(`[data-pane-return="${parent}"]`);
+    await expect(head.locator("[data-desk-session-title]")).toHaveText("Agent two");
+    await screenshot(page, "desk-room-ancestors");
+    await expect(ancestor.getByText("Agent one", { exact: true })).toBeVisible();
+    await ancestor.click();
+    await expect(page.locator(`[data-desk-thread-panel="${parent}"]`)).toBeVisible();
+    await expect(head.locator("[data-pane-return]")).toHaveCount(0);
+  } finally {
+    daemon.stop();
+    engine.stop();
   }
 });
 

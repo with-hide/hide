@@ -10,7 +10,7 @@
 
 import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -96,6 +96,19 @@ export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonl
 }
 
 export type DeskApproval = Extract<DeskItem, { kind: "approval" }>;
+
+/** The names a JSON-RPC peer gives its own errors; an agent's refusal arrives behind one, which says nothing to the operator. */
+const WIRE_ERROR_NAME = /^(?:parse error|invalid request|method not found|invalid params|internal error)\s*:\s*/i;
+
+/**
+ * The agent's reason a turn failed, in plain words (B5): without the protocol's error name, and none at all when the
+ * reply above the notice already says it, since a reason is shown once. `reply` is the reply the failed turn left.
+ */
+export function failureReason(detail: string | null, reply: string | null): string | null {
+  const reason = detail?.replace(WIRE_ERROR_NAME, "").trim() ?? "";
+  if (reason === "" || reply?.includes(reason)) return null;
+  return reason;
+}
 
 /**
  * The longest line `거절…` takes, in UTF-16 units: three bytes each at most

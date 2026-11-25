@@ -2169,7 +2169,7 @@ pub(super) fn dismiss_promotion(
 pub(super) const UNSEEN: &str = "native_identity_unavailable";
 /// The spawn's answer when another spawn holds this machine's spawn lock:
 /// nothing was started, and asking again soon may get the lock.
-const BUSY: &str = "spawn_busy";
+const BUSY: &str = crate::coordination::SPAWN_BUSY;
 /// How long a promotion's start waits for the machine's spawn lock.
 const SPAWN_LOCK_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 

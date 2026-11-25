@@ -1,4 +1,4 @@
-import { EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob, DeskOutput } from "../../desk";
@@ -7,7 +7,9 @@ import { cn } from "../../lib/utils";
 import { PaneHeadChildren, PanePrChip } from "../../PaneHeaderBand";
 import { PaneWorkChip } from "../../PaneMissionChip";
 import { AncestorPath, usePaneMenu } from "../../PaneRelations";
-import type { AgentRow, PaneRow, SleepingSession } from "../../snapshot";
+import { useNoticeFloor } from "../../noticeFloor";
+import { wakeFailureReason, wakingLine } from "../../sleep";
+import type { AgentRow, AgentSleep, PaneRow } from "../../snapshot";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -127,7 +129,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
       <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
         {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
         <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
-          {pane ? <AncestorPath pane={pane} actions={deskActions} /> : null}
+          {pane ? <AncestorPath pane={pane} actions={deskActions} names="always" /> : null}
           <Hint label={title} reveals>
             <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
           </Hint>
@@ -227,15 +229,30 @@ export function SessionAskCard({ onWrite, ...card }: Parameters<typeof AskCardVi
 /**
  * Where the input box stood while the session sleeps (PRD desk-2-ui D-28,
  * B43): the sleeping session row's moon, its name and `에이전트 깨우기`, as
- * the sidebar's sleeping row offers it.
+ * the sidebar's sleeping row and the sleeping pane offer it. An agent asleep
+ * in its pane (`sleep`) says what its pane says (`SleepBody`, `sleep.ts`):
+ * a wake under way and how old the conversation is, or a wake that failed,
+ * its reason, `다시 시도` and `새 세션 시작`. A session whose sleep closed its
+ * pane has no `sleep`; `state` is its phase. `onWake` is null while nothing
+ * can wake it.
  */
-export function SessionSleepingFoot({ title, session, onWake }: { title: string; session: SleepingSession | null; onWake: (sleepId: string) => void }) {
+export function SessionSleepingFoot({ title, sleep, state, onWake, onFresh }: { title: string; sleep: AgentSleep | null; state: string; onWake: (() => void) | null; onFresh: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
+  // A notice in the window's corner stands above the foot, as above the input box it replaces.
+  const foot = useRef<HTMLDivElement>(null);
+  useNoticeFloor(foot);
+  const failed = sleep?.state === "failed";
+  const reason = failed ? wakeFailureReason(sleep, t) : null;
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-xs border-t border-border px-md py-sm text-body" data-desk-session-sleeping={session?.phase ?? "unknown"}>
-      <MoonIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate text-subtle-foreground">{title}</span>
-      {session?.wake_available ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={() => onWake(session.sleep_id)}>{t("panes.sleep.wake")}</Button> : null}
+    <div ref={foot} className="flex min-w-0 shrink-0 flex-col gap-xxs border-t border-border px-md py-sm text-body" data-desk-session-sleeping={sleep?.state ?? state}>
+      <div className="flex min-w-0 items-center gap-xs">
+        {failed ? <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-destructive" /> : <MoonIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
+        <span className="min-w-0 flex-1 truncate text-subtle-foreground">{failed ? t("panes.sleep.resumeFailed") : title}</span>
+        {sleep?.state === "waking" ? <span role="status" className="shrink-0 text-caption text-muted-foreground">{wakingLine(sleep, Date.now(), t)}</span> : null}
+        {onWake ? <Button variant="ghost" size="sm" data-desk-session-wake="true" onClick={onWake}>{failed ? t("common.retry") : t("panes.sleep.wake")}</Button> : null}
+        {failed && onFresh ? <Button variant="ghost" size="sm" data-desk-session-wake-fresh="true" onClick={onFresh}>{t("panes.sleep.newSession")}</Button> : null}
+      </div>
+      {reason ? <p role="alert" className="pl-(--size-control-sm) text-caption text-muted-foreground" data-desk-session-wake-reason="true">{reason}</p> : null}
     </div>
   );
 }

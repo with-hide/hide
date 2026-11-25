@@ -298,6 +298,7 @@ export function App() {
   // waits on the core; every other notice stands in the window's corner,
   // newest nearest the corner.
   const remoteScreen = useUiStore((s) => s.remoteScreen);
+  const noticeFloor = useUiStore((s) => s.noticeFloor);
   const notices: [string, ReactNode][] = [
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
@@ -362,7 +363,7 @@ export function App() {
               </>
             )}
           </div>
-          <ToastStack>{notices.map(leftOut)}</ToastStack>
+          <ToastStack floor={noticeFloor}>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}
         </div>
       </RenderBoundary>

@@ -3400,6 +3400,8 @@ export type DeskIrreversible = "end_working_session" | "force_push" | "delete_re
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
+/** A message sent while a reply was being written, waiting for the turn before it (`desk_queued_remove` takes it out); none is in `items` until its turn starts. */
+export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[] };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
@@ -3436,7 +3438,7 @@ export type DeskItem =
    * archive ends or the path a deletion reaches; `refusal` is the line the
    * operator sent with 거절.
    */
-  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; /** The row of Settings › Labs › Desk › 권한 the request reads as, whose name is the card's kind; none on a card kept from before it was sent. */ row?: DeskPermissionRow | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, the blocked call, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
@@ -3638,7 +3640,7 @@ export type DeskSection = {
   agents: DeskAgent[];
   host: { state: DeskHostState; detail: string | null };
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
-  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };

@@ -201,6 +201,11 @@ pub(crate) struct Stored {
     /// conversation and queue (B29).
     #[serde(default, rename = "panel_widths")]
     pub lane: crate::model::DeskLane,
+    /// Messages the operator sent while a reply was being written, in order,
+    /// kept across a restart; each goes once the turn before it ended. An
+    /// older Hide reads past the key.
+    #[serde(default)]
+    pub queued: Vec<crate::model::DeskQueuedMessage>,
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -338,6 +343,20 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.settings.cap = stored.settings.cap.clamp(1, DESK_CAP_MAX);
     stored.sessions.truncate(AdapterId::all().count());
     stored.queue.truncate(MAX_QUEUE);
+    // A start is a fact of the thread running it, which no hided before
+    // this one left behind: read from the file, it waits again, and asking
+    // the same intent again converges on what the ledger already holds.
+    for job in &mut stored.queue {
+        if job.state == QueuedState::Starting {
+            job.state = QueuedState::Waiting;
+        }
+    }
+    stored
+        .queued
+        .retain(|message| !message.text.is_empty() && message.text.len() <= MAX_MESSAGE_BYTES);
+    // One past the cap: a message the agent did not take goes back ahead
+    // of a full line.
+    stored.queued.truncate(crate::model::DESK_QUEUED_MAX + 1);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
     let width = |width: Option<u32>| {
@@ -665,5 +684,83 @@ mod tests {
             written["panel_widths"],
             serde_json::json!({"view_width": null, "session_width": null})
         );
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    /// A spawn a hided ended while it started, read again: no thread will
+    /// answer it, so it waits again and the queue goes on, rather than
+    /// stand starting for ever and hold the whole queue.
+    #[test]
+    fn a_start_hided_ended_under_reads_as_waiting_again() {
+        let job = |intent: &str, state: QueuedState| QueuedJob {
+            intent: intent.into(),
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                parent: None,
+                machine: None,
+                name: "worker".into(),
+                intent: intent.into(),
+                kind: "codex".into(),
+                repo: Some("/r".into()),
+                branch: Some("main".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: None,
+                beside: false,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                profile: None,
+            },
+            queued_at_ms: 1,
+            state,
+            code: None,
+        };
+        let mut stored = Stored::default();
+        stored.queue.push(job("starting", QueuedState::Starting));
+        stored.queue.push(job("waiting", QueuedState::Waiting));
+        stored.queue.push(job("failed", QueuedState::Failed));
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        let states: Vec<_> = read
+            .queue
+            .iter()
+            .map(|job| (job.intent.as_str(), job.state))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("starting", QueuedState::Waiting),
+                ("waiting", QueuedState::Waiting),
+                ("failed", QueuedState::Failed)
+            ]
+        );
+    }
+
+    /// The waiting messages read back as they were kept, within the line's
+    /// cap and the message cap.
+    #[test]
+    fn queued_messages_are_kept_and_held_to_their_caps_when_read() {
+        let message = |id: u64, text: String| crate::model::DeskQueuedMessage {
+            id,
+            text,
+            at_ms: 0,
+            mentions: Vec::new(),
+        };
+        let mut stored = Stored::default();
+        stored
+            .queued
+            .push(message(1, "x".repeat(MAX_MESSAGE_BYTES + 1)));
+        for id in 2..20 {
+            stored.queued.push(message(id, format!("m{id}")));
+        }
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(read.queued.len(), crate::model::DESK_QUEUED_MAX + 1);
+        assert_eq!(read.queued[0].text, "m2");
     }
 }
