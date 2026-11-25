@@ -7,10 +7,13 @@
 //! on a worker outside the lock; the answer comes back under a short lock.
 //! The newest page is read once and kept; what the session writes after it
 //! is read forward from where that page ended, again when the engine reports the
-//! agent's state moved and, while it works, when a once-a-second look at the
-//! session's file size and time says it wrote. A forward read that fills
-//! becomes a kept page and the next one starts where it ended, so a working
-//! session re-sends only its live page.
+//! agent's state moved and whenever a once-a-second look at the session's
+//! file size and time says it wrote, whatever state the agent is in. The
+//! state change alone reads too early: an agent writes the end of its turn
+//! after it reports the turn ended (Claude Code appends its last answer once
+//! its Stop hook ran), so only the file says when that end is there. A
+//! forward read that fills becomes a kept page and the next one starts where
+//! it ended, so a working session re-sends only its live page.
 //!
 //! Input goes only to the pane the thread was opened for, while it still
 //! runs that session, through the one write a phone's reply takes too
@@ -394,8 +397,10 @@ impl Runtime {
         changed
     }
 
-    /// Retries a read that could not reach the node and, while the agent
-    /// works, looks once a second at whether its session file moved.
+    /// Retries a read that could not reach the node and, while the thread
+    /// is drawn for the pane it was opened for, looks once a second at
+    /// whether its session file moved, in every agent state: the file, not
+    /// the state, says a turn's last lines were written.
     pub(super) fn tick_session_thread(&mut self, now_unix_ms: u64) -> bool {
         let Some(open) = self.session_thread.open.as_mut() else {
             return false;
@@ -412,7 +417,6 @@ impl Runtime {
             thread.state == ThreadState::Ready && thread.pane == ThreadPane::Same
         });
         if !ready
-            || open.status != "working"
             || open.checking
             || open.reading
             || open.retry_at_ms.is_some()
@@ -1091,17 +1095,26 @@ mod tests {
     const SESSION: &str = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
     const INPUT: &str = "4f1c2b3a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 
-    /// A node that answers each thread read with the next scripted answer
-    /// and records what it was asked.
+    /// A node that answers each thread read, and each look at the session's
+    /// file, with the next scripted answer, and records the reads it was asked.
     #[derive(Default)]
     struct ScriptedNode {
         answers: Mutex<VecDeque<Result<Value, LinkError>>>,
         asked: Mutex<Vec<ThreadRead>>,
+        activities: Mutex<VecDeque<Value>>,
     }
 
     impl ScriptedNode {
         fn answer(&self, answer: Result<Value, LinkError>) {
             self.answers.lock().unwrap().push_back(answer);
+        }
+
+        /// What the next look at the session's file finds.
+        fn activity(&self, bytes: u64) {
+            self.activities
+                .lock()
+                .unwrap()
+                .push_back(json!({"modified_at_unix_ms": bytes, "bytes": bytes}));
         }
 
         fn asked(&self) -> Vec<ThreadRead> {
@@ -1111,8 +1124,13 @@ mod tests {
 
     impl NodeLink for ScriptedNode {
         fn call(&self, call: Call, _: Duration) -> Result<LinkAnswer, LinkError> {
-            let Call::SessionThread { request } = call else {
-                panic!("a thread asks its node for pages only");
+            let request = match call {
+                Call::SessionThread { request } => request,
+                Call::SessionActivity { .. } => {
+                    let activity = self.activities.lock().unwrap().pop_front();
+                    return Ok(LinkAnswer::Parsed(activity.expect("a scripted activity")));
+                }
+                _ => panic!("a thread asks its node for pages and file activity only"),
             };
             self.asked.lock().unwrap().push(request.read);
             let answer = self
@@ -1305,6 +1323,49 @@ mod tests {
         // An engine read in which nothing about the agent moved reads nothing.
         observe(&mut runtime, "working", 2, "t1", true);
         assert!(node.asked().is_empty());
+    }
+
+    #[test]
+    fn an_answer_written_after_the_turn_ended_shows_on_the_next_look_at_the_file() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("처음")])));
+        open(&mut runtime);
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        let from = |position| ThreadRead::From(serde_json::from_value(cursor(position)).unwrap());
+
+        // A turn starts and ends. The agent reports the end before it writes
+        // its answer, so the read on that state change finds only the prompt.
+        node.answer(Ok(page(100, 200, false, vec![said("질문")])));
+        observe(&mut runtime, "working", 2, "t1", true);
+        node.answer(Ok(page(100, 200, false, vec![said("질문")])));
+        observe(&mut runtime, "idle", 3, "t1", true);
+        assert_eq!(node.asked(), vec![from(100), from(100)]);
+        assert_eq!(
+            thread(&runtime).tail.expect("the live page").updates.len(),
+            1
+        );
+
+        // The answer lands with no state change after it: the next look at
+        // the file sees it moved and the open thread reads it.
+        let now = 1_000_000;
+        node.activity(300);
+        node.answer(Ok(page(100, 300, false, vec![said("질문"), said("답")])));
+        runtime.tick_session_thread(now);
+        assert_eq!(node.asked(), vec![from(100)]);
+        let tail = thread(&runtime).tail.expect("the live page");
+        assert_eq!(tail.updates[1]["content"]["text"], "답");
+
+        // Looks keep their second, and a file that did not move reads nothing.
+        runtime.tick_session_thread(now + 1);
+        node.activity(300);
+        runtime.tick_session_thread(now + ACTIVITY_EVERY_MS);
+        assert!(node.asked().is_empty());
+        assert!(
+            node.activities.lock().unwrap().is_empty(),
+            "each scripted look was taken"
+        );
     }
 
     #[test]
