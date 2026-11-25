@@ -108,6 +108,18 @@ impl Capability {
         self.access_mode
     }
 
+    /// The mode the command boundary judges this caller's command by: a
+    /// bot's own, and the whole Hide for Desk, which works as the operator
+    /// does over every project and agent with no checkout of its own, so the
+    /// one table (`hide_core::access`) refuses it what is the operator's
+    /// alone and what means an agent in a pane.
+    pub(crate) fn reach(&self) -> Option<hide_core::access::Mode> {
+        match self.binding {
+            Binding::Desk { .. } => Some(hide_core::access::Mode::All),
+            _ => self.access_mode,
+        }
+    }
+
     /// The shell a pane-bound credential was proved against; none for any
     /// other binding.
     fn pane_shell(&self) -> Option<i32> {
@@ -2268,6 +2280,10 @@ mod tests {
         );
         assert_eq!(capability.context, context);
         assert!(!capability.one_shot);
+        // The command boundary judges Desk as a bot of the whole Hide, with
+        // no bot mode of its own (`AccessList` still needs a connection).
+        assert_eq!(capability.reach(), Some(hide_core::access::Mode::All));
+        assert_eq!(capability.access_mode(), None);
         assert_eq!(capability.changed_refusal().0, "desk_not_running");
         // A second bind names no unbound capability.
         assert_eq!(

@@ -4293,13 +4293,18 @@ impl ColorTheme {
     }
 }
 
+/// Which agent's sessions the list shows: every one, or the one whose
+/// session format `hide_session::Agent` names. It rides the wire as `all` or
+/// as that type's serde name (`claude`, `codex`, `antigravity`, ...), which is
+/// not always a row's `provider` (Antigravity's rows say `agy`); a new agent
+/// needs no change here.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionsProviderFilter {
     #[default]
     All,
-    Codex,
-    Claude,
+    #[serde(untagged)]
+    Agent(hide_session::Agent),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

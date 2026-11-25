@@ -2687,11 +2687,9 @@ impl Runtime {
         // conduct (mission-87), and leads none: a Conductor it starts does
         // (PRD hide-external-control D-12).
         let tool = match Caller::parse(caller) {
-            Caller::Access { connection, .. } => Some(self.access_authority(
-                device,
-                connection,
-                crate::access::mission_need(&command),
-            )?),
+            broad @ (Caller::Access { .. } | Caller::Desk) => {
+                Some(self.broad_authority(device, broad, crate::access::mission_need(&command))?)
+            }
             _ => None,
         };
         let every_project = tool.is_some();

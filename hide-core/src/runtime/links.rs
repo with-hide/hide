@@ -1111,10 +1111,15 @@ impl Runtime {
                 hide_project::project_id(&workspace.device_id, Path::new(&workspace.path))
             })
             .unwrap_or_default();
+        // Who works over the whole Hide with no checkout is the caller's kind,
+        // never a failed lookup: a pane in a plain folder has no Project and
+        // is not one.
+        let every_project = crate::access::is_checkoutless_context(context);
         Some(crate::links::query::Scope {
             store: hide_kit::layout::links_store(directory),
             local_device: self.node.to_string(),
             caller,
+            every_project,
             projects,
         })
     }

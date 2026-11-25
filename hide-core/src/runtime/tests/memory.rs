@@ -9,10 +9,10 @@ fn session(id: &str, provider: &str, request: &str, updated_at_unix_ms: u64) -> 
         account: Default::default(),
         id: id.to_owned(),
         provider: provider.to_owned(),
-        provider_label: if provider == "codex" {
-            "Codex"
-        } else {
-            "Claude Code"
+        provider_label: match provider {
+            "codex" => "Codex",
+            "opencode" => "OpenCode",
+            _ => "Claude Code",
         }
         .to_owned(),
         locator: format!("/fixture/{id}.jsonl"),
@@ -154,12 +154,13 @@ fn session_filter_and_query_keep_the_catalogs_existing_order() {
         session("new-codex", "codex", "Alpha decision", 30),
         session("claude", "claude", "Alpha review", 20),
         session("old-codex", "codex", "Beta work", 10),
+        session("open", "opencode", "Alpha port", 5),
     ];
 
     assert!(runtime.set_sessions_filter("codex", "alpha".to_owned()));
     assert_eq!(
         runtime.snapshot.sessions.provider_filter,
-        SessionsProviderFilter::Codex
+        SessionsProviderFilter::Agent(hide_session::Agent::Codex)
     );
     assert_eq!(
         runtime
@@ -181,7 +182,33 @@ fn session_filter_and_query_keep_the_catalogs_existing_order() {
             .iter()
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>(),
-        ["new-codex", "claude"]
+        ["new-codex", "claude", "open"]
+    );
+
+    // Any agent whose sessions Hide reads filters, not only the first two,
+    // and the wire still carries its name.
+    assert!(runtime.set_sessions_filter("opencode", String::new()));
+    assert_eq!(
+        runtime.snapshot.sessions.provider_filter,
+        SessionsProviderFilter::Agent(hide_session::Agent::OpenCode)
+    );
+    assert_eq!(
+        serde_json::to_value(runtime.snapshot.sessions.provider_filter).unwrap(),
+        "opencode"
+    );
+    assert_eq!(
+        serde_json::to_value(SessionsProviderFilter::All).unwrap(),
+        "all"
+    );
+    assert_eq!(
+        runtime
+            .snapshot
+            .sessions
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["open"]
     );
 }
 

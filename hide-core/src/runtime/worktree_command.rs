@@ -159,12 +159,19 @@ impl Runtime {
         if !command.valid() {
             return Err("worktree_remove_unknown".into());
         }
-        if Caller::parse(caller) == Caller::Desk {
-            return Err("agent_pane_required".into());
-        }
-        let context = self
-            .resolve_caller(device, Caller::parse(caller))
-            .map_err(|refusal| refusal.reason.to_owned())?;
+        // Desk has no checkout to run in, so it cleans up any worktree on
+        // this machine; what removing would lose is never discarded on its
+        // word (`--force`), since no card stands in front of it.
+        let desk = Caller::parse(caller) == Caller::Desk;
+        let context = if desk {
+            if command.force {
+                return Err("worktree_remove_desk_no_force".into());
+            }
+            self.desk_authority(device)?.0
+        } else {
+            self.resolve_caller(device, Caller::parse(caller))
+                .map_err(|refusal| refusal.reason.to_owned())?
+        };
         if context != *expected {
             return Err("caller_context_changed".into());
         }

@@ -1827,6 +1827,7 @@ pub const COMMANDS: &[Spec] = &[
             "worktree_remove_unknown",
             "worktree_remove_blocked",
             "worktree_remove_needs_force",
+            "worktree_remove_desk_no_force",
             "worktree_remove_branch_unmerged",
             "worktree_remove_branch_kept",
             "worktree_remove_agent_working",
