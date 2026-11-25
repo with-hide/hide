@@ -10,16 +10,17 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
+import { DeskMark } from "./desk-entry";
 
 /** One arrow key on a focused edge moves it this many pixels, as the lane's divider does. */
 const EDGE_STEP = 32;
 
-/** The chat column's head: its name and `＋ 새 대화` (B10); ◆ stays in the sidebar (D-38). */
+/** The chat column's head: Desk's own mark and name, and `＋ 새 대화` (B10; Doop ①). */
 export function DeskChatHead({ onNewConversation }: { onNewConversation: () => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
-      <span className="flex-1 font-semibold text-foreground">{t("desk.name")}</span>
+      <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
       <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
     </>
   );

@@ -156,3 +156,15 @@ it("asks for the page before once per state the core shows, a failed read includ
   expect(actions.readOlderThread).toHaveBeenCalledTimes(2);
   expect(actions.readOlderThread).toHaveBeenLastCalledWith(4);
 });
+
+it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
+  const { container } = await mount();
+  const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = container.querySelector('[data-desk-thread-line="interrupted"]');
+  expect(line?.textContent).toBe("Interrupted");
+  expect(container.textContent).not.toContain("Request interrupted");
+  // The only bubble is the operator's own words.
+  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
+});

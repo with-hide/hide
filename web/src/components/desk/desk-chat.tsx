@@ -2,7 +2,7 @@ import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSear
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -155,20 +155,23 @@ const SWITCH_WORDS: Record<Extract<DeskItem, { kind: "switch" }>["carried"], Mes
 
 /**
  * A notice at the chat's end (B5, B6, B11, B13, B15), one line with no box
- * (D-75): what happened and the one action that answers it, as words. A
- * sign-in notice carries the command to run, copyable; the words the
- * operator sent stay in the composer.
+ * (D-75): what happened and the one action that answers it, as words, a
+ * failure in the failed colour. A sign-in notice carries the command to run,
+ * copyable; the words the operator sent stay in the composer. A failed turn
+ * names the agent's own reason in plain words when it gave one and the reply
+ * above did not already say it (`reason`); once a newer turn ran
+ * (`settled`) its `다시 시도` is gone, since the answer to it was given.
  */
-export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
+export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
   const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
-  const action = NOTICE_ACTION[item.notice];
-  // A failed turn names the agent's own reason when it gave one (a provider's refusal).
-  const key = item.notice === "turn_failed" && item.detail ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
-  const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: item.detail ?? "" });
+  const action = settled ? undefined : NOTICE_ACTION[item.notice];
+  const turn = item.notice === "turn_failed";
+  const key = turn && reason ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
+  const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: turn ? (reason ?? "") : (item.detail ?? "") });
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
-      <span className={cn("min-w-0", failed ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground")}>{words}</span>
+      <span className={cn("min-w-0", failed ? "text-destructive" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground")}>{words}</span>
       {item.notice === "login_needed" && item.detail ? (
         <span className="inline-flex min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xs font-mono text-micro text-foreground">
           <TerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
@@ -341,6 +344,18 @@ function replyMentions(item: Extract<DeskItem, { kind: "reply" }>): DeskMention[
   return mentions;
 }
 
+/** Whether the item after `index` is the notice that a failed turn did not finish, which says the reply stopped. */
+function failsAfter(items: readonly DeskItem[], index: number): boolean {
+  const next = items[index + 1];
+  return next?.kind === "notice" && next.notice === "turn_failed";
+}
+
+/** The reply a notice follows directly, which a failed turn's notice does not repeat. */
+function replyBefore(items: readonly DeskItem[], index: number): string | null {
+  const before = items[index - 1];
+  return before?.kind === "reply" ? before.text : null;
+}
+
 /** A job card's job: an item naming a job the snapshot does not carry is a broken snapshot, not an empty card. */
 function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
   const job = jobs[id];
@@ -373,14 +388,14 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
   const choice = (id: string | null, of: "models" | "efforts") => id === null ? t("desk.bar.default") : (agents.flatMap((agent) => agent[of]).find((one) => one.id === id)?.label ?? id);
   return (
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
-      {items.map((item) => (
+      {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
-            : item.kind === "notice" ? <DeskNotice item={item} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={items.slice(index + 1).some((later) => later.kind === "user")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>

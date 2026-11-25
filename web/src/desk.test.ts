@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -14,6 +14,16 @@ const text = (sessionUpdate: "user_message_chunk" | "agent_message_chunk", words
 describe("the sidebar's Desk row (PRD desk-2-ui B46)", () => {
   it("counts the sessions Desk started that ask the operator", () => {
     expect(askingCount([job("a", "asking"), job("b", "asking"), job("c", "done"), job("d", "working")])).toBe(2);
+  });
+});
+
+describe("a failed turn's reason (B5)", () => {
+  it("drops the protocol's error name, and is none when the reply above already says it", () => {
+    expect(failureReason("Internal error: API Error: 400 거부", null)).toBe("API Error: 400 거부");
+    expect(failureReason("Internal error: API Error: 400 거부", "API Error: 400 거부")).toBeNull();
+    expect(failureReason("Rate limit reached", "다른 말")).toBe("Rate limit reached");
+    expect(failureReason(null, null)).toBeNull();
+    expect(failureReason("Internal error:", null)).toBeNull();
   });
 });
 

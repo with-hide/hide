@@ -55,6 +55,7 @@ export const DESK_SCENES = [
   { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
   { state: "mention-project", label: "@ 프로젝트에서 ⇥ (B18)" },
+  { state: "mention-empty", label: "@ 맞는 것이 없을 때" },
   { state: "composer-chips", label: "입력창 칩 · 보낸 말 칩 (B49)" },
   { state: "parts", label: "스레드 속 Hide 부품 (B26)" },
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
@@ -245,12 +246,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "mention":
     case "mention-open":
     case "mention-search":
+    case "mention-empty":
     case "mention-project": {
-      const query = state === "mention-search" ? "리뷰" : "";
-      const section = { sessions: menuSessions(now), projects: MENU_PROJECTS };
+      const query = state === "mention-search" ? "리뷰" : state === "mention-empty" ? "zzzz" : "";
+      const section = state === "mention-empty" ? { sessions: [], projects: [] } : { sessions: menuSessions(now), projects: MENU_PROJECTS };
       const tree = mentionTree(section, query, state === "mention-open" ? { "agent-holder": true } : {});
       const entered = state === "mention-project" ? { project: MENU_PROJECTS[0]!, sessions: enteredSessions(now) } : null;
-      const active = state === "mention-project" ? "session:agent-record-now" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
+      const active = state === "mention-project" ? "session:agent-record-now" : state === "mention-empty" ? "" : `session:${(state === "mention-open" ? tree.rows[2] : tree.rows[0] ?? tree.found[0])!.session.id}`;
       const menu = <DeskMentionMenu tree={tree} searching={query !== ""} entered={entered} active={active} onActive={noop} onSession={noop} onProject={noop} onFold={noop} onBack={noop} />;
       body = <Room chat={chat(mentionItems(now), <ChatComposer selection={CLAUDE} value={state === "mention-project" ? "@herdr-ide " : `@${query}`} mention={menu} />)} />;
       break;

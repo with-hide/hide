@@ -147,6 +147,38 @@ describe("Desk's room", () => {
     expect(notice()).not.toContain("·");
   });
 
+  const reply = (id: number, words: string): DeskItem => ({ kind: "reply", id, agent: "claude", text: words, at_ms: 0, state: "stopped", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [] });
+  const user = (id: number): DeskItem => ({ kind: "user", id, text: "실패해 보세요", at_ms: 0, mentions: [] });
+
+  it("says a failed turn's reason once, in plain words and the failed colour, and drops an older 다시 시도 once a newer turn ran", async () => {
+    const refusal = "API Error: 400 이 모델은 지금 쓸 수 없어요";
+    await render(desk([
+      user(1), reply(2, refusal), { kind: "notice", id: 3, notice: "turn_failed", agent: "claude", detail: `Internal error: ${refusal}` },
+      user(4), reply(5, refusal), { kind: "notice", id: 6, notice: "turn_failed", agent: "claude", detail: `Internal error: ${refusal}` },
+    ]));
+    const text = document.body.textContent!;
+    // The agent's words stand in its reply alone: no wire prefix, no second copy in the notice, no `stopped` label beside them.
+    expect(text).not.toContain("Internal error");
+    expect(text.split("이 모델은 지금 쓸 수 없어요")).toHaveLength(3);
+    expect(document.body.querySelector("[data-desk-reply='stopped']")).toBeNull();
+    const notices = Array.from(document.body.querySelectorAll<HTMLElement>("[data-desk-notice='turn_failed']"));
+    expect(notices.map((one) => one.querySelector("span")!.className.includes("text-destructive"))).toEqual([true, true]);
+    // Only the newest failed turn offers `다시 시도`.
+    expect(notices.map((one) => one.querySelector("[data-desk-notice-action]") !== null)).toEqual([false, true]);
+  });
+
+  it("names a reason the reply did not say, without the protocol's error name", async () => {
+    await render(desk([user(1), reply(2, ""), { kind: "notice", id: 3, notice: "turn_failed", agent: "claude", detail: "Internal error: Rate limit reached" }]));
+    const notice = document.body.querySelector<HTMLElement>("[data-desk-notice='turn_failed']")!.textContent!;
+    expect(notice).toContain("· Rate limit reached");
+    expect(notice).not.toContain("Internal error");
+  });
+
+  it("marks the head with Desk's own mark, as the sidebar's row draws it (Doop 1)", async () => {
+    await render(desk([]));
+    expect(document.body.querySelector("[data-desk-chat-head] [data-desk-mark]")).not.toBeNull();
+  });
+
   it("sends an example line at once, and only writes it in the box while the agent cannot take it", async () => {
     await render(desk([]));
     const example = document.body.querySelector<HTMLElement>("[data-desk-example]")!.textContent!;
@@ -180,6 +212,23 @@ describe("Desk's room", () => {
     expect(listed()).toEqual(["w1:lead", "w1:other"]);
     await press("[data-desk-mention-fold]");
     expect(listed()).toEqual(["w1:lead", "w1:child", "w1:other"]);
+  });
+
+  it("says in one row that nothing matches what follows @ and still sends the words with ↵ (Doop MentionMenu empty)", async () => {
+    useUiStore.setState({ deskDraft: { text: "@zzzz", mentions: [] } });
+    await render(desk([]), tree);
+    expect(document.body.querySelector("[data-desk-mention-empty]")?.textContent).toBe("No session or project matches");
+    expect(listed()).toEqual([]);
+    await key("Enter");
+    expect(sent("desk_send")).toEqual([{ text: "@zzzz", mentions: [] }]);
+  });
+
+  it("closes the empty @ row with Esc", async () => {
+    useUiStore.setState({ deskDraft: { text: "@zzzz", mentions: [] } });
+    await render(desk([]), tree);
+    expect(document.body.querySelector("[data-desk-mention-empty]")).not.toBeNull();
+    await key("Escape");
+    expect(document.body.querySelector("[data-desk-mention-empty]")).toBeNull();
   });
 
   it("puts a picked session in the box as one chip, sends its token, and takes it out with one ⌫ (B49)", async () => {

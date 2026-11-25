@@ -27,7 +27,7 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * With `draft`, the box is Desk's, where picked mentions stand as chips
  * (D-85) and `value` is the draft's text; without, it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
@@ -45,6 +45,8 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   notice?: string | null;
   menu?: ReactNode;
   menuOpen?: boolean;
+  /** The open menu holds nothing to choose, so ↵ is not its own and sends. */
+  menuEmpty?: boolean;
   /** The words changed, and where the caret stands in them. */
   onChange: (value: string, caret: number) => void;
   /** The caret moved in the chip box without the words changing. */
@@ -64,7 +66,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
     // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
-    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || menuOpen) return;
+    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
   };

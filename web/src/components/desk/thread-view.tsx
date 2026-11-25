@@ -235,6 +235,8 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   if (line.origin === "letter") return <ReceivedLine line={line} actions={actions} />;
+  // Whatever an agent records when its turn was cut short is one quiet word, never the operator's bubble (D-75).
+  if (line.origin === "interrupted") return <p className="text-micro text-muted-foreground" data-desk-thread-line="interrupted">{t("desk.thread.interrupted")}</p>;
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}

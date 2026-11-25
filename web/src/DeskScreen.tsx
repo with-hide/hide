@@ -178,13 +178,14 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     actions.deskSend(out.text, out.mentions);
   };
 
-  // The `@` menu: open while the caret ends an `@` word Esc did not close, and something matches it.
+  // The `@` menu: open while the caret ends an `@` word Esc did not close; when nothing matches it says so in one row.
   const at = mentionAt(draft.text, caret);
   const entered = menu.entered !== null ? mentions?.projects.find((project) => project.id === menu.entered) ?? null : null;
   const tree = at && mentions ? mentionTree(mentions, at.query, menu.folds) : null;
   const enteredSessions = entered && mentions ? mentions.sessions.filter((session) => entered.sessions.includes(session.id)) : [];
   const values = entered ? [`new:${entered.id}`, ...enteredSessions.map((session) => `session:${session.id}`)] : tree ? [...tree.rows, ...tree.found].map((row) => `session:${row.session.id}`).concat(tree.projects.map((project) => `project:${project.id}`)) : [];
-  const menuOpen = at !== null && menu.dismissed !== at.start && values.length > 0;
+  const menuOpen = at !== null && menu.dismissed !== at.start && (values.length > 0 || tree !== null);
+  const menuEmpty = menuOpen && values.length === 0;
   const active = values.includes(menu.active) ? menu.active : (values[0] ?? "");
 
   const pick = (mention: DeskMention) => {
@@ -215,6 +216,15 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.nativeEvent.isComposing || !menuOpen) return;
     const key = event.key;
+    // With nothing to choose the menu has no keys of its own but Esc, which closes it; ↵ sends the words.
+    if (menuEmpty) {
+      if (key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({ ...menu, dismissed: at!.start });
+      }
+      return;
+    }
     const row = tree?.rows.find((one) => `session:${one.session.id}` === active);
     if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
@@ -302,6 +312,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       held={!canSend}
       focused={menuOpen}
       menuOpen={menuOpen}
+      menuEmpty={menuEmpty}
       menu={menuOpen && tree ? (
         <DeskMentionMenu
           tree={tree}
