@@ -156,7 +156,7 @@ export type AcpContentBlock =
  * sender as written, a cut text or image, and when a call or its result was
  * written (Unix milliseconds).
  */
-export type AcpMeta = { hide?: { origin?: "letter" | "interrupted" | "injected"; from?: string; truncated?: boolean; at_ms?: number } } | null;
+export type AcpMeta = { hide?: { origin?: "letter" | "interrupted"; from?: string; truncated?: boolean; at_ms?: number } } | null;
 
 /** ACP `ToolCallContent`. */
 export type AcpToolCallContent =
@@ -213,7 +213,7 @@ export type ThreadHidePart =
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
   /** `peer` is a letter's sender, when the record names it. */
-  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected"; peer: DeskSessionRef | null }
+  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted"; peer: DeskSessionRef | null }
   | { kind: "agent"; id: string; message: string | null; text: string }
   | { kind: "thought"; id: string; message: string | null; text: string }
   /** `startedAtMs` is when the session made the call, when its record says. */

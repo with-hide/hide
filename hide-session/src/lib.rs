@@ -1969,6 +1969,8 @@ pub const INJECTED_PREFIXES: &[&str] = &[
     "# AGENTS.md instructions",
     "<environment_context>",
     "<user_instructions>",
+    // Codex's record of an interrupted turn: a note for the model.
+    "<turn_aborted>",
     // Codex's record of the operator's answer to an async question: it
     // answers that question and is not a request.
     turns::native::ASYNC_REPLY_OPEN,

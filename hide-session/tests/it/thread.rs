@@ -759,16 +759,57 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
             ("고쳐줘", None, false),
             ("panic at main.rs:3", None, true),
             ("왜 그래?", None, false),
-            ("Caveat: local command output", Some("injected"), false),
-            (
-                "<system-reminder>hook said hi</system-reminder>",
-                Some("injected"),
-                false
-            ),
             (letter, Some("letter"), false),
             ("[Request interrupted by user]", Some("interrupted"), false),
         ]
     );
+}
+
+/// Codex writes its own context into the user role: the AGENTS.md
+/// instructions and the environment as the two parts of the session's first
+/// message, a note for an interrupted turn, and (as the newest records show
+/// it) the environment ahead of a real prompt. None of it is the operator's
+/// turn; the operator's own words next to it stay.
+#[test]
+fn text_codex_injects_is_not_an_operator_turn() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Codex)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let cwd = placed.cwd.to_str().unwrap();
+    let environment = format!(
+        "<environment_context>\n  <cwd>{cwd}</cwd>\n  <shell>zsh</shell>\n</environment_context>"
+    );
+    let instructions =
+        format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>");
+    let message = |id: &str, texts: &[&str]| {
+        let content = texts
+            .iter()
+            .map(|text| json!({"type": "input_text", "text": text}))
+            .collect::<Vec<_>>();
+        json!({"type": "response_item", "payload": {"type": "message", "id": id, "role": "user", "content": content}})
+    };
+    let session = std::fs::read_to_string(&placed.path).unwrap();
+    let header = session.lines().next().unwrap();
+    let records = [
+        message("a", &[&instructions, &environment]),
+        message("b", &["고쳐줘"]),
+        message(
+            "c",
+            &[
+                "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+            ],
+        ),
+        message("d", &[&environment, "왜 그래?"]),
+    ];
+    let contents = std::iter::once(header.to_owned())
+        .chain(records.iter().map(Value::to_string))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(texts(&page), ["고쳐줘", "왜 그래?"]);
 }
 
 /// A letter's line says whom it came from: the envelope's sender, or the
@@ -862,9 +903,8 @@ fn an_opencode_1_session_reads_from_its_parts() {
     );
     let synthetic = updates
         .iter()
-        .find(|update| update["content"]["text"] == "Summarize the conversation so far")
-        .unwrap();
-    assert_eq!(synthetic["_meta"]["hide"]["origin"], "injected");
+        .find(|update| update["content"]["text"] == "Summarize the conversation so far");
+    assert!(synthetic.is_none(), "a synthetic message is not drawn");
 }
 
 fn texts(page: &ThreadPage) -> Vec<String> {
