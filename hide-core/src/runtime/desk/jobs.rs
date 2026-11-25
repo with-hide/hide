@@ -1481,12 +1481,9 @@ fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutpu
     }
 }
 
-/// The group each checkout's Desk sessions sit in (B20).
-pub(crate) const DESK_GROUP: &str = "◆ Desk";
-
 impl Runtime {
     /// Follows Desk's jobs as a publish moves their rows: a new session's
-    /// tab goes into its checkout's `◆ Desk` group once, the operator's
+    /// tab goes into its checkout's reserved Desk group once, the operator's
     /// close, move out of the group and typing are remembered, a watch
     /// follows each, a freed place starts the next in the queue, and the
     /// section is sent again only when a card moved.
@@ -1789,7 +1786,7 @@ impl Runtime {
     }
 
     /// The checkout path and tab holding `pane` on this machine, and whether
-    /// that tab is in the `◆ Desk` group (`None` while it is in no group).
+    /// that tab is in the reserved Desk group (`None` while it is in no group).
     fn desk_tab_group(&self, pane: &str) -> Option<(String, String, Option<bool>)> {
         let (checkout_id, tab) = self.checkout_tab_holding_pane(pane)?;
         let path = self
@@ -1806,16 +1803,13 @@ impl Runtime {
             .get(self.node.as_str(), &path)?;
         let group = view.agent_tab_group(&tab)?;
         let desk = view
-            .agent_groups
-            .items
-            .iter()
-            .find(|item| item.name == DESK_GROUP)
+            .reserved_agent_group(crate::agent_groups::GroupRole::Desk)
             .map(|item| item.id.as_str());
         let in_desk = group.map(|group| Some(group) == desk);
         Some((path, tab, in_desk))
     }
 
-    /// Puts the tab in its checkout's `◆ Desk` group, made when missing,
+    /// Puts the tab in its checkout's reserved Desk group, made when missing,
     /// without changing the screen in front (B20): the group in front stays,
     /// unless the tab is the one it shows, which the front then follows into
     /// the group rather than leaving the screen to another tab or to none.
@@ -1827,26 +1821,18 @@ impl Runtime {
         let view = store.views.entry(&key.0, &key.1);
         let selected = view.agent_groups.selected.clone();
         let shown = view.selected_agent_layout().active() == Some(tab);
-        let group = match view
-            .agent_groups
-            .items
-            .iter()
-            .find(|item| item.name == DESK_GROUP)
-        {
-            Some(item) => item.id.clone(),
-            None => match view.create_agent_group(DESK_GROUP) {
-                Ok(id) => id,
-                Err(error) => {
-                    view.agent_groups.selected = selected;
-                    crate::diagnostic!(json!({
-                        "component": "desk",
-                        "kind": "desk.group_refused",
-                        "checkout": path,
-                        "error": format!("{error:?}"),
-                    }));
-                    return false;
-                }
-            },
+        let group = match view.ensure_reserved_agent_group(crate::agent_groups::GroupRole::Desk) {
+            Ok(id) => id,
+            Err(error) => {
+                view.agent_groups.selected = selected;
+                crate::diagnostic!(json!({
+                    "component": "desk",
+                    "kind": "desk.group_refused",
+                    "checkout": path,
+                    "error": format!("{error:?}"),
+                }));
+                return false;
+            }
         };
         let moved = view
             .move_agent_to_group(tab, Some(&group), super::super::unix_milliseconds())

@@ -208,7 +208,7 @@ pub enum DeskJobState {
     Cancelled,
     /// The operator closed its tab (B38).
     Closed,
-    /// The operator moved its tab out of the `◆ Desk` group (B37).
+    /// The operator moved its tab out of the reserved Desk group (B37).
     MovedOut,
     /// Hide put it to sleep (`hide agent sleep`); a letter wakes it.
     Sleeping,

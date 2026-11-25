@@ -503,6 +503,10 @@ pub struct AgentGroupSnapshot {
     pub id: Option<String>,
     pub name: Option<String>,
     pub tabs: Vec<String>,
+    /// A reserved group's role (`desk`), which the screens draw with that
+    /// surface's own mark; absent on the operator's own groups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::agent_groups::GroupRole>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

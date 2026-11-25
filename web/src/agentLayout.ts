@@ -3,7 +3,8 @@ import { adjacentInOrder, areaSentence, locateDisplay, moveLabel, neighbourArea,
 import type { MenuEntry } from "./components/entry-menu";
 
 export type AgentItem = { id: string };
-export type AgentGroup = { id: string | null; name: string | null; tabs: string[] };
+/** A tab group; `role` marks a group Hide keeps for one of its surfaces (`desk`), found by it and never by its name. */
+export type AgentGroup = { id: string | null; name: string | null; tabs: string[]; role?: "desk" | null };
 export type AgentStartReceipt = { request_id: string; group_id: string | null; area_id: string; draft_tab_id: string | null; live_tab_id: string | null; pane_id: string | null; add_pane: boolean; state: "pending" | "failed" | "ready"; agent_kind: string | null; agent_phase: string | null };
 export type CheckoutAgentGroups = { selected: string | null; groups: AgentGroup[]; drafts: string[]; start_receipts?: AgentStartReceipt[] };
 export type AgentStartTarget = { group_id: string | null; area_id: string; tab_id: string | null; add_pane: boolean };

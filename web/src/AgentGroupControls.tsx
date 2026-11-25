@@ -1,10 +1,11 @@
-import { BriefcaseBusinessIcon, ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import type { AgentLayout } from "./agentLayout";
 import { EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { coreErrorText } from "./coreError";
 import { Button } from "./components/ui/button";
+import { GroupMark } from "./components/group-mark";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Hint } from "./components/ui/tooltip";
 import { Input } from "./components/ui/input";
@@ -31,7 +32,7 @@ export function AgentGroupSelector({ layout, workspace, actions }: { layout: Age
     if (id.startsWith("select:")) actions.agentGroup(workspace, id.slice(7) || null, { action: "select" });
     else if (id === "create" || id === "rename") useGroupName.getState().open({ workspace, groupId: id === "rename" ? selected : null, name: id === "rename" ? name : "" });
     else actions.agentGroup(workspace, selected, { action: id });
-  }} trigger={<button type="button" data-agent-group-selector={selected ?? "ungrouped"} aria-label={`${t("groups.select")}: ${name}`} className="flex min-w-0 max-w-(--size-tab-preferred) shrink items-center gap-xs border-r border-border px-sm text-caption text-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{name}</span><ChevronDownIcon className="size-(--size-icon-sm) shrink-0" /></button>} />{failure ? <Hint label={failure} reveals><span role="alert" data-core-error={error?.kind} className="my-auto max-w-(--size-tab-preferred) truncate px-xs text-caption text-destructive">{failure}</span></Hint> : null}</>;
+  }} trigger={<button type="button" data-agent-group-selector={selected ?? "ungrouped"} aria-label={`${t("groups.select")}: ${name}`} className="flex min-w-0 max-w-(--size-tab-preferred) shrink items-center gap-xs border-r border-border px-sm text-caption text-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"><GroupMark group={groups.find((group) => group.id === selected)} /><span className="truncate">{name}</span><ChevronDownIcon className="size-(--size-icon-sm) shrink-0" /></button>} />{failure ? <Hint label={failure} reveals><span role="alert" data-core-error={error?.kind} className="my-auto max-w-(--size-tab-preferred) truncate px-xs text-caption text-destructive">{failure}</span></Hint> : null}</>;
 }
 
 export function GroupNameDialog({ actions }: { actions: Actions }) {

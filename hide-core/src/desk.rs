@@ -296,7 +296,7 @@ pub(crate) enum QueuedState {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct JobMark {
     pub intent: String,
-    /// Its tab was put in the `◆ Desk` group once; leaving it after that
+    /// Its tab was put in the reserved Desk group once; leaving it after that
     /// is the operator's move (B37).
     pub grouped: bool,
     pub moved_out: bool,

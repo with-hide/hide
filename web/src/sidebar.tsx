@@ -3,7 +3,7 @@ import { hostLook, hostRepository, projectHost, pullHost, pullLabel } from "./co
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
-import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
@@ -73,6 +73,7 @@ import { HerdrImportLine } from "./HerdrImport";
 import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
 import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
+import { GroupMark } from "./components/group-mark";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
@@ -1629,7 +1630,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
             and its briefcase where its rows' own column starts, so a collection never reads deeper than its rows. */}
         <div className="flex h-(--size-control-compact) min-w-0 items-center gap-xs rounded-sm pr-xs text-caption hover:bg-accent" style={{ paddingLeft: glyphColumn }}>
           <Button variant="text" size="inline" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)}>{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</Button>
-          <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></Button></Hint>
+          <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><GroupMark group={group} className={selected ? "text-foreground" : "text-muted-foreground"} /><span className="truncate">{name}</span></Button></Hint>
         </div>
         {open ? <ul className="mt-xxs"><CollectionRows checkout={checkout} deviceId={deviceId} collection={collection} inset={childInset} guideColumn={GROUP_GLYPH_COLUMN} guideSize="var(--size-icon-sm)" context={context} /></ul> : null}
       </li>;

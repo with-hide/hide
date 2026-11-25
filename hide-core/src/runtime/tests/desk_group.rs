@@ -3,11 +3,12 @@ use super::*;
 use crate::coordination::started::tests::{Child, register, spawn};
 use crate::delivery::ledger::Ledger;
 use crate::delivery::{Actor, HIDE_DESK_ROLE};
+use crate::agent_groups::GroupRole;
 use crate::model::{AgentGroupSnapshot, DeskJobState};
 use serde_json::{Value, json};
 
 // Expected outcomes come from PRD Desk 1차 B20, B37 and B38: a session Desk
-// started goes into its checkout's `◆ Desk` group once, without changing the
+// started goes into its checkout's reserved Desk group once, without changing the
 // screen in front; the operator's move out of the group and close are kept.
 const PATH: &str = "/desk-group";
 const TABS: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
@@ -84,7 +85,7 @@ fn a_session_desk_started_joins_the_desk_group_once_and_the_screen_stays() {
     assert_eq!(after, selected, "the group in front does not move");
     let desk = groups_now
         .iter()
-        .find(|group| group.name.as_deref() == Some("◆ Desk"))
+        .find(|group| group.role == Some(GroupRole::Desk))
         .expect("the Desk group was made");
     assert_eq!(desk.tabs, [TABS[1]]);
     assert_eq!(job_state(&runtime), DeskJobState::Working);
@@ -95,14 +96,14 @@ fn a_session_desk_started_joins_the_desk_group_once_and_the_screen_stays() {
     assert_eq!(
         again
             .iter()
-            .filter(|group| group.name.as_deref() == Some("◆ Desk"))
+            .filter(|group| group.role == Some(GroupRole::Desk))
             .count(),
         1
     );
 }
 
 /// The tab in front is Desk's session: it stays on screen, so the group in
-/// front is the `◆ Desk` group it went into, never the one it left empty
+/// front is the reserved Desk group it went into, never the one it left empty
 /// (with-hide/hide-private#466).
 #[test]
 fn a_session_desk_started_in_the_tab_in_front_stays_on_screen_in_the_desk_group() {
@@ -131,7 +132,7 @@ fn a_session_desk_started_in_the_tab_in_front_stays_on_screen_in_the_desk_group(
     let (_, groups_now) = groups(&runtime);
     let desk = groups_now
         .iter()
-        .find(|group| group.name.as_deref() == Some("◆ Desk"))
+        .find(|group| group.role == Some(GroupRole::Desk))
         .expect("the Desk group was made");
     assert_eq!(desk.tabs, [TABS[0]]);
     assert_eq!(shown(&runtime), (desk.id.clone(), Some(TABS[0].to_owned())));
@@ -154,7 +155,7 @@ fn a_tab_moved_out_of_the_desk_group_reads_moved_out_and_stays_out() {
     assert!(
         groups_now
             .iter()
-            .filter(|group| group.name.as_deref() == Some("◆ Desk"))
+            .filter(|group| group.role == Some(GroupRole::Desk))
             .all(|group| !group.tabs.iter().any(|tab| tab == TABS[1]))
     );
 }
@@ -231,7 +232,7 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
     let (_, groups_now) = groups(&runtime);
     let group = groups_now
         .iter()
-        .find(|group| group.name.as_deref() == Some("◆ Desk"))
+        .find(|group| group.role == Some(GroupRole::Desk))
         .expect("the Desk group was made");
     assert_eq!(group.tabs, [TABS[1]]);
     let card = |runtime: &Runtime| runtime.snapshot.desk_jobs.as_ref().unwrap().jobs[0].clone();
