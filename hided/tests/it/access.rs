@@ -493,6 +493,21 @@ async fn a_bot_asks_is_approved_for_the_whole_hide_and_runs_what_the_operator_do
         let ran = tool.run(args);
         assert!(ran.ok, "{args:?}: {}", ran.out);
     }
+    // Outside every checkout it has no Project to narrow to, so the sessions
+    // and links it reads are every Project's: it is not told to ask from
+    // inside a checkout, whatever the record answers.
+    for args in [
+        &["session", "list", "--json"][..],
+        &["links", "branch", "main"],
+    ] {
+        let ran = tool.run(args);
+        assert!(
+            !ran.out.contains("checkout_not_registered")
+                && !ran.out.contains("workspace_unavailable"),
+            "{args:?}: {}",
+            ran.out
+        );
+    }
     let list = tool.run(&["access", "list", "--json"]).json();
     assert_eq!(list["value"]["connections"][0]["name"], "nightly");
     assert_eq!(

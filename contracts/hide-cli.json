@@ -7571,6 +7571,7 @@
                 "worktree_remove_unknown",
                 "worktree_remove_blocked",
                 "worktree_remove_needs_force",
+                "worktree_remove_desk_no_force",
                 "worktree_remove_branch_unmerged",
                 "worktree_remove_branch_kept",
                 "worktree_remove_agent_working",
@@ -9791,7 +9792,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:963a71d35efb70233bd62fc3729d13901d11b55469243688453c0adedd6219cb",
+    "digest": "sha256:1a37b04a51bfa18ba9e0a9e28a5742859069c5d7901e698efb29c0885c463c01",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -160,6 +160,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "worktree_remove_needs_force" => {
             "The worktree holds work that removing it would lose; commit or move it, or add --force to discard it"
         }
+        "worktree_remove_desk_no_force" => {
+            "Desk never discards work on its own word; ask the operator, or leave out --force and remove what holds none"
+        }
         "worktree_remove_branch_unmerged" => {
             "The branch holds commits its base does not have; leave out --delete-branch to keep it, or add --force to delete it anyway"
         }

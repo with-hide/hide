@@ -364,6 +364,7 @@ mod tests {
                     store: path,
                     local_device: "local".into(),
                     caller: "app".into(),
+                    every_project: false,
                     projects: vec![
                         scope_project("app", "/work/app"),
                         scope_project("lib", "/work/lib"),

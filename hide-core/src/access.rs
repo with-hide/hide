@@ -297,6 +297,22 @@ pub struct Requested {
     pub expired: Option<String>,
 }
 
+/// Whether `context` is the own context of a caller over the whole Hide that
+/// has no checkout: Desk's (`desk_context`) or a bot connection's
+/// ([`access_context`]). A bot whose folder a registered checkout holds has
+/// that checkout's context instead, and a pane's is its checkout's.
+pub fn is_checkoutless_context(context: &crate::workspace_control::Context) -> bool {
+    context.workspace_id == crate::workspace_control::DESK_CALLER
+        || context
+            .workspace_id
+            .strip_prefix(&format!(
+                "{}{}:",
+                crate::delivery::HIDE_PREFIX,
+                crate::delivery::HIDE_ACCESS_ROLE
+            ))
+            .is_some()
+}
+
 /// The context a tool's command carries when the folder it ran in is no
 /// registered checkout: its connection on the core's machine, with no
 /// checkout, as Desk's carries Desk (`crate::desk::desk_context`).
@@ -1112,6 +1128,20 @@ mod tests {
 
     fn id(n: u8) -> String {
         format!("{n:016x}")
+    }
+
+    #[test]
+    fn only_desks_and_a_bots_own_context_has_no_checkout() {
+        use crate::workspace_control::Context;
+        assert!(is_checkoutless_context(&crate::desk::desk_context("local")));
+        assert!(is_checkoutless_context(&access_context("local", "abc123")));
+        let workspace = Context {
+            device_id: "local".into(),
+            workspace_id: "w1".into(),
+            checkout_id: "c1".into(),
+            checkout_path: "/work/app".into(),
+        };
+        assert!(!is_checkoutless_context(&workspace));
     }
 
     #[test]

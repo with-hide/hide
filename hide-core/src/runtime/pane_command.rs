@@ -23,7 +23,8 @@ impl Runtime {
         // A bot reads panes and types into them as the operator does (PRD
         // hide-external-control B20, B21, B28), an own-mode bot those of its
         // own work (mission-87), which `own` holds; it has no pane to open
-        // another beside or a checkout to name.
+        // another beside or a checkout to name. Desk does as a bot of the
+        // whole Hide does.
         let mut own = None;
         let (caller_pane, context) = match Caller::parse(caller) {
             Caller::Pane(caller_pane) => {
@@ -35,8 +36,13 @@ impl Runtime {
                 }
                 (caller_pane, context)
             }
-            Caller::Access { connection, .. } => {
-                self.access_authority(device, connection, crate::access::pane_need(&command))?;
+            broad @ (Caller::Access { .. } | Caller::Desk) => {
+                // Desk reads panes and types into none: its text would reach
+                // a shell with no card in front of it.
+                if broad == Caller::Desk && matches!(command, PaneCommand::Send { .. }) {
+                    return Err("pane_required".into());
+                }
+                self.broad_authority(device, broad, crate::access::pane_need(&command))?;
                 own = self.own_work(caller);
                 if let Some(own) = &own {
                     match &command {

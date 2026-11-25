@@ -2013,6 +2013,24 @@ impl ScopedRequest {
     }
 }
 
+/// Judges `command` by the mode its caller runs in: a bot's own, and the
+/// whole Hide for Desk (`Capability::reach`); a pane's or checkout's has none
+/// and is judged by the core where the command names its caller.
+fn admit_command(
+    cap: &crate::pane_auth::Capability,
+    command: &ScopedRequest,
+) -> Result<(), (String, &'static str)> {
+    match cap.reach() {
+        Some(mode) => hide_core::access::admit(mode, command.access_need()).map_err(|reason| {
+            (
+                reason.to_owned(),
+                crate::pane_auth::refusal_next_action(reason),
+            )
+        }),
+        None => Ok(()),
+    }
+}
+
 /// A pane capability can submit only Workspace commands. It never receives a
 /// snapshot, file bytes, or the shell's unrestricted dispatch channel.
 async fn scoped_client_loop(
@@ -2261,13 +2279,10 @@ async fn scoped_client_loop(
                             tokio::task::spawn_blocking(move || {
                             let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
-                            // A bot runs what its mode allows, judged here
-                            // for every command (B20-B23, mission-87 D3).
-                            if let Some(mode) = cap.access_mode() {
-                                hide_core::access::admit(mode, command.access_need()).map_err(|reason| {
-                                    (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
-                                })?;
-                            }
+                            // A bot runs what its mode allows, and Desk what
+                            // the whole Hide allows, judged here for every
+                            // command (B20-B23, mission-87 D3).
+                            admit_command(&cap, &command)?;
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
@@ -2323,17 +2338,6 @@ async fn scoped_client_loop(
                                 }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
-                                }
-                                // A bot outside every checkout has none to
-                                // read: it asks from inside one (B25).
-                                ScopedRequest::Links(_) | ScopedRequest::Session(_)
-                                    if cap.access_mode().is_some()
-                                        && cap.context.checkout_path.is_empty() =>
-                                {
-                                    return Err((
-                                        "checkout_not_registered".to_owned(),
-                                        crate::pane_auth::CHECKOUT_NEXT_ACTION,
-                                    ));
                                 }
                                 ScopedRequest::Links(query) => {
                                     let scope = core.links_scope(&cap.context).ok_or((
@@ -6299,6 +6303,60 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Desk is judged at the command boundary as a bot of the whole Hide is:
+    /// it reads, and what is the operator's alone or means an agent in a pane
+    /// is refused with the table's codes. A capability that is no bot's or
+    /// Desk's has no mode and is judged by the core.
+    #[test]
+    fn desk_is_judged_at_the_command_boundary_as_a_bot_of_the_whole_hide() {
+        use super::{ScopedRequest, admit_command};
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::pane_auth::Registry::new(directory.path()).unwrap();
+        let path = registry
+            .issue_desk(
+                "0123456789abcdef0123456789abcdef",
+                1,
+                hide_core::desk::desk_context("local"),
+            )
+            .unwrap();
+        let pid = std::process::id() as i32;
+        registry
+            .bind_desk(
+                &path,
+                pid,
+                hide_node::pane_proof::process_start(pid).unwrap(),
+            )
+            .unwrap();
+        let token = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap())
+            .unwrap()["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let desk = registry.get(&token).unwrap();
+
+        let reads =
+            ScopedRequest::Session(hide_core::links::session_command::SessionCommand::List {
+                since_ms: None,
+                limit: None,
+            });
+        assert_eq!(admit_command(&desk, &reads), Ok(()));
+        let adds = ScopedRequest::Device(hide_core::device_command::DeviceCommand::Add {
+            ssh_alias: "box".into(),
+            name: None,
+        });
+        assert_eq!(
+            admit_command(&desk, &adds).unwrap_err().0,
+            "access_operator_only"
+        );
+        let memory = ScopedRequest::Memory(hide_core::memory_command::MemoryCommand::Search {
+            words: "x".into(),
+        });
+        assert_eq!(
+            admit_command(&desk, &memory).unwrap_err().0,
+            "access_needs_agent"
+        );
+    }
+
     /// This machine's eight places are taken in one place, `LocalSeat`
     /// (PRD device-connect-iroh D-67): a way in that compared a count of
     /// its own with `MAX_CLIENTS`, as the phone's, a pane's command and

@@ -659,6 +659,31 @@ impl Runtime {
     }
 }
 
+impl Runtime {
+    /// The identity a command acts as when its caller is no pane and works
+    /// over the whole Hide: a bot's connection (`access_authority`), or Desk
+    /// while its process runs, which the one table judges as a bot of the
+    /// whole Hide, so what is the operator's alone or means an agent in a
+    /// pane is refused it. Any other caller is no such caller.
+    pub(super) fn broad_authority(
+        &self,
+        device: &str,
+        caller: crate::workspace_control::Caller<'_>,
+        need: crate::access::Need,
+    ) -> Result<(crate::delivery::Actor, Mode), String> {
+        use crate::workspace_control::Caller;
+        match caller {
+            Caller::Access { connection, .. } => self.access_authority(device, connection, need),
+            Caller::Desk => {
+                let (_, actor) = self.desk_authority(device)?;
+                crate::access::admit(Mode::All, need)?;
+                Ok((actor, Mode::All))
+            }
+            Caller::Pane(_) | Caller::Checkout { .. } => Err("broad_caller_required".into()),
+        }
+    }
+}
+
 /// What an own-mode bot's command reaches, judged against its own work
 /// (mission-87): the agents its connection started and every agent started
 /// under them, as the started records hold them (`hide_started.tool_work`,
