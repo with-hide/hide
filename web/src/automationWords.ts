@@ -55,15 +55,16 @@ export function onceText(schedule: Extract<AutomationSchedule, { kind: "once" }>
 }
 
 /**
- * `7일 뒤`: how long until a once schedule's time, by the calendar when it is
- * another day (so 1주일 뒤 reads as 7일 뒤 at any hour), else `3시간 뒤`, or
- * `곧` in its last minute; `at` is the core's time for it.
+ * `7일 뒤`: how long until a once schedule's time, in calendar days once it
+ * is a day or more away (so 1주일 뒤 reads as 7일 뒤 at any hour), else by the
+ * clock (`3시간 뒤`, the next morning's 00:30 an hour before it), or `곧` in its
+ * last minute; `at` is the core's time for it.
  */
 export function onceUntilText(schedule: Extract<AutomationSchedule, { kind: "once" }>, at: number, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
   const [year, month, day] = schedule.date.split("-").map(Number);
   const [nowYear, nowMonth, nowDay] = wallDay(now, zone).split("-").map(Number);
   const days = Math.round((Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1) - Date.UTC(nowYear ?? 0, (nowMonth ?? 1) - 1, nowDay ?? 1)) / 86_400_000);
-  if (days >= 1) return t("automationScreen.inTime", { time: formatElapsed(language, days * 86_400_000) });
+  if (at - now >= 86_400_000) return t("automationScreen.inTime", { time: formatElapsed(language, days * 86_400_000) });
   return at - now < 60_000 ? t("automationScreen.soon") : t("automationScreen.inTime", { time: formatElapsed(language, at - now) });
 }
 

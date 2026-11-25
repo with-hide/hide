@@ -308,3 +308,37 @@ it("draws an automation that stopped for a person as one line of 내 차례 with
     await unmount();
   }
 });
+
+// mission-104 S-5: a once automation reads as its date with the clock mark, a
+// done one comes after the rest, and the one whose run ended is a line of
+// 내 차례 counted in the agents tab until the core takes it away.
+it("lists a once automation by its date, a done one last, and the one whose run ended as a counted line of 내 차례", async () => {
+  const once = { kind: "once" as const, date: "2026-11-26", time: "09:00" };
+  const waiting = automation("week", { name: "Check webhooks", schedule: once, next_run_at_unix_ms: NOW + 7 * 24 * HOUR });
+  const ended = automation("migration", {
+    name: "Check migration", schedule: { ...once, date: "2026-11-19", time: "07:56" }, next_run_at_unix_ms: null, done: true, look_run: 1,
+    records: [{ kind: "run", number: 1, trigger: "scheduled", started_at_unix_ms: NOW - 4 * 60_000, ended_at_unix_ms: NOW, state: "succeeded", attempt: 1, seen: false }],
+  });
+  const { container, serve, click, unmount } = await connect(null);
+  try {
+    await serve({ type: "automations", items: [ended, automation("daily"), waiting], zone: ZONE, looks: ["migration"] });
+    const look = container.querySelector('[data-phone-group="needs_you"] [data-phone-automation-look="migration"]')!;
+    expect(look.querySelector('[data-mark-automation="once"]')).not.toBeNull();
+    expect(look.querySelector('[data-phone-automation-look-line="ok"]')!.textContent).toBe("Automation · once · ✓ Done · 4m");
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
+
+    await click('[data-phone-tab="automations"]');
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-phone-automation]")];
+    expect(rows.map((row) => row.getAttribute("data-phone-automation"))).toEqual(["daily", "week", "migration"]);
+    expect(rows[2]!.getAttribute("data-phone-automation-state")).toBe("done");
+    expect(container.querySelector('[data-phone-automation="week"] [data-phone-automation-once="true"]')!.textContent).toBe("Thu 11-26 09:00 · once");
+
+    // Opened on the computer, the core takes the look away and the line and its count go.
+    await serve({ type: "automations", items: [ended, automation("daily"), waiting], zone: ZONE, looks: [] });
+    await click('[data-phone-tab="agents"]');
+    expect(container.querySelector("[data-phone-automation-look]")).toBeNull();
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
