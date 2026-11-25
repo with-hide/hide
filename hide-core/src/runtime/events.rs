@@ -3272,24 +3272,14 @@ impl Runtime {
                 true
             }
             Event::GuestWorkFoldToggle(payload) => {
+                let fold = crate::guest_panes::GuestWorkFold {
+                    device_id: payload.device_id,
+                    folder: payload.folder,
+                };
                 // A head stands only for a machine whose work is listed here,
                 // after one of this machine's projects or checkouts, or at
                 // the list's end.
-                let listed = self
-                    .snapshot
-                    .navigator
-                    .guest_panes
-                    .iter()
-                    .any(|guest| guest.device_id == payload.device_id);
-                let placed = payload.folder.is_empty()
-                    || self.snapshot.navigator.workspaces.iter().any(|workspace| {
-                        workspace.path == payload.folder
-                            || workspace
-                                .checkouts
-                                .iter()
-                                .any(|checkout| checkout.path == payload.folder)
-                    });
-                if !listed || !placed {
+                if !guest_work_fold_listed(&self.snapshot.navigator, &fold) {
                     self.set_error(
                         "guest_work_fold.unavailable",
                         "This machine's work is no longer listed here".to_owned(),
@@ -3297,16 +3287,21 @@ impl Runtime {
                     );
                     return true;
                 }
-                let fold = crate::guest_panes::GuestWorkFold {
-                    device_id: payload.device_id,
-                    folder: payload.folder,
-                };
+                let navigator = &self.snapshot.navigator;
                 let folds = &mut self.snapshot.ui_state.folded_guest_work;
                 if folds.contains(&fold) {
                     folds.retain(|kept| kept != &fold);
                 } else {
                     if folds.len() >= crate::guest_panes::MAX_FOLDS {
-                        folds.remove(0);
+                        // Full: a fold whose machine or folder is no longer
+                        // listed goes first, oldest first, since no head
+                        // draws it; only when every fold is drawn does the
+                        // oldest open again.
+                        let finished = folds
+                            .iter()
+                            .position(|kept| !guest_work_fold_listed(navigator, kept))
+                            .unwrap_or(0);
+                        folds.remove(finished);
                     }
                     folds.push(fold);
                 }
@@ -4992,4 +4987,25 @@ impl Runtime {
                 });
         }
     }
+}
+
+/// Whether `fold` names a head the 프로젝트 list can draw: a machine whose
+/// work is listed here, in the folder of one of this machine's projects or
+/// checkouts, or `""` for its work outside every project.
+fn guest_work_fold_listed(
+    navigator: &crate::model::NavigatorSnapshot,
+    fold: &crate::guest_panes::GuestWorkFold,
+) -> bool {
+    navigator
+        .guest_panes
+        .iter()
+        .any(|guest| guest.device_id == fold.device_id)
+        && (fold.folder.is_empty()
+            || navigator.workspaces.iter().any(|workspace| {
+                workspace.path == fold.folder
+                    || workspace
+                        .checkouts
+                        .iter()
+                        .any(|checkout| checkout.path == fold.folder)
+            }))
 }

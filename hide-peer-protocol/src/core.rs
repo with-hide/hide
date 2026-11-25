@@ -198,14 +198,17 @@ pub const MAX_WORK_MARK_BYTES: usize = 16;
 /// The longest agent kind a [`Work`] carries: an agent definition's id.
 pub const MAX_WORK_AGENT_BYTES: usize = 32;
 
-/// Whether `agent` is an agent kind a [`Work`] carries: one short word of
-/// lower-case letters, digits, `-` and `_`, as an agent definition's id is.
+/// Whether `agent` is an agent kind a [`Work`] carries: an agent
+/// definition's id, lower-case letters, digits and `-`, not starting with
+/// `-`. It is `hide_agent_adapter::definition::id_is_valid`, which this
+/// crate cannot link; a test in hided holds the two equal, since a sender
+/// that passed a kind this refuses would lose its whole list.
 pub fn work_agent_is_carried(agent: &str) -> bool {
-    !agent.is_empty()
-        && agent.len() <= MAX_WORK_AGENT_BYTES
-        && agent.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
-        })
+    (1..=MAX_WORK_AGENT_BYTES).contains(&agent.len())
+        && agent
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !agent.starts_with('-')
 }
 
 /// The most panes one [`CoreMessage::WorkNames`] names: the most a host
@@ -607,6 +610,8 @@ mod tests {
             "Claude",
             "claude code",
             "a\nb",
+            "-claude",
+            "my_agent",
             &"a".repeat(MAX_WORK_AGENT_BYTES + 1),
         ] {
             assert!(!valid_work(&[work("w1:p1", Some(agent))]), "{agent:?}");

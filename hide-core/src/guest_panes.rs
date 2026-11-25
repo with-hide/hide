@@ -110,19 +110,12 @@ pub fn mark_is_carried(mark: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
-/// The longest agent kind a list carries: an agent definition's id, as
-/// the peer link bounds it (`hide_peer_protocol::core::MAX_WORK_AGENT_BYTES`).
-pub const MAX_AGENT_BYTES: usize = 32;
-
-/// Whether `agent` is an agent kind a list carries: one short word of
-/// lower-case letters, digits, `-` and `_`, as an agent definition's id
-/// is. Which kinds a screen has a logo for is the screen's to know.
+/// Whether `agent` is an agent kind a list carries: an agent definition's
+/// id (`hide_agent_adapter::definition::id_is_valid`), the rule the peer
+/// link checks a kind by. Which kinds a screen has a logo for is the
+/// screen's to know.
 pub fn agent_is_carried(agent: &str) -> bool {
-    !agent.is_empty()
-        && agent.len() <= MAX_AGENT_BYTES
-        && agent.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
-        })
+    hide_agent_adapter::definition::id_is_valid(agent)
 }
 
 /// A folded head of another machine's work in the 프로젝트 list (B10,
@@ -136,8 +129,9 @@ pub struct GuestWorkFold {
     pub folder: String,
 }
 
-/// The most folded heads the core keeps; folding one past it lets the
-/// oldest fold open again.
+/// The most folded heads the core keeps; folding one past it drops the
+/// oldest fold no head draws any more (its machine or folder no longer
+/// listed), else lets the oldest fold open again.
 pub const MAX_FOLDS: usize = 256;
 
 /// Whether `pane` is a pane id a list carries.
@@ -313,7 +307,10 @@ mod tests {
         };
         assert!(agent("claude") && agent("cursor-agent") && agent("qwen3"));
         assert!(!agent("") && !agent("Claude") && !agent("claude code"));
-        assert!(!agent(&"a".repeat(MAX_AGENT_BYTES + 1)));
+        assert!(!agent("-claude") && !agent("my_agent"));
+        assert!(!agent(
+            &"a".repeat(hide_agent_adapter::definition::MAX_ID_BYTES + 1)
+        ));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

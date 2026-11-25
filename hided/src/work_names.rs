@@ -29,7 +29,7 @@ const _: () = assert!(
         && hide_core::work_names::MAX_BRANCH_BYTES
             == hide_peer::protocol::core::MAX_WORK_BRANCH_BYTES
         && hide_core::guest_panes::MAX_MARK_BYTES == hide_peer::protocol::core::MAX_WORK_MARK_BYTES
-        && hide_core::guest_panes::MAX_AGENT_BYTES
+        && hide_agent_adapter::definition::MAX_ID_BYTES
             == hide_peer::protocol::core::MAX_WORK_AGENT_BYTES
 );
 
