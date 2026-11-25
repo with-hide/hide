@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
+import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -121,7 +121,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
   const box = useRef<MentionInputHandle>(null);
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
-  const pending = useRef<{ text: string; after: number } | null>(null);
+  const pending = useRef<{ text: string; after: number; queued: ReadonlySet<number> } | null>(null);
   // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
   const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
 
@@ -134,17 +134,20 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const liveText = live?.text ? live.text : null;
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
-  const canSend = !answering && agent?.state === "ready";
+  // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
+  const canSend = agent?.state === "ready";
+  const queued = desk?.conversation.queued ?? NO_QUEUED;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
     const sent = pending.current;
     if (!sent || !items) return;
-    if (items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text)) {
+    const shown = items.some((item) => item.kind === "user" && item.id > sent.after && item.text === sent.text) || queued.some((one) => !sent.queued.has(one.id) && one.text === sent.text);
+    if (shown) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
     }
-  }, [items, setDraft]);
+  }, [items, queued, setDraft]);
   useEffect(() => {
     const sent = lastSent.current;
     if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
@@ -155,7 +158,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   useLayoutEffect(() => {
     const box = scroller.current;
     if (box && stick.current) box.scrollTop = box.scrollHeight;
-  }, [shown, liveText, answering]);
+  }, [shown, liveText, answering, queued]);
   useEffect(() => {
     const box = scroller.current;
     if (!box) return;
@@ -172,7 +175,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (!canSend || !items) return;
     const out = outgoing(words);
     if (!out.text) return;
-    pending.current = { text: out.text, after: lastUserId(items) };
+    pending.current = { text: out.text, after: lastUserId(items), queued: new Set(queued.map((one) => one.id)) };
     lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions);
@@ -282,6 +285,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onOutput: room.output,
     onMission: room.mission,
     onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
+    onQueuedRemove: (id) => actions.deskQueuedRemove(id),
     onNoticeAction,
     onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
     onMention: (mention) => {
@@ -352,7 +356,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}
@@ -512,6 +516,7 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   );
 }
 
+const NO_QUEUED: readonly DeskQueuedMessage[] = [];
 const NO_WIDTHS = { view_width: null, session_width: null };
 
 /**

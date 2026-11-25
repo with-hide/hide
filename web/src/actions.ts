@@ -2873,6 +2873,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })) } });
     },
 
+    /** ✕ on a message waiting for the turn before it: it never goes (`desk_queued_remove`). */
+    deskQueuedRemove(id: number) {
+      dispatch({ schema_version: 2, kind: "desk_queued_remove", payload: { id } });
+    },
+
     /** `중지`: ends Desk's turn and nothing it started (B7). */
     deskStop() {
       dispatch({ schema_version: 2, kind: "desk_stop", payload: {} });

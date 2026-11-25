@@ -65,8 +65,8 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   const blocked = empty || held;
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
-    // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
-    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || (menuOpen && !menuEmpty)) return;
+    // Enter sends and Shift+Enter starts a line, while Desk answers too (the message waits for its turn); a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
+    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
   };

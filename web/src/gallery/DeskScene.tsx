@@ -25,7 +25,7 @@ import { ThreadView } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
 import { mentionTree } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -74,7 +74,7 @@ const noop = () => undefined;
 
 const CHAT_ACTIONS: DeskChatActions = {
   onOpen: noop, onAnswer: noop, onCancel: noop, onRequeue: noop, onRetry: noop, onOutput: noop, onMission: noop,
-  onApproval: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
+  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
 };
 
 const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop };
@@ -186,9 +186,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -289,7 +289,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       body = <OutputsCriteria />;
       break;
     case "chat-states":
-      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고" })} />;
+      body = <Room chat={chat(stateItems(now), <ChatComposer agents={AGENTS_PREPARING} selection={CODEX} answering />, { live: "지금 돌고 있는 일은 세 개예요. mention 버튼 정리는 테스트를 돌리는 중이고", queued: [{ id: 900, text: "끝나면 release 노트도 정리해줘", at_ms: now, mentions: [] }] })} />;
       break;
     case "thread-states": {
       const fresh = deskJob(jobs.mention!, { id: "fresh", title: "로그 정리", state: "starting", now: null, plan: null, pull_requests: [], outputs: [] });

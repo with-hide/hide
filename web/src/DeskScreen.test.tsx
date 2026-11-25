@@ -35,11 +35,11 @@ const rest = {
 
 const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, always_runs: [], login_command: "claude /login", models: [], efforts: [] });
 
-const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true): DeskSection => ({
+const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = []): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
   agents: [claude(state, signedIn)],
   host: { state: "ready", detail: null },
-  conversation: { generation: 1, items, dropped: 0 },
+  conversation: { generation: 1, items, dropped: 0, queued },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
   lane: { view_width: null, session_width: null },
@@ -261,6 +261,31 @@ describe("Desk's room", () => {
     expect(sent("focus_checkout")).toEqual([expect.objectContaining({ workspace_id: "w-repo", checkout_id: "c-home" })]);
   });
 
+  describe("a message sent while a reply is being written", () => {
+    const writing = () => act(async () => useShellStore.setState({ deskLive: { text: "답을 쓰는 중", started_at_ms: 1 } }));
+    const waiting = (id: number, text: string) => ({ id, text, at_ms: 0, mentions: [] });
+
+    it("goes with ↵ and waits as a bubble with 대기 중, the stop button staying", async () => {
+      useUiStore.setState({ deskDraft: { text: "끝나면 알려줘", mentions: [] } });
+      await render(desk([]));
+      await writing();
+      expect(document.body.querySelector("[data-desk-composer-stop]")).not.toBeNull();
+      await key("Enter");
+      expect(sent("desk_send")).toEqual([{ text: "끝나면 알려줘", mentions: [] }]);
+      // The box keeps the words until the core shows them waiting, then lets them go.
+      expect(useUiStore.getState().deskDraft.text).toBe("끝나면 알려줘");
+      await show(desk([], "ready", true, [waiting(5, "끝나면 알려줘")]));
+      expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
+    });
+
+    it("is taken out with its ✕, which sends the core's one event", async () => {
+      await render(desk([], "ready", true, [waiting(5, "하나"), waiting(6, "둘")]));
+      await press("[data-desk-queued='6'] [data-desk-queued-remove]");
+      expect(sent("desk_queued_remove")).toEqual([{ id: 6 }]);
+    });
+  });
+
   describe("permissions (D-82, D-83, B46, B47)", () => {
     const archive: DeskItem = {
       kind: "approval", id: 7, card: "command", command: "hide agent archive agent-18285", folder: "~/repo", reason: null, state: "waiting",
@@ -273,6 +298,14 @@ describe("Desk's room", () => {
       await act(async () => { setter.call(refusal()!, value); refusal()!.dispatchEvent(new Event("input", { bubbles: true })); });
     };
     const key = (name: string, composing = false) => act(async () => { refusal()!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, isComposing: composing })); });
+
+    it("names a hide line's card by its permission row, and any other command a shell command", async () => {
+      await render(desk([{ ...archive, row: "hide" }]));
+      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("hide commands");
+      await show(desk([{ ...archive, row: "shell" }]));
+      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Shell command");
+      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("~/repo");
+    });
 
     it("asks about a working session's archive with three answers and no 'always', and says what it ends", async () => {
       await render(desk([archive]));
