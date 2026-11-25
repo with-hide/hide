@@ -35,6 +35,7 @@ pub mod index;
 pub mod link;
 pub mod link_panes;
 pub mod list;
+pub mod liveness;
 pub mod memory;
 pub mod mutate;
 pub mod panes;

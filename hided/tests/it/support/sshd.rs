@@ -176,9 +176,27 @@ impl Sshd {
     /// A client config block for `alias` reaching this server: its key, its
     /// known_hosts, and no agent or other file of this account's.
     pub fn client_config(&self, alias: &str) -> String {
+        self.client_config_at(alias, self.port)
+    }
+
+    /// [`Sshd::client_config`] for a client that reaches this server through
+    /// `port` on loopback (a [`super::relay::Relay`]), which the known_hosts
+    /// then names as this server too.
+    pub fn client_config_through(&self, alias: &str, port: u16) -> Result<String> {
+        let public = std::fs::read_to_string(self.dir.join("host.pub"))?;
+        let mut known = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.known_hosts)?;
+        std::io::Write::write_all(
+            &mut known,
+            format!("[127.0.0.1]:{port} {}\n", public.trim()).as_bytes(),
+        )?;
+        Ok(self.client_config_at(alias, port))
+    }
+
+    fn client_config_at(&self, alias: &str, port: u16) -> String {
         format!(
-            "Host {alias}\n  HostName 127.0.0.1\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n",
-            self.port,
+            "Host {alias}\n  HostName 127.0.0.1\n  Port {port}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n",
             account(),
             self.client_key.display(),
             self.known_hosts.display()

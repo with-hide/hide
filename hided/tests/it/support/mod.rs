@@ -3,6 +3,7 @@
 //! `tailscale`; declared once, so the binary compiles each once.
 
 pub mod fake_tailscale;
+pub mod relay;
 pub mod remote_delivery;
 pub mod run;
 pub mod shipped;
