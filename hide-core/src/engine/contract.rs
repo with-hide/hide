@@ -1371,10 +1371,15 @@ fn shell_named(variable: &str) -> std::ffi::OsString {
 
 /// The variables of a home made for one test's shell, every shell alike:
 /// `HOME` and each XDG folder under `home`, so nothing a shell reads or
-/// writes at its start is the runner's. zsh finds startup files there, so
-/// Debian's and Ubuntu's zsh opens no new-user menu, and Ubuntu's global
-/// zshrc runs no compinit, which asks about the runner's folders; either
-/// would take the typed start as its answer.
+/// writes at its start is the runner's, and a home the shells have run in
+/// before, so none does its first-run work while the test waits:
+/// - zsh finds startup files, so Debian's and Ubuntu's zsh opens no new-user
+///   menu, and Ubuntu's global zshrc runs no compinit, which asks about the
+///   runner's folders; either would take the typed start as its answer.
+/// - fish finds its generated completions, so it starts no man-page reader:
+///   fish runs that `python3` in its own process group, where it held the
+///   terminal for 15 to 30 s on a Linux runner (the shell never held it
+///   alone, so nothing could be typed).
 #[cfg(unix)]
 fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
     std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
@@ -1390,6 +1395,7 @@ fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
         std::fs::create_dir_all(&folder).unwrap();
         env.insert(name.to_owned(), folder.to_str().unwrap().to_owned());
     }
+    std::fs::create_dir_all(home.join(".local/share/fish/generated_completions")).unwrap();
     env
 }
 
