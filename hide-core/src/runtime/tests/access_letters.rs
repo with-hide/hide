@@ -470,16 +470,30 @@ fn a_desk_command_under_another_context_is_refused_as_changed() {
     assert_eq!(desk.err().as_deref(), Some("caller_context_changed"));
 }
 
-/// D22: what Desk cannot do, refused with the codes it has always had:
-/// another pane's typing, an agent's sleep and a mission.
+/// D22: Desk works as a bot of the whole Hide does: it reads panes and
+/// missions, and what means an agent in a pane (opening a pane, leading a
+/// mission) is refused it with the table's codes; typing into a pane and an
+/// agent's sleep stay the refusals they have always had.
 #[test]
-fn desk_is_refused_panes_sleep_and_missions_as_before() {
+fn desk_reads_panes_and_missions_and_leads_nothing() {
     let fixture = Fixture::start();
     fixture.runtime.lock().unwrap().open_test_desk(1);
     let desk_context = crate::desk::desk_context(crate::node::TEST_NODE);
     let mut runtime = fixture.runtime.lock().unwrap();
+    let node = crate::node::TEST_NODE;
+    let read = runtime.prepare_pane_command(
+        node,
+        DESK_CALLER,
+        &desk_context,
+        crate::pane_command::PaneCommand::Read {
+            pane: "worker".into(),
+            lines: 10,
+        },
+    );
+    assert!(read.is_ok(), "{:?}", read.err());
+    // It types into none: its text would reach a shell with no card in front.
     let typed = runtime.prepare_pane_command(
-        crate::node::TEST_NODE,
+        node,
         DESK_CALLER,
         &desk_context,
         crate::pane_command::PaneCommand::Send {
@@ -491,21 +505,94 @@ fn desk_is_refused_panes_sleep_and_missions_as_before() {
         },
     );
     assert_eq!(typed.err().as_deref(), Some("pane_required"));
+    let opened = runtime.prepare_pane_command(
+        node,
+        DESK_CALLER,
+        &desk_context,
+        crate::pane_command::PaneCommand::Open {
+            command: "ls".into(),
+            focus: false,
+        },
+    );
+    assert_eq!(opened.err().as_deref(), Some("access_needs_agent"));
+    let listed = runtime.mission_command(
+        node,
+        DESK_CALLER,
+        &desk_context,
+        crate::missions::MissionCommand::List,
+    );
+    assert!(listed.is_ok(), "{listed:?}");
+    let created = runtime.mission_command(
+        node,
+        DESK_CALLER,
+        &desk_context,
+        crate::missions::MissionCommand::Create {
+            title: "desk's".into(),
+            scope: None,
+            cap: None,
+            github: None,
+        },
+    );
+    assert_eq!(created.err().as_deref(), Some("access_needs_agent"));
     let slept = runtime.agent_sleep_command(
-        crate::node::TEST_NODE,
+        node,
         DESK_CALLER,
         &desk_context,
         &fixture.ids["other"],
         None,
     );
     assert_eq!(slept.err().as_deref(), Some("desk_has_no_checkout"));
-    let mission = runtime.mission_command(
+}
+
+/// Desk cleans up worktrees without a checkout of its own: it reaches the
+/// removal's own gate (which names a path Hide lists no worktree at), is
+/// refused a `--force` no card stands behind, and is refused while it does
+/// not run.
+#[test]
+fn desk_removes_a_worktree_through_the_removal_gate_but_never_forces_it() {
+    let fixture = Fixture::start();
+    let desk_context = crate::desk::desk_context(crate::node::TEST_NODE);
+    let remove = |runtime: &mut Runtime, force: bool| {
+        runtime.worktree_remove_command(
+            crate::node::TEST_NODE,
+            DESK_CALLER,
+            &desk_context,
+            &crate::worktree_command::WorktreeRemove {
+                path: "/nowhere/worktree".into(),
+                delete_branch: false,
+                force,
+            },
+        )
+    };
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert_eq!(
+        remove(&mut runtime, false).err().as_deref(),
+        Some("desk_not_running")
+    );
+    runtime.open_test_desk(1);
+    assert_eq!(
+        remove(&mut runtime, true).err().as_deref(),
+        Some("worktree_remove_desk_no_force")
+    );
+    let refused = remove(&mut runtime, false).unwrap_err();
+    assert_ne!(refused, "agent_pane_required");
+    assert_ne!(refused, "desk_has_no_checkout");
+}
+
+/// A Desk command is refused while Desk does not run, as every Desk command
+/// is: the table judges no caller that has ended.
+#[test]
+fn desk_reads_nothing_while_its_process_is_not_running() {
+    let fixture = Fixture::start();
+    let desk_context = crate::desk::desk_context(crate::node::TEST_NODE);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let listed = runtime.mission_command(
         crate::node::TEST_NODE,
         DESK_CALLER,
         &desk_context,
         crate::missions::MissionCommand::List,
     );
-    assert_eq!(mission.err().as_deref(), Some("desk_has_no_checkout"));
+    assert_eq!(listed.err().as_deref(), Some("desk_not_running"));
 }
 
 /// B21, B22 outside letters: a bot reads panes and missions and types into

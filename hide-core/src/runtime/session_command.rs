@@ -78,6 +78,7 @@ impl Runtime {
             store: links.store,
             local_device: links.local_device,
             caller: links.caller,
+            every_project: links.every_project,
             projects: links.projects,
             repositories,
             devices,

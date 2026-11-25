@@ -98,6 +98,11 @@ pub struct Scope {
     pub local_device: String,
     /// The record key of the caller checkout's Project.
     pub caller: String,
+    /// The caller works over the whole Hide with no checkout of its own (Desk,
+    /// a bot of mode `all` outside every checkout): with no Project of its own
+    /// to narrow to it reads every Project's, as `--all-projects` does. A pane
+    /// or checkout caller whose Project is missing is refused instead.
+    pub every_project: bool,
     pub projects: Vec<ScopeProject>,
 }
 
@@ -143,34 +148,45 @@ pub fn run(scope: &Scope, query: &LinksQuery, own: &dyn NodeLink) -> Result<Valu
         )
     };
     let mut results = Vec::new();
-    if query.all_projects {
-        for project in &scope.projects {
-            if let Some(found) = find(&store, scope, project, &query.target, own).map_err(failed)? {
-                results.push(found);
+    let caller = scope
+        .projects
+        .iter()
+        .find(|project| project.key == scope.caller);
+    // A caller over the whole Hide with no checkout (Desk, a bot outside every
+    // checkout) has no Project to narrow to, so it reads them all as
+    // `--all-projects` does; any other caller without one is refused.
+    if caller.is_none() && !scope.every_project {
+        return Err((
+            "workspace_unavailable",
+            "Run hide links from a checkout of a registered Project",
+        ));
+    }
+    let all_projects = query.all_projects || caller.is_none();
+    match caller {
+        Some(caller) if !all_projects => {
+            match find(&store, scope, caller, &query.target, own).map_err(failed)? {
+                Some(found) => results.push(found),
+                None => {
+                    for project in scope.projects.iter().filter(|p| p.key != scope.caller) {
+                        if find(&store, scope, project, &query.target, own)
+                            .map_err(failed)?
+                            .is_some()
+                        {
+                            return Err((
+                                "other_project",
+                                "The target is in another Project; add --all-projects to read it",
+                            ));
+                        }
+                    }
+                }
             }
         }
-    } else {
-        let caller = scope
-            .projects
-            .iter()
-            .find(|project| project.key == scope.caller)
-            .ok_or((
-                "workspace_unavailable",
-                "Run hide links from a checkout of a registered Project",
-            ))?;
-        match find(&store, scope, caller, &query.target, own).map_err(failed)? {
-            Some(found) => results.push(found),
-            None => {
-                for project in scope.projects.iter().filter(|p| p.key != scope.caller) {
-                    if find(&store, scope, project, &query.target, own)
-                        .map_err(failed)?
-                        .is_some()
-                    {
-                        return Err((
-                            "other_project",
-                            "The target is in another Project; add --all-projects to read it",
-                        ));
-                    }
+        _ => {
+            for project in &scope.projects {
+                if let Some(found) =
+                    find(&store, scope, project, &query.target, own).map_err(failed)?
+                {
+                    results.push(found);
                 }
             }
         }
@@ -183,7 +199,7 @@ pub fn run(scope: &Scope, query: &LinksQuery, own: &dyn NodeLink) -> Result<Valu
     }
     Ok(json!({
         "target": query.target,
-        "scope": if query.all_projects { "all_projects" } else { "project" },
+        "scope": if all_projects { "all_projects" } else { "project" },
         "results": results,
     }))
 }
@@ -433,6 +449,7 @@ mod tests {
             store: path,
             local_device: "local".into(),
             caller: "app".into(),
+            every_project: false,
             projects: vec![
                 scope_project("app", "/work/app"),
                 scope_project("lib", "/work/lib"),
@@ -481,6 +498,45 @@ mod tests {
         assert_eq!(pr["sessions"][0]["id"], "s-app");
         assert_eq!(pr["sessions"][0]["role"], "worked");
         assert_eq!(pr["sessions"][0]["device_id"], "local");
+    }
+
+    #[test]
+    fn a_caller_in_no_project_reads_every_project_without_being_asked() {
+        let (_state, mut scope) = fixture();
+        scope.caller = String::new();
+        let ask = |scope: &Scope| {
+            run(
+                scope,
+                &query(
+                    QueryTarget::Pr {
+                        number: 9,
+                        host: None,
+                        repository: None,
+                    },
+                    false,
+                ),
+                &hide_node::Local::of_process(),
+            )
+        };
+        // A pane in a plain folder is in no Project and is no caller over the
+        // whole Hide: it is refused, as it always was.
+        assert_eq!(ask(&scope).unwrap_err().0, "workspace_unavailable");
+        scope.every_project = true;
+        let answer = run(
+            &scope,
+            &query(
+                QueryTarget::Pr {
+                    number: 9,
+                    host: None,
+                    repository: None,
+                },
+                false,
+            ),
+            &hide_node::Local::of_process(),
+        )
+        .unwrap();
+        assert_eq!(answer["scope"], "all_projects");
+        assert!(!answer["results"].as_array().unwrap().is_empty());
     }
 
     #[test]

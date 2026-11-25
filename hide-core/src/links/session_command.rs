@@ -5,7 +5,9 @@
 //!
 //! The scope is the caller's Project and the connected devices' Projects of
 //! the same repository, as each checkout's own `origin` names it, with every
-//! descendant of their sessions (D-09). `list` and `record` read the link record on a read-only
+//! descendant of their sessions (D-09); a caller that works over the whole
+//! Hide with no checkout (Desk, a bot outside every checkout) has no Project to
+//! narrow to and reads every Project's. `list` and `record` read the link record on a read-only
 //! connection off the runtime's lock; `record` is the screen's own
 //! [`LinkStore::ledger_record`], with the pull requests laid by the runtime
 //! as the screen's are. `read` asks the node that holds the session's file,
@@ -144,9 +146,12 @@ pub struct DeviceFacts {
 pub struct SessionScope {
     pub store: PathBuf,
     pub local_device: String,
-    /// The record key of the caller checkout's Project; empty when the
-    /// caller is in none.
+    /// The record key of the caller checkout's Project.
     pub caller: String,
+    /// The caller works over the whole Hide with no checkout of its own
+    /// (`query::Scope::every_project`): with no Project it reads every
+    /// Project's sessions; any other caller without one is refused.
+    pub every_project: bool,
     pub projects: Vec<ScopeProject>,
     /// Each Project's repository by record key: the one the operator
     /// connected it to, else the one its own checkout's `origin` names
@@ -255,22 +260,24 @@ fn answer(
     }
 }
 
-/// The caller's Project, the record opened read-only, and the sessions of
-/// the scope (D-09): what every read of the Project's sessions starts from,
-/// a command's and a session start's (`session_brief`).
+/// The caller's Project (none for a caller over the whole Hide with no
+/// checkout, which reads every Project's), the record opened read-only, and
+/// the sessions of the scope (D-09): what every read of the Project's
+/// sessions starts from, a command's and a session start's (`session_brief`).
+/// Any other caller without a Project is refused `workspace_unavailable`.
 pub(super) fn scoped(
     scope: &SessionScope,
-) -> Result<(&ScopeProject, LinkStore, BTreeSet<SessionIdentity>), Refusal> {
+) -> Result<(Option<&ScopeProject>, LinkStore, BTreeSet<SessionIdentity>), Refusal> {
     let caller = scope
         .projects
         .iter()
-        .find(|project| project.key == scope.caller)
-        .ok_or_else(|| {
-            no(
-                "workspace_unavailable",
-                "Run hide session from a checkout of a registered Project",
-            )
-        })?;
+        .find(|project| project.key == scope.caller);
+    if caller.is_none() && !scope.every_project {
+        return Err(no(
+            "workspace_unavailable",
+            "Run hide session from a checkout of a registered Project",
+        ));
+    }
     let store = LinkStore::open_read_only(&scope.store).map_err(|code| {
         crate::diagnostic!(
             json!({"component": "session_cli", "kind": "store.read_failed", "code": code})
@@ -326,8 +333,16 @@ pub(super) fn failed(code: String) -> Refusal {
 }
 
 /// The caller's Project and every device's Project of the caller's
-/// repository; the caller's alone when its repository is unknown.
-fn scope_keys(scope: &SessionScope, caller: &ScopeProject) -> Vec<String> {
+/// repository; the caller's alone when its repository is unknown, and every
+/// Project when there is no caller Project.
+fn scope_keys(scope: &SessionScope, caller: Option<&ScopeProject>) -> Vec<String> {
+    let Some(caller) = caller else {
+        return scope
+            .projects
+            .iter()
+            .map(|project| project.key.clone())
+            .collect();
+    };
     let mut keys = vec![caller.key.clone()];
     let Some(name) = scope.repositories.get(&caller.key) else {
         return keys;
@@ -507,7 +522,7 @@ fn identity_value(session: &SessionIdentity, facts: &SessionFacts) -> Value {
 fn list(
     store: &LinkStore,
     scope: &SessionScope,
-    caller: &ScopeProject,
+    caller: Option<&ScopeProject>,
     members: &BTreeSet<SessionIdentity>,
     since_ms: Option<u64>,
     limit: Option<u32>,
@@ -537,7 +552,8 @@ fn list(
         .collect::<Vec<_>>();
     Ok(json!({
         "verb": "list",
-        "project": project_value(caller),
+        // Null when the caller is in no Project and the list spans them all.
+        "project": caller.map(project_value),
         "since_ms": period,
         "since_unix_ms": since,
         "now_unix_ms": scope.now_unix_ms,
@@ -1191,6 +1207,7 @@ mod tests {
             store: path,
             local_device: "local".into(),
             caller: "app".into(),
+            every_project: false,
             projects: vec![
                 scope_project("app", "local", "/work/app"),
                 scope_project("app-mini", "mini", "/home/u/app"),
@@ -1422,14 +1439,54 @@ mod tests {
         assert_eq!(refused("s-lib"), "other_project");
         assert_eq!(refused("s-nowhere"), "not_found");
         assert_eq!(refused("agent-9"), "not_found");
+    }
+
+    #[test]
+    fn a_caller_in_no_project_reads_every_projects_sessions() {
+        let (_state, scope) = fixture();
         let mut outside = scope.clone();
         outside.caller = String::new();
+        outside.every_project = true;
+        // A pane in a plain folder is in no Project either, and is no caller
+        // over the whole Hide: it is refused, as it always was.
+        let mut plain_folder = scope.clone();
+        plain_folder.caller = "plain-folder".into();
         assert_eq!(
-            run_with(&outside, SessionCommand::Record { id: "s-app".into() })
+            run_with(&plain_folder, SessionCommand::Record { id: "s-app".into() })
                 .unwrap_err()
                 .0,
             "workspace_unavailable"
         );
+        // `s-lib` is another Project's: refused to a caller inside `app`,
+        // read by one that is in none.
+        assert_eq!(
+            run_with(&scope, SessionCommand::Record { id: "s-lib".into() })
+                .unwrap_err()
+                .0,
+            "other_project"
+        );
+        for id in ["s-app", "s-lib"] {
+            assert_eq!(
+                run_with(&outside, SessionCommand::Record { id: id.into() }).unwrap()["session"]["session_id"],
+                id
+            );
+        }
+        let listed = run_with(
+            &outside,
+            SessionCommand::List {
+                since_ms: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        assert!(listed["project"].is_null());
+        let ids: Vec<_> = listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["session"]["session_id"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(ids.contains(&"s-app".to_owned()) && ids.contains(&"s-lib".to_owned()));
     }
 
     #[test]
