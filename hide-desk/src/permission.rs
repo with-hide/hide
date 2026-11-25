@@ -340,7 +340,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             read_line(command, &vec![Some(cwd.clone())], place, 0, &mut line);
             // A line that sets a variable choosing which program a name
             // runs, or what a program runs for it, may run anything.
-            let unreadable = line.unreadable || line.environment;
+            let unreadable = line.unreadable || line.rewrites;
             Reading {
                 row: if line.other || unreadable {
                     Row::Shell
@@ -473,16 +473,25 @@ struct Line {
     force_push: bool,
     delete_remote: bool,
     unreadable: bool,
-    /// The line sets a variable that chooses which program a name runs or
-    /// what a program runs for it ([`Sets::Choice`]), or one that names a
-    /// program to a value Hide does not see.
-    environment: bool,
+    /// The line changes which program a name runs or what a program runs
+    /// for it ([`Line::rewrites_what_runs`]).
+    rewrites: bool,
     /// A command has run that may make or move a link, so a path deleted
     /// after it may lead somewhere it does not lead now.
     writes: bool,
 }
 
 impl Line {
+    /// The one decision behind every way a line rewrites what runs: `hash`
+    /// and `enable` with arguments, a variable the shell, the loader or a
+    /// program reads to find or run code ([`Sets::Choice`]), an element of
+    /// a table, a name made to stand for another variable, and a program
+    /// variable set to a value Hide does not see. What follows may run any
+    /// program, so the line is one Hide cannot read.
+    fn rewrites_what_runs(&mut self) {
+        self.rewrites = true;
+    }
+
     /// A command Hide cannot read: it could do anything.
     fn unreadable(&mut self) {
         self.other = true;
@@ -1374,7 +1383,7 @@ fn assigns(
             .iter()
             .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('n'))
     {
-        line.environment = true;
+        line.rewrites_what_runs();
         return;
     }
     for word in args {
@@ -1540,12 +1549,12 @@ fn assign(word: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: 
     // An element of an array or a table: bash's and zsh's tables of what a
     // name runs are set this way, and no ordinary line needs it.
     if target[name.len()..].starts_with('[') {
-        line.environment = true;
+        line.rewrites_what_runs();
         return;
     }
     match sets(name) {
         Sets::Value => {}
-        Sets::Choice => line.environment = true,
+        Sets::Choice => line.rewrites_what_runs(),
         // Set outright, the program it names is read as any other; an
         // empty value leaves the program's own default.
         Sets::Program => match value {
@@ -1554,7 +1563,7 @@ fn assign(word: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: 
                     read_line(value, folders, place, depth + 1, line);
                 }
             }
-            _ => line.environment = true,
+            _ => line.rewrites_what_runs(),
         },
     }
 }
@@ -1641,10 +1650,9 @@ fn run_program(
         }
         "cd" | "pushd" => cd(args, folders, place.home),
         "popd" => Move::Unknown,
-        // They change which program a name runs.
         "hash" | "enable" if !args.is_empty() => {
             line.other = true;
-            line.environment = true;
+            line.rewrites_what_runs();
             Move::Stay
         }
         "hash" | "enable" => Move::Stay,
