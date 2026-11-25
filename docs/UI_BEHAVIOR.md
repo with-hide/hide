@@ -272,7 +272,7 @@ Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab.
 A tab whose pane is alive always shows that pane, whatever its start's receipt says, so a question the agent stops on (a folder-trust screen, a login) is answered in its terminal.
 A start of a live tab that is still being confirmed, whose first prompt Hide could not confirm, or whose agent failed is reported by the start notice, with Retry and Show terminal, and by the tab's status, never by a start form over the terminal; the start form appears only where there is no pane, in a draft or an empty group.
-The start notice is drawn from the start's saved receipt too, so after a restart, or once another start took the core's task slot, an unconfirmed or failed live-tab start still says so and offers Check start status and Show terminal; the check recovers the original intent in the same pane, and its answer returns as the start notice, with Retry for a failed agent.
+The start notice is drawn from the start's saved receipt too, so after a restart, or once another start took the core's task slot, an unconfirmed or failed live-tab start still says so and offers Check start status and Show terminal; the check recovers the original intent in the same pane, and its answer returns as the start notice, with Retry for a failed agent; while the check runs it cannot be pressed again, and a check that fails or is refused keeps the notice, says why, and offers the same intent's check again.
 Dismissing that notice ends it for the page's lifetime.
 New tab remains the tab bar's creation entry point.
 Starting in an enlarged pane returns that tab to its split layout and keeps its existing terminals running.

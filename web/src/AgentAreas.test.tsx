@@ -124,3 +124,49 @@ it.each((["after a restart", "beside another start's answer"] as const).flatMap(
   await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, task_operation: unrelated } }));
   expect(container.querySelector("[data-task-agent]")).toBeNull();
 });
+
+// A check can itself fail (the original terminal could not be proven, the
+// device dropped) or be refused; the notice keeps the start, says why at once,
+// and offers the same intent's check again, while the terminal stays in view.
+it.each(["unknown", "failed"] as const)("a live tab's %s start keeps its notice through a check that runs, fails and is refused", async (phase) => {
+  await show({ ...started, agent_phase: phase }, "after a restart");
+  const notice = () => container.querySelector(`[data-live-start="${started.request_id}"]`);
+  const check = () => container.querySelector<HTMLButtonElement>("[data-live-start-check]")!;
+  const shows = () => [...notice()!.querySelectorAll("button")].some((button) => button.textContent === "Show pane");
+  const checks = () => events.filter((event) => event.kind === "agent_start_in_checkout");
+  const answer = async (patch: Record<string, unknown>) => act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, ...patch } }));
+  const working: TaskOperation = { ...unrelated, id: 13, request_id: started.request_id, phase: "working", pane_id: null, agent_kind: "claude", agent_phase: null };
+
+  await act(async () => check().click());
+  await answer({ task_operation: working });
+  expect(notice()?.getAttribute("data-live-start-checking")).toBe("true");
+  expect(check().disabled).toBe(true);
+  expect(shows()).toBe(true);
+
+  await answer({ task_operation: { ...working, phase: "failed", failure: "agent_start.terminal_unchecked" } });
+  expect(notice()?.querySelector("[data-live-start-failure]")?.getAttribute("data-live-start-failure")).toBe("agent_start.terminal_unchecked");
+  expect(check().disabled).toBe(false);
+  expect(shows()).toBe(true);
+  await act(async () => check().click());
+
+  // The next check is refused while the failed one still holds the task slot: the refusal is the newer answer.
+  const refusal = (kind: string) => ({ status: { ...useShellStore.getState().rest!.status, last_error: { kind, message: "", retryable: true, occurred_at: 1, request_id: started.request_id } } });
+  await answer(refusal("agent_start.device_unavailable"));
+  expect(notice()?.querySelector("[data-live-start-failure]")?.getAttribute("data-live-start-failure")).toBe("agent_start.device_unavailable");
+  expect(check().disabled).toBe(false);
+  expect(shows()).toBe(true);
+  await act(async () => check().click());
+
+  // Refused again after another start took the slot.
+  await answer({ task_operation: unrelated, ...refusal("agent_start.confirmation_unavailable") });
+  expect(notice()?.querySelector("[data-live-start-failure]")?.getAttribute("data-live-start-failure")).toBe("agent_start.confirmation_unavailable");
+  expect(check().disabled).toBe(false);
+  expect(shows()).toBe(true);
+  await act(async () => check().click());
+
+  // Every check is the original intent, confirmed only, at its original target.
+  expect(checks()).toHaveLength(4);
+  for (const event of checks()) expect(event.payload).toMatchObject({ request_id: started.request_id, confirm_only: true, provider: "claude", target: { tab_id: "draft-1", area_id: "a1", add_pane: false } });
+  expect(container.querySelector("[data-agent-tab-start]")).toBeNull();
+  expect(container.querySelector('[data-canvas="t1"], [data-canvas="empty"]')).not.toBeNull();
+});

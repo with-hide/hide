@@ -17,7 +17,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
-import { agentFailure, endedSentence, useInlineStarts } from "./startDraft";
+import { agentFailure, endedSentence, startFailure, startRefusal, useInlineStarts } from "./startDraft";
 import { inlineReceipts, liveStartNotice, receiptTarget } from "./inlineStart";
 import { deviceConnected } from "./devices";
 import type { AgentKind } from "./agentPicker";
@@ -673,17 +673,19 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     // Only the saved receipt is left (a restart, or another start took the task
     // slot): its check recovers the original intent in the same pane, and the
     // core's answer comes back as the task notice below, with Retry on a failure.
-    const { device, path, receipt } = live;
+    const { device, path, receipt, checking } = live;
+    const failure = live.failedBy === "refusal" && live.failureCode ? startRefusal(live.failureCode) : live.failedBy ? startFailure(live.failureCode) : null;
     return (
       <Toast
         level="important"
         data-task-agent={receipt.agent_phase ?? undefined}
         data-live-start={receipt.request_id}
+        data-live-start-checking={checking ? "true" : undefined}
         onDismiss={() => useInlineStarts.getState().dismissLive(receipt.request_id)}
         dismissLabel={t("workspace.dismiss")}
         actions={
           <>
-            <Button variant="text" size="inline" disabled={!liveConnected} onClick={() => actions.startAgent({ target: { checkoutPath: path }, deviceId: device, provider: (receipt.agent_kind ?? "terminal") as AgentKind, requestId: receipt.request_id, tabTarget: receiptTarget(receipt), confirmOnly: true })} data-live-start-check="true">
+            <Button variant="text" size="inline" disabled={!liveConnected || checking} onClick={() => actions.startAgent({ target: { checkoutPath: path }, deviceId: device, provider: (receipt.agent_kind ?? "terminal") as AgentKind, requestId: receipt.request_id, tabTarget: receiptTarget(receipt), confirmOnly: true })} data-live-start-check="true">
               {t("groups.confirm")}
             </Button>
             {receipt.pane_id ? (
@@ -695,6 +697,7 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
         }
       >
         {`${endedSentence(t(receipt.agent_phase === "failed" ? "workspace.agentNotStarted" : "coreError.agent.unconfirmed"))} ${t("workspace.paneKept")}`}
+        {failure ? <span className="mt-xxs block" data-live-start-failure={"code" in failure ? failure.code : undefined}>{"values" in failure ? t(failure.key, failure.values) : "key" in failure ? t(failure.key) : failure.message}</span> : null}
       </Toast>
     );
   }
