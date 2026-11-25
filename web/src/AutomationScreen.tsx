@@ -345,6 +345,14 @@ function StateBadge({ automation }: { automation: Automation }) {
 function NextTime({ automation, words, large = false }: { automation: Automation; words: Words; large?: boolean }) {
   const at = automation.paused ? null : automation.next_run_at_unix_ms;
   const once = automation.schedule.kind === "once" ? automation.schedule : null;
+  // A once automation keeps its date while paused, with no count, as nothing is due; a done one reads `끝남` (S-1, S-3).
+  if (at == null && once && !(automation.done && !automation.paused)) {
+    return (
+      <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="none" data-automation-once-at={`${once.date} ${once.time}`}>
+        <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{onceText(once, words.language, words.t)}</span>
+      </span>
+    );
+  }
   if (at == null) {
     const none = automation.paused ? "—" : automation.done ? words.t("automation.next.done") : words.t("automation.next.none");
     return <span className={cn("text-muted-foreground", large ? "text-subhead" : "text-caption")} data-automation-next={automation.done && !automation.paused ? "done" : "none"}>{none}</span>;

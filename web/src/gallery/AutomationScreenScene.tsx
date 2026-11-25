@@ -6,7 +6,7 @@
 // one automation's facts and runs; `form` makes a new one, its schedule read
 // back by a stand-in core; `run` is a finished run whose terminal is closed, its summary with the agent's last answer and the results its agent opened (shown, not pressable: the run has no tab);
 // `loading` is the section not yet sent; `once` is the table with its done once automations unfolded (mission-104 S-1). The
-// table also holds a once automation a week ahead and one done. No daemon is used.
+// table also holds a once automation a week ahead, one paused three days ahead (its date stays) and one done. No daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { configureAutomationCalls, receiveAutomationResult, type AutomationCall } from "../automationCall";
@@ -68,6 +68,11 @@ function automations(project: string, now: number): Automation[] {
       id: "a-webhook", name: "결제 웹훅 점검", task: "배포 뒤 웹훅 실패율이 0인지 로그로 확인해 줘.",
       schedule: onceIn(now, 7), reads_as: onceIn(now, 7), next_run_at_unix_ms: onceUnix(onceIn(now, 7)),
       agent: { kind: "claude" }, folder: { path: `${ROOT}/결제-웹훅-점검-a4`, default: true, worktree: false }, running: false, done: false, unseen: 0, records: [],
+    },
+    {
+      id: "a-release", name: "릴리스 노트 검토", task: "다음 릴리스 노트 초안의 빠진 PR을 찾아 줘.",
+      schedule: onceIn(now, 3), reads_as: onceIn(now, 3), next_run_at_unix_ms: null, paused: { reason: "operator", at_unix_ms: now - HOUR },
+      agent: { kind: "claude" }, folder: { path: `${ROOT}/릴리스-노트-검토-a6`, default: true, worktree: false }, running: false, done: false, unseen: 0, records: [],
     },
     {
       id: "a-migration", name: "DB 마이그레이션 확인", task: "어제 돌린 마이그레이션이 모든 테이블에 들어갔는지 확인해 줘.",

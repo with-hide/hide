@@ -57,7 +57,6 @@ async function choose(page: Page, field: string, option: Locator): Promise<void>
 
 const screen = (page: Page) => page.locator("[data-automation-screen]");
 
-/** The wall date and minute `ahead` minutes from now on this machine, whose zone hided reads a once time in. */
 /** `date` moved by `days` whole days, read as a calendar date with no clock or zone. */
 function shiftDate(date: string, days: number): string {
   const [year, month, day] = date.split("-").map(Number);
@@ -71,6 +70,7 @@ async function askingCount(page: Page): Promise<number> {
   return Number((await count.textContent())?.match(/\d+/)?.[0] ?? 0);
 }
 
+/** The wall date and minute `ahead` minutes from now on this machine, whose zone hided reads a once time in. */
 function wallMinute(ahead: number): { date: string; time: string } {
   const at = new Date(Date.now() + ahead * 60_000);
   const two = (n: number) => String(n).padStart(2, "0");
@@ -367,11 +367,12 @@ test("a once automation waits in its group, runs once at its minute, stands in N
 
     // Its run's agent starts at that minute, works and finishes its turn, with no one looking at it.
     const pane = await withControl(stack.daemon, (control) => control.until((rest) => ((rest.navigator as { agents?: { pane_id: string; hide_ai?: { task?: { target?: string } } }[] } | undefined)?.agents ?? []).find((row) => row.hide_ai?.task?.target === id)?.pane_id, "the once run's agent", 180_000));
+    // The count is read before the run's agent moves, since the turn's end is what puts the line in Needs You.
+    const askingBefore = await askingCount(page);
     await setAgentState(stack.daemon, pane, "working");
     await setAgentState(stack.daemon, pane, "idle");
 
     // S-4: its line stands in Needs You with the clock and its run's result, and the count of Needs You takes it in.
-    const askingBefore = await askingCount(page);
     const look = page.locator(`[data-project-list] [data-automation-look="${id}"]`);
     await expect(look).toHaveCount(1, { timeout: 60_000 }); // wait-ok: the core recorded the run as ended and put its line in Needs You
     await expect(look.locator('[data-mark-automation="once"]')).toHaveCount(1);
