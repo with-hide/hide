@@ -36,7 +36,7 @@ export function ScreenHead({ title, line, action, ...data }: { title: ReactNode;
  * action at the right; what the page keeps under its head (tabs, cells, buttons) comes as `children`. `back.tag` marks the back
  * press for tests and names the list it returns to.
  */
-export function PageHead({ back, lead, title, titleEnd, line, action, children, ...data }: { back: { label: string; onClick: () => void; tag: string }; lead?: ReactNode; title: ReactNode; titleEnd?: ReactNode; line?: ReactNode; action?: ReactNode; children?: ReactNode } & DataProps) {
+export function PageHead({ back, lead, title, titleEnd, line, lineEnd, action, children, ...data }: { back: { label: string; onClick: () => void; tag: string }; lead?: ReactNode; title: ReactNode; titleEnd?: ReactNode; line?: ReactNode; lineEnd?: ReactNode; action?: ReactNode; children?: ReactNode } & DataProps) {
   return (
     <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-sm" {...data}>
       <div className="flex min-w-0 items-center gap-sm pt-sm">
@@ -51,7 +51,13 @@ export function PageHead({ back, lead, title, titleEnd, line, action, children, 
             <h1 className="min-w-0 flex-1 break-keep text-title font-semibold text-foreground wrap-anywhere">{title}</h1>
             {titleEnd ? <div className="flex min-h-lh shrink-0 items-center text-title">{titleEnd}</div> : null}
           </div>
-          {line ? <div className="flex min-w-0 flex-wrap items-center gap-x-xs text-body text-muted-foreground">{line}</div> : null}
+          {line || lineEnd ? (
+            // What sits at the right of the line under the title (an agent's tabs) never shrinks; the line gives up its width first.
+            <div className={cn("flex min-w-0 items-center gap-sm", lineEnd && "mt-xs")}>
+              <div className={cn("flex min-w-0 flex-1 items-center gap-x-xs text-body text-muted-foreground", !lineEnd && "flex-wrap")}>{line}</div>
+              {lineEnd ? <div className="shrink-0">{lineEnd}</div> : null}
+            </div>
+          ) : null}
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>

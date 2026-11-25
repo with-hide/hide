@@ -84,6 +84,9 @@ function shownTab(detail: NonNullable<ReturnType<typeof usePhone.getState>["deta
   return tab === "conversation" && !hasConversation ? "terminal" : tab;
 }
 
+/** A detail tab: drawn a control tall, pressed a touch target tall through the band its `after` adds above and below. */
+const TAB = "relative h-(--size-control) px-sm text-body after:absolute after:inset-x-0 after:-inset-y-sm after:content-['']";
+
 export function Detail({ onBack }: { onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   // Whether a reply is being written: the ask folds to one line above it then (Doop 06).
@@ -117,35 +120,34 @@ export function Detail({ onBack }: { onBack: () => void }) {
           back={{ label: t("mobile.list"), onClick: onBack, tag: "true" }}
           lead={agent ? <AgentLead agent={agent} /> : null}
           title={agent?.title ?? ""}
-          line={agent ? <PlaceParts agent={agent} /> : null}
+          line={agent ? <PlaceParts agent={agent} alone /> : null}
           titleEnd={detail ? <DetailLinks agentKey={detail.key} /> : null}
-        >
-          {(hasConversation || hasLooks) && detail && !sleep ? (
-            <div className="mt-sm flex min-w-0 items-center">
-              <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
-                <TabsList>
-                  {hasConversation ? (
-                    <TabsTrigger value="conversation" className="h-(--size-touch-target) px-md text-body" data-phone-view="conversation">
-                      {t("mobile.tab.conversation")}
-                    </TabsTrigger>
-                  ) : null}
-                  <TabsTrigger value="terminal" className="h-(--size-touch-target) px-md text-body" data-phone-view="terminal">
-                    {t("mobile.tab.terminal")}
+          lineEnd={(hasConversation || hasLooks) && detail && !sleep ? (
+            // Compact segments on the place's line, each pressable a touch target tall past its drawn edge, so the head keeps two lines.
+            <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
+              <TabsList>
+                {hasConversation ? (
+                  <TabsTrigger value="conversation" className={TAB} data-phone-view="conversation">
+                    {t("mobile.tab.conversation")}
                   </TabsTrigger>
-                  {hasLooks ? (
-                    <TabsTrigger value="looks" className="h-(--size-touch-target) gap-xs px-md text-body" data-phone-view="looks">
-                      {t("mobile.tab.looks")}
-                      {unseen > 0 ? (
-                        <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
-                          {unseen}
-                        </span>
-                      ) : null}
-                    </TabsTrigger>
-                  ) : null}
-                </TabsList>
-              </Tabs>
-            </div>
+                ) : null}
+                <TabsTrigger value="terminal" className={TAB} data-phone-view="terminal">
+                  {t("mobile.tab.terminal")}
+                </TabsTrigger>
+                {hasLooks ? (
+                  <TabsTrigger value="looks" className={cn(TAB, "gap-xs")} data-phone-view="looks">
+                    {t("mobile.tab.looks")}
+                    {unseen > 0 ? (
+                      <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
+                        {unseen}
+                      </span>
+                    ) : null}
+                  </TabsTrigger>
+                ) : null}
+              </TabsList>
+            </Tabs>
           ) : null}
+        >
           {agent ? <PhoneHumanTurn agent={agent} inset="mt-sm" /> : null}
         </PageHead>
       )}

@@ -83,8 +83,9 @@ export function DeviceTag({ label, computer = false }: { label: string; computer
  * Where an agent works, as pieces of a line its caller lays out: the gathered view's computer (`computer`), the tool whose work
  * the row is, leading as on the desktop's sidebar row (PRD hide-external-control B46), the place, and the SSH device's chip. A
  * list row names the project alone (`project`), from a Mac that predates it the whole place; the detail names project and branch.
+ * A row's place keeps at most half its line, for the words after it; a line the place has to itself (`alone`, the detail's) gives it all.
  */
-export function PlaceParts({ agent, project = false, computer }: { agent: PhoneAgent; project?: boolean; computer?: string }) {
+export function PlaceParts({ agent, project = false, computer, alone = false }: { agent: PhoneAgent; project?: boolean; computer?: string; alone?: boolean }) {
   const place = project ? (agent.project ?? agent.place) : agent.place;
   return (
     <>
@@ -96,7 +97,7 @@ export function PlaceParts({ agent, project = false, computer }: { agent: PhoneA
           {place ? <span aria-hidden="true">·</span> : null}
         </span>
       ) : null}
-      {place ? <span className="min-w-0 max-w-1/2 shrink-0 truncate text-muted-foreground" data-phone-place={place}>{place}</span> : null}
+      {place ? <span className={cn("min-w-0 truncate text-muted-foreground", alone ? "shrink" : "max-w-1/2 shrink-0")} data-phone-place={place}>{place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </>
   );
