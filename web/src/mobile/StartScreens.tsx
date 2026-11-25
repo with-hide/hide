@@ -4,7 +4,7 @@
 // screen, and its Settings is the fourth tab of the phone app.
 
 import { useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, QrCodeIcon, SettingsIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, QrCodeIcon, ServerIcon, SettingsIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { decodeQr, type PairingQr } from "../../../hide-relay-protocol/web";
 import { Button } from "../components/ui/button";
@@ -57,6 +57,46 @@ export function FirstScreen({ t, onScan, onDemo, onSettings }: { t: TFunction; o
         <PlayIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.demo.try")}
       </Button>
       <p className="pb-lg text-center text-body text-muted-foreground">{t("mobile.demo.tryHint")}</p>
+    </main>
+  );
+}
+
+/** A choice's icon in its small rounded tile, as a device row of the picker draws one. */
+function ChoiceTile({ icon: Icon }: { icon: LucideIcon }) {
+  return <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-sm bg-secondary text-subtle-foreground"><Icon className="size-(--size-icon-lg)" /></span>;
+}
+
+function ChoiceText({ title, body }: { title: string; body: string }) {
+  return <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+    <b className="break-keep text-subhead font-semibold text-foreground wrap-anywhere">{title}</b>
+    <span className="whitespace-normal break-keep text-body font-normal text-muted-foreground wrap-anywhere">{body}</span>
+  </span>;
+}
+
+/**
+ * 기기 추가 (`/?add=1`): what is added, first. A computer with Hide goes on to its QR scan and paste page; an SSH server is added in
+ * that computer's Hide and shows under it by itself, so its choice only says where, and presses nothing.
+ */
+export function AddChoice({ t, onBack, onComputer }: { t: TFunction; onBack: () => void; onComputer: () => void }) {
+  return (
+    <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col px-xl" data-phone-add-choice="true">
+      <header className="-ml-sm flex items-center gap-xs pt-lg">
+        <Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("common.back")} data-phone-back="add-choice" onClick={onBack}>
+          <ChevronLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
+        </Button>
+        <h1 className="text-headline font-semibold">{t("mobile.relay.add")}</h1>
+      </header>
+      <div className="flex flex-col gap-md pt-xl">
+        <Button variant="outline" className="h-auto min-h-(--size-touch-target) items-start justify-start gap-md whitespace-normal rounded-lg p-md text-left" data-phone-add-kind="computer" onClick={onComputer}>
+          <ChoiceTile icon={QrCodeIcon} />
+          <ChoiceText title={t("mobile.add.computer")} body={t("mobile.add.computerBody")} />
+          <ChevronRightIcon aria-hidden="true" className="mt-xs size-(--size-icon) shrink-0 text-muted-foreground" />
+        </Button>
+        <div className="flex items-start gap-md rounded-lg border border-border p-md" data-phone-add-kind="server">
+          <ChoiceTile icon={ServerIcon} />
+          <ChoiceText title={t("mobile.add.server")} body={t("mobile.add.serverBody")} />
+        </div>
+      </div>
     </main>
   );
 }

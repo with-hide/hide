@@ -186,31 +186,44 @@ describe("the device sheet", () => {
     return <HostList t={t} machines={machines} activeRoom={"a".repeat(43)} active={{ online: true, lastSeen: null, needs: 3, working: 9 }} />;
   }
 
-  it("draws the devices the Mac reaches under its row, the unconnected one dimmed, and says no pairing is needed", async () => {
+  it("draws the devices the Mac reaches on a rail under its row, compact and dimmed while not connected, with one short line", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const room = "a".repeat(43);
     localStorage.setItem(HOSTS_KEY, JSON.stringify([{ room, name: "MacBook Pro", noiseKey: "b".repeat(43), credential: "credential", protocol: 2, lastSeen: null }]));
     const machines: PhoneDevice[] = [
       { device_id: "local", label: null, local: true, connected: true, needs_you: 3, working: 9 },
-      { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3 },
+      { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3, link: "ssh" },
+      { device_id: "ubuntu", label: "Ubuntu", connected: true, needs_you: 0, working: 0, link: "wsl" },
+      // A Mac before `link`, and a paired computer: neither wears a mark.
       { device_id: "old", label: "Old box", connected: false, needs_you: 0, working: 0 },
+      { device_id: "imac", label: "iMac", connected: true, needs_you: 0, working: 1, link: "peer" },
     ];
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(async () => root.render(<Sheet machines={machines} />));
     try {
       const reached = container.querySelector('[data-phone-devices="true"]')!;
-      expect(reached.textContent).toContain("Devices connected through this Mac");
       const mini = reached.querySelector('[data-phone-device-row="mini"]')!;
       expect(mini.textContent).toContain("Mac mini");
-      expect(mini.textContent).toContain("Needs you 1 · Working 3");
+      expect(mini.querySelector("[data-phone-device-link]")?.textContent).toBe("SSH");
+      expect(mini.querySelector("[data-phone-counts]")?.getAttribute("data-phone-counts")).toBe("1:3");
+      expect(mini.querySelector("[data-phone-counts] .sr-only")?.textContent).toBe("Needs you 1 · Working 3");
+      expect(reached.querySelector('[data-phone-device-row="ubuntu"] [data-phone-device-link]')?.textContent).toBe("WSL");
+      expect(reached.querySelector('[data-phone-device-row="imac"] [data-phone-device-link]')).toBeNull();
       const old = reached.querySelector('[data-phone-device-row="old"]')!;
       expect(old.getAttribute("data-connected")).toBe("false");
       expect(old.className).toContain("opacity-(--opacity-dimmed)");
-      expect(old.textContent).not.toContain("Needs you");
-      expect(reached.textContent).toContain("Mac mini, Old box agents appear in the list with a chip");
-      // The Mac's own row says it is the one being viewed.
-      expect(container.textContent).toContain("Connected · Viewing now");
+      expect(old.querySelector("[data-phone-device-link]")).toBeNull();
+      expect(old.querySelector("[data-phone-counts]")).toBeNull();
+      expect(reached.textContent).toContain("Shown through this Mac. Their agents appear in the list too.");
+      // The Mac's own row is the one being viewed: outlined, its words say so, and its counts sit at the right of the same line.
+      const mac = container.querySelector('[data-phone-host="true"]')!;
+      expect(mac.getAttribute("data-phone-host-viewing")).toBe("true");
+      expect(mac.textContent).toContain("Viewing now");
+      expect(mac.querySelector("[data-phone-counts]")?.getAttribute("data-phone-counts")).toBe("3:9");
+      // Removing moved off the row: no button on it but the row itself.
+      expect(container.querySelectorAll('button[aria-label="Remove device"]')).toHaveLength(0);
+      expect(container.querySelector("[data-phone-add]")?.textContent).toBe("Add device");
     } finally {
       await act(async () => root.unmount());
     }

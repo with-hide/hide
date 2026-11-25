@@ -203,7 +203,7 @@ impl Descendants {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Group, GroupRow, PhoneAgent, Projection, project};
+    use super::super::{DeviceLink, Group, GroupRow, PhoneAgent, Projection, project};
     use serde_json::{Value, json};
 
     fn agent(pane: &str, group: &str, activity: u64, extra: Value) -> Value {
@@ -640,5 +640,50 @@ mod tests {
         );
         assert_eq!(group(&projection, "needs_you").count, 2);
         assert_eq!(group(&projection, "working").count, 3);
+    }
+
+    /// The phone marks a device row as the desktop's Settings › Devices
+    /// does, so each device says how the core reaches it, read off its
+    /// registration as the navigator's row carries it; the paired Mac and a
+    /// device the navigator does not list say nothing.
+    #[test]
+    fn each_device_says_how_the_core_reaches_it() {
+        let device = |id: &str, extra: Value| {
+            let mut row = json!({"id": id, "label": id, "ssh_alias": null, "wsl_distro": null, "peer_key": null, "dials_in": false});
+            for (key, value) in extra.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        let rest = json!({
+            "navigator": {"agents": [], "devices": [
+                device("local", json!({})),
+                device("mini", json!({"ssh_alias": "mini"})),
+                device("ubuntu", json!({"wsl_distro": "Ubuntu"})),
+                device("imac", json!({"peer_key": "a".repeat(64)})),
+                device("box", json!({"dials_in": true})),
+            ]},
+            "status": {"remote": ["mini", "ubuntu", "imac", "box", "unlisted"].map(|id| json!({"target_id": id, "state": "unreachable"}))},
+        });
+        let links: Vec<_> = project(&rest, "local")
+            .devices
+            .iter()
+            .map(|d| (d.device_id.clone(), d.link))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                ("local".to_owned(), None),
+                ("mini".to_owned(), Some(DeviceLink::Ssh)),
+                ("ubuntu".to_owned(), Some(DeviceLink::Wsl)),
+                ("imac".to_owned(), Some(DeviceLink::Peer)),
+                ("box".to_owned(), Some(DeviceLink::Inbound)),
+                ("unlisted".to_owned(), None),
+            ]
+        );
+        let wire = serde_json::to_value(&project(&rest, "local").devices).unwrap();
+        assert_eq!(wire[0].get("link"), None);
+        assert_eq!(wire[1]["link"], "ssh");
+        assert_eq!(wire[2]["link"], "wsl");
     }
 }

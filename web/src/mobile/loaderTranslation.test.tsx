@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLoaderTranslation } from "./loaderTranslation";
-import { DEFAULT_SETTINGS, choosePhoneSettings } from "./settings";
+import { DEFAULT_SETTINGS, MAC_LANGUAGE_KEY, choosePhoneSettings } from "./settings";
 
 function Probe() {
   const { t } = useLoaderTranslation();
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("the start page's language", () => {
-  it("is this phone's own choice, else the phone's language", async () => {
+  it("is this phone's own choice, else the language the last Mac chose, else the phone's language", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.spyOn(window.navigator, "language", "get").mockReturnValue("ko-KR");
     choosePhoneSettings({ language: "ja" });
@@ -29,7 +29,14 @@ describe("the start page's language", () => {
     choosePhoneSettings({ language: null });
     await act(async () => root.render(<Probe />));
     await act(async () => window.dispatchEvent(new Event("languagechange")));
-    expect(host.textContent).toBe("기기 고르기");
+    expect(host.textContent).toBe("기기");
+    // The app kept the last Mac's explicit choice; the add page then speaks it, not the phone's language.
+    localStorage.setItem(MAC_LANGUAGE_KEY, "zh-CN");
+    await act(async () => window.dispatchEvent(new Event("languagechange")));
+    expect(host.textContent).toBe("设备");
+    choosePhoneSettings({ language: "ja" });
+    await act(async () => root.render(<Probe />));
+    expect(host.textContent).toBe("デバイス");
     await act(async () => root.unmount());
   });
 });

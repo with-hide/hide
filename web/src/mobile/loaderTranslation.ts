@@ -7,7 +7,7 @@ import { mobileCatalogs, mobileEnglish } from "../i18n/resources/mobile";
 import { mobileRelayCatalogs, mobileRelayEnglish } from "../i18n/resources/mobileRelay";
 import { mobileDemoCatalogs, mobileDemoEnglish } from "../i18n/resources/mobileDemo";
 import { commonCatalogs, commonEnglish } from "../i18n/resources/common";
-import { usePhoneSettings } from "./settings";
+import { startLanguage, usePhoneSettings } from "./settings";
 
 // The loader uses the same messages and translation policy, without shipping desktop catalogs.
 const english = { ...commonEnglish, ...mobileEnglish, ...mobileRelayEnglish, ...mobileDemoEnglish };
@@ -15,8 +15,14 @@ const catalogs = Object.fromEntries(INTERFACE_LANGUAGES.map((language) => [langu
   { ...commonCatalogs[language], ...mobileCatalogs[language], ...mobileRelayCatalogs[language], ...mobileDemoCatalogs[language] },
 ])) as Catalogs<typeof english>;
 validateCatalogs(english, catalogs);
-// The start page has no Mac yet: this phone's own choice, else its language.
-const language = () => resolveInterfaceLanguage(usePhoneSettings.getState().language, navigator.language).language;
+// The start page has no Mac yet: this phone's own choice, else the language the last Mac it showed chose, else the phone's.
+const language = () => {
+  try {
+    return startLanguage(localStorage, navigator.language);
+  } catch {
+    return resolveInterfaceLanguage(usePhoneSettings.getState().language, navigator.language).language;
+  }
+};
 const instance = initializeEmbeddedI18n(language(), catalogs);
 
 export function useLoaderTranslation() {

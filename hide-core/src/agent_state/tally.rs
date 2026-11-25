@@ -737,6 +737,47 @@ pub mod phone {
         /// devices to the groups' counts.
         pub needs_you: usize,
         pub working: usize,
+        /// How the core reaches the device, which the phone's device row
+        /// marks as the desktop's does; absent on the paired Mac, and from a
+        /// Mac before it, which the phone reads as no mark.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub link: Option<DeviceLink>,
+    }
+
+    /// How the core reaches a device it lists: the device's registration
+    /// (`LinkOrigin`) as its navigator row tells it.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DeviceLink {
+        /// The core dials it over SSH (`ssh_alias`).
+        Ssh,
+        /// A WSL distribution of the PC the core runs on (`wsl_distro`).
+        Wsl,
+        /// Another machine that runs Hide and paired with this one
+        /// (`peer_key`).
+        Peer,
+        /// Its own node dials this core over the operator's SSH login
+        /// (`dials_in`).
+        Inbound,
+    }
+
+    impl DeviceLink {
+        /// The way a navigator device row says it is reached, or `None` for a
+        /// row that names none (the core's own).
+        fn of(device: &Value) -> Option<Self> {
+            let named = |field: &str| device.get(field).and_then(Value::as_str).is_some();
+            if named("wsl_distro") {
+                Some(Self::Wsl)
+            } else if named("peer_key") {
+                Some(Self::Peer)
+            } else if named("ssh_alias") {
+                Some(Self::Ssh)
+            } else if device.get("dials_in").and_then(Value::as_bool) == Some(true) {
+                Some(Self::Inbound)
+            } else {
+                None
+            }
+        }
     }
 
     #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -1334,6 +1375,7 @@ pub mod phone {
             connected: true,
             needs_you: 0,
             working: 0,
+            link: None,
         }];
         for status in rest
             .pointer("/status/remote")
@@ -1342,9 +1384,10 @@ pub mod phone {
             .flatten()
         {
             let target = str_of(status, "target_id");
-            let label = devices
+            let registered = devices
                 .iter()
-                .find(|device| str_of(device, "id") == target)
+                .find(|device| str_of(device, "id") == target);
+            let label = registered
                 .map(|device| str_of(device, "label"))
                 .filter(|label| !label.is_empty())
                 .unwrap_or(target);
@@ -1356,6 +1399,7 @@ pub mod phone {
                 connected,
                 needs_you: 0,
                 working: 0,
+                link: registered.and_then(DeviceLink::of),
             });
             if !connected {
                 continue;

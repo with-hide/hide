@@ -8,6 +8,7 @@ import { useLayoutEffect, useState } from "react";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage, useInterfaceTranslation } from "../i18n/translator";
 import { DeviceConnecting } from "../mobile/HostList";
+import { AddChoice } from "../mobile/StartScreens";
 import { ListScreen } from "../mobile/App";
 import { SettingsScreen } from "../mobile/SettingsScreen";
 import { Detail } from "../mobile/Detail";
@@ -22,7 +23,7 @@ import { PRESETS_MISSION, RELEASE_MISSION, phoneMissions } from "./mobilePhoneMi
 import { AGENT_PR, FAILED_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
 import { ADD_HINT_MACHINES, PHONE_LOOK_SCENES, PHONE_MAC, PHONE_ROOM, gatheredWatch, phoneDevices, phoneGroups, phoneLookDetail, phoneLookGroups, seedPairedMac, type PhoneLookScene } from "./mobilePhoneSceneData";
 
-export type PhoneSceneState = "phone-connecting" | "phone-list" | "phone-gathered" | "phone-add-hint" | "phone-list-cut" | "phone-devices" | "phone-settings" | "phone-settings-sheet" | "phone-missions" | "phone-missions-cut" | "phone-mission" | "phone-mission-views" | "phone-mission-presets" | PhonePrScene | PhoneLookScene;
+export type PhoneSceneState = "phone-connecting" | "phone-add" | "phone-list" | "phone-gathered" | "phone-add-hint" | "phone-list-cut" | "phone-devices" | "phone-settings" | "phone-settings-sheet" | "phone-missions" | "phone-missions-cut" | "phone-mission" | "phone-mission-views" | "phone-mission-presets" | PhonePrScene | PhoneLookScene;
 
 /** The pull request tab's own scenes: the list, a page, the merge confirmation and the hand-over sheet. */
 const PHONE_PR_SCENES = ["phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-merge", "phone-pr-delegate"] as const;
@@ -40,7 +41,7 @@ const CATALOG = {
 };
 
 /** The scene names this component draws: the list, the device sheet, the missions tab and a mission (its decision with nothing to look at, or with Views linked to it), the PR tab and the 볼 것 tab with its viewers. */
-export const PHONE_SCENES: readonly string[] = ["phone-connecting", "phone-list", "phone-gathered", "phone-add-hint", "phone-list-cut", "phone-devices", "phone-settings", "phone-settings-sheet", "phone-missions", "phone-missions-cut", "phone-mission", "phone-mission-views", "phone-mission-presets", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
+export const PHONE_SCENES: readonly string[] = ["phone-connecting", "phone-add", "phone-list", "phone-gathered", "phone-add-hint", "phone-list-cut", "phone-devices", "phone-settings", "phone-settings-sheet", "phone-missions", "phone-missions-cut", "phone-mission", "phone-mission-views", "phone-mission-presets", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
 
 /** The `-cut` states: a list hided cut to fit one relay message, with the line that counts what it left out. */
 const CUT = { agents: 37, missions: 3 };
@@ -93,7 +94,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
   return (
     <TooltipProvider>
       <div className={missionPage || state === "phone-prs" || state in PR_PAGE ? "h-screen w-full bg-background text-foreground" : "min-h-screen w-full bg-background text-foreground"} data-gallery-scene="mobile" data-scene-ready={ready ? "true" : undefined}>
-        {state === "phone-connecting" ? <DeviceConnecting t={t} name={PHONE_MAC} error={null} onChoose={noop} /> : look ? (
+        {state === "phone-connecting" ? <DeviceConnecting t={t} name={PHONE_MAC} error={null} onChoose={noop} /> : state === "phone-add" ? <AddChoice t={t} onBack={noop} onComputer={noop} /> : look ? (
           <div className="h-screen">
             <Detail onBack={noop} />
           </div>

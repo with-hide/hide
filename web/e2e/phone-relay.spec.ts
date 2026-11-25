@@ -182,7 +182,7 @@ test("host picker reports counts, reconnects without repeating a reply and route
   await pair(page, relay);
   await page.getByRole("button", { name: relay.pairing.name, exact: true }).click();
   await expect(page.getByText("Needs you 1 · Working 2", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add device" })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.locator('[data-phone-agent="test-device|pane-one"]').click();
   await expect(page.getByText("The encrypted connection is ready.", { exact: true })).toBeVisible();
@@ -290,7 +290,11 @@ test("a revoked device stays listed as disconnected, never dials again and pairs
   await expect(row).toContainText(relay.pairing.name);
   await expect(row).toContainText("Disconnected");
   await expect(row).toContainText("Unused for 7 days, or disconnected on this device");
-  await expect(row.getByRole("button", { name: "Remove device" })).toBeVisible();
+  // 기기 지우기 is the row's menu (a long press, or a right-click), not a button on it.
+  await expect(row.getByRole("button", { name: "Remove device" })).toHaveCount(0);
+  await row.click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Remove device" })).toBeVisible();
+  await page.keyboard.press("Escape");
   // A link to the device shows the refusal without dialing it.
   relay.plaintext.length = 0;
   await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?host=${relay.pairing.room}`);
@@ -298,7 +302,9 @@ test("a revoked device stays listed as disconnected, never dials again and pairs
   expect(relay.plaintext).toEqual([]);
   await page.goto(relay.origin + "/");
   await row.getByRole("button", { name: "Reconnect" }).click();
-  await expect(page).toHaveURL(relay.origin + "/?add=1");
+  // 다시 연결 knows it adds a computer, so it skips 기기 추가's choice.
+  await expect(page).toHaveURL(relay.origin + "/?add=computer");
+  await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   relay.state.refusal = "";
   await pair(page, relay);
   await expect.poll(hosts).toEqual([expect.objectContaining({ room: relay.pairing.room, credential: relay.credential })]);
@@ -547,8 +553,9 @@ test("the phone keeps receiving Off across reload and reconnect, and On register
   await receive.click();
   await expect.poll(subscriptions).toBe(2);
   await expect(receive).toHaveAttribute("aria-checked", "true");
+  await page.locator('[data-phone-settings-section="computers"] [data-phone-host]').click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove device" }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
-  await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
   await expect(page).toHaveURL(relay.origin + "/");
   await expect(page.getByRole("heading", { name: "Connect your computer" })).toBeVisible();
   await expect.poll(scopes).toEqual(["/"]);
@@ -739,6 +746,32 @@ test("one browser keeps two devices and switches its live list through the heade
   } finally { await page.goto("about:blank"); await second.stop(); }
 });
 
+// The add page once came up in English on a phone whose app spoke Korean: the start page has no Mac to ask, so it speaks the language
+// the last Mac chose, which only a page load from the app to the start page shows. 기기 추가 asks what is added first; a reached
+// device opened over SSH wears the desktop's SSH mark, which the Mac's frame names (`link`).
+test("기기 추가 asks first, in the language the Mac chose, and a device reached over SSH wears its mark", async ({ page, relay }) => {
+  relay.state.interfaceLanguage = "ko";
+  relay.state.reached = true;
+  await pair(page, relay);
+  const head = page.getByRole("button", { name: `${relay.pairing.name} + Mac mini`, exact: true });
+  await expect(head).toContainText("+1");
+  await head.click();
+  const sheet = page.getByRole("dialog", { name: "기기" });
+  await expect(sheet.locator('[data-phone-device-row="mini"] [data-phone-device-link="ssh"]')).toHaveText("SSH");
+  await expect(sheet.locator('[data-phone-host-viewing="true"]')).toContainText("지금 보는 중");
+  await sheet.getByRole("button", { name: "기기 추가" }).click();
+  await expect(page).toHaveURL(relay.origin + "/?add=1");
+  await expect(page.getByRole("heading", { name: "기기 추가" })).toBeVisible();
+  await expect(page.locator('[data-phone-add-kind="server"]')).toContainText("설정\u00a0› 기기\u00a0› 기기 추가\u00a0› 컴퓨터");
+  await page.locator('[data-phone-add-kind="computer"]').click();
+  await expect(page.getByRole("heading", { name: "컴퓨터를 연결하세요" })).toBeVisible();
+  await page.locator("[data-phone-add-back]").click();
+  await expect(page.locator("[data-phone-add-choice]")).toBeVisible();
+  await page.locator('[data-phone-back="add-choice"]').click();
+  await expect(page).toHaveURL(relay.origin + "/?list=1");
+  await expect(page.locator("[data-phone-add]")).toHaveText("기기 추가");
+});
+
 // Approved B1: the QR names the device, and the device picker is a labelled
 // sheet in the phone's language. The hostile name remains an escaping fixture.
 test.describe("Korean phone screens", () => {
@@ -751,10 +784,10 @@ test.describe("Korean phone screens", () => {
     await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
     const trigger = page.getByRole("button", { name: relay.pairing.name, exact: true });
     await trigger.click();
-    const sheet = page.getByRole("dialog", { name: "기기 고르기" });
+    const sheet = page.getByRole("dialog", { name: "기기" });
     await expect(sheet).toBeVisible();
     await expect(sheet.getByText("내 차례 1 · 작업 중 2", { exact: true })).toBeVisible();
-    await expect(sheet.getByRole("button", { name: "다른 기기 연결" })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "기기 추가" })).toBeVisible();
     await sheet.getByRole("button", { name: "닫기", exact: true }).click();
     await expect(sheet).toHaveCount(0);
     await expect(trigger).toBeFocused();

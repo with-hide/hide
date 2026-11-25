@@ -1,19 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import { LaptopIcon, PlusIcon, ServerIcon, Trash2 } from "lucide-react";
+import { LaptopIcon, PlusIcon, ServerIcon, type LucideIcon } from "lucide-react";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/ui/context-menu";
+import { cn } from "../lib/utils";
 import { leaveHostPush } from "./appPush";
-import { hostStore, hostLink, removeHost, dropHostPush, HOST_LIST_LINK, type PairedHost } from "./hosts";
+import { hostStore, hostLink, removeHost, dropHostPush, ADD_COMPUTER_LINK, ADD_DEVICE_LINK, HOST_LIST_LINK, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 import { MovingOwl } from "../components/moving-owl";
 import blink from "../../../site/public/assets/owls/owl-blink.svg";
 import blinkStill from "../../../site/public/assets/owls/owl-blink-still.svg";
-import type { PhoneDevice } from "./protocol";
+import { linkMark, type PhoneDevice } from "./protocol";
 
-/** Observe lists only while the picker is open. Never opens a detail or sends an action. */
-export function HostList({ t, active, machines = [], activeRoom: named, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The Mac being viewed when the page address does not name it (the gallery). */ activeRoom?: string; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; choose?: (host: PairedHost) => void }) {
+/**
+ * Observe lists only while the picker is open. Never opens a detail or sends an action. Each computer is one row of two lines (the
+ * name, then its state and counts), the one being viewed outlined; a long press offers 기기 지우기 (docs/UI_BEHAVIOR.md, The phone
+ * app). `card` draws the rows split by hairlines, as a Settings group's card does.
+ */
+export function HostList({ t, active, machines = [], activeRoom: named, card = false, choose = (host: PairedHost) => window.location.assign(hostLink(host)) }: { t: TFunction; active?: Presence; /** The Mac being viewed when the page address does not name it (the gallery). */ activeRoom?: string; /** The devices the Mac being viewed reaches, drawn under its row (PRD mobile-companion-ui B9). */ machines?: readonly PhoneDevice[]; card?: boolean; choose?: (host: PairedHost) => void }) {
   // Undefined while the list is read (the app reads each computer's secret from the Keychain), null when it cannot be read.
   const [hosts, setHosts] = useState<PairedHost[] | null | undefined>(undefined);
   const [error, setError] = useState(false);
@@ -41,48 +48,40 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
   }, [hosts, activeRoom]);
   if (hosts === undefined) return null;
   if (hosts === null) return <p role="alert">{t("mobile.relay.storage")}</p>;
-  return <div className="flex min-w-0 flex-col divide-y divide-border">
+  // 기기 지우기 is the row's long press (or right-click, or the menu key), so the row itself stays one press.
+  const withMenu = (host: PairedHost, row: ReactNode) => <ContextMenu>
+    <ContextMenuTrigger className="select-none [-webkit-touch-callout:none]">{row}</ContextMenuTrigger>
+    <ContextMenuContent><ContextMenuItem variant="destructive" data-phone-host-remove={host.room} onSelect={() => setRemoving(host)}>{t("mobile.relay.remove")}</ContextMenuItem></ContextMenuContent>
+  </ContextMenu>;
+  // A Settings card's rows meet its edges and its hairlines, as its other rows do; the sheet's are rounded and spaced.
+  const rowBox = card ? "rounded-none px-md" : "rounded-lg px-sm";
+  return <div className={cn("flex min-w-0 flex-col", card ? "divide-y divide-border" : "gap-xxs")}>
     {hosts.map((host) => {
       const state = host.room === activeRoom ? active : presence[host.room];
       const seen = state?.lastSeen ?? host.lastSeen;
-      const mismatch = state?.protocolMismatch !== undefined
-        ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
-      const trash = <Button variant="ghost" size="icon" className="mt-md min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 aria-hidden="true" /></Button>;
-      if (host.credential === null) return <div key={host.room} className="flex min-w-0 items-start" data-phone-host-revoked={host.room}>
-        <div className="flex min-w-0 flex-1 items-start gap-md px-md py-md">
-          <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground opacity-(--opacity-dimmed)" />
-          <span className="flex min-w-0 flex-1 flex-col gap-xs">
-            <span className="flex min-w-0 flex-col gap-xs opacity-(--opacity-dimmed)">
-              <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
-              <span className="flex items-center gap-xs text-body text-muted-foreground">
-                <span aria-hidden="true" className="size-(--size-status-mark) shrink-0 rounded-full bg-muted-foreground" />
-                {t("mobile.relay.revoked")}
-              </span>
-              <span className="whitespace-normal break-keep text-body text-muted-foreground">{t("mobile.relay.revokedReason")}</span>
-            </span>
-            <Button variant="text" className="min-h-(--size-touch-target) self-start px-none text-body" onClick={() => window.location.assign("/?add=1")}>{t("mobile.relay.reconnect")}</Button>
-          </span>
-        </div>
-        {trash}
+      if (host.credential === null) return <div key={host.room} className={cn("flex min-w-0 flex-col gap-xs py-sm", rowBox)} data-phone-host-revoked={host.room}>
+        {withMenu(host, <div className="flex min-w-0 items-center gap-md opacity-(--opacity-dimmed)">
+          <DeviceTile icon={LaptopIcon} />
+          <TwoLines name={host.name} dot="off" word={t("mobile.relay.revoked")} />
+        </div>)}
+        <span className="flex min-w-0 flex-col items-start pl-[calc(var(--size-control-lg)+var(--spacing-md))]">
+          <span className="whitespace-normal break-keep text-body text-muted-foreground opacity-(--opacity-dimmed)">{t("mobile.relay.revokedReason")}</span>
+          <Button variant="text" className="min-h-(--size-touch-target) px-none text-body" onClick={() => window.location.assign(ADD_COMPUTER_LINK)}>{t("mobile.relay.reconnect")}</Button>
+        </span>
       </div>;
       const viewing = host.room === activeRoom && state?.online === true;
+      // A computer whose phone protocol differs says both versions in its state's place (the warning dot says it needs updating).
+      const mismatch = state?.protocolMismatch !== undefined ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
+      const word = mismatch ?? (state?.online
+        ? state.needs === undefined ? t("mobile.relay.connecting") : t(viewing ? "mobile.devices.viewing" : "mobile.connected")
+        : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen"));
       return <div key={host.room} className="flex min-w-0 flex-col">
-        <div className="flex min-w-0 items-start">
-        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-md py-md text-left" data-phone-host="true" onClick={() => choose(host)}>
-          <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
-          <span className="flex min-w-0 flex-1 flex-col gap-xs">
-            <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
-            <span className="flex items-center gap-xs text-body text-muted-foreground">
-              <span aria-hidden="true" className={`size-(--size-status-mark) shrink-0 rounded-full ${mismatch ? "bg-warning" : state?.online ? "bg-success" : "bg-muted-foreground"}`} />
-              {mismatch ? t("mobile.relay.updateTitle") : viewing ? t("mobile.devices.viewing") : t(state?.online ? "mobile.connected" : "mobile.disconnected")}
-            </span>
-            <span className="whitespace-normal text-body font-normal text-muted-foreground">{mismatch ?? (state?.online
-              ? state.needs !== undefined ? t("mobile.relay.counts", { needs: state.needs, working: state.working ?? 0 }) : t("mobile.relay.connecting")
-              : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen"))}</span>
-          </span>
-        </Button>
-        {trash}
-        </div>
+        {withMenu(host, <Button variant="ghost" className={cn("h-auto min-h-(--size-touch-target) w-full min-w-0 justify-start gap-md py-sm text-left font-normal text-foreground", rowBox, viewing && "ring-2 ring-inset ring-primary")}
+          data-phone-host="true" data-phone-host-viewing={viewing ? "true" : undefined} onClick={() => choose(host)}>
+          <DeviceTile icon={LaptopIcon} />
+          <TwoLines name={host.name} dot={mismatch ? "warning" : state?.online ? "on" : "off"} word={mismatch ? <><span className="sr-only">{t("mobile.relay.updateTitle")} · </span>{word}</> : word}
+            counts={!mismatch && state?.online && state.needs !== undefined ? <Counts t={t} needs={state.needs} working={state.working ?? 0} /> : null} />
+        </Button>)}
         {host.room === activeRoom ? <ReachedDevices t={t} devices={machines} /> : null}
       </div>;
     })}
@@ -90,7 +89,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
       <p className="text-subhead">{t("mobile.relay.removeConfirm", { name: removing.name })}</p>
       <div className="flex gap-sm">
         <Button variant="secondary" className="min-h-(--size-touch-target)" onClick={() => setRemoving(null)}>{t("common.cancel")}</Button>
-        <Button variant="destructive" className="min-h-(--size-touch-target)" onClick={() => {
+        <Button variant="destructive" className="min-h-(--size-touch-target)" data-phone-host-remove-confirm="true" onClick={() => {
           void leaveHostPush(removing.room).then(() => removeHost(removing.room)).then(() => {
             if (removing.room === activeRoom) location.assign("/");
             else { void reload(); setRemoving(null); }
@@ -98,30 +97,58 @@ export function HostList({ t, active, machines = [], activeRoom: named, choose =
         }}>{t("mobile.relay.remove")}</Button>
       </div>
     </div> : null}
-    <Button variant="ghost" className="min-h-(--size-touch-target) justify-start gap-sm rounded-none px-md text-body" data-phone-add="true" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
+    <Button variant="ghost" className={cn("min-h-(--size-touch-target) justify-start gap-md text-body text-foreground", rowBox)} data-phone-add="true" onClick={() => window.location.assign(ADD_DEVICE_LINK)}>
+      <span className="flex size-(--size-control-lg) shrink-0 items-center justify-center"><PlusIcon aria-hidden="true" className="size-(--size-icon-lg)" /></span>{t("mobile.relay.add")}
+    </Button>
     {error ? <p role="alert">{t("mobile.relay.storage")}</p> : null}
   </div>;
 }
 
-/** The devices the Mac being viewed reaches: each with its state and counts, dimmed while not connected, and why no pairing is needed (B9). */
+/** A device's icon in its small rounded tile: a paired computer's laptop, a reached device's server (`compact`, a size smaller). */
+export function DeviceTile({ icon: Icon, compact = false }: { icon: LucideIcon; compact?: boolean }) {
+  return <span aria-hidden="true" className={cn("flex shrink-0 items-center justify-center rounded-sm bg-secondary text-subtle-foreground", compact ? "size-(--size-control)" : "size-(--size-control-lg)")}>
+    <Icon className={compact ? "size-(--size-icon)" : "size-(--size-icon-lg)"} />
+  </span>;
+}
+
+/** A device row's two lines: its name on one line (with `mark` after it), then its state's dot and word and, at the right, its counts. */
+function TwoLines({ name, mark, dot, word, counts, compact = false }: { name: string; mark?: ReactNode; dot: "on" | "off" | "warning"; word: ReactNode; counts?: ReactNode; compact?: boolean }) {
+  return <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+    <span className="flex min-w-0 items-center gap-xs">
+      <span className={cn("min-w-0 truncate font-medium", compact ? "text-body" : "text-subhead")}>{name}</span>{mark}
+    </span>
+    <span className="flex min-w-0 items-center gap-xs text-body text-muted-foreground">
+      <span aria-hidden="true" className={cn("size-(--size-status-mark) shrink-0 rounded-full", dot === "on" ? "bg-success" : dot === "warning" ? "bg-warning" : "bg-muted-foreground")} />
+      <span className="min-w-0 truncate">{word}</span>
+      {counts}
+    </span>
+  </span>;
+}
+
+/** 내 차례 and 작업 중 as two small numbers at the right, the first in the hold colour; the words are for assistive technology. */
+function Counts({ t, needs, working }: { t: TFunction; needs: number; working: number }) {
+  return <span className="ml-auto flex shrink-0 items-center gap-xs pl-sm" data-phone-counts={`${needs}:${working}`}>
+    <span className="sr-only">{t("mobile.relay.counts", { needs, working })}</span>
+    <Badge aria-hidden="true" className="font-mono text-caption text-warning">{needs}</Badge>
+    <Badge aria-hidden="true" className="font-mono text-caption">{working}</Badge>
+  </span>;
+}
+
+/** The devices the Mac being viewed reaches, on a rail under its row: compact rows, dimmed while not connected, and one short line (B9). */
 function ReachedDevices({ t, devices }: { t: TFunction; devices: readonly PhoneDevice[] }) {
   const reached = devices.filter((device) => !device.local);
   if (reached.length === 0) return null;
-  const names = reached.map((device) => device.label ?? device.device_id).join(", ");
-  return <div className="ml-xl flex min-w-0 flex-col gap-sm border-l border-border pb-sm pl-md" data-phone-devices="true">
-    <p className="text-body text-muted-foreground">{t("mobile.devices.via")}</p>
-    {reached.map((device) => <div key={device.device_id} className={`flex min-w-0 flex-col gap-xs ${device.connected ? "" : "opacity-(--opacity-dimmed)"}`} data-phone-device-row={device.device_id} data-connected={device.connected ? "true" : "false"}>
-      <span className="flex min-w-0 items-center gap-sm">
-        <ServerIcon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 text-muted-foreground" />
-        <span className="min-w-0 whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{device.label ?? device.device_id}</span>
-      </span>
-      <span className="flex items-center gap-xs text-body text-muted-foreground">
-        <span aria-hidden="true" className={`size-(--size-status-mark) shrink-0 rounded-full ${device.connected ? "bg-success" : "bg-muted-foreground"}`} />
-        {t(device.connected ? "mobile.connected" : "mobile.disconnected")}
-      </span>
-      {device.connected ? <span className="text-body text-muted-foreground">{t("mobile.relay.counts", { needs: device.needs_you, working: device.working })}</span> : null}
-    </div>)}
-    <p className="whitespace-normal break-keep text-body text-muted-foreground wrap-anywhere">{t("mobile.devices.mixed", { names })}</p>
+  return <div className="ml-[calc(var(--spacing-sm)+var(--size-control-lg)/2)] flex min-w-0 flex-col gap-xs border-l border-border py-xs pl-md" data-phone-devices="true">
+    {reached.map((device) => {
+      const mark = linkMark(device);
+      return <div key={device.device_id} className={cn("flex min-w-0 items-center gap-md py-xs pr-sm", !device.connected && "opacity-(--opacity-dimmed)")} data-phone-device-row={device.device_id} data-connected={device.connected ? "true" : "false"}>
+        <DeviceTile icon={ServerIcon} compact />
+        <TwoLines compact name={device.label ?? device.device_id} dot={device.connected ? "on" : "off"} word={t(device.connected ? "mobile.connected" : "mobile.disconnected")}
+          mark={mark ? <Badge variant="outline" data-phone-device-link={device.link}>{mark}</Badge> : null}
+          counts={device.connected ? <Counts t={t} needs={device.needs_you} working={device.working} /> : null} />
+      </div>;
+    })}
+    <p className="whitespace-normal break-keep text-caption text-muted-foreground wrap-anywhere">{t("mobile.devices.mixed")}</p>
   </div>;
 }
 
