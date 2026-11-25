@@ -30,7 +30,6 @@ const WAIT: Wait = Wait::Each(Duration::from_secs(10));
 const SHOWN_WITHIN: Duration = Duration::from_secs(30);
 /// How long a start may take to reach its program, the start wait a spawn
 /// gives an agent's screen.
-#[cfg(windows)]
 const START_WITHIN: Duration = crate::agent_start::AGENT_START_DEADLINE;
 
 /// A command line for the engine's default shell that prints `word-42`,
@@ -1291,10 +1290,14 @@ fn launched_input_reaches_npms_program(shell: &str) {
 #[test]
 #[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
 fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_shell() {
-    let shells = ["HIDE_TEST_ZSH_BIN", "HIDE_TEST_BASH_BIN", "HIDE_TEST_FISH_BIN"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .chain(std::iter::once("/bin/sh".into()));
+    let shells = [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+    ]
+    .into_iter()
+    .filter_map(std::env::var_os)
+    .chain(std::iter::once("/bin/sh".into()));
     for shell in shells {
         launched_input_reaches_the_program_in(shell);
     }
@@ -1328,7 +1331,10 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
     let written = bin.path().join("argv");
     let env = BTreeMap::from([
-        ("HIDE_TEST_ARGV".to_owned(), written.to_str().unwrap().to_owned()),
+        (
+            "HIDE_TEST_ARGV".to_owned(),
+            written.to_str().unwrap().to_owned(),
+        ),
         ("LC_ALL".to_owned(), "C".to_owned()),
         (
             "PATH".to_owned(),

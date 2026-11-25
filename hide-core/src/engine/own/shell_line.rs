@@ -41,11 +41,7 @@ pub(super) fn shell_of(name: Option<&str>, windows: bool) -> Option<Syntax> {
 /// PowerShell a script runs in the shell with the text as it is, anything
 /// else as one process whose Windows command line ends with the text quoted
 /// as one word, as [`powershell_script`] starts a program.
-pub(super) fn command_with_prompt(
-    argv: &[String],
-    prompt: &str,
-    shell: Syntax,
-) -> Option<String> {
+pub(super) fn command_with_prompt(argv: &[String], prompt: &str, shell: Syntax) -> Option<String> {
     let (program, args) = argv.split_first()?;
     let text = shell.file_word(prompt);
     Some(match shell {

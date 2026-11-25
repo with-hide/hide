@@ -815,7 +815,11 @@ fn briefed_start(fixture: &mut Fixture, brief: &str, on_device: bool) -> Result<
         err = quote(answer.with_extension("err")),
         status = quote(answer.with_extension("status")),
     ))?;
-    ensure!(started.status == 0, "the spawn did not start: {}", started.stderr);
+    ensure!(
+        started.status == 0,
+        "the spawn did not start: {}",
+        started.stderr
+    );
     let spawned = wait_for("the spawned agent's pane", || {
         Ok(fixture::ready_panes(&home)?
             .into_iter()

@@ -50,16 +50,19 @@ impl OwnEngine<'_> {
     /// Removes the prompt file of a start that typed nothing; a failure is
     /// logged, and the node's cap takes the file in time.
     pub(super) fn drop_prompt(&self, pane: &str, staged: Staged) {
-        let removed = self.node().map_err(|error| error.to_string()).and_then(|node| {
-            call_as::<serde_json::Value>(
-                node.as_ref(),
-                Call::PromptFileRemove {
-                    start: staged.start.clone(),
-                },
-                PROMPT_FILE_WAIT,
-            )
+        let removed = self
+            .node()
             .map_err(|error| error.to_string())
-        });
+            .and_then(|node| {
+                call_as::<serde_json::Value>(
+                    node.as_ref(),
+                    Call::PromptFileRemove {
+                        start: staged.start.clone(),
+                    },
+                    PROMPT_FILE_WAIT,
+                )
+                .map_err(|error| error.to_string())
+            });
         if let Err(cause) = removed {
             crate::diagnostic!(serde_json::json!({
                 "component": "own_engine", "kind": "start.prompt_file_kept",
@@ -73,5 +76,9 @@ impl OwnEngine<'_> {
 /// the same file again, and nothing of either reaches the name.
 fn start_of(pane: &str, name: &str) -> String {
     let digest = Sha256::digest(format!("{pane}\n{name}").as_bytes());
-    format!("start-{}", hex::encode(&digest[..12]))
+    let named: String = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("start-{named}")
 }

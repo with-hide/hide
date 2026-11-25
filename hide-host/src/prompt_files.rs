@@ -85,8 +85,8 @@ mod tests {
 
     #[test]
     fn a_prompt_file_is_private_replaced_by_its_start_and_capped_oldest_first() {
-        let state = tempfile::tempdir().unwrap();
-        let state = Some(state.path());
+        let root = tempfile::tempdir().unwrap();
+        let state = Some(root.path());
         let text = "한글 첫 지시\u{2028}둘째 줄";
         let path = write(state, "start-1", text).unwrap();
         let path = hide_platform::path::from_wire(&path).unwrap();
@@ -97,7 +97,7 @@ mod tests {
         for n in 2..=PROMPT_FILES_CAP + 3 {
             write(state, &format!("start-{n}"), "x").unwrap();
         }
-        let folder = hide_kit::layout::prompt_files(state.unwrap());
+        let folder = hide_kit::layout::prompt_files(root.path());
         assert_eq!(
             std::fs::read_dir(&folder).unwrap().count(),
             PROMPT_FILES_CAP
