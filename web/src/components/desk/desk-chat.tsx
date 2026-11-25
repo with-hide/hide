@@ -9,6 +9,8 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
+import { CopyableMessage } from "../copy-words";
+import type { CopyText } from "../human-turn-copy";
 import { Elapsed, formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { StatusMark } from "../status-mark";
@@ -46,13 +48,14 @@ export function DeskMentionChip({ mention, onPress }: { mention: DeskMention; on
     : <MentionChip kind="project" name={mention.name} lead={lead} />;
 }
 
-/** The operator's own words, the one thing drawn as a bubble (B7, D-75). */
-export function DeskUserMessage({ text, mentions, onMention }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
-  return (
+/** The operator's own words, the one thing drawn as a bubble (B7, D-75), with `복사` on hover when `copy` is given (Doop E2). */
+export function DeskUserMessage({ text, mentions, onMention, copy }: { text: string; mentions: readonly DeskMention[]; onMention?: (mention: DeskMention) => void; copy?: CopyText }) {
+  const bubble = (
     <p className="max-w-(--size-pr-popover) self-end whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-item="user">
       <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
     </p>
   );
+  return copy ? <CopyableMessage text={text} copy={copy} align="end">{bubble}</CopyableMessage> : bubble;
 }
 
 /**
@@ -78,9 +81,11 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 /**
  * Desk's answer as plain Markdown (D-75), where a session it names is that
  * session's chip, pressed to open it; streaming while `live`; a stopped
- * answer keeps what it said and says it stopped (B7).
+ * answer keeps what it said and says it stopped (B7). Given `copy`, it
+ * offers `복사` of its original words on hover and on every code block
+ * (Doop E2).
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention, copy }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void; copy?: CopyText }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
@@ -88,9 +93,10 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
     token: markedMention(mention),
     node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
   })), [mentions, onMention, bridge]);
+  const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
-      <MarkdownText text={text} size="chat" chips={chips} />
+      {copy ? <CopyableMessage text={text} copy={copy}>{words}</CopyableMessage> : words}
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );
@@ -185,7 +191,7 @@ const SWITCH_WORDS: Record<Extract<DeskItem, { kind: "switch" }>["carried"], Mes
  * (`settled`) its `다시 시도` is gone, since the answer to it was given; the
  * notice that stopped a held line (`restartable`) offers `다시 시작`, which frees it.
  */
-export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, restartable = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; restartable?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
+export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, restartable = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; restartable?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: CopyText }) {
   const { t } = useInterfaceTranslation();
   const turn = item.notice === "turn_failed";
   // The failed colour is the failed turn's alone, as Doop's DeskNotice draws it; a stopped host is neutral words, as its `stopped`.
@@ -203,7 +209,7 @@ export function DeskNotice({ item, reason = failureReason(item.detail, null), se
           <TerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
           <span className="truncate">{item.detail}</span>
           <Hint label={t("desk.action.copy")}>
-            <Button variant="ghost" size="icon-xs" aria-label={t("desk.action.copy")} onClick={() => onCopy(item.detail!)}><CopyIcon /></Button>
+            <Button variant="ghost" size="icon-xs" aria-label={t("desk.action.copy")} onClick={() => void onCopy(item.detail!, "desk sign-in command")}><CopyIcon /></Button>
           </Hint>
         </span>
       ) : null}
@@ -359,7 +365,8 @@ export type DeskChatActions = DeskJobCardActions & {
   onApproval: (id: number, answer: DeskApprovalAnswer, text?: string) => void;
   onQueuedRemove: (id: number) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
-  onCopy: (text: string) => void;
+  /** Puts words on the clipboard: a sign-in command, a message, a code block. */
+  onCopy: CopyText;
   onMention: (mention: DeskMention) => void;
   onHanded: (paneId: string) => void;
 };
@@ -426,8 +433,8 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
-          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
+          {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} copy={actions.onCopy} />
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} copy={actions.onCopy} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />

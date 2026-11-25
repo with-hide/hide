@@ -217,7 +217,8 @@ export type ThreadHidePart =
 export type ThreadLine =
   /** `peer` is a letter's sender, when the record names it. */
   | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted"; peer: DeskSessionRef | null }
-  | { kind: "agent"; id: string; message: string | null; text: string }
+  /** `atMs` is when its record was written, when the record says (its first piece's time). */
+  | { kind: "agent"; id: string; message: string | null; text: string; atMs: number | null }
   | { kind: "thought"; id: string; message: string | null; text: string }
   /** `startedAtMs` is when the session made the call, when its record says. */
   | { kind: "tool"; id: string; title: string; toolKind: AcpToolKind; status: AcpToolCallStatus; input: string | null; output: string | null; diffs: Extract<AcpToolCallContent, { type: "diff" }>[]; images: AcpContentBlock[]; startedAtMs: number | null }
@@ -290,9 +291,13 @@ export function threadLines(updates: readonly AcpSessionUpdate[], parts: Readonl
       }
       case "agent_message_chunk":
       case "agent_thought_chunk": {
-        const kind = update.sessionUpdate === "agent_message_chunk" ? "agent" : "thought";
-        if (last?.kind === kind && last.message === message) last.text += textOf(update.content);
-        else lines.push({ kind, id, message, text: textOf(update.content) });
+        if (update.sessionUpdate === "agent_thought_chunk") {
+          if (last?.kind === "thought" && last.message === message) last.text += textOf(update.content);
+          else lines.push({ kind: "thought", id, message, text: textOf(update.content) });
+          return;
+        }
+        if (last?.kind === "agent" && last.message === message) last.text += textOf(update.content);
+        else lines.push({ kind: "agent", id, message, text: textOf(update.content), atMs: update._meta?.hide?.at_ms ?? null });
         return;
       }
       case "tool_call": {
@@ -455,19 +460,18 @@ export function threadTurns(lines: readonly ThreadLine[]): ThreadTurn[] {
 }
 
 /**
- * The turns with the question an asking job waits on said once (D-75): the
- * wait at the thread's foot says it, so the last answer leaves it out, whole
- * when the answer is only the question and its ending when it ends with it.
+ * The answer a question Hide found at a turn's end was asked in (B4 question
+ * 나): the last answer written no later than the question was found, whose
+ * line id it returns. Hide AI lists a question only when the sentence that
+ * asks it is in the turn's own answer, so that answer is where it stands;
+ * null when no answer of the lines read says when it was written that early.
  */
-export function askedOnce(turns: readonly ThreadTurn[], question: string | null): readonly ThreadTurn[] {
-  const asked = question?.trim();
-  const last = turns.at(-1);
-  const answer = last?.answer.at(-1);
-  if (!asked || !last || !answer) return turns;
-  const said = answer.text.trim();
-  const only = said.replace(/\s+/g, " ") === asked.replace(/\s+/g, " ");
-  if (!only && !said.endsWith(asked)) return turns;
-  const rest = only ? "" : said.slice(0, said.length - asked.length).trimEnd();
-  const answers = rest ? [...last.answer.slice(0, -1), { ...answer, text: rest }] : last.answer.slice(0, -1);
-  return [...turns.slice(0, -1), { ...last, answer: answers }];
+export function askedIn(turns: readonly ThreadTurn[], atUnixMs: number): string | null {
+  let found: { id: string; at: number } | null = null;
+  for (const turn of turns) {
+    for (const line of turn.answer) {
+      if (line.atMs !== null && line.atMs <= atUnixMs && (!found || line.atMs >= found.at)) found = { id: line.id, at: line.atMs };
+    }
+  }
+  return found?.id ?? null;
 }

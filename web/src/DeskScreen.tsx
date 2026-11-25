@@ -20,7 +20,7 @@ import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
-import { SessionAskCard, SessionHead, SessionQuestionCard, SessionSleepingFoot, sessionQuestion } from "./components/desk/desk-session";
+import { SessionAskCard, SessionHead, SessionSleepingFoot } from "./components/desk/desk-session";
 import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
@@ -283,7 +283,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
     onQueuedRemove: (id) => actions.deskQueuedRemove(id),
     onNoticeAction,
-    onCopy: (text) => void actions.copyText(text, "desk sign-in command"),
+    onCopy: (text, what) => actions.copyText(text, what),
     onMention: (mention) => {
       if (mention.kind === "session") return room.session({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id });
       const rest = useShellStore.getState().rest;
@@ -560,7 +560,6 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       paneId={paneId}
       actions={actions}
       startedByDesk={ownJob}
-      selectedOutput={front?.kind === "output" ? front.output.id : null}
       answer={answer}
       head={
         <SessionHead
@@ -584,6 +583,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
         />
       }
       ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
+      asks={row?.open_asks?.items}
       foot={sleeping ? (
         <SessionSleepingFoot
           title={title}
@@ -606,6 +606,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       onOutput={(output) => actions.deskOpen({ kind: "output", output: outputOf(job ?? undefined, output, row && checkoutPath ? { device: row.device_id, checkout: checkoutPath } : null) })}
       onMission={room.mission}
       onSession={room.session}
+      onCopy={(text, what) => actions.copyText(text, what)}
     />
   );
 }
@@ -682,10 +683,7 @@ function DeskSessionAsk({ paneId, deviceId, job, row, actions, onWrite }: { pane
   useEffect(() => {
     if (stale && deviceId) actions.askPane(deviceId, paneId);
   }, [actions, deviceId, paneId, stale]);
-  if (!ask || !deviceId) {
-    const question = sessionQuestion(job, row);
-    return question ? <SessionQuestionCard question={question} onWrite={onWrite} /> : null;
-  }
+  if (!ask || !deviceId) return null;
   const identity = askIdentity({ device_id: deviceId, pane_id: paneId }, ask);
   const mine = sent?.ask === identity ? sent : null;
   const lost = mine?.dropped === true && !result;

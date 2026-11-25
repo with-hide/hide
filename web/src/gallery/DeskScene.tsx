@@ -15,7 +15,7 @@ import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatAct
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
-import { SessionHead, SessionQuestionCard, sessionQuestion } from "../components/desk/desk-session";
+import { SessionHead } from "../components/desk/desk-session";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
@@ -71,13 +71,15 @@ export const DESK_SCENES = [
 type SceneState = (typeof DESK_SCENES)[number]["state"];
 
 const noop = () => undefined;
+/** A copy the gallery takes as done, so `복사함 ✓` shows. */
+const copied = () => Promise.resolve(true);
 
 const CHAT_ACTIONS: DeskChatActions = {
   onOpen: noop, onAnswer: noop, onCancel: noop, onRequeue: noop, onRetry: noop, onOutput: noop, onMission: noop,
-  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
+  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: copied, onMention: noop, onHanded: noop,
 };
 
-const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop };
+const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop, onCopy: copied };
 
 /** A session the scene names, as its chip draws it. */
 const sceneSession = (name: string): DeskSessionRef => Object.values(SESSIONS).find((session) => session.name === name) ?? { name, mark: null, agent_kind: null };
@@ -124,14 +126,13 @@ function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "",
 const CLAUDE: DeskSelection = { agent: "claude", model: "opus", effort: "high" };
 const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
-/** A session open beside Desk: its head, read as a pane head, its conversation, and the question card when it asks. */
-function ThreadColumn({ job, updates, parts, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
+/** A session open beside Desk: its head and outputs shelf, its conversation, and the question Hide found above the box when it asks. */
+function ThreadColumn({ job, updates, parts, reading = false, failure = null, selectedOutput = null, focused = false, draft = "", attachments = [] }: {
   job: DeskJob;
   updates: Parameters<typeof threadLines>[0];
   parts?: Parameters<typeof threadLines>[1];
   reading?: boolean;
   failure?: ThreadReadFailure | null;
-  outputs?: readonly DeskOutput[];
   selectedOutput?: string | null;
   focused?: boolean;
   draft?: string;
@@ -140,13 +141,13 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, ou
   const [text, setText] = useState(draft);
   const actions = useMemo(() => createActions(() => true), []);
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
-  const question = sessionQuestion(job, null);
+  const asks = useMemo(() => (job.state === "asking" && job.question ? [{ id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 }] : []), [job]);
   return <>
     <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
     <ThreadView
-      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
+      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}
-      ask={question ? <SessionQuestionCard question={question} onWrite={noop} /> : null}
+      asks={asks}
       onTerminal={noop} {...PART_ACTIONS}
     />
   </>;
@@ -220,13 +221,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         { kind: "job", id: 3, job_id: "gallery" },
       ];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}
-        session={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} outputs={[]} />} />;
+        session={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} />} />;
       break;
     }
     case "s5": {
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "record" }, { kind: "job", id: 2, job_id: "gallery" }];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { selectedJob: "record" })}
-        session={<ThreadColumn job={jobs.record!} updates={RECORD_THREAD} outputs={[]} focused draft="응 지우고 다시 빌드해" />} />;
+        session={<ThreadColumn job={jobs.record!} updates={RECORD_THREAD} focused draft="응 지우고 다시 빌드해" />} />;
       break;
     }
     case "s7": {
@@ -263,7 +264,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "parts": {
       const thread = conductorThread(jobs);
       body = <Room chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
-        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} outputs={[]} />} />;
+        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} />} />;
       break;
     }
     case "pane":
@@ -283,7 +284,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "mission":
       body = <Room chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
         panel={<DeskTabPanel tabs={[tab("map", t("desk.lane.missionMap", { title: "Desk 1차" }), true, <MapIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="map" onTab={noop} onKeep={noop} onCloseTab={noop} onClose={noop}><MissionMap missionId="mission-1" actions={actions} /></DeskTabPanel>}
-        session={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} outputs={[]} />} />;
+        session={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} />} />;
       break;
     case "outputs":
       body = <OutputsCriteria />;
@@ -302,7 +303,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           {column("failed", <ThreadColumn job={jobs.release!} updates={[]} failure="no_record" />)}
           {column("reading", <ThreadColumn job={jobs.release!} updates={[]} reading />)}
           {column("empty", <ThreadColumn job={fresh} updates={[]} />)}
-          {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} outputs={[]} />)}
+          {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} />)}
         </div>
       );
       break;

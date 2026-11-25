@@ -2,7 +2,7 @@ import type { DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { RowButton } from "../ui/row-button";
-import { OutputMark, UnseenDot } from "./desk-job-card";
+import { OutputMark, UnseenMark } from "./desk-job-card";
 
 const PICTURE = "relative flex aspect-[3/2] w-(--size-desk-output-thumb) overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -30,7 +30,7 @@ export function DeskOutputs({ outputs, selected = null, onOpen }: {
             <li key={output.id}>
               <RowButton className={cn(PICTURE, "p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.seen ? output.label : `${output.label} · ${t("desk.outputs.unseen")}`} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
                 <img src={output.thumb!} alt="" aria-hidden="true" draggable={false} className="size-full object-cover object-top" />
-                {!output.seen ? <UnseenDot className="absolute right-xxs top-xxs" /> : null}
+                {!output.seen ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
               </RowButton>
             </li>
           ))}
@@ -43,7 +43,7 @@ export function DeskOutputs({ outputs, selected = null, onOpen }: {
               <RowButton className={cn("px-xxs py-xxs text-caption", selected === output.id && "bg-accent")} aria-pressed={selected === output.id} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb="row">
                 <OutputMark output={output} />
                 <span className="min-w-0 flex-1 truncate text-subtle-foreground">{output.label}</span>
-                {!output.seen ? <UnseenDot /> : null}
+                {!output.seen ? <UnseenMark /> : null}
               </RowButton>
             </li>
           ))}

@@ -165,10 +165,10 @@ export function JobLead({ job }: { job: DeskJob }) {
   );
 }
 
-/** The dot on an output not looked at yet (the Views chip's unseen dot, D-64), named for a screen reader. */
-export function UnseenDot({ className }: { className?: string }) {
+/** The mark on an output not looked at yet: the look eye the sidebar draws for a View to look at (Doop B4), named for a screen reader. */
+export function UnseenMark({ className }: { className?: string }) {
   const { t } = useInterfaceTranslation();
-  return <span role="img" aria-label={t("desk.outputs.unseen")} className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full bg-foreground", className)} data-desk-output-unseen="true" />;
+  return <StatusMark mark="look" label={t("desk.outputs.unseen")} className={className} data-desk-output-unseen="true" />;
 }
 
 /** The mark of an output's kind: an image, a page, a PR, or the document's file type. */
@@ -204,7 +204,7 @@ export function OutputsChip({ outputs, selected = null, onOpen }: { outputs: rea
       <OutputMark output={shown} />
       <span className="truncate">{shown.label}</span>
       {more > 0 ? <span className="shrink-0 text-muted-foreground" data-desk-job-more-outputs={more}>+{more}</span> : null}
-      {outputs.some((output) => !output.seen) ? <UnseenDot /> : null}
+      {outputs.some((output) => !output.seen) ? <UnseenMark /> : null}
     </Button>
   );
 }

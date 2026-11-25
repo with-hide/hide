@@ -108,7 +108,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine="mac" disconnected={false} sleeping={false} selectedOutput={null} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine="mac" disconnected={false} sleeping={false} selectedOutput={null} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>

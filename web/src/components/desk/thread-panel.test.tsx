@@ -3,6 +3,8 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
+import type { CopyText } from "../human-turn-copy";
+import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
 import type { SessionThreadSection } from "../../snapshot";
 import { useShellStore } from "../../store";
@@ -45,7 +47,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true) }: { asks?: AskLine[]; onCopy?: CopyText } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -54,7 +56,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -166,5 +168,58 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
   expect(line?.textContent).toBe("Interrupted");
   expect(container.textContent).not.toContain("Request interrupted");
   // The only bubble is the operator's own words.
-  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
+  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"] [data-desk-thread-bubble]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
+});
+
+/** Lets the lazily loaded Markdown language parse each message, and the parts drawn in roots of their own mount. */
+const laidOut = () => act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+
+it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
+  const copied: [string, string][] = [];
+  const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
+  const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await laidOut();
+  const message = container.querySelector('[data-desk-thread-line="agent"]')!;
+  expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
+  await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
+  await act(async () => message.querySelector<HTMLElement>('[data-markdown-code-copy] [data-copy-words="code block"]')!.click());
+  expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
+  // A copy that took says so on the button that made it.
+  expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
+});
+
+it("shows the questions Hide found above the box and goes to the answer each was asked in, lit for 2 s (Doop B4)", async () => {
+  const scrolled: string[] = [];
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
+  const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "다크도 찍을지 물었어요", at_unix_ms: 1_500 },
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지 물었어요", at_unix_ms: 2_500 },
+  ];
+  const { container } = await mount(job, null, { asks });
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("본인 확인은 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await laidOut();
+  // One line above the box says the newest question and how many more there are.
+  const line = container.querySelector("[data-desk-thread-asks]")!;
+  expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
+  expect(line.querySelector("[data-desk-thread-asks-more]")?.getAttribute("data-desk-thread-asks-more")).toBe("1");
+  expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  vi.useFakeTimers();
+  try {
+    await act(async () => line.querySelector<HTMLElement>('[data-desk-thread-ask="missed-2-0"]')!.click());
+    const lit = () => Array.from(container.querySelectorAll('[data-desk-thread-lit="true"]')).map((one) => one.textContent);
+    expect(scrolled.at(-1)).toContain("본인 확인은 직접 해 줄 수 있어?");
+    expect(lit()).toEqual([expect.stringContaining("본인 확인은 직접 해 줄 수 있어?")]);
+    await act(async () => vi.advanceTimersByTime(1_999));
+    expect(lit()).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(lit()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

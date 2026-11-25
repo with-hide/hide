@@ -15,7 +15,8 @@ import { Kbd } from "../ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Hint } from "../ui/tooltip";
 import { AskCardView } from "../../mobile/AskCard";
-import { JobLead, OutputsChip } from "./desk-job-card";
+import { JobLead } from "./desk-job-card";
+import { OutputShelf } from "./output-shelf";
 import { AgentMark } from "../../AgentMark";
 import { StatusMark } from "../status-mark";
 
@@ -98,7 +99,8 @@ const GAP = 4;
  * then `파일 ⇧⌘E`, `터미널 ⌘J` (hidden while it sleeps) and `✕`. The second
  * line is its machine and the chips the pane head carries, in one line that
  * folds into `+n`: the work chip (the plan's, or the mission chip on a
- * Conductor), what it opened, and its PR; no model.
+ * Conductor) and its PR; no model. Under the head, the shelf gathers what
+ * the session made (Doop B4, shelf 나).
  */
 export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onClose }: {
   paneId: string;
@@ -125,88 +127,56 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   const { t } = useInterfaceTranslation();
   const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
   return (
-    <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={sleeping ? "sleeping" : (job?.state ?? "pending")}>
-      <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
-        {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
-        <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
-          {pane ? <AncestorPath pane={pane} actions={deskActions} names="always" /> : null}
-          <Hint label={title} reveals>
-            <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
-          </Hint>
-        </nav>
-        {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
-        <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
-          <Button variant="ghost" size="sm" aria-pressed={explorerOpen} className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground", explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}>
-            <FolderIcon />
-            {t("desk.room.files")}
-            {filesChord ? <Kbd aria-hidden="true">{filesChord}</Kbd> : null}
-          </Button>
-        </Hint>
-        {sleeping ? null : (
-          <Hint label={t("desk.room.terminal")} shortcut={terminalChord ?? undefined}>
-            <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-session-terminal="true" onClick={onTerminal}>
-              <SquareTerminalIcon />
-              {t("desk.room.terminal")}
-              {terminalChord ? <Kbd aria-hidden="true">{terminalChord}</Kbd> : null}
+    <>
+      <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={sleeping ? "sleeping" : (job?.state ?? "pending")}>
+        <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
+          {sleeping ? <MoonIcon aria-label={t("desk.job.sleeping")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-desk-session-asleep="true" /> : lead}
+          <nav className="flex min-w-0 flex-1 items-center gap-xxs text-subtle-foreground" aria-label={t("desk.thread.path")}>
+            {pane ? <AncestorPath pane={pane} actions={deskActions} names="always" /> : null}
+            <Hint label={title} reveals>
+              <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page" data-desk-session-title="true">{title}</span>
+            </Hint>
+          </nav>
+          {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
+          <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
+            <Button variant="ghost" size="sm" aria-pressed={explorerOpen} className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground", explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}>
+              <FolderIcon />
+              {t("desk.room.files")}
+              {filesChord ? <Kbd aria-hidden="true">{filesChord}</Kbd> : null}
             </Button>
           </Hint>
-        )}
-        {pane && !sleeping ? <SessionPaneMenu pane={pane} title={title} actions={deskActions} /> : null}
-        <Hint label={t("desk.room.closeSession")}>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
-        </Hint>
-      </div>
-      <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
-        {machine ? <span className="shrink-0 text-caption text-subtle-foreground" data-desk-session-machine="true">{machine}</span> : null}
-        {disconnected ? <span className="shrink-0 text-caption text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
-        <FoldingChips>
-          {sleeping ? null : <PaneWorkChip paneId={paneId} actions={deskActions} />}
-          {job?.outputs.length ? <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} /> : null}
-          {sleeping ? null : <PanePrChip paneId={paneId} actions={deskActions} />}
-        </FoldingChips>
-      </div>
-    </header>
-  );
-}
-
-/** What a waiting session asks, as its sidebar row or its card names it (B14, B34). */
-export type SessionQuestion = { kind: "question" | "plan_approval" | "decision" | "approval"; text: string };
-
-/** The question a session waits on (B14): the agent's own ask from its sidebar row, else the card's line. */
-export function sessionQuestion(job: DeskJob, row: AgentRow | null): SessionQuestion | null {
-  if (job.state !== "asking") return null;
-  const turn = row?.user_turn;
-  if (turn?.content) return { kind: turn.kind, text: turn.content.text };
-  const kind = job.ask === "approval" ? "approval" : job.ask === "decision" ? "decision" : job.ask === "plan_review" ? "plan_approval" : "question";
-  return job.question ? { kind, text: job.question } : null;
-}
-
-const QUESTION_WORD = { question: "desk.ask.question", plan_approval: "desk.ask.plan_review", decision: "desk.ask.decision", approval: "desk.ask.approval" } as const;
-
-/**
- * The question card while what the agent asks on its screen has not been
- * read (PRD desk-2-ui B14): the kind of ask and what it asks, from its
- * sidebar row or its card, and `직접 쓰기`, which gives the keyboard to the
- * input box below.
- */
-export function SessionQuestionCard({ question, onWrite }: { question: SessionQuestion; onWrite: () => void }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <section className="flex min-w-0 flex-col gap-sm rounded-lg border border-warning bg-warning/10 p-md" aria-label={t(QUESTION_WORD[question.kind])} data-desk-question={question.kind}>
-      <p className="flex min-w-0 items-baseline gap-xs text-body text-foreground">
-        <span className="shrink-0 text-caption text-warning">{t(QUESTION_WORD[question.kind])}</span>
-        <span className="min-w-0 whitespace-pre-wrap break-keep font-semibold [overflow-wrap:anywhere]">{question.text}</span>
-      </p>
-      <div className="flex justify-end">
-        <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
-      </div>
-    </section>
+          {sleeping ? null : (
+            <Hint label={t("desk.room.terminal")} shortcut={terminalChord ?? undefined}>
+              <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-session-terminal="true" onClick={onTerminal}>
+                <SquareTerminalIcon />
+                {t("desk.room.terminal")}
+                {terminalChord ? <Kbd aria-hidden="true">{terminalChord}</Kbd> : null}
+              </Button>
+            </Hint>
+          )}
+          {pane && !sleeping ? <SessionPaneMenu pane={pane} title={title} actions={deskActions} /> : null}
+          <Hint label={t("desk.room.closeSession")}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
+          </Hint>
+        </div>
+        <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
+          {machine ? <span className="shrink-0 text-caption text-subtle-foreground" data-desk-session-machine="true">{machine}</span> : null}
+          {disconnected ? <span className="shrink-0 text-caption text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
+          <FoldingChips>
+            {sleeping ? null : <PaneWorkChip paneId={paneId} actions={deskActions} />}
+            {sleeping ? null : <PanePrChip paneId={paneId} actions={deskActions} />}
+          </FoldingChips>
+        </div>
+      </header>
+      {job ? <OutputShelf outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} /> : null}
+    </>
   );
 }
 
 /**
- * The question card at the conversation's end (PRD desk-2-ui D-11, B14,
- * B34): the phone's own ask card (`AskCardView`), its choices answered
+ * What the agent's own screen asks, at the conversation's end, answered in
+ * place (PRD desk-2-ui D-11, B14, B34; Doop B4): the phone's own ask card
+ * (`AskCardView`), its choices answered
  * through the phone's path, which types the keys the agent's screen takes;
  * one the computer cannot answer goes to the terminal. `직접 쓰기` under it
  * gives the keyboard to the input box below, for an answer of the

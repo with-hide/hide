@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "../../actions";
 import { refusalText, submitThreadInput } from "../../attachments";
-import type { DeskJob, DeskMention, DeskOutput } from "../../desk";
+import type { DeskJob, DeskMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
@@ -10,11 +10,10 @@ import { Input } from "../ui/input";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ComposerAttachment } from "./desk-composer";
 import type { ReactNode } from "react";
+import type { AskLine } from "../open-asks";
 import { ThreadView, type ThreadPartActions } from "./thread-view";
 
 type Attached = ComposerAttachment & { bytes: Uint8Array };
-
-const NO_OUTPUTS: readonly DeskOutput[] = [];
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
@@ -24,11 +23,11 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * D-01, D-20, B2, B15, B30): it opens the session thread of the pane while
  * it is shown and closes it after, draws the record as the core reads it
  * on, reads the page before when the conversation is scrolled to its top,
- * and types the input box's words and files into that pane. Its head, the
- * question card and what stands in the box's place while it sleeps are the
- * caller's.
+ * and types the input box's words and files into that pane. Its head (with
+ * the outputs shelf under it), the agent's choice card, the questions Hide
+ * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = [], startedByDesk = false, selectedOutput = null, focused = false, answer = 0, head = null, ask = null, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = [], startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */
@@ -36,13 +35,13 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   actions: Pick<Actions, "openThread" | "closeThread" | "readOlderThread">;
   mentions?: readonly DeskMention[];
   startedByDesk?: boolean;
-  selectedOutput?: string | null;
   focused?: boolean;
   /** Moves when `답하기` asks for this thread's input box (B29): the box takes the keyboard. */
   answer?: number;
   /** The panel's head, drawn once the card is here. */
   head?: ReactNode;
   ask?: ReactNode;
+  asks?: readonly AskLine[];
   foot?: ReactNode;
   onTerminal: () => void;
 } & ThreadPartActions) {
@@ -144,10 +143,9 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         failure={screen.failure}
         mentions={mentions}
         startedByDesk={startedByDesk}
-        outputs={job?.outputs ?? NO_OUTPUTS}
         ask={ask}
+        asks={asks}
         foot={foot}
-        selectedOutput={selectedOutput}
         composer={{
           value: text,
           attachments: files,
