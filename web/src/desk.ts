@@ -123,8 +123,13 @@ export const DESK_REFUSAL_MAX = 600;
 /** The word Hide puts on one kind of the agent's options; `other` has none and shows the agent's own name. */
 export type ApprovalWord = "reject" | "allow_always" | "allow_once";
 
-/** One button of a waiting card: the agent's option, and Hide's word for it, or null where the agent's own name labels it. */
-export type ApprovalButton = { option: DeskOption; word: ApprovalWord | null };
+/**
+ * One button of a waiting card: the agent's option, and Hide's word for it,
+ * or null where the agent's own name labels it. A null option is Hide's own
+ * `거절…` on a card that offers no rejecting option, which ends the request
+ * as ACP's `cancelled`, so no card waits on `중지`.
+ */
+export type ApprovalButton = { option: DeskOption | null; word: ApprovalWord | null };
 
 const APPROVAL_WORD: Record<DeskOptionKind, ApprovalWord | null> = {
   reject_once: "reject",
@@ -146,7 +151,7 @@ const BUTTON_ORDER: Record<ApprovalWord | "other", number> = { reject: 0, other:
  */
 export function approvalButtons(options: readonly DeskOption[]): ApprovalButton[] {
   const words = options.map((option) => APPROVAL_WORD[option.kind]);
-  return options
+  const buttons: ApprovalButton[] = options
     .map((option, index) => {
       const word = words[index] ?? null;
       const shared = word !== null && words.filter((other) => other === word).length > 1;
@@ -154,10 +159,14 @@ export function approvalButtons(options: readonly DeskOption[]): ApprovalButton[
     })
     .sort((left, right) => left.at - right.at || left.index - right.index)
     .map(({ option, word }) => ({ option, word }));
+  return options.some(rejects) ? buttons : [{ option: null, word: "reject" }, ...buttons];
 }
 
 /** Whether pressing the option refuses the request, which opens `거절…`'s one line first. */
 export const rejects = (option: DeskOption) => option.kind === "reject_once" || option.kind === "reject_always";
+
+/** Whether the button refuses the request: a rejecting option, or Hide's own `거절…`. */
+export const refuses = ({ option }: ApprovalButton) => option === null || rejects(option);
 
 /** One View of a session, before Desk keeps only its outputs (B30). */
 export type SessionViewKind = "image" | "page" | "pr" | "markdown" | "pdf" | "html" | "code" | "diff" | "log" | "hide_ai";

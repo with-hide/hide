@@ -3441,7 +3441,7 @@ export type DeskItem =
    * pressed (null on a card kept from before it was sent), and `refusal` the
    * line the operator sent with 거절.
    */
-  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; options: DeskOption[]; state: DeskApprovalState; chosen: DeskOptionKind | null; refusal: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; options: DeskOption[]; state: DeskApprovalState; chosen: DeskOptionKind | null; /** The agent's own name for the option pressed; absent where `chosen` is null and from an older core. */ answer?: string; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */

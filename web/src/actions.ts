@@ -2911,8 +2911,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_stop", payload: {} });
     },
 
-    /** One of the agent's own options on an approval card (D-92), by its id; a refusal's line goes to Desk with it, a blank one is a plain refusal. */
-    deskApproval(id: number, option: string, text?: string) {
+    /** One of the agent's own options on an approval card (D-92), by its id, or null for `거절…` on a card that offers no rejecting option; a refusal's line goes to Desk with it, a blank one is a plain refusal. */
+    deskApproval(id: number, option: string | null, text?: string) {
       dispatch({ schema_version: 2, kind: "desk_approval", payload: text ? { id, option, text } : { id, option } });
     },
 

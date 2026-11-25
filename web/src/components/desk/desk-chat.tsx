@@ -1,8 +1,8 @@
 import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { ApprovalWord, DeskAgent, DeskApproval, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, DeskOption, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, namedText, rejects } from "../../desk";
+import type { ApprovalButton, ApprovalWord, DeskAgent, DeskApproval, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention, namedText, refuses } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { DeskAttachment } from "../../snapshot";
@@ -319,24 +319,25 @@ const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
  * button names the agent's own option on hover. Once answered it folds to one
  * dim line: how it was answered and the command's start.
  */
-export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: DeskApproval; /** The agent's option pressed, with `거절…`'s line for a refusal. */ onAnswer: (option: string, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
+export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: DeskApproval; /** The agent's option pressed, or null for Hide's own `거절…`, with `거절…`'s line for a refusal. */ onAnswer: (option: string | null, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
   const { t } = useInterfaceTranslation();
   const buttons = approvalButtons(item.options);
-  const firstReject = buttons.find(({ option }) => rejects(option))?.option ?? null;
-  const [refusing, setRefusing] = useState<DeskOption | null>(defaultRefusal !== undefined ? firstReject : null);
+  const firstReject = buttons.find(refuses) ?? null;
+  const [refusing, setRefusing] = useState<ApprovalButton | null>(defaultRefusal !== undefined ? firstReject : null);
   const [line, setLine] = useState(defaultRefusal ?? "");
   if (item.state !== "waiting") {
     const Icon = APPROVAL_ICON[item.card];
     return (
       <p className="flex min-w-0 items-center gap-xs text-micro text-muted-foreground" title={item.command} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-answered={item.state} data-desk-approval-chosen={item.chosen ?? undefined}>
         <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" data-desk-approval-card={item.card} />
-        <span className="shrink-0">{t(answeredWord(item))}</span>
+        {/* An option Hide has no word for reads as the agent named it. */}
+        <span className="shrink-0">{item.chosen === "other" && item.answer ? item.answer : t(answeredWord(item))}</span>
         <span aria-hidden="true">·</span>
         <span className="min-w-0 truncate font-mono">{item.command}</span>
       </p>
     );
   }
-  const refuse = (option: DeskOption) => onAnswer(option.id, line.trim() || undefined);
+  const refuse = ({ option }: ApprovalButton) => onAnswer(option?.id ?? null, line.trim() || undefined);
   return (
     <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
       <p className="flex min-w-0 items-center gap-sm">
@@ -371,18 +372,19 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             }}
           />
           <div className="flex flex-wrap items-center justify-end gap-xs">
-            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_plain" onClick={() => onAnswer(refusing.id)}>{t("desk.approval.rejectPlain")}</Button>
+            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_plain" onClick={() => onAnswer(refusing.option?.id ?? null)}>{t("desk.approval.rejectPlain")}</Button>
             <Button variant="secondary" size="sm" data-desk-approval-answer="reject_send" onClick={() => refuse(refusing)}>{t("desk.approval.rejectSend")}<CornerDownLeftIcon aria-hidden="true" /></Button>
           </div>
         </div>
       ) : buttons.length > 0 ? (
         <div className="flex flex-wrap items-center justify-end gap-xs pt-xxs">
-          {buttons.map(({ option, word }) => {
-            const label = word ? t(BUTTON_WORD[word]) : option.name;
+          {buttons.map((button) => {
+            const { option, word } = button;
+            const label = word ? t(BUTTON_WORD[word]) : (option?.name ?? "");
             // The button keeps its own word as its name; the hint adds the agent's own name for the option when the word is Hide's.
             return (
-              <Hint key={option.id} label={option.name} active={word !== null}>
-                <Button variant="secondary" size="sm" aria-label={label} data-desk-approval-option={option.id} data-desk-approval-kind={option.kind} onClick={() => (rejects(option) ? setRefusing(option) : onAnswer(option.id))}>
+              <Hint key={option?.id ?? "reject"} label={option?.name ?? label} active={word !== null && option !== null}>
+                <Button variant="secondary" size="sm" aria-label={label} data-desk-approval-option={option?.id} data-desk-approval-kind={option?.kind ?? "reject"} onClick={() => (refuses(button) ? setRefusing(button) : onAnswer(option?.id ?? null))}>
                   {label}
                 </Button>
               </Hint>
@@ -419,7 +421,7 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 
 export type DeskChatActions = DeskJobCardActions & {
   /** The agent's option pressed on card `id`, with `거절…`'s line for a refusal. */
-  onApproval: (id: number, option: string, text?: string) => void;
+  onApproval: (id: number, option: string | null, text?: string) => void;
   onQueuedRemove: (id: number) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   /** Puts words on the clipboard: a sign-in command, a message, a code block. */

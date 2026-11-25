@@ -175,12 +175,16 @@ describe("the answer a question Hide found was asked in (B4 question 나)", () =
 
 describe("a waiting card's buttons (D-92, frame A2 가)", () => {
   const option = (id: string, kind: DeskOption["kind"], name = id): DeskOption => ({ id, kind, name });
-  const read = (options: DeskOption[]) => approvalButtons(options).map(({ option: one, word }) => [one.id, word]);
+  const read = (options: DeskOption[]) => approvalButtons(options).map(({ option: one, word }) => [one?.id ?? null, word]);
 
   it("keeps every answer the agent offers, reject first, then its own others, 항상 허용 and 한 번 허용 last, in the agent's order within each", () => {
     expect(read([option("yes", "allow_once"), option("always", "allow_always"), option("no", "reject_once")])).toEqual([["no", "reject"], ["always", "allow_always"], ["yes", "allow_once"]]);
     expect(read([option("yes", "allow_once"), option("ask", "other"), option("never", "reject_always")])).toEqual([["never", "reject"], ["ask", null], ["yes", "allow_once"]]);
-    expect(read([])).toEqual([]);
+  });
+
+  it("adds Hide's own 거절… to a card that offers no rejecting option, so it ends without 중지", () => {
+    expect(read([option("plan", "other"), option("go", "allow_once")])).toEqual([[null, "reject"], ["plan", null], ["go", "allow_once"]]);
+    expect(read([])).toEqual([[null, "reject"]]);
   });
 
   it("labels answers that would read the same word by the agent's own names instead", () => {

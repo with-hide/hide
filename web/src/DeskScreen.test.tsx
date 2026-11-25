@@ -597,7 +597,7 @@ describe("Desk's room", () => {
       expect(document.body.textContent).toContain("How Desk asks while it works");
       expect(choices()).toEqual([
         ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
-        ["agent", "unchecked", "As the agentAsks as you set Claude Code up. The same as in the terminal."],
+        ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
       ]);
       await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
@@ -636,6 +636,17 @@ describe("Desk's room", () => {
       expect(buttons().map(([id]) => id)).toEqual(["reject", "allow-with-updates", "allow-once"]);
     });
 
+    it("ends a card that offers no refusal with Hide's own 거절…, sent as no option", async () => {
+      const plan: DeskOption[] = [{ id: "plan", kind: "other", name: "Keep planning" }, { id: "go", kind: "allow_once", name: "Yes" }];
+      await render(desk([{ ...build, card: "other", command: "ExitPlanMode", options: plan }]));
+      expect(buttons()).toEqual([["plan", "Keep planning"], ["go", "Allow once"]]);
+      await press("[data-desk-approval-kind='reject']");
+      await type("keep planning instead");
+      await key("Enter");
+      await press("[data-desk-approval-answer='reject_plain']");
+      expect(sent("desk_approval")).toEqual([{ id: 7, option: null, text: "keep planning instead" }, { id: 7, option: null }]);
+    });
+
     it("folds an answered card to the kind of answer pressed", async () => {
       await render(desk([
         { ...build, state: "allowed", chosen: "allow_always" },
@@ -644,6 +655,7 @@ describe("Desk's room", () => {
         { ...build, id: 10, state: "rejected", chosen: "reject_once", refusal: "wait for it" },
         { ...build, id: 11, state: "rejected", chosen: "reject_once" },
         { ...build, id: 12, state: "closed" },
+        { ...build, id: 13, state: "allowed", chosen: "other", answer: "Keep planning" },
       ]));
       const folded = [...document.body.querySelectorAll("[data-desk-approval-answered]")].map((line) => line.textContent);
       expect(folded).toEqual([
@@ -653,6 +665,7 @@ describe("Desk's room", () => {
         "Rejected · your line went to Desk·npm run build",
         "Rejected·npm run build",
         "Not run · closed by a new conversation or restart·npm run build",
+        "Keep planning·npm run build",
       ]);
       expect(document.body.querySelector("[data-desk-approval-option]")).toBeNull();
     });
