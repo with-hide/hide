@@ -255,6 +255,20 @@ describe("Desk's room", () => {
     expect(box().querySelectorAll("[data-desk-token]")).toHaveLength(0);
   });
 
+  it("leaves a chip alone when ⌫ ends a Korean syllable's composition, which Safari reports as keyCode 229", async () => {
+    useUiStore.setState({ deskDraft: { text: "@", mentions: [] } });
+    await render(desk([]), tree);
+    await press("[data-desk-mention-session='w1:other']");
+    await act(async () => {
+      const range = document.createRange();
+      range.setStartAfter(box().querySelector("[data-desk-token]")!);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", keyCode: 229, bubbles: true, cancelable: true }));
+    });
+    expect(box().querySelectorAll("[data-desk-token]")).toHaveLength(1);
+  });
+
   it("opens the checkout a project chip names", async () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");
