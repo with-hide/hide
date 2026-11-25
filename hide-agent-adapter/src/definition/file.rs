@@ -123,13 +123,12 @@ pub struct PlanKeys {
 /// where the agent offers that, or refuse it (the operator says what to do
 /// instead in a reply after it). A permission is answered from another
 /// screen only when it names the command it waits on and the agent's screen
-/// shows that command as the keys are typed, unless `by_hook`: the agent
-/// records a call only once it is allowed (Codex), so its session names no
-/// call while the operator is asked. Its permission request hook names the
+/// shows that command as the keys are typed (`command`). With `by_hook` the
+/// agent records a call only once it is allowed (Codex), so its session names
+/// no call while the operator is asked: its permission request hook names the
 /// command instead (`hide_agent_hooks::report::HookAsked`), which the card
-/// shows; the hook is what ties the card to the dialog, so the keys are
-/// typed without a check of the screen's command, and a permission whose
-/// hook named none is answered as it stands.
+/// shows and the screen must show too, as for any other command. A permission
+/// whose hook named none is answered as it stands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionKeys {
@@ -143,7 +142,7 @@ pub struct PermissionKeys {
     pub by_hook: bool,
     /// Where the agent's approval dialog draws the command, which a
     /// permission that names one is checked against; a table with a `row`
-    /// that is not `by_hook` needs it.
+    /// needs it.
     #[serde(default)]
     pub command: Option<CommandSlot>,
 }
@@ -159,7 +158,14 @@ pub struct PermissionKeys {
 #[serde(deny_unknown_fields)]
 pub struct CommandSlot {
     pub title: String,
-    pub separator: String,
+    /// The line that opens and closes a command drawn between two of them
+    /// (Claude Code's `╌` rules); exactly one of this and `prompt`.
+    #[serde(default)]
+    pub separator: Option<String>,
+    /// What a command's own line begins with, the line after it blank
+    /// (Codex's `$ `); exactly one of this and `separator`.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 /// The key names an `[answer]` table may name, as the core's own engine
@@ -228,12 +234,20 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     }
     if let Some(permission) = &answer.permission {
         match &permission.command {
-            Some(slot) if !text(&slot.title) || !text(&slot.separator) => {
+            Some(slot)
+                if !text(&slot.title)
+                    || slot.separator.is_some() == slot.prompt.is_some()
+                    || !slot
+                        .separator
+                        .iter()
+                        .chain(&slot.prompt)
+                        .all(|line| text(line)) =>
+            {
                 return Err(format!(
-                    "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
+                    "{name}: answer.permission.command names its title and one of separator or prompt in 1 to {MAX_ROW_BYTES} bytes of text"
                 ));
             }
-            None if permission.row.is_some() && !permission.by_hook => {
+            None if permission.row.is_some() => {
                 return Err(format!(
                     "{name}: answer.permission.command says where the dialog draws the command, which a permission with a row checks before its keys"
                 ));
@@ -1224,6 +1238,8 @@ mod tests {
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \", separator = \"╌\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Run\", separator = \"╌\", prompt = \"$ \" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", by_hook = true }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\" } }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\", separator = \" \" } }\n",
             "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",

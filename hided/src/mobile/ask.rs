@@ -60,8 +60,7 @@ pub fn turn_of(agent: &PhoneAgent) -> Option<String> {
 pub struct Shown {
     pub kind: Ask,
     pub turn: String,
-    /// The command the card shows, which the agent's screen must show too
-    /// unless its hook named it (`operator_input::permission_by_hook`).
+    /// The command the card shows, which the agent's screen must show too.
     pub command: Option<String>,
     pub answerable: bool,
     /// The ask frame's body.
@@ -76,8 +75,10 @@ pub struct Shown {
 pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
     let turn = turn_of(agent)?;
     let by_hook = operator_input::permission_by_hook(&agent.agent_kind);
-    // The command its hook gave was cut before it arrived.
+    // The command its hook gave was cut before it arrived, or names a patch
+    // whose lines the dialog draws, which no screen is checked against.
     let mut hook_cut = false;
+    let mut hook_patch = false;
     let (kind, call, command) = match kind_of(agent)? {
         // The agent's session names no call while it asks (Codex): the
         // permission request's own command is the one, and what its session
@@ -88,6 +89,7 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
                 .as_ref()
                 .filter(|asked| !asked.command.trim().is_empty());
             hook_cut = asked.is_some_and(|asked| asked.cut);
+            hook_patch = asked.is_some_and(|asked| asked.patch);
             (
                 Ask::Permission,
                 None,
@@ -148,7 +150,7 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
             if let Some(command) = &command {
                 let (shown, cut) = super::calls::cut(command);
                 let cut = cut || hook_cut;
-                whole_line = !cut && !shown.contains('\n');
+                whole_line = !cut && !shown.contains('\n') && !hook_patch;
                 frame["command"] = json!(shown);
                 frame["command_truncated"] = json!(cut);
             }
@@ -211,13 +213,9 @@ pub fn keys(
         choice,
         labels.as_deref().unwrap_or_default(),
     );
-    // A command its hook gave is tied to the dialog by that request, and its
-    // screen draws it in no place a table names.
     let screen = match &shown.command {
-        Some(command) if !operator_input::permission_by_hook(&agent.agent_kind) => {
-            screen.showing(command)
-        }
-        _ => screen,
+        Some(command) => screen.showing(command),
+        None => screen,
     };
     Ok((keys, screen))
 }
@@ -264,16 +262,22 @@ mod tests {
 
     /// An agent whose session records a call only once it is allowed (Codex)
     /// shows the command its permission request gave, never what its session
-    /// has open, and types the keys on that request's word alone; a command
-    /// the card does not show whole on one line, or one that arrived cut, is
-    /// answered in the terminal, and an agent whose table does not say so
-    /// takes no command from a hook.
+    /// has open, and types the keys only on a screen whose dialog draws that
+    /// same command; a command the card does not show whole on one line, one
+    /// that arrived cut and a patch are answered in the terminal, and an agent
+    /// whose table does not say so takes no command from a hook.
     #[test]
     fn a_hook_named_approval_shows_the_command_its_request_gave() {
         let asking = |kind: &str, asked: Value| {
             listed(
                 json!({"agent_kind": kind, "status_code": "approval", "demand": "approval",
                 "asked": asked}),
+            )
+        };
+        let dialog = |command: &str| {
+            format!(
+                "Would you like to run the following command?\n\nEnvironment: local\n\n\
+                 Reason: a check\n\n$ {command}\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No (esc)\n"
             )
         };
         let running = open("call_9", Some("sleep 60"), false);
@@ -285,18 +289,31 @@ mod tests {
                 "command": "cargo test --workspace", "command_truncated": false, "answerable": true,
                 "choices": [{"id": "allow"}, {"id": "allow_always"}, {"id": "deny"}]})
         );
-        // No screen check of the command: Codex's dialog draws it in no place
-        // its table names, and only the highlighted row is waited for.
+        // The keys wait for the dialog that draws that same command: another
+        // dialog, a dialog of another command and a row with no dialog do not.
         let (typed, screen) =
             keys(agent(&codex), Some(&shown), "100", "permission", "allow").unwrap();
         assert_eq!(typed, ["enter"]);
-        assert!(screen.shows("  › 1. Yes, proceed (y)", None));
+        assert!(screen.shows(&dialog("cargo test --workspace"), None));
+        assert!(!screen.shows(&dialog("cargo test"), None));
+        assert!(!screen.shows(&dialog("cargo test --workspace --all"), None));
+        assert!(!screen.shows("› 1. Yes, proceed (y)\n", None));
+        assert!(!screen.shows(
+            &dialog("cargo test --workspace").replace("$ cargo", "# cargo"),
+            None
+        ));
+        // A command the screen wraps puts text between it and the rows.
+        assert!(!screen.shows(
+            &dialog("cargo test --workspace").replace("workspace\n\n", "workspace\n   --all\n\n"),
+            None
+        ));
 
         let long = format!("echo {}", "x".repeat(crate::mobile::calls::COMMAND_CHARS));
         for unseen in [
             json!({"command": "cargo test\nrm -r build"}),
             json!({"command": long}),
             json!({"command": "cargo test", "cut": true}),
+            json!({"command": "apply_patch: src/a.rs", "patch": true}),
         ] {
             let cut = asking("codex", unseen.clone());
             let shown = of(agent(&cut), None).unwrap();

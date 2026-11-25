@@ -103,6 +103,10 @@ pub struct HookAsked {
     pub command: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cut: bool,
+    /// `command` names the files of a patch, not a line the agent's dialog
+    /// draws, so no screen can be checked against it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub patch: bool,
 }
 
 /// What an edit tool's input holds in place of a command: a patch, which
@@ -130,7 +134,12 @@ impl HookAsked {
                 .map(str::trim)
                 .collect();
             if !files.is_empty() {
-                return Self::of_line(&format!("apply_patch: {}", files.join(", ")));
+                return Self::of_line(&format!("apply_patch: {}", files.join(", "))).map(|named| {
+                    Self {
+                        patch: true,
+                        ..named
+                    }
+                });
             }
         }
         Self::of_line(command)
@@ -144,6 +153,7 @@ impl HookAsked {
         Some(Self {
             command: command[..end].to_owned(),
             cut: end < command.len(),
+            patch: false,
         })
     }
 }
@@ -592,16 +602,16 @@ mod tests {
             (ASKED_COMMAND_LIMIT - 1, true)
         );
         let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Delete File: old.rs\n*** End Patch\n";
+        let named = HookAsked::of(patch).unwrap();
         assert_eq!(
-            HookAsked::of(patch).unwrap().command,
-            "apply_patch: src/a.rs, old.rs"
+            (named.command.as_str(), named.patch),
+            ("apply_patch: src/a.rs, old.rs", true)
         );
         // An envelope that names no file is kept as it is.
+        let bare = HookAsked::of("*** Begin Patch\n*** End Patch").unwrap();
         assert_eq!(
-            HookAsked::of("*** Begin Patch\n*** End Patch")
-                .unwrap()
-                .command,
-            "*** Begin Patch\n*** End Patch"
+            (bare.command.as_str(), bare.patch),
+            ("*** Begin Patch\n*** End Patch", false)
         );
     }
 

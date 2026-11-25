@@ -53,7 +53,7 @@ fn last(machine: &Machine) -> (Option<String>, Option<Value>) {
 /// A shell request reports the command it asks to run beside the turn
 /// waiting; the call's end, the only word Codex sends of the answer, reports
 /// the turn going on with none. A command past the report's limit arrives
-/// cut, a patch is named by the files it changes, and a request that names
+/// cut, a patch is named by the files it changes (and marked as one), and a request that names
 /// no command reports none.
 #[test]
 fn a_request_reports_the_command_it_asks_to_run_until_the_turn_goes_on() {
@@ -97,7 +97,7 @@ fn a_request_reports_the_command_it_asks_to_run_until_the_turn_goes_on() {
         last(&machine),
         (
             Some("waiting".to_owned()),
-            Some(json!({"command": "apply_patch: src/a.rs, src/b.rs"}))
+            Some(json!({"command": "apply_patch: src/a.rs, src/b.rs", "patch": true}))
         )
     );
 

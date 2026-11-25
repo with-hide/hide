@@ -645,3 +645,43 @@ fn a_stop_after_a_refusal_the_session_file_records_leaves_no_approval_open() {
     assert_eq!(pane.waits(s).last(), Some(&0));
     assert_eq!(pane.turns(s).last(), Some(&Some("done".to_owned())));
 }
+
+/// Every agent's permission request now reports what it asks to run, and
+/// Claude Code's report says what it said before beside it: the turn waiting
+/// and the one call waited on, ended by that call's own end. Its card takes
+/// the command from the session's open call, so the extra field is only
+/// carried (`hide-core/src/agent_hooks/facts.rs` lays it for no Claude Code
+/// row).
+#[test]
+fn claude_codes_permission_request_still_reports_its_turn_and_waiting_call() {
+    let machine = Machine::new("registered");
+    let pane = Pane { machine: &machine };
+    let s = PANE_SESSION;
+    pane.session_start(s, "startup");
+    pane.event(
+        "UserPromptSubmit",
+        json!({"session_id": s, "hook_event_name": "UserPromptSubmit", "prompt": "go"}),
+    );
+    let bash = |event: &str| {
+        pane.event(
+            event,
+            json!({"session_id": s, "hook_event_name": event, "tool_name": "Bash",
+                   "tool_input": {"command": "rm -rf build"}, "tool_use_id": "toolu_1",
+                   "tool_response": {"stdout": ""}}),
+        );
+    };
+    bash("PreToolUse");
+    pane.event(
+        "PermissionRequest",
+        json!({"session_id": s, "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+               "tool_input": {"command": "rm -rf build"}}),
+    );
+    let asked = pane.reports(s).pop().expect("a report");
+    assert_eq!(asked["waiting"].as_array().map(Vec::len), Some(1));
+    assert_eq!(asked["asked"], json!({"command": "rm -rf build"}));
+    bash("PostToolUse");
+    let ended = pane.reports(s).pop().expect("a report");
+    assert_eq!(ended["waiting"].as_array().map(Vec::len), Some(0));
+    assert_eq!(ended.get("asked"), None);
+    assert_eq!(pane.turns(s).last(), Some(&Some("working".to_owned())));
+}
