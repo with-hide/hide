@@ -7664,6 +7664,103 @@ fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row(
     assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
 }
 
+/// A Conductor's open decision is one ask however often its row leaves
+/// Needs You and comes back: woken by a worker's letter and resting again
+/// with the decision still open, it stands for the same ask
+/// (`RowState::ask_keys`), so its notice is said once; the Conductor's next
+/// decision is a new one, said once too (the operator's report, 2026-11-25).
+#[test]
+fn a_conductors_decision_is_announced_once_however_often_its_row_comes_back_to_it() {
+    use crate::agent_state::{phone, push};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let mut transitions = push::Transitions::default();
+    // The engine sends the Conductor's row at `seq` in `status`.
+    let engine = |runtime: &mut Runtime, status: &str, seq: u64| {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            {"pane_id": "sender", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-sender",
+             "revision": 1, "focused": false, "agent_status": status, "agent": "codex",
+             "name": "sender", "cwd": PROJECT, "state_change_seq": seq,
+             "changed_at_unix_ms": 1_000 + seq},
+        ]}))
+        .unwrap();
+        let mut rows = crate::sidebar::project_agents(payload).agents;
+        rows[0].session_id = Some("sender-session".into());
+        runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
+        runtime.snapshot.navigator.agents = rows;
+        runtime.refresh_pane_read_state();
+    };
+    // The row as it is now, and how many asks the phone's notices say of it.
+    let asks_said = |runtime: &mut Runtime, transitions: &mut push::Transitions| {
+        let row = conductor_shown(runtime);
+        let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+        let (notices, _) = transitions.observe(&phone::project(&rest, crate::node::TEST_NODE));
+        let asks = notices
+            .iter()
+            .filter(|notice| notice.state == push::NoticeState::NeedsYou)
+            .count();
+        (row, asks)
+    };
+    engine(&mut runtime, "idle", 1);
+    asks_said(&mut runtime, &mut transitions);
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship the candidate?"}),
+    )
+    .unwrap();
+    let (asking, said) = asks_said(&mut runtime, &mut transitions);
+    assert_eq!((asking.group.as_str(), said), ("needs_you", 1));
+    let keys = asking.state.ask_keys.clone();
+    assert!(!keys.is_empty(), "a Needs You row names its asks");
+
+    for seq in [2, 4, 6] {
+        engine(&mut runtime, "working", seq);
+        let (working, said) = asks_said(&mut runtime, &mut transitions);
+        assert_eq!(
+            (
+                working.group.as_str(),
+                working.state.ask_keys.is_empty(),
+                said
+            ),
+            ("working", true, 0)
+        );
+        engine(&mut runtime, "idle", seq + 1);
+        let (back, said) = asks_said(&mut runtime, &mut transitions);
+        assert_eq!(
+            (back.group.as_str(), &back.state.ask_keys, said),
+            ("needs_you", &keys, 0),
+            "the same decision is not said again (seq {seq})"
+        );
+    }
+
+    let open = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    runtime
+        .answer_mission("mission-1", open, None, Some("yes".into()), false)
+        .unwrap();
+    asks_said(&mut runtime, &mut transitions);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge it too?"}),
+    )
+    .unwrap();
+    let (next, said) = asks_said(&mut runtime, &mut transitions);
+    assert_eq!(
+        (next.group.as_str(), said),
+        ("needs_you", 1),
+        "a new decision is said"
+    );
+    assert_ne!(next.state.ask_keys, keys);
+}
+
 /// One landing case: what the record holds, and what the core answers.
 struct LandingCase {
     name: &'static str,

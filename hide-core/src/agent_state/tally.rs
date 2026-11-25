@@ -529,6 +529,12 @@ pub mod phone {
         /// notice transport.
         #[serde(skip)]
         pub human_turns: std::collections::BTreeMap<String, AskSubject>,
+        /// The asks the row stands for while it is in Needs You
+        /// (`RowState::ask_keys`), so a notice is said once per ask however
+        /// often the row leaves Needs You and comes back to it. Used only by
+        /// notice transport.
+        #[serde(skip)]
+        pub ask_keys: Vec<String>,
         pub status_code: String,
         pub demand: String,
         /// Present while the agent's process is ended and its pane holds a
@@ -1252,6 +1258,14 @@ pub mod phone {
                         AskSubject::HumanTurn { id, .. } => Some((id.clone(), subject.clone())),
                         _ => None,
                     })
+                    .collect(),
+                ask_keys: agent
+                    .pointer("/state/ask_keys")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
                     .collect(),
                 status_code: str_of(agent, "status_code").to_owned(),
                 demand: agent

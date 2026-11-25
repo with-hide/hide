@@ -1118,6 +1118,64 @@ fn record_covers_turn(
             }))
 }
 
+/// What the row shows now that `record` does not cover, by the condition
+/// of `record_covers` it fails, for the diagnostic of a read row turned
+/// unread (`pane.read_lost`). Names only ids and kinds: which questions laid
+/// on the row the record never read, which part of the agent's own turn
+/// moved, which descendant signals are new, and whether the checks' end or
+/// a person's turn is.
+fn uncovered(
+    record: &PaneReadRecord,
+    current: &PaneReadRecord,
+    agent: &SidebarAgentSnapshot,
+) -> serde_json::Value {
+    let mut why = serde_json::Map::new();
+    if asks_read(record, agent) == Some(false) {
+        let read = record.read_asks.clone().unwrap_or_default();
+        why.insert(
+            "laid_asks_unread".into(),
+            serde_json::json!(agent.laid_asks.difference(&read).collect::<Vec<_>>()),
+        );
+    }
+    if !record_covers_turn(record, current, agent) && !turn_covered(record, current) {
+        let mut turn = Vec::new();
+        if record.state_change_seq != current.state_change_seq {
+            turn.push("state_change_seq");
+        }
+        if record.session_id.is_some()
+            && current.session_id.is_some()
+            && record.session_id != current.session_id
+        {
+            turn.push("session");
+        }
+        if current.demand != AgentDemand::None.name() && record.demand != current.demand {
+            turn.push("demand");
+        }
+        if record.activity != current.activity {
+            turn.push("activity");
+        }
+        if completion_is_news(record.completed, current.completed) {
+            turn.push("completion");
+        }
+        why.insert("turn".into(), serde_json::json!(turn));
+    }
+    let signals = current
+        .descendant_signals
+        .difference(&record.descendant_signals)
+        .map(|signal| format!("{}:{}", signal.pane_id, signal.kind))
+        .collect::<Vec<_>>();
+    if !signals.is_empty() {
+        why.insert("descendant_signals".into(), serde_json::json!(signals));
+    }
+    if current.checks_ended.is_some() && current.checks_ended != record.checks_ended {
+        why.insert("checks_ended".into(), serde_json::json!(true));
+    }
+    if current.human_turn.is_some() && current.human_turn != record.human_turn {
+        why.insert("human_turn".into(), serde_json::json!(current.human_turn));
+    }
+    serde_json::Value::Object(why)
+}
+
 /// Whether the record read the questions laid on the row now: Some(true)
 /// when one is laid and the record read them all, Some(false) when one is
 /// laid that it did not read, and None when none is laid or the record was
@@ -1366,6 +1424,17 @@ pub fn apply_read_state(
             && record.unread != agent.unread
             && connection.judges_by_sequence(record, agent)
         {
+            if agent.unread {
+                // A row read before turns unread: say what it shows now
+                // that the read did not, so a row that turns unread again
+                // with nothing new is told from one with news.
+                crate::diagnostic!(serde_json::json!({
+                    "component": "session", "kind": "pane.read_lost",
+                    "pane_id": agent.pane_id,
+                    "state_change_seq": agent.state_change_seq,
+                    "uncovered": uncovered(record, &read_fingerprint(agent), agent),
+                }));
+            }
             record.unread = agent.unread;
             changes.push(ReadRecordChange {
                 pane_id: agent.pane_id.clone(),
