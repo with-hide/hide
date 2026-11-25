@@ -582,6 +582,7 @@ mod tests {
                 name: None,
                 branch: None,
                 mark: None,
+                agent: None,
                 id: PANE.into(),
                 pane: "w1:p1".into(),
                 since_unix_ms: 1,

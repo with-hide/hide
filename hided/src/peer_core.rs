@@ -245,6 +245,7 @@ fn names_out(names: &[hide_core::work_names::WorkName]) -> CoreMessage {
                 mark: serde_json::to_value(told.mark)
                     .ok()
                     .and_then(|mark| mark.as_str().map(str::to_owned)),
+                agent: told.agent.clone(),
             })
             .collect(),
     }
@@ -1079,6 +1080,7 @@ impl PeerCore {
                                     name: Some(named.name),
                                     branch: None,
                                     mark: None,
+                                    agent: None,
                                 };
                                 (named.pane, told)
                             })
@@ -1701,6 +1703,7 @@ mod tests {
                     name: Some((*name).to_owned()),
                     branch: None,
                     mark: hide_core::agent_state::RowMark::Quiet,
+                    agent: Some("claude".to_owned()),
                 })
                 .collect()
         };
@@ -1738,6 +1741,7 @@ mod tests {
                     name: Some("로그인 고치기".to_owned()),
                     branch: None,
                     mark: Some("quiet".to_owned()),
+                    agent: Some("claude".to_owned()),
                 }
             )])
         );
@@ -1816,6 +1820,7 @@ mod tests {
                 name: None,
                 branch: None,
                 mark: listed(mark),
+                agent: None,
             })
             .collect();
         let CoreMessage::WorkNames { work, .. } = names_out(&told) else {
@@ -1863,6 +1868,7 @@ mod tests {
                     name: Some("로그인 고치기".to_owned()),
                     branch: None,
                     mark: None,
+                    agent: None,
                 }
             )])
         );
@@ -1879,6 +1885,7 @@ mod tests {
             name: None,
             branch: Some("main".to_owned()),
             mark: hide_core::agent_state::RowMark::Going,
+            agent: None,
         };
         let out = names_out(std::slice::from_ref(&terminal));
         let CoreMessage::WorkNames { names, work } = &out else {
@@ -1892,6 +1899,7 @@ mod tests {
                 name: None,
                 branch: Some("main".to_owned()),
                 mark: Some("going".to_owned()),
+                agent: None,
             }]
         );
         let mut told = std::collections::BTreeMap::new();

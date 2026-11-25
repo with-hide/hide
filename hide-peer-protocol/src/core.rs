@@ -183,6 +183,11 @@ pub struct Work {
     /// build knows it and leaves out when not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark: Option<String>,
+    /// The agent that runs in it (`claude`, `codex`, ...), whose logo its
+    /// row draws; absent for a plain terminal. A build before it leaves it
+    /// out, and the receiving machine draws the row without a logo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// The longest branch a [`Work`] carries: git refuses a longer ref name on
@@ -190,6 +195,18 @@ pub struct Work {
 pub const MAX_WORK_BRANCH_BYTES: usize = 255;
 /// The longest mark a [`Work`] carries; every mark is one short word.
 pub const MAX_WORK_MARK_BYTES: usize = 16;
+/// The longest agent kind a [`Work`] carries: an agent definition's id.
+pub const MAX_WORK_AGENT_BYTES: usize = 32;
+
+/// Whether `agent` is an agent kind a [`Work`] carries: one short word of
+/// lower-case letters, digits, `-` and `_`, as an agent definition's id is.
+pub fn work_agent_is_carried(agent: &str) -> bool {
+    !agent.is_empty()
+        && agent.len() <= MAX_WORK_AGENT_BYTES
+        && agent.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+}
 
 /// The most panes one [`CoreMessage::WorkNames`] names: the most a host
 /// keeps of one guest (`panes.json`).
@@ -216,8 +233,9 @@ pub fn valid_work_names(names: &[WorkName]) -> bool {
 
 /// Whether `work` is a list a receiving machine keeps: bounded as
 /// [`valid_work_names`] bounds the names, no pane twice, every name one line
-/// that is not blank, every branch one line, and every mark one lower-case
-/// word.
+/// that is not blank, every branch one line, every mark one lower-case
+/// word, and every agent one an agent definition could be named
+/// ([`work_agent_is_carried`]).
 pub fn valid_work(work: &[Work]) -> bool {
     let mut panes = std::collections::HashSet::new();
     work.len() <= MAX_WORK_NAMES
@@ -242,6 +260,7 @@ pub fn valid_work(work: &[Work]) -> bool {
                             .bytes()
                             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
                 })
+                && told.agent.as_deref().is_none_or(work_agent_is_carried)
         })
 }
 
@@ -437,6 +456,7 @@ mod tests {
                 name: name.map(str::to_owned),
                 branch: branch.map(str::to_owned),
                 mark: mark.map(str::to_owned),
+                agent: None,
             };
         let told = CoreMessage::WorkNames {
             names: vec![WorkName {
@@ -526,6 +546,70 @@ mod tests {
                 .collect(),
         ] {
             assert!(!valid_work(&wrong), "{wrong:?}");
+        }
+    }
+
+    /// B10: a pane's agent crosses with its work, so the receiving machine
+    /// draws its logo; a build before it sends none and reads a later
+    /// message without it, and an agent no definition could be named by
+    /// keeps the list out.
+    #[test]
+    fn work_crosses_with_its_agent_and_reads_across_builds() {
+        let work = |pane: &str, agent: Option<&str>| Work {
+            pane: pane.to_owned(),
+            name: None,
+            branch: Some("main".to_owned()),
+            mark: Some("going".to_owned()),
+            agent: agent.map(str::to_owned),
+        };
+        let told = CoreMessage::WorkNames {
+            names: Vec::new(),
+            work: vec![work("w1:p1", Some("claude")), work("w1:p2", None)],
+        };
+        let body = serde_json::to_vec(&told).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["work"],
+            serde_json::json!([
+                {"pane": "w1:p1", "branch": "main", "mark": "going", "agent": "claude"},
+                {"pane": "w1:p2", "branch": "main", "mark": "going"},
+            ])
+        );
+        assert_eq!(CoreMessage::parse(&body).unwrap(), Some(told));
+
+        // An earlier build's work has no agent: read, with none.
+        let earlier = br#"{"t":"work_names","names":[],"work":[{"pane":"w1:p1","mark":"quiet"}]}"#;
+        let Some(CoreMessage::WorkNames { work: read, .. }) = CoreMessage::parse(earlier).unwrap()
+        else {
+            panic!("work names were not read");
+        };
+        assert_eq!(read[0].agent, None);
+        // An earlier reader, whose work had no agent, reads a later message.
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct EarlierWork {
+            pane: String,
+            mark: Option<String>,
+        }
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(tag = "t", rename_all = "snake_case")]
+        enum Earlier {
+            WorkNames { work: Vec<EarlierWork> },
+        }
+        let Earlier::WorkNames { work: earlier_read } =
+            serde_json::from_slice::<Earlier>(&body).unwrap();
+        assert_eq!(earlier_read[0].pane, "w1:p1");
+
+        assert!(valid_work(&[
+            work("w1:p1", Some("cursor-agent")),
+            work("w1:p2", Some("qwen3"))
+        ]));
+        for agent in [
+            "",
+            "Claude",
+            "claude code",
+            "a\nb",
+            &"a".repeat(MAX_WORK_AGENT_BYTES + 1),
+        ] {
+            assert!(!valid_work(&[work("w1:p1", Some(agent))]), "{agent:?}");
         }
     }
 

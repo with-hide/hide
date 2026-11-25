@@ -64,6 +64,11 @@ pub struct GuestPane {
     /// and the row is drawn without a dot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark: Option<String>,
+    /// The agent the guest's core says runs in the pane (`work_names`,
+    /// B10): the logo its row draws while rows draw logos. A plain
+    /// terminal, or a build of the guest that tells none, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// Whether `id` can name a guest in a pane's address: not empty, bounded,
@@ -105,6 +110,21 @@ pub fn mark_is_carried(mark: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
+/// The longest agent kind a list carries: an agent definition's id, as
+/// the peer link bounds it (`hide_peer_protocol::core::MAX_WORK_AGENT_BYTES`).
+pub const MAX_AGENT_BYTES: usize = 32;
+
+/// Whether `agent` is an agent kind a list carries: one short word of
+/// lower-case letters, digits, `-` and `_`, as an agent definition's id
+/// is. Which kinds a screen has a logo for is the screen's to know.
+pub fn agent_is_carried(agent: &str) -> bool {
+    !agent.is_empty()
+        && agent.len() <= MAX_AGENT_BYTES
+        && agent.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+}
+
 /// Whether `pane` is a pane id a list carries.
 pub fn pane_is_listed(pane: &str) -> bool {
     !pane.is_empty() && pane.len() <= MAX_PANE_BYTES
@@ -136,6 +156,7 @@ pub fn valid(guests: &[GuestPanes]) -> bool {
                         && pane.name.as_deref().is_none_or(name_is_shown)
                         && pane.branch.as_deref().is_none_or(branch_is_shown)
                         && pane.mark.as_deref().is_none_or(mark_is_carried)
+                        && pane.agent.as_deref().is_none_or(agent_is_carried)
                         && panes.insert(pane.pane.as_str())
                         && pane.id
                             == hide_node_link::address::guest_pane_id(&guest.device_id, &pane.pane)
@@ -220,6 +241,7 @@ mod tests {
                     name: None,
                     branch: None,
                     mark: None,
+                    agent: None,
                 })
                 .collect(),
         }
@@ -268,6 +290,15 @@ mod tests {
         assert!(!told("a\nb", "going"));
         assert!(!told("main", "Going"));
         assert!(!told("main", &"a".repeat(MAX_MARK_BYTES + 1)));
+        // A told agent is one word an agent definition could be named by.
+        let agent = |agent: &str| {
+            let mut told = guest("macbook", &["w1:p1"]);
+            told.panes[0].agent = Some(agent.to_owned());
+            valid(&[told])
+        };
+        assert!(agent("claude") && agent("cursor-agent") && agent("qwen3"));
+        assert!(!agent("") && !agent("Claude") && !agent("claude code"));
+        assert!(!agent(&"a".repeat(MAX_AGENT_BYTES + 1)));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

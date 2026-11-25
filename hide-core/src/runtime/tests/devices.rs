@@ -2612,10 +2612,10 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
 /// B10: what this core shows its work on a machine it opens by, read for
 /// that machine by its connection key, each pane by the id the machine's
 /// node lists it under: the agent's label, else the name its tab was given,
-/// the branch of its checkout and the mark its row is drawn with. A tab
-/// known only by its number has no name and is still told, by its branch
-/// and a quiet mark; a machine whose session this core does not hold now
-/// tells nothing.
+/// the branch of its checkout, the mark its row is drawn with and the
+/// agent that runs in it. A tab known only by its number has no name and
+/// is still told, by its branch and a quiet mark, with no agent; a machine
+/// whose session this core does not hold now tells nothing.
 #[test]
 fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     let mut runtime = runtime();
@@ -2693,7 +2693,15 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         .remove(&key)
         .expect("the machine is told")
         .into_iter()
-        .map(|named| (named.pane, named.name, named.branch, named.mark))
+        .map(|named| {
+            (
+                named.pane,
+                named.name,
+                named.branch,
+                named.mark,
+                named.agent,
+            )
+        })
         .collect();
     let branch = || Some("m75-relay".to_owned());
     assert_eq!(
@@ -2703,19 +2711,22 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
                 "w1:p1".to_owned(),
                 Some("로그인 고치기".to_owned()),
                 branch(),
-                crate::agent_state::RowMark::Going
+                crate::agent_state::RowMark::Going,
+                Some("codex".to_owned())
             ),
             (
                 "w1:p2".to_owned(),
                 Some("배포 확인".to_owned()),
                 branch(),
-                crate::agent_state::RowMark::Quiet
+                crate::agent_state::RowMark::Quiet,
+                None
             ),
             (
                 "w1:p3".to_owned(),
                 None,
                 branch(),
-                crate::agent_state::RowMark::Quiet
+                crate::agent_state::RowMark::Quiet,
+                None
             ),
         ]
     );

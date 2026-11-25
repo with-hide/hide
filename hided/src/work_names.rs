@@ -1,5 +1,5 @@
 //! What this machine's core shows its work on other machines by (names,
-//! branches and marks), read from the core as it changes, for the `core`
+//! branches, marks and agents), read from the core as it changes, for the `core`
 //! stream to tell each machine its own (PRD device-connect-iroh B10,
 //! `hide_core::work_names`).
 //!
@@ -29,6 +29,8 @@ const _: () = assert!(
         && hide_core::work_names::MAX_BRANCH_BYTES
             == hide_peer::protocol::core::MAX_WORK_BRANCH_BYTES
         && hide_core::guest_panes::MAX_MARK_BYTES == hide_peer::protocol::core::MAX_WORK_MARK_BYTES
+        && hide_core::guest_panes::MAX_AGENT_BYTES
+            == hide_peer::protocol::core::MAX_WORK_AGENT_BYTES
 );
 
 /// Each machine's names by its connection key, as the core last read.
