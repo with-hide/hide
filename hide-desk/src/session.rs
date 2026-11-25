@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::adapter::{AdapterId, AskMode};
+use crate::adapter::{AdapterId, AskMode, FailedTurnMark};
 use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
@@ -297,6 +297,9 @@ pub enum Update {
     Mode(String),
     /// The model or effort lists or values moved.
     Choices(Choices),
+    /// The session's own facts moved (`session_info_update`): its title, or
+    /// what an adapter adds in `_meta`, such as a failed turn's mark.
+    Info(Value),
     Other,
 }
 
@@ -329,6 +332,7 @@ pub fn read_update(params: &Value) -> Update {
             .and_then(Value::as_str)
             .map_or(Update::Other, |mode| Update::Mode(mode.to_owned())),
         Some("config_option_update") => Update::Choices(choices(update)),
+        Some("session_info_update") => Update::Info(update.clone()),
         _ => Update::Other,
     }
 }
@@ -368,7 +372,7 @@ impl ReplyBlocks {
                 self.open = None;
                 None
             }
-            Update::Mode(_) | Update::Choices(_) | Update::Other => None,
+            Update::Mode(_) | Update::Choices(_) | Update::Info(_) | Update::Other => None,
         }
     }
 }
@@ -376,6 +380,20 @@ impl ReplyBlocks {
 /// Tool calls a turn keeps for the steps its reply is folded into; past
 /// this the rest are not counted.
 pub const MAX_TURN_CALLS: usize = 256;
+
+/// The words a failed turn keeps after its mark; the failure line shows
+/// only their first line, so the rest is not kept.
+pub const MAX_FAILURE_BYTES: usize = 4 * 1024;
+
+/// How a turn ended, as its updates told it.
+#[derive(Debug, Default, PartialEq)]
+pub struct Answered {
+    /// The tool calls it made.
+    pub calls: Vec<String>,
+    /// The turn met its adapter's failed-turn mark: the text that came after
+    /// it, which is the agent's error and not a reply.
+    pub failed: Option<String>,
+}
 
 /// The turn an owner follows on a session: which one runs, what its reply
 /// gains from each update, and the tool calls it made. A turn owns only the
@@ -390,12 +408,17 @@ pub struct TurnReader {
     /// it arrives: it may land inside the first turn and is not its reply.
     prelude: Option<String>,
     reply: ReplyBlocks,
+    /// The adapter's mark of a failed turn, when it has one.
+    mark: Option<FailedTurnMark>,
+    /// The running turn met the mark: the text written since.
+    failed: Option<String>,
 }
 
 impl TurnReader {
-    pub fn new(prelude: Option<String>) -> Self {
+    pub fn new(prelude: Option<String>, mark: Option<FailedTurnMark>) -> Self {
         Self {
             prelude,
+            mark,
             ..Self::default()
         }
     }
@@ -412,11 +435,13 @@ impl TurnReader {
         self.from = from;
         self.calls.clear();
         self.reply = ReplyBlocks::default();
+        self.failed = None;
     }
 
     /// What `update`, numbered `number`, adds to the running turn: its tag
     /// and the reply text it gains. A tool call it made is kept for
-    /// [`TurnReader::end`].
+    /// [`TurnReader::end`], and so is the adapter's failed-turn mark, after
+    /// which the turn's text is the failure's words and not its reply.
     pub fn read(&mut self, number: u64, update: &Update) -> Option<(u64, String)> {
         if let Update::Text { text, .. } = update
             && self.prelude.as_deref() == Some(text.as_str())
@@ -425,6 +450,18 @@ impl TurnReader {
             return None;
         }
         if number < self.from {
+            return None;
+        }
+        if let Update::Info(info) = update {
+            if self.tag.is_some() && self.mark.is_some_and(|mark| mark.marks(info)) {
+                self.failed.get_or_insert_with(String::new);
+            }
+            return None;
+        }
+        if let (Some(words), Update::Text { text, .. }) = (&mut self.failed, update) {
+            if words.len() + text.len() <= MAX_FAILURE_BYTES {
+                words.push_str(text);
+            }
             return None;
         }
         let piece = self.reply.piece(update);
@@ -437,14 +474,17 @@ impl TurnReader {
         Some((self.tag?, piece?))
     }
 
-    /// The turn `tag` answered: the tool calls it made, when it was the
-    /// running one; it runs no more.
-    pub fn end(&mut self, tag: u64) -> Option<Vec<String>> {
+    /// The turn `tag` answered, when it was the running one; it runs no
+    /// more.
+    pub fn end(&mut self, tag: u64) -> Option<Answered> {
         if self.tag != Some(tag) {
             return None;
         }
         self.tag = None;
-        Some(std::mem::take(&mut self.calls))
+        Some(Answered {
+            calls: std::mem::take(&mut self.calls),
+            failed: self.failed.take(),
+        })
     }
 }
 
@@ -492,7 +532,7 @@ mod tests {
     }
 
     fn numbered(updates: &[(u64, Value)]) -> (TurnReader, Vec<String>) {
-        let mut turn = TurnReader::new(Some("pi v1 started".into()));
+        let mut turn = TurnReader::new(Some("pi v1 started".into()), None);
         turn.start(7, 3);
         let text = updates
             .iter()
@@ -522,9 +562,98 @@ mod tests {
             (5, tool("new")),
         ]);
         assert_eq!(text, ["응답: 델타넷째"]);
-        assert_eq!(turn.end(7), Some(vec!["new".to_owned()]));
+        assert_eq!(
+            turn.end(7),
+            Some(Answered {
+                calls: vec!["new".to_owned()],
+                failed: None,
+            })
+        );
         assert_eq!(turn.running(), None);
         assert_eq!(turn.end(7), None);
+    }
+
+    /// codex-acp 2.5.0 with a model that failed (letter-47671, frames
+    /// taken on the mini): Codex's thread status turns `systemError`, the
+    /// model's error follows as reply text with no message id, and the prompt
+    /// is answered `end_turn`. With Codex's mark the turn reads failed and its
+    /// error is no reply; without a mark the same frames are a reply, and a
+    /// turn that ends `idle` reads as it did.
+    #[test]
+    fn a_turn_its_adapter_marks_failed_keeps_its_error_out_of_the_reply() {
+        let status = |kind: &str| {
+            json!({"sessionUpdate": "session_info_update",
+                   "_meta": {"codex": {"threadStatus": {"type": kind}}}})
+        };
+        let active = json!({"sessionUpdate": "session_info_update",
+            "_meta": {"codex": {"threadStatus": {"type": "active", "activeFlags": []}}}});
+        let retry = json!({"sessionUpdate": "session_info_update", "_meta": {"codex": {"error": {
+            "message": "Reconnecting... 1/5",
+            "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": null}},
+            "additionalDetails": "We’re currently experiencing high demand, which may cause temporary errors.",
+            "misalignment": null, "turnId": "01a211bd-a9af-7833-beea-9779755ca9f0", "willRetry": true}}}});
+        let title =
+            json!({"sessionUpdate": "session_info_update", "title": "fail please @@fail429"});
+        let read = |mark, updates: &[Value]| {
+            let mut turn = TurnReader::new(None, mark);
+            turn.start(7, 0);
+            let text: String = updates
+                .iter()
+                .filter_map(|update| turn.read(1, &read_update(&json!({"update": update}))))
+                .map(|(_, text)| text)
+                .collect();
+            (text, turn.end(7).unwrap().failed)
+        };
+        let codex = AdapterId::CODEX.failed_turn_mark();
+        assert!(codex.is_some());
+        let high_demand =
+            "We’re currently experiencing high demand, which may cause temporary errors.\n\n";
+        let too_many = "exceeded retry limit, last status: 429 Too Many Requests\n\n";
+        for (updates, words) in [
+            (
+                vec![
+                    active.clone(),
+                    status("systemError"),
+                    said("\n\n"),
+                    title.clone(),
+                ],
+                "\n\n",
+            ),
+            (
+                vec![
+                    active.clone(),
+                    retry.clone(),
+                    retry,
+                    status("systemError"),
+                    said(high_demand),
+                    title.clone(),
+                ],
+                high_demand,
+            ),
+            (
+                vec![
+                    active.clone(),
+                    status("systemError"),
+                    said(too_many),
+                    title.clone(),
+                ],
+                too_many,
+            ),
+        ] {
+            assert_eq!(
+                read(codex, &updates),
+                (String::new(), Some(words.to_owned()))
+            );
+            assert_eq!(read(None, &updates), (words.to_owned(), None));
+        }
+        let answered = json!({"sessionUpdate": "agent_message_chunk",
+            "messageId": "msg_f218fd2cdca842c78bedf5e93f462fcd",
+            "content": {"type": "text", "text": "응답: fail please say hi"}});
+        assert_eq!(
+            read(codex, &[active, answered, status("idle"), title]),
+            ("응답: fail please say hi".to_owned(), None)
+        );
+        assert_eq!(AdapterId::CLAUDE.failed_turn_mark(), None);
     }
 
     #[test]
