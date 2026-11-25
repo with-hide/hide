@@ -5,16 +5,13 @@ import type { DeskJob, DeskMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
+import { keepSent, useComposerTray } from "../../deskComposer";
 import { useSessionThread } from "../../sessionThread";
 import { useShellStore } from "../../store";
-import { Input } from "../ui/input";
 import { threadInputHeld, threadScreen } from "../../threadView";
-import type { ComposerAttachment } from "./desk-composer";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
 import { ThreadView, type ThreadPartActions } from "./thread-view";
-
-type Attached = ComposerAttachment & { bytes: Uint8Array };
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
@@ -55,14 +52,14 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   const plans = useShellStore((s) => s.rest?.plans);
   const missions = useShellStore((s) => s.rest?.missions);
   const rows = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
-  const refusal = useShellStore((s) => s.threadInputRefusal);
+  const refusal = useShellStore((s) => s.composerRefusal);
   const screen = useMemo(() => threadScreen(thread, history, { plans, missions }, rows), [thread, history, plans, missions, rows]);
 
   const [text, setText] = useState("");
-  const [files, setFiles] = useState<Attached[]>([]);
-  const [sent, setSent] = useState<string | null>(null);
+  const tray = useComposerTray();
+  // The request a send is waiting on and the tiles it carried.
+  const [sent, setSent] = useState<{ request: string; tiles: string[] } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const picker = useRef<HTMLInputElement>(null);
   const words = (reason: string) => (INPUT_WORDS.has(reason) ? t(`desk.thread.input.${reason}` as MessageKey) : refusalText(reason, t));
 
   // The words stay in the box until the pane took them, so a refused send loses nothing.
@@ -71,34 +68,38 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   // answered there, as closed.
   const input = useShellStore((s) => s.sessionThread?.input ?? null);
   useEffect(() => {
-    if (!sent || input?.request_id !== sent || input.state === "sending") return;
+    if (!sent || input?.request_id !== sent.request || input.state === "sending") return;
     setSent(null);
     if (input.state === "sent") {
       setText("");
-      setFiles([]);
+      // Only the files this send carried: one dropped since stays for the next.
+      sent.tiles.forEach(tray.remove);
       setNotice(null);
     } else {
       setNotice(input.reason ? words(input.reason) : null);
     }
   }, [input, sent]);
   useEffect(() => {
-    if (!sent || refusal?.request_id !== sent) return;
+    if (!sent || refusal?.request_id !== sent.request) return;
     setSent(null);
     setNotice(words(refusal.reason));
   }, [refusal, sent]);
 
   const held = threadInputHeld(thread);
   const send = () => {
-    if (!thread?.pane_id || held !== null || sent) return;
+    const files = tray.outgoing();
+    if (!thread?.pane_id || held !== null || sent || !files) return;
     const request = submitThreadInput(thread.generation, thread.pane_id, text, files.map(({ name, bytes }) => ({ name, bytes })));
-    if (request) {
-      setSent(request);
+    if (request && typeof request === "object") {
+      setNotice(words(request.refused));
+    } else if (request) {
+      // The bubble the record will show names these files by their stages, here and on a device.
+      files.forEach((file, index) => keepSent(`${request}-${index}`, file.name, file.image));
+      setSent({ request, tiles: files.map((file) => file.id) });
       setNotice(null);
+    } else {
+      setNotice(words("forward_failed"));
     }
-  };
-  const attach = async (picked: FileList | null) => {
-    const read = await Promise.all([...(picked ?? [])].map(async (file, index) => ({ id: `${Date.now()}-${index}-${file.name}`, name: file.name, image: file.type.startsWith("image/"), bytes: new Uint8Array(await file.arrayBuffer()) })));
-    setFiles((current) => [...current, ...read]);
   };
   // One ask per state the core shows: scroll events at the top come faster
   // than its answer, and a read that failed is asked again only after the
@@ -143,29 +144,16 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
         foot={foot}
         composer={{
           value: text,
-          attachments: files,
+          tray,
           focused,
           held: held !== null || sent !== null,
           notice: held === "pane_changed" || held === "pane_gone" ? words(held) : notice,
           onChange: setText,
           onSend: send,
-          onAttach: () => picker.current?.click(),
-          onRemoveAttachment: (id) => setFiles((current) => current.filter((file) => file.id !== id)),
         }}
         onTerminal={onTerminal}
         onReachTop={reachTop}
         {...parts}
-      />
-      <Input
-        ref={picker}
-        type="file"
-        multiple
-        hidden
-        data-desk-thread-picker="true"
-        onChange={(event) => {
-          void attach(event.target.files);
-          event.target.value = "";
-        }}
       />
     </div>
   );

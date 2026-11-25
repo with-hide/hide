@@ -16,7 +16,8 @@ import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
-import { DeskComposer, type ComposerAttachment } from "./desk-composer";
+import { DeskComposer, SentAttachments } from "./desk-composer";
+import { sentWords, type ComposerTray } from "../../deskComposer";
 import { DeskMissionChip } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
@@ -254,15 +255,18 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
 function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; copy: CopyText; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
+  // The files a composer sent stand over the words, read from the quoted paths it typed before them (B41).
+  const sent = useMemo(() => sentWords(line.text), [line.text]);
   if (line.origin === "letter") return <ReceivedLine line={line} actions={actions} />;
   // Whatever an agent records when its turn was cut short is one quiet word, never the operator's bubble (D-75).
   if (line.origin === "interrupted") return <p className="text-micro text-muted-foreground" data-desk-thread-line="interrupted">{t("desk.thread.interrupted")}</p>;
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
-      {line.text ? (
-        <CopyableMessage text={line.text} copy={copy} align="end">
-          <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{line.text}</p>
+      <SentAttachments files={sent.files} />
+      {sent.words ? (
+        <CopyableMessage text={sent.words} copy={copy} align="end">
+          <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
         </CopyableMessage>
       ) : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
@@ -387,7 +391,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   mentions?: readonly DeskMention[];
   /** Desk handed the thread its task: the first message says so. */
   startedByDesk?: boolean;
-  composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
+  composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void };
   /** What the agent's own screen asks, at the conversation's end, answered in place (the choice card, PRD desk-2-ui B14). */
   ask?: ReactNode;
   /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
@@ -450,14 +454,12 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             value={composer.value}
             label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
             placeholder={t("desk.thread.placeholder")}
-            attachments={composer.attachments}
+            tray={composer.tray}
             focused={composer.focused}
             held={composer.held}
             notice={composer.notice}
             onChange={composer.onChange}
             onSend={composer.onSend}
-            onAttach={composer.onAttach}
-            onRemoveAttachment={composer.onRemoveAttachment}
           />
         </div>
       )}

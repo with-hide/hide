@@ -1385,6 +1385,15 @@ impl Core {
         lock_recover(&self.runtime).registered_paths(device_id)
     }
 
+    /// The paths of the files Desk's waiting messages and its turn under way
+    /// still name, which Desk's folder keeps whatever its cap says.
+    pub fn desk_files_in_use(&self) -> Vec<String> {
+        if !check_owner_thread(self, "desk_files_in_use") {
+            return Vec::new();
+        }
+        lock_recover(&self.runtime).desk_files_in_use()
+    }
+
     /// Why a link from `node` would be refused now, if it would.
     pub fn inbound_refusal(&self, node: &str) -> Option<String> {
         if !check_owner_thread(self, "inbound_refusal") {
