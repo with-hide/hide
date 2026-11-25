@@ -283,11 +283,18 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
-      tail: { updates: [{ sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" } }, sessions: {} } };
+      tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "문서 보여줘" } }, { sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" } }, sessions: {} } };
     await act(async () => {
-      useShellStore.setState({ rest: remoteRest, agents: [row], sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } });
+      const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
+        state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+        mark: "going", mark_read: false, machine: "deepbox", disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
+      useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } });
       useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
     });
+    // The core answers the open with the session's thread.
+    await act(async () => useShellStore.setState({ sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } }));
+    // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
+    for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
     await press("[data-desk-output='/home/me/repo/new.md']");
     const front = useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
     expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
