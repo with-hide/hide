@@ -16,6 +16,7 @@
 
 mod files;
 pub(super) mod jobs;
+mod opens;
 mod worker;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -77,6 +78,9 @@ pub(super) struct Desk {
     /// The files Desk's tab panel holds open, oldest first (`files.rs`);
     /// the window's, so never stored.
     files: Vec<files::DeskFile>,
+    /// What Desk's agent opened with `hide file open`, waiting for a window
+    /// showing Desk to open it in the tab panel (`opens.rs`); never stored.
+    opens: opens::DeskOpens,
     /// The agent refused the last start (its sign-in, its ask mode, a
     /// process that did not open): the queued messages wait for the
     /// operator's next send, `다시 시작` or a session that opens, rather
@@ -190,6 +194,8 @@ pub(super) enum DeskEvent {
     File(files::FilePayload),
     /// A held file that could not be opened, read again (B28).
     FileRetry(files::RetryPayload),
+    /// A window opened one of `opens` in its room.
+    OpenTaken(opens::TakenPayload),
     /// ✕ on a message waiting for the turn before it: it never goes.
     QueuedRemove(QueuedPayload),
 }
@@ -289,7 +295,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 16] = [
+    pub(super) const KINDS: [&'static str; 17] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -305,6 +311,7 @@ impl DeskEvent {
         "desk_lane",
         "desk_file",
         "desk_file_retry",
+        "desk_open_taken",
         "desk_queued_remove",
     ];
 
@@ -328,6 +335,7 @@ impl DeskEvent {
             "desk_lane" => Self::Lane(parse(payload)?),
             "desk_file" => Self::File(parse(payload)?),
             "desk_file_retry" => Self::FileRetry(parse(payload)?),
+            "desk_open_taken" => Self::OpenTaken(parse(payload)?),
             "desk_queued_remove" => Self::QueuedRemove(parse(payload)?),
             _ => return None,
         })
@@ -380,7 +388,8 @@ impl Runtime {
         let view_seen = matches!(event, DeskEvent::OutputSeen(_));
         // Letting a file go always lands, so a Desk switched off holds
         // nothing a window let go; `desk_file` opens nothing while it is off.
-        let file_holds = matches!(event, DeskEvent::File(_));
+        // A taken open only leaves the list, which turning Desk off emptied.
+        let file_holds = matches!(event, DeskEvent::File(_) | DeskEvent::OpenTaken(_));
         if !view_seen && !file_holds {
             if self.desk.worker.is_none() {
                 return refused("desk_unavailable");
@@ -401,11 +410,11 @@ impl Runtime {
         // A width moves only the `desk` section's lane; a file Desk holds
         // moves the editor's documents, no section of Desk's.
         let file = matches!(event, DeskEvent::File(_) | DeskEvent::FileRetry(_));
-        let jobs = !file && !matches!(event, DeskEvent::Lane(_));
+        let jobs = !file && !matches!(event, DeskEvent::Lane(_) | DeskEvent::OpenTaken(_));
         let room = room && !file;
         // An output seen moves the View's seen state, which the core keeps
         // with the View, not in Desk's store; a file held is the window's.
-        let stored = !file && !matches!(event, DeskEvent::OutputSeen(_));
+        let stored = !file && !matches!(event, DeskEvent::OutputSeen(_) | DeskEvent::OpenTaken(_));
         let changed = match event {
             DeskEvent::Send(payload) => {
                 // Only the Desk composer sends it.
@@ -436,6 +445,7 @@ impl Runtime {
             DeskEvent::Lane(payload) => self.desk_lane(payload),
             DeskEvent::File(payload) => self.desk_file(payload),
             DeskEvent::FileRetry(payload) => self.desk_file_retry(payload.into()),
+            DeskEvent::OpenTaken(payload) => self.desk_open_taken(payload),
             DeskEvent::QueuedRemove(payload) => self.desk_queued_remove(payload.id),
         };
         let sent = self.desk_send_queued();
@@ -1140,6 +1150,9 @@ impl Runtime {
                     self.order(Order::Cancel);
                 }
                 self.end_desk_process();
+                // An open waiting for a window ends with Desk, so turning it
+                // on later shows nothing it opened before.
+                self.desk.opens.clear();
                 // Every adapter download under way ends with Desk, not later
                 // in a folder nobody watches (engineering principle 14).
                 self.order(Order::Off);
@@ -1732,6 +1745,7 @@ impl Runtime {
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
             lane: desk.stored.lane,
+            opens: desk.opens.snapshot(),
         }));
     }
 
@@ -1826,6 +1840,11 @@ impl Runtime {
         self.start_test_desk();
         self.desk.host.open = true;
         self.desk.stored.settings.cap = cap;
+    }
+
+    /// Desk installed and on, its process not running a session.
+    pub(in crate::runtime) fn close_test_desk(&mut self) {
+        self.desk.host.open = false;
     }
 }
 

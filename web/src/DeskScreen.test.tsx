@@ -45,7 +45,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
-  lane: { view_width: null, session_width: null },
+  lane: { view_width: null, session_width: null }, opens: [],
 });
 
 const fixer = { kind: "session" as const, id: "w1:p2", name: "fixer" };
