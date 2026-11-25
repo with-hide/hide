@@ -49,6 +49,15 @@ class ScreenRuleGate(unittest.TestCase):
         [problem] = check.problems(base, {"omp.toml": definition("1", agent="omp")}, set())
         self.assertIn("screens/omp/", problem)
 
+    def test_a_rule_s_asks_is_no_rule_change(self):
+        base = {"devin.toml": definition("1", agent="devin")}
+        head = definition("1", agent="devin")
+        head["screen"]["rules"][0]["asks"] = "folder_trust"
+        self.assertEqual(check.problems(base, {"devin.toml": head}, set()), [])
+        # Anything else that changes with it still is one.
+        head["screen"]["rules"][0]["contains"] = ["other"]
+        self.assertEqual(len(check.problems(base, {"devin.toml": head}, set())), 2)
+
     def test_a_new_file_adds_an_agent_and_is_not_a_rule_change(self):
         self.assertEqual(check.problems({}, {"amp.toml": definition("1", agent="amp")}, set()), [])
 

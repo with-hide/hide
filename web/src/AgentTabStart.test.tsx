@@ -100,13 +100,11 @@ describe("inline tab start (group-tabs B7–B9, B22, B27)", () => {
     }
     expect(starts()).toHaveLength(3);
   });
-  it.each(["failed", "agent_failed"] as const)("accepts multiple Korean input events after a restored %s and retries the same confirmed intent", async (phase) => {
-    const receipt: AgentStartReceipt = { request_id: "start-restored", group_id: "g1", area_id: "a1", draft_tab_id: "draft-1", live_tab_id: phase === "agent_failed" ? "live-1" : null, pane_id: phase === "agent_failed" ? "pane-1" : null, add_pane: false, state: phase === "failed" ? "failed" : "ready", agent_kind: "claude", agent_phase: phase === "agent_failed" ? "failed" : null };
+  // A start that made a live tab has no form; its notice recovers it (`AgentAreas.test.tsx`).
+  it("accepts multiple Korean input events after a restored failed start and retries the same confirmed intent", async () => {
+    const phase = "failed";
+    const receipt: AgentStartReceipt = { request_id: "start-restored", group_id: "g1", area_id: "a1", draft_tab_id: "draft-1", live_tab_id: null, pane_id: null, add_pane: false, state: "failed", agent_kind: "claude", agent_phase: null };
     await publishReceipts(target, [receipt]);
-    if (phase === "agent_failed") {
-      const rest = useShellStore.getState().rest!;
-      useShellStore.setState({ rest: { ...rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: "pane-1", agent_kind: "claude", failure: null, agent_phase: "failed", agent_reason: "Enter the replacement instruction", agent_line: null, request_id: receipt.request_id } } });
-    }
     await mount();
     const field = container.querySelector("textarea")!;
     for (const text of ["다", "다시", "다시 시작할", "다시 시작할 한글 지시문"]) {

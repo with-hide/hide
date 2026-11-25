@@ -48,8 +48,19 @@ pub struct Target {
     /// The checkout's id.
     pub id: String,
     pub device_id: String,
-    /// The place on the device (`project · branch`, or a folder's name).
+    /// The place on the device (`project · branch`, or a folder's name),
+    /// which a phone bundle that predates `project` names the target by.
     pub place: String,
+    /// The project's name alone, the sheet's project word.
+    pub project: String,
+    /// The project's id, which gathers its checkouts under one project.
+    pub project_id: String,
+    /// The checkout's branch, the sheet's branch word; `None` for a folder,
+    /// whose project is its one place.
+    pub branch: Option<String>,
+    /// The project's main checkout, where choosing the project starts: the
+    /// one the core marks primary, else the first it lists.
+    pub main: bool,
     /// The device's name; `None` is the core's own machine, which the phone
     /// names in its language from the catalog's `core_platform`.
     pub device_label: Option<String>,
@@ -204,58 +215,67 @@ impl Catalog {
         used: &mut Vec<u64>,
     ) {
         let route_device = (!local).then(|| device_id.to_owned());
-        let mut push = |catalog: &mut Self, id: String, place: String, path: String, at: u64| {
-            if catalog.routes.contains_key(&id) {
-                return;
-            }
-            catalog.routes.insert(
-                id.clone(),
-                Route {
-                    device_id: route_device.clone(),
-                    checkout_path: path,
-                },
-            );
-            catalog.targets.push(Target {
-                id,
-                device_id: device_id.to_owned(),
-                place,
-                device_label: device_label.map(str::to_owned),
-                connected,
-            });
-            used.push(at);
-        };
         for workspace in workspaces
             .iter()
             .filter(|workspace| hide_core::agent_state::phone::listed_project(workspace))
         {
-            let checkouts = array_of(workspace.get("checkouts"));
             let at = workspace
                 .get("last_activity_unix_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            let checkouts: Vec<&Value> = array_of(workspace.get("checkouts"))
+                .iter()
+                .filter(|checkout| {
+                    !str_of(checkout, "id").is_empty()
+                        && !str_of(checkout, "path").is_empty()
+                        && checkout.get("temporary").and_then(Value::as_bool) != Some(true)
+                        && checkout.get("exists").and_then(Value::as_bool) != Some(false)
+                })
+                .collect();
             let folder = workspace.get("is_git").and_then(Value::as_bool) != Some(true)
                 && checkouts.len() == 1;
-            for checkout in checkouts {
+            let main = checkouts
+                .iter()
+                .position(|checkout| {
+                    checkout.get("is_primary").and_then(Value::as_bool) == Some(true)
+                })
+                .unwrap_or(0);
+            let project = str_of(workspace, "label");
+            for (index, checkout) in checkouts.into_iter().enumerate() {
                 let id = str_of(checkout, "id");
-                let path = str_of(checkout, "path");
-                if id.is_empty()
-                    || path.is_empty()
-                    || checkout.get("temporary").and_then(Value::as_bool) == Some(true)
-                    || checkout.get("exists").and_then(Value::as_bool) == Some(false)
-                {
+                if self.routes.contains_key(id) {
                     continue;
                 }
-                let label = if folder {
-                    str_of(workspace, "label").to_owned()
-                } else {
-                    let branch = checkout
+                let branch = (!folder).then(|| {
+                    checkout
                         .get("branch")
                         .and_then(Value::as_str)
                         .filter(|branch| !branch.is_empty())
-                        .unwrap_or_else(|| str_of(checkout, "label"));
-                    format!("{} · {branch}", str_of(workspace, "label"))
-                };
-                push(self, id.to_owned(), label, path.to_owned(), at);
+                        .unwrap_or_else(|| str_of(checkout, "label"))
+                        .to_owned()
+                });
+                self.routes.insert(
+                    id.to_owned(),
+                    Route {
+                        device_id: route_device.clone(),
+                        checkout_path: str_of(checkout, "path").to_owned(),
+                    },
+                );
+                self.targets.push(Target {
+                    id: id.to_owned(),
+                    device_id: device_id.to_owned(),
+                    place: match &branch {
+                        Some(branch) => format!("{project} · {branch}"),
+                        None => project.to_owned(),
+                    },
+                    project: project.to_owned(),
+                    project_id: str_of(workspace, "id").to_owned(),
+                    branch,
+                    main: index == main,
+                    device_label: device_label.map(str::to_owned),
+                    connected,
+                });
+                used.push(at);
             }
         }
     }
@@ -784,6 +804,54 @@ mod tests {
         assert_eq!(catalog.frame()["core_platform"], "windows x86_64");
         assert_eq!(catalog.targets[3].device_label.as_deref(), Some("mini"));
         assert!(catalog.targets.iter().all(|target| target.connected));
+    }
+
+    /// The sheet asks for a project, then a branch (docs/UI_BEHAVIOR.md, The
+    /// phone app): each target names its project and branch apart, which
+    /// checkouts are one project, and the main one a project's choice starts
+    /// on; a folder has no branch.
+    #[test]
+    fn a_target_names_its_project_its_branch_and_the_main_checkout() {
+        let frame = Catalog::of(&rest(), "local").frame();
+        let fields = |index: usize| {
+            let target = &frame["targets"][index];
+            (
+                target["project"].clone(),
+                target["project_id"].clone(),
+                target["branch"].clone(),
+                target["main"].clone(),
+            )
+        };
+        assert_eq!(
+            fields(0),
+            (json!("hide"), json!("w1"), json!("main"), json!(true))
+        );
+        assert_eq!(
+            fields(1),
+            (json!("hide"), json!("w1"), json!("prd/a"), json!(false))
+        );
+        assert_eq!(
+            fields(2),
+            (json!("notes"), json!("w2"), json!(null), json!(true))
+        );
+        assert_eq!(
+            fields(3),
+            (json!("contong"), json!("rw1"), json!("main"), json!(true))
+        );
+
+        // The checkout the core marks primary is the main one wherever the project lists it.
+        let mut value = rest();
+        value["navigator"]["workspaces"][0]["checkouts"][1]["is_primary"] = json!(true);
+        let catalog = Catalog::of(&value, "local");
+        let main: Vec<_> = catalog
+            .targets
+            .iter()
+            .map(|t| (t.id.as_str(), t.main))
+            .collect();
+        assert_eq!(
+            main,
+            [("c1", false), ("c2", true), ("c4", true), ("rc1", true)]
+        );
     }
 
     /// Past the cap the sheet keeps the places used last, in the order it

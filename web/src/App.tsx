@@ -1,5 +1,6 @@
 import { InterfaceLanguageBoundary, translate, useInterfaceTranslation } from "./i18n/client";
 import { agentCapacityNotice } from "./agentLayout";
+import { storeAskNotice, storeAskNoticeChanges } from "./storeAskNotice";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { createActions, type Actions } from "./actions";
 import { identity, moveBuffer, tabBufferKey, type BufferKey } from "./buffers";
@@ -164,6 +165,12 @@ export function App() {
       if (waiting !== previouslyWaiting || state.rest?.workspace_view?.path !== previous.rest?.workspace_view?.path) {
         if (waiting > 0) useUiStore.getState().showNotice({ level: "important", key: "agent_capacity", text: agentCapacityNotice(waiting), refreshable: false });
         else if (previouslyWaiting > 0) useUiStore.getState().dismissNotices((notice) => notice.key === "agent_capacity");
+      }
+      // An agent's skill or MCP ask waits on the operator, so it stands in the corner until it is answered.
+      if (state.rest?.status?.store_asks !== previous.rest?.status?.store_asks) {
+        const { raise, gone } = storeAskNoticeChanges(state.rest?.status?.store_asks, previous.rest?.status?.store_asks);
+        for (const ask of raise) useUiStore.getState().showNotice(storeAskNotice(ask, translate));
+        if (gone.length > 0) useUiStore.getState().dismissNotices((notice) => notice.storeAsk !== undefined && gone.includes(notice.storeAsk));
       }
       // A refused commit brings nothing forward, so the next surface in use is a visit again.
       if (fresh) {

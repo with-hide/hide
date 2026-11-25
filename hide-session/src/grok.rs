@@ -299,7 +299,7 @@ pub(crate) fn parse_line(item: &Value) -> LineResult {
 /// share its `promptIndex` and become one message.
 fn user_chunk(item: &Value, update: &Value) -> LineResult {
     let meta = update.get("_meta");
-    let flag = |name: &str| meta.and_then(|meta| meta.get(name)) == Some(&Value::Bool(true));
+    let flag = |name: &str| crate::grok_flag(meta, name);
     if flag("hostTurn") {
         return LineResult::Ignore;
     }

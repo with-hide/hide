@@ -6,8 +6,8 @@ Hide reads screen rules from the app's own definition files
 (`hide-agent-adapter/agents/<id>.toml`, `[screen]`) and the operator's, never
 from a download, so a rule change ships with the release that carries it and
 this check is its one gate. For each built-in file the base already has
-whose `[screen]` differs there (a new file adds an agent and is reviewed as
-that):
+whose `[screen]` differs there, in anything but a rule's `asks`, which no
+evaluator reads (a new file adds an agent and is reviewed as that):
 
 - `[screen] version` is higher than the base's, so a release, the catalog
   and an operator's override can tell the rules apart;
@@ -38,6 +38,22 @@ def version_key(version):
     return parts
 
 
+def matched(screen):
+    """`screen` as the evaluator reads it: without a rule's `asks`, which says
+    what the screen asks the operator for Hide's own contracts and is never
+    evaluated or handed to a pane's holder, so adding it changes no state an
+    agent's screen reads as."""
+    if screen is None:
+        return None
+    return {
+        **screen,
+        "rules": [
+            {key: value for key, value in rule.items() if key != "asks"}
+            for rule in screen.get("rules", [])
+        ],
+    }
+
+
 def problems(base, head, captured):
     """`base` and `head` map a file name to its parsed TOML (a file the base
     lacks is new); `captured` is the agent ids with a captured screen."""
@@ -49,7 +65,7 @@ def problems(base, head, captured):
             continue
         screen = definition.get("screen")
         before = base[name].get("screen")
-        if screen is None or screen == before:
+        if screen is None or matched(screen) == matched(before):
             continue
         agent = definition.get("id", name.removesuffix(".toml"))
         if before is not None and version_key(screen.get("version", "0")) <= version_key(

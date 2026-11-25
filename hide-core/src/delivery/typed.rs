@@ -185,6 +185,35 @@ pub(crate) fn standing(
     }
 }
 
+/// Why typed `input` still owes no verdict once [`RECORD_WAIT_MS`] has passed
+/// since its last typing: the word `input.waiting` logs, once per typing
+/// (`Runtime::typed_input_work`), so a brief that sits as `awaiting_record`
+/// says why in the log. `None` within the wait, and for input confirmed or
+/// unconfirmed, which has its verdict. It reads the same facts as
+/// [`standing`] and changes nothing: the verdict still moves only on a
+/// state, never on this.
+pub(crate) fn overdue_wait(
+    input: &TypedInput,
+    observation: Option<&Observation>,
+    now: u64,
+) -> Option<&'static str> {
+    if input.attempts == 0 || now.saturating_sub(input.typed_at_unix_ms) < RECORD_WAIT_MS {
+        return None;
+    }
+    match standing(input, observation, now) {
+        Standing::Confirmed | Standing::Unconfirmed { .. } => None,
+        // The pane's read is stale, or its turn is not laid yet.
+        Standing::Unsettled => Some("turn_unsettled"),
+        Standing::Waiting => Some(match observation.and_then(Observation::projected_turn) {
+            None => "not_observed",
+            Some(projected) if projected.turn.activity == AgentActivity::Working => "turn_working",
+            // At rest, but since less than the wait: the turn moved
+            // after the typing.
+            Some(_) => "rested_recently",
+        }),
+    }
+}
+
 /// Whether unconfirmed `input` may be typed again now, once its agent's
 /// composer reads empty: someone answered the agent's screen since the last
 /// typing (`Observation::answered_at_unix_ms`: the operator's keys, a phone
@@ -445,6 +474,40 @@ mod tests {
             Standing::Confirmed
         );
         assert_eq!(standing(&input, None, u64::MAX), Standing::Waiting);
+    }
+
+    #[test]
+    fn input_past_its_record_wait_with_no_verdict_says_why() {
+        let input = typed(1_000);
+        let due = 1_000 + RECORD_WAIT_MS;
+        let idle = observation("idle", 0, 0);
+        // Within the wait nothing is owed, and a verdict needs no reason.
+        assert_eq!(overdue_wait(&input, Some(&idle), due - 1), None);
+        assert_eq!(overdue_wait(&input, Some(&idle), due), None);
+        assert_eq!(overdue_wait(&input, None, due), Some("not_observed"));
+        let working = observation("working", 2_000, 0);
+        assert_eq!(
+            overdue_wait(&input, Some(&working), due),
+            Some("turn_working")
+        );
+        let rested = observation("done", due - 1, 0);
+        assert_eq!(
+            overdue_wait(&input, Some(&rested), due),
+            Some("rested_recently")
+        );
+        let stale = Observation {
+            telemetry_stale: true,
+            ..idle.clone()
+        };
+        assert_eq!(
+            overdue_wait(&input, Some(&stale), due),
+            Some("turn_unsettled")
+        );
+        let confirmed = TypedInput {
+            confirmed_at_unix_ms: Some(2_000),
+            ..input.clone()
+        };
+        assert_eq!(overdue_wait(&confirmed, None, u64::MAX), None);
     }
 
     #[test]

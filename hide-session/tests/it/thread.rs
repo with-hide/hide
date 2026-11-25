@@ -732,6 +732,8 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
     let letter = "Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1";
     let records = [
         json!({"type":"user","uuid":"a","message":{"content":"고쳐줘\n<pasted_content id=\"a1b2\">\npanic at main.rs:3\n</pasted_content id=\"a1b2\">\n왜 그래?"}}),
+        // Left out of the thread: a meta record, and a text that is a hook's
+        // reminder by its prefix alone.
         json!({"type":"user","uuid":"b","isMeta":true,"message":{"content":"Caveat: local command output"}}),
         json!({"type":"user","uuid":"c","message":{"content":"<system-reminder>hook said hi</system-reminder>"}}),
         json!({"type":"user","uuid":"d","message":{"content":letter}}),
@@ -759,12 +761,6 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
             ("고쳐줘", None, false),
             ("panic at main.rs:3", None, true),
             ("왜 그래?", None, false),
-            ("Caveat: local command output", Some("injected"), false),
-            (
-                "<system-reminder>hook said hi</system-reminder>",
-                Some("injected"),
-                false
-            ),
             (letter, Some("letter"), false),
             ("[Request interrupted by user]", Some("interrupted"), false),
         ]
@@ -809,6 +805,207 @@ fn claude_s_image_note_shows_no_text_and_the_image_it_describes_stays_an_image()
         .collect::<Vec<_>>();
     assert_eq!(images, ["c2hvdA==", "cGFzdGVk"]);
     assert_eq!(page.skipped.get("claude_image_note"), Some(&2));
+}
+
+/// Codex writes its own context into the user role: the AGENTS.md
+/// instructions and the environment as the two parts of the session's first
+/// message, a note for an interrupted turn, and the environment ahead of a
+/// real prompt, as a part of its own or as the front of the prompt's. None
+/// of it is the operator's turn; the operator's own words next to it stay,
+/// and the interruption is drawn as the short line Claude Code's is, not as
+/// the note Codex writes for the model.
+#[test]
+fn text_codex_injects_is_not_an_operator_turn() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Codex)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let cwd = placed.cwd.to_str().unwrap();
+    let environment = format!(
+        "<environment_context>\n  <cwd>{cwd}</cwd>\n  <shell>zsh</shell>\n</environment_context>"
+    );
+    let instructions =
+        format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>");
+    let aborted =
+        "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>";
+    let message = |id: &str, texts: &[&str]| {
+        let content = texts
+            .iter()
+            .map(|text| json!({"type": "input_text", "text": text}))
+            .collect::<Vec<_>>();
+        json!({"type": "response_item", "payload": {"type": "message", "id": id, "role": "user", "content": content}})
+    };
+    let session = std::fs::read_to_string(&placed.path).unwrap();
+    let header = session.lines().next().unwrap();
+    let joined = format!("{environment}\n왜 그래?");
+    let records = [
+        message("a", &[&instructions, &environment]),
+        message("b", &["고쳐줘"]),
+        message("c", &[aborted]),
+        message("d", &[&environment, "또 해줘"]),
+        message("e", &[&joined]),
+    ];
+    let contents = std::iter::once(header.to_owned())
+        .chain(records.iter().map(Value::to_string))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    let marks = json_of(&page)
+        .iter()
+        .map(|update| {
+            (
+                update["content"]["text"].as_str().unwrap().to_owned(),
+                update["_meta"]["hide"]["origin"]
+                    .as_str()
+                    .map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks,
+        [
+            ("고쳐줘".to_owned(), None),
+            (
+                "[Request interrupted by user]".to_owned(),
+                Some("interrupted".to_owned()),
+            ),
+            ("또 해줘".to_owned(), None),
+            ("왜 그래?".to_owned(), None),
+        ]
+    );
+    // a's two parts and d's environment part; e only lost the front of its.
+    assert_eq!(page.skipped.get("injected"), Some(&3));
+}
+
+/// A Memory delivery is three blocks in one text: the instruction, the
+/// cards and a receipt line that closes itself and carries an auth tag; the
+/// open questions a prompt gives are a block of their own with a receipt
+/// line of theirs. All of it is injected, and the operator's words after it
+/// stay.
+#[test]
+fn a_memory_delivery_with_its_receipt_is_left_out_to_the_last_line() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Codex)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let auth = "a".repeat(64);
+    let delivery = format!(
+        "<hide-memory-instruction>If what the operator says now contradicts a card, run `hide memory stale <id>`.</hide-memory-instruction>\n<hide-memory-context trust=\"untrusted-reference-data\">\n{{\"id\":\"m1\",\"text\":\"a card\"}}\n</hide-memory-context>\n<hide-memory-receipt event=\"UserPromptSubmit\" count=\"1\" items=\"m1@1\" auth=\"{auth}\" />"
+    );
+    let asks = format!(
+        "<hide-open-questions trust=\"untrusted-reference-data\">\nq1 \"a question\"\n</hide-open-questions>\n<hide-asks-receipt items=\"q1\" auth=\"{auth}\" />"
+    );
+    let message = |id: &str, text: &str| json!({"type": "response_item", "payload": {"type": "message", "id": id, "role": "user", "content": [{"type": "input_text", "text": text}]}});
+    let session = std::fs::read_to_string(&placed.path).unwrap();
+    let header = session.lines().next().unwrap();
+    let records = [
+        message("a", &delivery),
+        message("b", &asks),
+        message("c", &format!("{delivery}\n{asks}\n고쳐줘")),
+    ];
+    let contents = std::iter::once(header.to_owned())
+        .chain(records.iter().map(Value::to_string))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(texts(&page), ["고쳐줘"]);
+    assert_eq!(page.skipped.get("injected"), Some(&2));
+}
+
+/// The limit of reading an injected block by its first words: a message
+/// that begins with one of them and has no closing tag is injected through
+/// its end, so an operator who pastes Claude Code's compaction summary as
+/// the first words of a message to an agent that does not mark it loses that
+/// message from the thread. The label reader reads it the same way.
+#[test]
+fn a_message_that_opens_with_a_summary_sentence_is_left_out_whole() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Codex)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let session = std::fs::read_to_string(&placed.path).unwrap();
+    let header = session.lines().next().unwrap();
+    let pasted = json!({"type": "response_item", "payload": {"type": "message", "id": "a", "role": "user", "content": [{"type": "input_text", "text": "This session is being continued from a previous conversation that ran out of context.\n이어서 해줘"}]}});
+    std::fs::write(&placed.path, format!("{header}\n{pasted}\n")).unwrap();
+    let page = placed.read(None).unwrap();
+    assert!(json_of(&page).is_empty());
+    assert_eq!(page.skipped.get("injected"), Some(&1));
+}
+
+/// Claude Code's own records are left out by their marks whatever their
+/// text, an image alone included, as the label reader reads them.
+#[test]
+fn claude_records_marked_as_its_own_are_left_out_whatever_their_text() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let records = [
+        json!({"type":"user","uuid":"a","origin":{"kind":"hook"},"message":{"content":"plain hook text"}}),
+        json!({"type":"user","uuid":"b","isCompactSummary":true,"message":{"content":"a plain summary"}}),
+        json!({"type":"user","uuid":"c","promptSource":"system","message":{"content":"a plain system prompt"}}),
+        json!({"type":"user","uuid":"d","isVisibleInTranscriptOnly":true,"message":{"content":"plain transcript text"}}),
+        json!({"type":"user","uuid":"e","isMeta":true,"message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}),
+        json!({"type":"user","uuid":"f","message":{"content":"진짜 요청"}}),
+    ];
+    let contents = records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(texts(&page), ["진짜 요청"]);
+    assert_eq!(page.skipped.get("injected"), Some(&5));
+}
+
+/// Grok's own wake prompts carry no words of an operator: `hideFromScrollback`
+/// and `hostTurn` mark them whatever they say.
+#[test]
+fn grok_prompts_it_marks_as_its_own_are_left_out_whatever_their_text() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Grok)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let before = user_texts(&placed.read(None).unwrap());
+    let chunk = |meta: Value| json!({"timestamp": 1793362760, "method": "session/update", "params": {"sessionId": "s", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "plain wake prompt"}, "_meta": meta}}});
+    let mut session = std::fs::read_to_string(&placed.path).unwrap();
+    for meta in [
+        json!({"hideFromScrollback": true}),
+        json!({"hostTurn": true}),
+    ] {
+        session.push_str(&format!("{}\n", chunk(meta)));
+    }
+    std::fs::write(&placed.path, session).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(user_texts(&page), before);
+    assert_eq!(page.skipped.get("injected"), Some(&2));
+}
+
+/// A step Hide's hook injects reaches agy as a user input whose source is
+/// the SDK, and is left out whatever it says.
+#[test]
+fn an_antigravity_step_from_the_sdk_is_left_out_whatever_its_text() {
+    let sample = SAMPLES
+        .iter()
+        .find(|sample| sample.format == SessionFormat::Antigravity)
+        .unwrap();
+    let placed = Placed::new(sample);
+    let first = placed.read(None).unwrap();
+    let (before, left_out) = (user_texts(&first), first.skipped.get("injected").copied());
+    let step = json!({"step_index": 900, "source": "SYSTEM_SDK", "type": "USER_INPUT", "status": "DONE", "created_at": "2026-10-30T12:40:00Z", "content": "plain guidance"});
+    let mut session = std::fs::read_to_string(&placed.path).unwrap();
+    session.push_str(&format!("{step}\n"));
+    std::fs::write(&placed.path, session).unwrap();
+    let page = placed.read(None).unwrap();
+    assert_eq!(user_texts(&page), before);
+    // The sample already holds notices agy appended to the operator's request.
+    assert_eq!(
+        page.skipped.get("injected").copied(),
+        left_out.map(|count| count + 1)
+    );
 }
 
 /// A letter's line says whom it came from: the envelope's sender, or the
@@ -902,9 +1099,17 @@ fn an_opencode_1_session_reads_from_its_parts() {
     );
     let synthetic = updates
         .iter()
-        .find(|update| update["content"]["text"] == "Summarize the conversation so far")
-        .unwrap();
-    assert_eq!(synthetic["_meta"]["hide"]["origin"], "injected");
+        .find(|update| update["content"]["text"] == "Summarize the conversation so far");
+    assert!(synthetic.is_none(), "a synthetic message is not drawn");
+}
+
+/// The text of each user message chunk of the page.
+fn user_texts(page: &ThreadPage) -> Vec<String> {
+    json_of(page)
+        .iter()
+        .filter(|update| update["sessionUpdate"] == "user_message_chunk")
+        .filter_map(|update| update["content"]["text"].as_str().map(str::to_owned))
+        .collect()
 }
 
 fn texts(page: &ThreadPage) -> Vec<String> {

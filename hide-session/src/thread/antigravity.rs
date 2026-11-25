@@ -31,7 +31,14 @@ fn record(record: &Value, _: &Session<'_>, thread: &mut Thread) {
     match record["type"].as_str() {
         Some("USER_INPUT") => {
             thread.end_turn();
-            user(id, content, thread);
+            // A step Hide's hook injected (`injectSteps`) arrives as a user
+            // input whose source is the SDK.
+            let origin = if record["source"] == "SYSTEM_SDK" {
+                Origin::Injected
+            } else {
+                Origin::Operator
+            };
+            user(id, origin, content, thread);
         }
         Some("SYSTEM_MESSAGE") => {
             thread.end_turn();
@@ -58,15 +65,15 @@ fn record(record: &Value, _: &Session<'_>, thread: &mut Thread) {
 
 /// agy wraps the operator's words in `<USER_REQUEST>` and appends its own
 /// notices (settings changes and the like) after them.
-fn user(id: Option<&str>, content: &str, thread: &mut Thread) {
+fn user(id: Option<&str>, origin: Origin, content: &str, thread: &mut Thread) {
     let Some((request, rest)) = content
         .strip_prefix(REQUEST_OPEN)
         .and_then(|inner| inner.split_once(REQUEST_CLOSE))
     else {
-        thread.user(id, Origin::Operator, [Part::Text(content)]);
+        thread.user(id, origin, [Part::Text(content)]);
         return;
     };
-    thread.user(id, Origin::Operator, [Part::Text(request.trim())]);
+    thread.user(id, origin, [Part::Text(request.trim())]);
     if !rest.trim().is_empty() {
         thread.user(id, Origin::Injected, [Part::Text(rest.trim())]);
     }
