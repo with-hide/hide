@@ -1212,6 +1212,8 @@ A failed Desk turn says its reason once: the agent's own words stay in its reply
 The `@` menu with nothing matching what follows `@` stays open as one row, `맞는 세션이나 프로젝트가 없어요`; ↵ then sends the words and Esc closes the row.
 The chat's head starts with Desk's own mark (`DeskMark`, the one the sidebar's Desk row draws) before `Desk`.
 A turn an agent recorded as interrupted (the thread's `interrupted` origin, the same for every agent) is one quiet line `중단됨` in the conversation, never the operator's bubble.
+An approval card names its kind by the permission row the core says it reads as (`row`): a `hide` line is `hide 명령`, not `셸 명령`; a card kept from before the field falls back to its card kind; its `폴더` line is the folder the core names (where a command runs, the folder that holds the files an edit changes, Desk's work folder for a read).
+↵ in Desk's box sends while a reply is being written too, the stop button staying: the message waits below the reply as the operator's bubble, dimmed, with `대기 중` and a `✕` that takes it out before it goes (`desk_queued_remove`); the box lets the words go once the core lists them waiting, and at eight waiting messages the words stay in the box (`DESK_QUEUED_MAX`).
 What the room beside Desk holds and how it opens and closes is `docs/desk.md`'s.
 
 ## Hide AI: the Hide AI tool
