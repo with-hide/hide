@@ -272,6 +272,8 @@ Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab.
 A tab whose pane is alive always shows that pane, whatever its start's receipt says, so a question the agent stops on (a folder-trust screen, a login) is answered in its terminal.
 A start of a live tab that is still being confirmed, whose first prompt Hide could not confirm, or whose agent failed is reported by the start notice, with Retry and Show terminal, and by the tab's status, never by a start form over the terminal; the start form appears only where there is no pane, in a draft or an empty group.
+The start notice is drawn from the start's saved receipt too, so after a restart, or once another start took the core's task slot, an unconfirmed or failed live-tab start still says so and offers Check start status and Show terminal; the check recovers the original intent in the same pane, and its answer returns as the start notice, with Retry for a failed agent.
+Dismissing that notice ends it for the page's lifetime.
 New tab remains the tab bar's creation entry point.
 Starting in an enlarged pane returns that tab to its split layout and keeps its existing terminals running.
 While a start is being confirmed its temporary terminal occupies the existing reservation and does not appear as another tab.
@@ -283,7 +285,7 @@ A failed status check shows its reason immediately and offers another check of t
 If a definitely failed start's tab has since moved, the form keeps its inputs and submits a new intent at the tab's current location.
 Unsent input follows the same draft or live tab through moves, ungrouping and Undo.
 The text survives navigation and failure for this page's lifetime, as the start panel's text does, but is not saved across an app restart.
-After restart the saved intent can still be checked without recovering or resending its prompt.
+After restart the saved intent can still be checked without recovering or resending its prompt: a start with no pane from its form, a start that made a live tab from the start notice.
 If the original terminal's identity cannot be proven, the check keeps the result uncertain and never starts a replacement process.
 A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
 

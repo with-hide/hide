@@ -37,6 +37,9 @@ export function InlineStartHost() {
       for (const { device, path, receipt } of receipts) {
         if (useInlineStarts.getState().retired.has(receipt.request_id) || movedFailures.has(receipt.request_id)) continue;
         if (receipt.state === "ready" && (!receipt.agent_phase || receipt.agent_phase === "started")) continue;
+        // A start that made a live tab is answered by that tab's terminal, never
+        // a form over it (`AgentAreas`), so only a start with no pane gets its form back.
+        if (receipt.live_tab_id !== null) continue;
         const target = receiptTarget(receipt);
         const key = inlineStartKey(device, path, target);
         if (store.retarget(device, path, receipt.request_id, target) || useInlineStarts.getState().drafts[key]) continue;

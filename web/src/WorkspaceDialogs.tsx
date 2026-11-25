@@ -17,7 +17,11 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
-import { agentFailure, endedSentence } from "./startDraft";
+import { agentFailure, endedSentence, useInlineStarts } from "./startDraft";
+import { inlineReceipts, liveStartNotice, receiptTarget } from "./inlineStart";
+import { deviceConnected } from "./devices";
+import type { AgentKind } from "./agentPicker";
+import { useShallow } from "zustand/react/shallow";
 import { QuotedLine } from "./QuotedLine";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Note, Status } from "./components/settings-rows";
@@ -620,7 +624,9 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, unlisted, listed, o
 /**
  * The answers that arrive after their dialog is gone: the chosen agent's start
  * in a created pane, and a removal the operator hid while it ran. Only the
- * request this page made is reported, by its id or its checkout.
+ * request this page made is reported, by its id or its checkout; a live tab's
+ * start whose agent was unconfirmed or failed is reported from its saved
+ * receipt too, since its tab shows the terminal, never a start form over it.
  */
 export function WorkspaceNotices({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -629,7 +635,10 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
   const operation = useShellStore((s) => s.rest?.task_operation);
   const removal = useShellStore((s) => s.rest?.worktree_removal);
   const dialogOpen = useUiStore((s) => s.workspaceDialog?.kind === "delete_worktree");
-  const task = operation && operation.id === watchedTask ? operation : null;
+  const dismissed = useInlineStarts((s) => s.retired);
+  const live = useShellStore(useShallow((s) => liveStartNotice(s.rest, dismissed)));
+  const liveConnected = useShellStore((s) => live !== null && s.connection === "live" && deviceConnected(s.rest, live.device));
+  const task = (operation && operation.id === watchedTask ? operation : null) ?? live?.answering ?? null;
 
   useEffect(() => {
     if (!watchedRemoval || dialogOpen) return;
@@ -660,8 +669,41 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     actions.openAgent(focusWhenListed);
   }, [focusWhenListed, listed, actions]);
 
+  if (live && !live.answering && (!task || !task.agent_phase || task.agent_phase === "started")) {
+    // Only the saved receipt is left (a restart, or another start took the task
+    // slot): its check recovers the original intent in the same pane, and the
+    // core's answer comes back as the task notice below, with Retry on a failure.
+    const { device, path, receipt } = live;
+    return (
+      <Toast
+        level="important"
+        data-task-agent={receipt.agent_phase ?? undefined}
+        data-live-start={receipt.request_id}
+        onDismiss={() => useInlineStarts.getState().dismissLive(receipt.request_id)}
+        dismissLabel={t("workspace.dismiss")}
+        actions={
+          <>
+            <Button variant="text" size="inline" disabled={!liveConnected} onClick={() => actions.startAgent({ target: { checkoutPath: path }, deviceId: device, provider: (receipt.agent_kind ?? "terminal") as AgentKind, requestId: receipt.request_id, tabTarget: receiptTarget(receipt), confirmOnly: true })} data-live-start-check="true">
+              {t("groups.confirm")}
+            </Button>
+            {receipt.pane_id ? (
+              <Button variant="text" size="inline" onClick={() => actions.focusPane(receipt.pane_id as string)}>
+                {t("workspace.showPane")}
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        {`${endedSentence(t(receipt.agent_phase === "failed" ? "workspace.agentNotStarted" : "coreError.agent.unconfirmed"))} ${t("workspace.paneKept")}`}
+      </Toast>
+    );
+  }
   if (!task || !task.agent_phase || task.agent_phase === "started") return null;
-  const dismiss = () => useUiStore.getState().setWatchedTask(null);
+  const dismiss = () => {
+    useUiStore.getState().setWatchedTask(null);
+    // A live tab's answer would come back from its receipt; dismissing it ends that too.
+    if (task.request_id && inlineReceipts(useShellStore.getState().rest).some(({ receipt }) => receipt.request_id === task.request_id && receipt.live_tab_id !== null)) useInlineStarts.getState().dismissLive(task.request_id);
+  };
   const failure = agentFailure(task.agent_reason, task.agent_line);
   return (
     <Toast

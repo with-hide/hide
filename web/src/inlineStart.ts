@@ -1,11 +1,29 @@
 import type { AgentStartReceipt, AgentStartTarget } from "./agentLayout";
 import { findArea, locateDisplay } from "./areaLayout";
-import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type SnapshotRest, type TaskOperation } from "./snapshot";
 import { startAnswer, type StartAnswer } from "./startAnswer";
 
 export const receiptTarget = (receipt: AgentStartReceipt): AgentStartTarget => ({ group_id: receipt.group_id, area_id: receipt.area_id, tab_id: receipt.draft_tab_id ?? (receipt.add_pane ? receipt.live_tab_id : null), add_pane: receipt.add_pane });
 export function inlineReceipts(rest: SnapshotRest | null) {
   return catalogWorkspaces(rest).flatMap((workspace) => workspace.checkouts.flatMap((checkout) => (checkout.agent_groups?.start_receipts ?? []).map((receipt) => ({ device: workspace.device_id, path: checkout.path, receipt }))));
+}
+
+/**
+ * A live tab's start whose agent the core could not confirm or saw fail, and
+ * that the operator has not dismissed: the start notice's to show, since the
+ * tab itself shows its terminal. `answering` is the task that answers it now,
+ * or null after a restart or once another start took the task slot, when only
+ * the saved receipt is left and its notice offers the original intent's check.
+ */
+export function liveStartNotice(rest: SnapshotRest | null, dismissed: ReadonlySet<string>): { device: string; path: string; receipt: AgentStartReceipt; answering: TaskOperation | null } | null {
+  const operation = rest?.task_operation ?? null;
+  for (const { device, path, receipt } of inlineReceipts(rest)) {
+    if (receipt.live_tab_id === null || dismissed.has(receipt.request_id)) continue;
+    const answering = operation?.request_id === receipt.request_id ? operation : null;
+    const phase = answering ? answering.agent_phase : receipt.state === "ready" ? receipt.agent_phase : null;
+    if (phase === "unknown" || phase === "failed") return { device, path, receipt, answering };
+  }
+  return null;
 }
 
 /** Only a definite failure can be abandoned after the core moves its target. */
