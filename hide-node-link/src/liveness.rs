@@ -162,11 +162,19 @@ impl Liveness {
             let Some(left) = self.left() else {
                 break Gone::Silent;
             };
+            let asked = Instant::now();
             state = self
                 .changed
                 .wait_timeout(state, left)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
+            // A wait that ended a heartbeat or more past what it asked for
+            // was the machine asleep, which Windows's clock counts and
+            // Linux's and macOS's do not: the other end gets a whole limit
+            // from the wake, rather than every link ending as it wakes.
+            if asked.elapsed() > left + HEARTBEAT && self.heard.load(Ordering::Relaxed) != UNHEARD {
+                self.hear();
+            }
         };
         state.gone = Some(found.clone());
         drop(state);

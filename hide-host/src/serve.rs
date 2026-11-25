@@ -525,22 +525,24 @@ fn watch_link(
     stop_link: &(impl Fn() + Sync),
     panes: &crate::panes::Panes,
 ) {
-    liveness.watch(|gone| {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "node",
-                "kind": "link.gone",
-                "reason": gone.error("the core").to_string(),
-            })
-        );
-        match end {
-            LinkEnd::Process => {
-                stop_link();
-                panes.remove_folder();
-                std::process::exit(1);
-            }
-            LinkEnd::Shut(shut) => shut(),
+    liveness.watch(|gone| match end {
+        // Its standard error is the same dead connection, where a record
+        // could hold the exit; the core records the link's end.
+        LinkEnd::Process => {
+            stop_link();
+            panes.remove_folder();
+            std::process::exit(1);
+        }
+        LinkEnd::Shut(shut) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "node",
+                    "kind": "link.gone",
+                    "reason": gone.error("the core").to_string(),
+                })
+            );
+            shut();
         }
     });
 }
