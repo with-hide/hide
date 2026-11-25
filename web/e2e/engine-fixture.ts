@@ -152,6 +152,13 @@ export function paneInputLog(root: string, pane: string): string {
   return path.join(root, `input-${pane.replaceAll(":", "-")}.log`);
 }
 
+/** Each start's arguments the `claude` shim in `pane` was given, oldest first, under the run's root (`HIDE_E2E_ROOT`). */
+export function paneArguments(root: string, pane: string): string[][] {
+  const file = path.join(root, `argv-${pane.replaceAll(":", "-")}.jsonl`);
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
+}
+
 /** The `hide-agent-hooks` this worktree built, which a stand-in runs from inside its pane as the agent's own integration does. */
 export function builtHooks(): string {
   return path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));

@@ -50,6 +50,7 @@ pub mod panes;
 pub mod ports;
 pub mod profiles;
 pub mod project;
+pub mod prompt_files;
 pub mod register;
 pub mod reporting;
 pub mod root;

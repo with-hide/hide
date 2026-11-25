@@ -1605,27 +1605,15 @@ fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResu
             text,
         ));
     }
-    let origin_kind = item.pointer("/origin/kind").and_then(Value::as_str);
-    let origin_is_human = origin_kind == Some("human");
-    let origin_is_injected = matches!(origin_kind, Some("hook" | "system"));
+    let origin_is_human = item.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
     let external_human = item.get("userType").and_then(Value::as_str) == Some("external")
         && item.get("promptId").and_then(Value::as_str).is_some()
         && item
             .pointer("/message/content")
             .is_some_and(Value::is_string);
-    let is_meta = item.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
-    let is_system_prompt = item.get("promptSource").and_then(Value::as_str) == Some("system");
     // A compaction summary is Claude Code's own record, written as an external
-    // user prompt with a `promptId`; only these flags tell it from the operator.
-    let is_compact_summary = item
-        .get("isCompactSummary")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || item
-            .get("isVisibleInTranscriptOnly")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    let provider_injected = origin_is_injected || is_meta || is_system_prompt || is_compact_summary;
+    // user prompt with a `promptId`; only its flags tell it from the operator.
+    let provider_injected = claude_record_injected(item);
     let interrupted = is_interruption(&text);
     let command = slash_command_text(&text);
     let mut kind = if interrupted {
@@ -1977,25 +1965,111 @@ pub const INJECTED_PREFIXES: &[&str] = &[
 ];
 
 /// The tags a Project Memory delivery begins with: a prompt's cards follow
-/// Hide's instruction for reporting a stale one, the index stands alone.
-const MEMORY_TAGS: &[&str] = &["<hide-memory-context", "<hide-memory-instruction"];
+/// Hide's instruction for reporting a stale one, the index stands alone, and
+/// the open questions a prompt gives are a block of their own beside them.
+const MEMORY_TAGS: &[&str] = &[
+    "<hide-memory-context",
+    "<hide-memory-instruction",
+    // The open questions a prompt gives, beside the cards.
+    "<hide-open-questions",
+];
 
 fn has_injected_prefix(text: &str) -> bool {
-    let text = text.trim_start();
-    let memory_context = MEMORY_TAGS.iter().any(|tag| {
-        text.strip_prefix(tag)
+    injected_len(text.trim_start()).is_some()
+}
+
+/// `text` without the injected blocks it begins with, and the whitespace
+/// between them (as it is when it begins with none): what is left is the operator's own words, empty when the
+/// whole text was injected.
+/// A block ends at its closing tag when the prefix is a tag (and the AGENTS.md
+/// instructions at `</INSTRUCTIONS>`; a receipt line after one, at its own `/>`); a prefix that is a sentence, or a tag
+/// never closed, takes the rest of the text, so an operator who pastes such a
+/// sentence as the first words of a message to an agent that does not mark it
+/// loses the message.
+pub(crate) fn strip_injected(text: &str) -> &str {
+    let mut rest = text.trim_start();
+    if injected_len(rest).is_none() {
+        return text;
+    }
+    loop {
+        if let Some(len) = injected_len(rest) {
+            rest = rest[len..].trim_start();
+        } else if let Some(len) = receipt_len(rest) {
+            rest = rest[len..].trim_start();
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// The length of a receipt line (`<hide-memory-receipt …/>` or
+/// `<hide-asks-receipt …/>`) `text` begins with. It ends a delivery of
+/// context and is injected only after one: a receipt alone is as likely to be
+/// words an operator typed, which the label reader leaves as theirs.
+fn receipt_len(text: &str) -> Option<usize> {
+    [
+        label_transcript::RECEIPT_MARKER,
+        label_transcript::ASKS_RECEIPT_MARKER,
+    ]
+    .iter()
+    .any(|marker| text.starts_with(marker))
+    .then(|| text.find("/>").map_or(text.len(), |at| at + "/>".len()))
+}
+
+/// The length of the injected block `text` (already trimmed at the start)
+/// begins with.
+fn injected_len(text: &str) -> Option<usize> {
+    let memory = MEMORY_TAGS.iter().find(|tag| {
+        text.strip_prefix(**tag)
             .and_then(|suffix| suffix.chars().next())
             .is_some_and(|boundary| boundary == '>' || boundary.is_ascii_whitespace())
     });
-    memory_context
-        || INJECTED_PREFIXES
+    let prefix = memory.copied().or_else(|| {
+        INJECTED_PREFIXES
             .iter()
             .chain(LOCAL_COMMAND_REPLIES)
-            .any(|prefix| text.starts_with(prefix))
+            .find(|prefix| text.starts_with(**prefix))
+            .copied()
+    })?;
+    let close = if prefix.starts_with("# AGENTS.md instructions") {
+        Some("</INSTRUCTIONS>".to_owned())
+    } else {
+        prefix.strip_prefix('<').map(|name| {
+            let name = name.trim_end_matches('>');
+            format!("</{name}>")
+        })
+    };
+    let end = close
+        .and_then(|close| text.find(&close).map(|at| at + close.len()))
+        .unwrap_or(text.len());
+    Some(end)
 }
 
+/// Whether a Claude Code record is Claude Code's own and not the operator's:
+/// a hook's or the system's message, a meta message, a system prompt, a
+/// compaction summary. The label reader and the thread converter both ask.
+pub(crate) fn claude_record_injected(item: &Value) -> bool {
+    let flag = |name: &str| item.get(name).and_then(Value::as_bool).unwrap_or(false);
+    matches!(
+        item.pointer("/origin/kind").and_then(Value::as_str),
+        Some("hook" | "system")
+    ) || flag("isMeta")
+        || item.get("promptSource").and_then(Value::as_str) == Some("system")
+        || flag("isCompactSummary")
+        || flag("isVisibleInTranscriptOnly")
+}
+
+/// A Grok user chunk's own flag in `_meta` (`hostTurn`, `hideFromScrollback`,
+/// `interjection`).
+pub(crate) fn grok_flag(meta: Option<&Value>, name: &str) -> bool {
+    meta.and_then(|meta| meta.get(name)) == Some(&Value::Bool(true))
+}
+
+/// Claude Code's record of an interrupted turn and Codex's note for the
+/// model after one (`<turn_aborted>`): the same fact in each agent's words.
 fn is_interruption(text: &str) -> bool {
-    text.trim_start().starts_with("[Request interrupted")
+    let text = text.trim_start();
+    text.starts_with("[Request interrupted") || text.starts_with("<turn_aborted>")
 }
 
 fn slash_command_text(text: &str) -> Option<String> {

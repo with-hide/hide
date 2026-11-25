@@ -6,7 +6,7 @@
 import { threadLines, type AcpSessionUpdate, type DeskOutput, type DeskSessionRef, type ThreadHidePart, type ThreadLine, type ThreadReadFailure } from "./desk";
 import { missionCounts, missionTurn } from "./missions";
 import { heldBy } from "./components/mission-hold";
-import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, SnapshotRest, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
+import type { AgentRow, MissionsSnapshot, PlansSnapshot, PlanView, SessionThreadHistorySection, SessionThreadSection, ThreadPart, ThreadSession, ThreadUpdate } from "./snapshot";
 
 export type ThreadConversation = {
   /** Every update the thread holds, oldest first. */
@@ -46,18 +46,6 @@ export function threadInputHeld(thread: SessionThreadSection | null): "pane_chan
   if (thread.pane === "gone") return "pane_gone";
   if (thread.input?.state === "sending") return "in_flight";
   return null;
-}
-
-/**
- * The model Hide launched the thread's session with, for its head's second
- * line: the launch choice the Overview map reads (`overview_graph.sessions`),
- * never a claim about a later switch inside the agent; null when the launch
- * chose none, so the line names no model the system cannot produce.
- */
-export function threadLaunchModel(rest: SnapshotRest | null | undefined, thread: SessionThreadSection | null): string | null {
-  if (!thread?.pane_id || !thread.machine) return null;
-  const launch = rest?.overview_graph?.sessions.find((one) => one.device_id === thread.machine && one.pane_id === thread.pane_id);
-  return launch?.launch_model ?? null;
 }
 
 /** The sections a thread's parts are found in, apart from the rows: a screen redraws the thread when only these move. */

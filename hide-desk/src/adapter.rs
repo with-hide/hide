@@ -236,6 +236,36 @@ impl AdapterId {
             _ => None,
         }
     }
+
+    /// How the adapter marks a turn that failed when it still answers the
+    /// prompt as ended: codex-acp passes Codex's own thread status on, which
+    /// is `systemError` only after a failed turn, and then writes the
+    /// model's error as reply text and answers `end_turn` (letter-47671).
+    /// An adapter that refuses the prompt itself, as Claude's does, needs
+    /// none.
+    pub fn failed_turn_mark(self) -> Option<FailedTurnMark> {
+        match self.0 {
+            AgentId::Codex => Some(FailedTurnMark {
+                pointer: "/_meta/codex/threadStatus/type",
+                value: "systemError",
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// A `session_info_update` field that says the running turn failed: the
+/// value at `pointer` in the update is `value`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailedTurnMark {
+    pub pointer: &'static str,
+    pub value: &'static str,
+}
+
+impl FailedTurnMark {
+    pub fn marks(self, update: &Value) -> bool {
+        update.pointer(self.pointer).and_then(Value::as_str) == Some(self.value)
+    }
 }
 
 /// The Claude tools held by an ask rule: what Claude would otherwise run

@@ -1,6 +1,7 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { botStarter } from "./bots";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
+import { useBesideDesk } from "./components/sidebar-agent-row";
 import { Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
@@ -516,7 +517,9 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const { t } = useInterfaceTranslation();
   const { agent, card, project } = entry;
   const session = useMemo(() => sessionOfAgent(agent), [agent]);
-  const go = () => { if (!disabled) actions.openListedAgent(agent.pane_id); };
+  // A row's press while Desk is in front opens the session beside Desk; a ⌘-click its tab (PRD desk-2-ui B3-B5).
+  const go = (event?: { metaKey: boolean; ctrlKey: boolean }) => { if (!disabled) actions.openSidebarRow(agent.pane_id, { tab: Boolean(event?.metaKey || event?.ctrlKey) }); };
+  const beside = useBesideDesk(agent.pane_id);
   // Pressed on the row, the record opens in this agent's own slot (operator decision 2026-11-09).
   const record = session ? () => actions.openSessionRecord(session, { pane: agent.pane_id }) : null;
   const toggle = () => actions.toggleSessionTree(agent.pane_id);
@@ -544,9 +547,9 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
-            title={[agent.identity_label, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
-            onClick={(event) => { event.stopPropagation(); go(); }}
+          <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected || beside ? "true" : undefined} data-desk-beside={beside ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
+            title={[beside ? t("desk.room.besideHint") : null, agent.identity_label, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
+            onClick={(event) => { event.stopPropagation(); go(event); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationBadge(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationBadge(agent)} className={markTone(agent)} />}
@@ -847,7 +850,8 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
     const own = child.device_id;
     return own !== parent.device_id && own !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, own, t) : null;
   });
-  const go = () => { if (!disabled) actions.openListedAgent(child.pane_id); };
+  const go = (event?: { metaKey: boolean; ctrlKey: boolean }) => { if (!disabled) actions.openSidebarRow(child.pane_id, { tab: Boolean(event?.metaKey || event?.ctrlKey) }); };
+  const beside = useBesideDesk(child.pane_id);
   const record = session ? () => actions.openSessionRecord(session, { pane: child.pane_id }) : null;
   const toggle = () => actions.toggleSessionTree(child.pane_id);
   const menu = useTaskMenu(child, record, go, false, disabled, actions, false);
@@ -859,10 +863,10 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
+          <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected || beside ? "true" : undefined} data-desk-beside={beside ? "true" : undefined} aria-expanded={open ?? undefined}
             aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
-            title={[child.identity_label, agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
-            onClick={(event) => { event.stopPropagation(); go(); }}
+            title={[beside ? t("desk.room.besideHint") : null, child.identity_label, agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
+            onClick={(event) => { event.stopPropagation(); go(event); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             <StatusMark mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} profile={child.profile} />

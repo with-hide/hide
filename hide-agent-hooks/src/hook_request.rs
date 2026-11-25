@@ -165,6 +165,12 @@ pub struct ExecStart {
 /// it ([`is_attempt_executor`]).
 pub const AGENT_EXEC_ATTEMPT: &str = "--attempt";
 
+/// The flag of `hide agent exec` that names the file a start's first input
+/// waits in (`Call::PromptFile`): the executor reads it, removes it and
+/// hands its text to the program as its last argument, so the text never
+/// crosses the pane's shell. After the attempt, when the start has one.
+pub const AGENT_EXEC_PROMPT_FILE: &str = "--prompt-file";
+
 /// A process as the system keeps it apart from any later one with the same
 /// pid: the pid and when it started (`hide_platform::process::start_time`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]

@@ -6,7 +6,7 @@
 //! connection to the core.
 
 pub use hide_agent_hooks::report::{
-    HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn, RefusalKind,
+    HookAsked, HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn, RefusalKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,12 +69,6 @@ pub const PROJECT_OPEN_ACCEPT: std::time::Duration = std::time::Duration::from_s
 /// How long a node waits for the outcome of an accepted open: past the
 /// core's own 30 s wait for the registration, which answers on its own.
 pub const PROJECT_OPEN_ANSWER: std::time::Duration = std::time::Duration::from_secs(40);
-/// How often a node that dialed its core writes [`NodeEvent::Ping`].
-pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
-/// How long the attach role waits for a byte from its node before it ends
-/// the link as gone: three heartbeats.
-pub const HEARTBEAT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Which shell a pane runs, as its terminal and the shell's pid and
 /// start: the identity a bootstrap checks a caller against.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -163,9 +157,9 @@ pub enum NodeEvent {
     StreamData { stream: u64, data: String },
     /// The command's side of the stream ended.
     StreamClosed { stream: u64 },
-    /// The node is alive: a node that dialed its core says so every
-    /// [`HEARTBEAT`], so the attach role on the core's machine ends a link
-    /// whose node fell silent (PRD core-host-node-remote-core B20).
+    /// The link is alive: each end says so every
+    /// [`HEARTBEAT`](crate::liveness::HEARTBEAT) as
+    /// [`PING_LINE`](crate::liveness::PING_LINE) (`crate::liveness`).
     Ping,
     /// Base64 bytes the node read from a stream's end (the
     /// browser relay or a loopback server) on a stream the core opened with `link_open`.
@@ -238,6 +232,15 @@ pub struct PanesStarted {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Both ends drop the ping by its exact line, so the line the core
+    /// writes is the node's own event as the node writes it.
+    #[test]
+    fn the_ping_line_is_the_node_s_ping_event() {
+        let mut line = serde_json::to_vec(&NodeEvent::Ping).unwrap();
+        line.push(b'\n');
+        assert_eq!(line, crate::liveness::PING_LINE);
+    }
 
     /// A device kit older than letter bundles asks without `bundle`, which
     /// reads as false, so the core hands it its letters as before.

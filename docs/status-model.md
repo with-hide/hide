@@ -538,7 +538,8 @@ Each of the four groups above is then a group of the rows the operator's lists e
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
 
 A read, unanswered question, approval or block is Seen in this group, a question the core laid included (needs-you-cleanup D-09, D-10).
-Every list and number of the operator's turns follows the group, so they say one number: the app icon badge, the 프로젝트 tab, the 태스크 list's 내 차례 in 상태별 and in each project's band, the project chip `내 차례 N`, the phone's 내 차례, and desktop and phone notifications (operator decision 2026-11-23, replacing the read-list exception of 2026-11-14).
+Every list and number of the operator's turns follows the group, so they say one number: the app icon badge, the 프로젝트 tab, the 태스크 list's 내 차례 in 상태별 and in each project's band, the project chip `내 차례 N`, the Overview map's My turn filter, its project rows and its `나를 기다리는 것` list, the phone's 내 차례, and desktop and phone notifications (operator decision 2026-11-23, replacing the read-list exception of 2026-11-14; the map followed the marks until 2026-11-25).
+The number itself is drawn in three places, the device rail's badge, a project's chip (the map's project rows and folded project nodes included) and the 태스크 list's 내 차례 band, so the sidebar's Overview and Missions rows, the map's My turn chip and the tool rail carry none in the warning colour; the Overview toolbar button keeps its warning dot, which is no number, and the phone's Missions tab keeps its badge until the phone is changed (operator decision 2026-11-25).
 The 태스크 list keeps a read ask where the operator finds it again, at the top of 쉬는 중, drawn read ([A question still waiting](#a-question-still-waiting)).
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.

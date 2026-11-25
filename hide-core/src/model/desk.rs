@@ -24,37 +24,23 @@ pub struct DeskSnapshot {
     pub lane: DeskLane,
 }
 
-/// Desk's lane as the core keeps it across a restart (D-64, B31, B32): its
-/// pin, and the tabs the operator kept in its 보기 column. Which columns
-/// show, the preview tab and the thread in the tool column are the window's.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+/// The widths of Desk's two panels as the operator last dragged them (PRD
+/// desk-2-ui D-06, D-07, B22, B23), in CSS pixels; `None` until dragged, so
+/// the shell draws its own first width. Which session is open beside Desk,
+/// whether the tab panel shows and which tab is in front are the window's,
+/// never the core's (B26).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeskLane {
-    pub pinned: bool,
-    /// Oldest first, at most `DESK_KEPT_TABS_MAX`.
-    pub kept: Vec<DeskKeptTab>,
+    /// The tab panel's width: its left edge.
+    pub view_width: Option<u32>,
+    /// The session panel's width: the edge between it and the tab panel.
+    pub session_width: Option<u32>,
 }
 
-/// Tabs the 보기 column keeps; keeping one more is refused `desk_tabs_full`.
-pub const DESK_KEPT_TABS_MAX: usize = 16;
-
-/// A tab kept in Desk's 보기 column: a job's output as its card listed it
-/// when it was kept, or a mission's map (B34).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DeskKeptTab {
-    Output { job: String, output: DeskJobOutput },
-    Mission { mission: String, title: String },
-}
-
-impl DeskKeptTab {
-    /// The tab's identity: one tab per output of a job, one per mission.
-    pub fn key(&self) -> String {
-        match self {
-            Self::Output { job, output } => format!("output:{job}:{}", output.id),
-            Self::Mission { mission, .. } => format!("mission:{mission}"),
-        }
-    }
-}
+/// The widest a stored panel width may be; a wider one is refused
+/// `desk_lane_width_invalid`, as is zero.
+pub const DESK_LANE_WIDTH_MAX: u32 = 8192;
 
 /// The `desk_jobs` section: the sessions Desk started and the ones waiting
 /// in its queue, newest first (B20-B24, B36-B39).
@@ -455,7 +441,38 @@ pub struct DeskConversationSnapshot {
     pub items: Vec<DeskItem>,
     /// Items dropped from the front to keep the conversation in its cap.
     pub dropped: u64,
+    /// Messages the operator sent while a reply was being written, in the
+    /// order they go: none is in `items` until its turn starts.
+    pub queued: Vec<DeskQueuedMessage>,
+    /// How many messages may wait; a send past it is refused
+    /// `desk_queued_full` and its words stay in the composer.
+    pub queued_max: usize,
+    /// The line is full: the screen says so, and ✕ on one frees a place.
+    pub queued_full: bool,
+    /// The line waits for the operator: the agent refused the message at
+    /// its head (a sign-in, a session that did not open), so nothing goes
+    /// until `다시 시작` or a new message.
+    pub queued_held: bool,
 }
+
+/// A message waiting for the turn before it to end (desk.md: "while a reply
+/// is being written, the next message waits"); `desk_queued_remove` takes
+/// it out before it goes. It is the whole message: its words, chips and
+/// files go together, whether it waits from the start or came back first in
+/// line because the agent never took it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskQueuedMessage {
+    pub id: u64,
+    pub text: String,
+    pub at_ms: u64,
+    pub mentions: Vec<DeskMention>,
+    /// The files sent with it, which reach the agent as paths when it goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DeskAttachment>,
+}
+
+/// Messages that wait at once; one more is refused `desk_queued_full`.
+pub const DESK_QUEUED_MAX: usize = 8;
 
 /// One line of the conversation, kept in Desk's store as it is sent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -466,6 +483,10 @@ pub enum DeskItem {
         text: String,
         at_ms: u64,
         mentions: Vec<DeskMention>,
+        /// The files sent with the message, drawn on its bubble; the agent
+        /// got their paths before the words.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<DeskAttachment>,
     },
     Reply {
         id: u64,
@@ -533,8 +554,15 @@ pub enum DeskItem {
         card: DeskCardKind,
         /// The command, or the files an edit changes, as the agent asked.
         command: String,
+        /// The folder the command runs in, or that holds the files an edit
+        /// changes; none where Hide cannot name one.
         folder: Option<String>,
         reason: Option<String>,
+        /// The row of Settings › Labs › Desk › 권한 the request reads as,
+        /// whose name is the card's kind (`hide 명령` for a `hide` line);
+        /// none on a card kept from before it was sent.
+        #[serde(default)]
+        row: Option<DeskRow>,
         state: DeskApprovalState,
         /// Why it asks, irreversible kinds first (D-82): what
         /// `이 대화에서 계속 허용` keeps allowed. Empty on a card kept from
@@ -579,11 +607,20 @@ impl DeskItem {
     /// cap.
     pub fn text_bytes(&self) -> usize {
         match self {
-            Self::User { text, mentions, .. } => {
+            Self::User {
+                text,
+                mentions,
+                attachments,
+                ..
+            } => {
                 text.len()
                     + mentions
                         .iter()
                         .map(|mention| mention.id.len() + mention.name.len())
+                        .sum::<usize>()
+                    + attachments
+                        .iter()
+                        .map(|file| file.name.len() + file.path.len())
                         .sum::<usize>()
             }
             Self::Reply { text, mentions, .. } => {
@@ -622,6 +659,16 @@ impl DeskItem {
             Self::Switch { .. } => 0,
         }
     }
+}
+
+/// A file the operator dropped, pasted or picked into Desk's composer
+/// (PRD desk-2-ui B41): its name and size as the composer showed them, and
+/// the path the window's hided staged it at, which the agent was given.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeskAttachment {
+    pub name: String,
+    pub bytes: u64,
+    pub path: String,
 }
 
 /// A session or project the operator named with `@`; the message's text
@@ -684,6 +731,9 @@ pub enum DeskCardKind {
 /// Why a card asks (`hide_desk::permission::Ask`).
 pub type DeskAsk = hide_desk::permission::Ask;
 
+/// A row of Settings › Labs › Desk › 권한 (`hide_desk::permission::Row`).
+pub type DeskRow = hide_desk::permission::Row;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskApprovalState {
@@ -717,6 +767,9 @@ pub enum DeskNotice {
     /// The turn failed; the detail is the agent's own one-line reason, when
     /// it gave one.
     TurnFailed,
+    /// A file the message named was gone, so the agent was not asked and the
+    /// message went back to the operator's input (PRD desk-2-ui B41).
+    AttachmentsGone,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

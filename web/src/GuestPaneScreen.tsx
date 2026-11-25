@@ -135,14 +135,13 @@ function GuestTab({ tab, active, actions }: { tab: GuestPane; active: boolean; a
 }
 
 /** The machine's letters beside a row or a tab of its work, with its name as the hint (B10). */
-export function GuestMark({ pane }: { pane: Pick<GuestPane, "machine" | "mark"> }) {
-  return (
-    <Hint label={pane.machine}>
-      <span className="shrink-0 rounded-xs bg-device-remote px-xs text-micro font-medium text-primary-foreground" data-guest-mark={pane.machine}>
-        {pane.mark}
-      </span>
-    </Hint>
+export function GuestMark({ pane, named = true }: { pane: Pick<GuestPane, "machine" | "mark">; /** `false` where the text beside it already names the machine: the letters are only drawn, with no hint and no name of their own. */ named?: boolean }) {
+  const letters = (
+    <span aria-hidden={named ? undefined : "true"} className="shrink-0 rounded-xs bg-device-remote px-xs text-micro font-medium text-primary-foreground" data-guest-mark={pane.machine}>
+      {pane.mark}
+    </span>
   );
+  return named ? <Hint label={pane.machine}>{letters}</Hint> : letters;
 }
 
 /** The pane's terminal: drawn and typed into by its address here, and sized by this window while it is the one typing. */

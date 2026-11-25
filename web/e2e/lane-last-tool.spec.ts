@@ -109,7 +109,7 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
 
     // The document is kept, and its rail button stands the desk with Memory
     // floating over its right edge (D-50).
-    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveAttribute("data-lane-badge", "1");
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");

@@ -40,6 +40,18 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
 
+/// A start's answer when another start holds this machine's start line:
+/// nothing was started, and the same start asked again goes through once
+/// the line is free.
+pub(crate) const SPAWN_BUSY: &str = "spawn_busy";
+
+/// Waits until no start holds this machine's start line, each holding it
+/// for the seconds a start takes. False for a line a panicked start
+/// poisoned, which refuses every start, so a caller does not wait on it.
+pub(crate) fn wait_for_spawn_line() -> bool {
+    SPAWN.lock().is_ok()
+}
+
 /// The refusal for a spawn whose machine already runs the most pane holders
 /// it keeps: the machine and the node's own count and cap, so the caller
 /// knows where to end finished agents.
@@ -577,10 +589,9 @@ fn launch_prompt(
     kind: &str,
     args: &[String],
     brief: &str,
-    here: bool,
     form: Option<&StartForm>,
 ) -> Option<Vec<String>> {
-    crate::start_prompt::launched(kind, args, brief, here, form)
+    crate::start_prompt::launched(kind, args, brief, form)
         .map_err(|refusal| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
@@ -603,7 +614,6 @@ fn launch_prompt(
 fn brief_words(
     reserved: &SpawnRecord,
     start_args: &[String],
-    here: bool,
     form: Option<&StartForm>,
 ) -> Result<Option<Vec<String>>, String> {
     let Some(brief) = reserved.brief.as_deref() else {
@@ -625,7 +635,7 @@ fn brief_words(
     if reserved.brief_phase() != super::BriefPhase::NotTyped {
         return Ok(None);
     }
-    Ok(launch_prompt(&reserved.kind, start_args, brief, here, form))
+    Ok(launch_prompt(&reserved.kind, start_args, brief, form))
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
@@ -1510,7 +1520,7 @@ fn spawn(
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
     // creates something runs under it.
-    let single = SPAWN.try_lock().map_err(|_| "spawn_busy")?;
+    let single = SPAWN.try_lock().map_err(|_| SPAWN_BUSY)?;
     let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
         // A device's path names no project of the caller's machine.
         own_registration(
@@ -1963,8 +1973,9 @@ fn spawn(
                 .brief_input
                 .as_ref()
                 .is_some_and(|input| input.route == SendRoute::Launch);
-            let words = brief_words(&reserved, &start_args, !on_device, form.as_ref())?;
+            let words = brief_words(&reserved, &start_args, form.as_ref())?;
             let carried = words.clone();
+            let mut prompt = None;
             if let Some(words) = words {
                 if !launched_before {
                     reserved = serde_json::from_value(mutate(
@@ -1978,7 +1989,9 @@ fn spawn(
                     )?)
                     .map_err(|_| "spawn_unavailable")?;
                 }
-                start_args.extend(words);
+                let (lead, last) = crate::start_prompt::split_carried(words);
+                start_args.extend(lead);
+                prompt = last;
                 crate::diagnostic!(json!({
                     "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
                     "pane_id": pane,
@@ -2009,6 +2022,7 @@ fn spawn(
                 codex_daemon,
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+                prompt,
                 &check,
             )
             .map_err(|not| {
@@ -3023,7 +3037,6 @@ mod tests {
             super::brief_words(
                 &record("opencode", Some("launch"), &["--prompt=-go"]),
                 &[],
-                true,
                 by_name,
             ),
             Ok(Some(vec!["--prompt=-go".to_owned()]))
@@ -3031,47 +3044,37 @@ mod tests {
         // An earlier build's launched record has no words: its start gave
         // the brief as carried, and nothing is asked.
         assert_eq!(
-            super::brief_words(&record("codex", Some("launch"), &[]), &[], true, by_name),
+            super::brief_words(&record("codex", Some("launch"), &[]), &[], by_name),
             Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
         );
         assert_eq!(
             super::brief_words(
                 &record("codex", Some("launch"), &[]),
                 &["--".into(), "mine".into()],
-                true,
                 by_name,
             ),
             Err("brief_launch_unrecorded".to_owned())
         );
         // A brief that was typed is never launched by a later start.
         assert_eq!(
-            super::brief_words(&record("codex", Some("typed"), &[]), &[], true, by_name),
+            super::brief_words(&record("codex", Some("typed"), &[]), &[], by_name),
             Ok(None)
         );
-        // Only a fresh start decides: here it launches as its node starts
-        // the program, by its name or its file, and a device's start, and a
-        // program Windows runs through cmd.exe, is typed.
-        assert_eq!(
-            super::brief_words(&record("codex", None, &[]), &[], false, by_name),
-            Ok(None)
-        );
+        // Only a fresh start decides: it launches as the pane's node, this
+        // machine's or a device's, starts the program, by its name or its
+        // file, and a program Windows runs through cmd.exe is typed.
         let direct = StartForm::Direct {
             program: "C:/node/node.exe".into(),
             leading: vec!["C:/npm/node_modules/@openai/codex/bin/codex.js".into()],
         };
         for form in [by_name, Some(&direct)] {
             assert_eq!(
-                super::brief_words(&record("codex", None, &[]), &[], true, form),
+                super::brief_words(&record("codex", None, &[]), &[], form),
                 Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
             );
         }
         assert_eq!(
-            super::brief_words(
-                &record("codex", None, &[]),
-                &[],
-                true,
-                Some(&StartForm::Batch)
-            ),
+            super::brief_words(&record("codex", None, &[]), &[], Some(&StartForm::Batch)),
             Ok(None)
         );
     }

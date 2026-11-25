@@ -70,31 +70,54 @@ export function sendPathImport(payload: Record<string, unknown>): boolean {
   return true;
 }
 
-/** Thread inputs sent and not answered yet, so hided's refusal of one reaches its thread, not a pane. Capped like `paneByRequest`. */
-const threadRequests = new Set<string>();
+/** Composer sends (a thread's input, a Desk message) not answered yet, so hided's refusal of one reaches its composer, not a pane. Capped like `paneByRequest`. */
+const composerRequests = new Set<string>();
+
+function rememberComposer(requestId: string): void {
+  composerRequests.add(requestId);
+  while (composerRequests.size > MAX_TRACKED_REQUESTS) {
+    const oldest = composerRequests.values().next().value;
+    if (oldest === undefined) break;
+    composerRequests.delete(oldest);
+  }
+}
+
+/**
+ * Desk's composer (PRD desk-2-ui B41): stages the files of one message to
+ * Desk's agent as a thread input's are, `<request>-<index>` each, and answers
+ * the request and stages its `desk_send` names; `refused` when a cap refuses
+ * the files before a byte leaves the page, null when there is no connection.
+ * hided's own refusal reaches the composer as `composerRefusal` under the
+ * request.
+ */
+export function stageDeskFiles(files: AttachmentInput[]): { request_id: string; stages: string[] } | { refused: string } | null {
+  if (!sender) return null;
+  const reason = preflightRefusal(files);
+  if (reason) return { refused: reason };
+  const requestId = crypto.randomUUID();
+  rememberComposer(requestId);
+  const stages = files.map((file, index) => {
+    const stage = `${requestId}-${index}`;
+    stageFile(stage, file);
+    return stage;
+  });
+  return { request_id: requestId, stages };
+}
 
 /**
  * A thread's input box (B29): the files stage as an attachment's do, then one
  * `thread_input` names them with the words. Answers the input's request id,
- * which the thread section's `input` settles, or null when there is no
- * connection or a cap refuses the files before a byte leaves the page.
+ * which the thread section's `input` settles, the reason a cap refuses the
+ * files before a byte leaves the page, or null when there is no connection.
  */
-export function submitThreadInput(generation: number, paneId: string, text: string, files: AttachmentInput[]): string | null {
+export function submitThreadInput(generation: number, paneId: string, text: string, files: AttachmentInput[]): string | { refused: string } | null {
   if (!sender) return null;
   const requestId = crypto.randomUUID();
   if (files.length > 0) {
     const reason = preflightRefusal(files);
-    if (reason) {
-      useShellStore.getState().setThreadInputRefusal({ request_id: requestId, reason });
-      return null;
-    }
+    if (reason) return { refused: reason };
   }
-  threadRequests.add(requestId);
-  while (threadRequests.size > MAX_TRACKED_REQUESTS) {
-    const oldest = threadRequests.values().next().value;
-    if (oldest === undefined) break;
-    threadRequests.delete(oldest);
-  }
+  rememberComposer(requestId);
   const stages = files.map((file, index) => {
     const stage = `${requestId}-${index}`;
     stageFile(stage, file);
@@ -116,6 +139,8 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
       return t("panes.attachment.tooMany", { minimum: 1, maximum: MAX_FILES });
     case "staging_full":
       return t("panes.attachment.stagingFull");
+    case "desk_full":
+      return t("panes.attachment.deskFull");
     case "invalid_request_id":
       return t("panes.attachment.invalidName");
     case "size_mismatch":
@@ -137,10 +162,10 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
 }
 
 export function receiveAttachmentRefusal(payload: { request_id: string; reason: string }): void {
-  const thread = [...threadRequests].find((id) => payload.request_id === id || payload.request_id.startsWith(`${id}-`));
+  const thread = [...composerRequests].find((id) => payload.request_id === id || payload.request_id.startsWith(`${id}-`));
   if (thread) {
-    threadRequests.delete(thread);
-    useShellStore.getState().setThreadInputRefusal({ request_id: thread, reason: payload.reason });
+    composerRequests.delete(thread);
+    useShellStore.getState().setComposerRefusal({ request_id: thread, reason: payload.reason });
     return;
   }
   for (const [batch, folder] of folderByDrop) {

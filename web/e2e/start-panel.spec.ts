@@ -7,7 +7,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { corePaneFocus, withControl } from "./daemon-actions";
-import { startFixture } from "./engine-fixture";
+import { paneArguments, startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -95,17 +95,11 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     expect(known.has(pane)).toBe(false);
     // The core holds the keyboard in the new pane too, not only the page.
     await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === pane || undefined, `the focus of ${pane}`, 30_000));
-    // The shell echoes the command line the core typed, so its arguments are read from the pane's text with the
-    // line breaks a narrow pane wraps it at taken out, rather than from the screen as laid out.
+    // The prompt reaches the agent from a file its start line reads, so the arguments are read from what the
+    // stand-in was given, not from the line the shell echoes.
     await expect
-      .poll(
-        async () => {
-          const shown = (await page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane)).replace(/\s+/g, "");
-          return ["--dangerously-skip-permissions", "skipDangerousModePermissionPrompt", "--modelopus", "첫지시확인용문장"].every((part) => shown.includes(part));
-        },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
+      .poll(() => paneArguments(fixture.root, pane).at(-1), { timeout: 30_000 })
+      .toEqual(["--dangerously-skip-permissions", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--model", "opus", "--", "첫 지시 확인용 문장"]);
 
     // B29: the next open preselects the kind and its model, with no 최근 mark, and the text is empty.
     await openFromPalette(page);

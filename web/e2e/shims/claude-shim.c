@@ -501,6 +501,16 @@ int main(int argc, char **argv) {
     for (char *at = pane_log + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
     log_path = pane_log;
   }
+  /* The words the pane's start gave the program, after the pane's shell read
+     its line, under the pane's own id (`engine-fixture.ts`, `paneArguments`):
+     a start's first input reaches the program from a file the line reads, so
+     the line the shell echoes does not show it. */
+  if (pane_root && pane && *pane) {
+    char arguments[4096];
+    if (snprintf(arguments, sizeof arguments, "%s/argv-%s.jsonl", pane_root, pane) >= (int)sizeof arguments) return 1;
+    for (char *at = arguments + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
+    if (append_argv(arguments, argc, argv)) return 1;
+  }
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32
   flags |= _O_BINARY;

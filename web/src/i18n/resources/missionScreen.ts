@@ -6,7 +6,6 @@ import type { Catalog, Catalogs } from "../schema";
 // a desk (operator decision 2026-11-09).
 export const missionScreenEnglish = {
   "missionScreen.title": "Missions",
-  "missionScreen.rowHint": "Missions · {{count}} your turn",
   "missionScreen.count_one": "{{count}} mission",
   "missionScreen.count_other": "{{count}} missions",
   "missionScreen.allProjects": "All projects",
@@ -61,7 +60,6 @@ export const missionScreenEnglish = {
 
 const ko: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.title": "미션",
-  "missionScreen.rowHint": "미션 · 내 차례 {{count}}",
   "missionScreen.count_one": "{{count}}개",
   "missionScreen.count_other": "{{count}}개",
   "missionScreen.allProjects": "모든 프로젝트",
@@ -116,7 +114,6 @@ const ko: Catalog<typeof missionScreenEnglish> = {
 
 const zh: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.title": "任务",
-  "missionScreen.rowHint": "任务 · 轮到你 {{count}}",
   "missionScreen.count_one": "{{count}} 个",
   "missionScreen.count_other": "{{count}} 个",
   "missionScreen.allProjects": "所有项目",
@@ -171,7 +168,6 @@ const zh: Catalog<typeof missionScreenEnglish> = {
 
 const ja: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.title": "ミッション",
-  "missionScreen.rowHint": "ミッション · あなたの番 {{count}}",
   "missionScreen.count_one": "{{count}} 件",
   "missionScreen.count_other": "{{count}} 件",
   "missionScreen.allProjects": "すべてのプロジェクト",

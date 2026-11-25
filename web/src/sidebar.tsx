@@ -9,8 +9,10 @@ import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hi
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
+import { FoldRow, PROJECT_COLUMN } from "./components/fold-row";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
+import { askingCount, deskOn, type DeskJob } from "./desk";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
@@ -28,7 +30,6 @@ import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } fr
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { SidebarAutomationLookRow, SidebarAutomationRow, useEveryDeviceAutomationAsks, useEveryDeviceAutomationLooks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
-import { useMissionTurnCount } from "./MissionScreen";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
@@ -73,15 +74,14 @@ import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
-import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
-import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, usePeerRows } from "./GuestWorkRows";
+import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, useGuestInFront, usePeerRows } from "./GuestWorkRows";
+import { guestFoldInFront, NO_CHECKOUT_ROWS, type GuestLayout } from "./guestWork";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
-import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
 function engineRowLabel(state: string | null, t: TFunction<"translation">): string | null {
@@ -108,15 +108,14 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const tool = useFrontTool();
   // The switch has no chord of its own until the operator binds one (issue 170).
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
-  // The operator's counts are not the tool's: a tool's cell shows its grey number on its tile alone (B41).
-  const operatorOverviewCount = useOverviewCount();
-  const overviewCount = tool ? 0 : operatorOverviewCount;
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
   const missionsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "missions");
-  const operatorMissionsCount = useMissionTurnCount();
-  const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const automationsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "automations");
+  // Desk's row stands only while Settings › Labs › Desk has it on (PRD desk-2-ui D-32, B44, B46).
+  const deskShown = useShellStore((s) => deskOn(s.desk));
+  const deskSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "desk");
+  const deskAsking = useShellStore((s) => askingCount(s.deskJobs?.jobs ?? NO_DESK_JOBS));
   // The runs no one has looked at yet (B1); a tool's cell keeps the operator's numbers off its screen (B41).
   const operatorAutomationsCount = useShellStore((s) => s.automations?.unseen ?? 0);
   const automationsCount = tool ? 0 : operatorAutomationsCount;
@@ -173,14 +172,14 @@ export function Sidebar({ actions }: { actions: Actions }) {
         <div className="sidebar-header-container flex min-h-0 min-w-0 flex-1 flex-col">
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
-            overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
+            overview={{ selected: overviewSelected, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            desk={deskShown ? { selected: deskSelected, asking: deskAsking, chord: null, onOpen: () => actions.openDesk() } : undefined}
+            missions={{ selected: missionsSelected, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />
-          <DeskSidebarEntry actions={actions} />
           {status ? (
             <div className="border-b border-border px-md py-sm text-caption text-muted-foreground">{status}</div>
           ) : null}
@@ -580,7 +579,7 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
         <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
-        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} /> : null}
+        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} columns={GUESTS_OUTSIDE} /> : null}
         {/* A tool's cell with no work says so in the same place, in the tool's words (B42). */}
         {!remote && workspaces.length === 0 ? (
           <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
@@ -647,7 +646,6 @@ const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack 
   return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });
 
-const NO_CHECKOUT_ROWS: ReadonlySet<string> = new Set();
 
 /**
  * A raised Needs You or Done section above the project tree
@@ -753,7 +751,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       depth={0}
       ask={agent.state.needs_you}
       selected={agent.pane_id === context.focusRowPane}
-      onOpen={(id) => context.actions.openListedAgent(id)}
+      onOpen={(id, how) => context.actions.openSidebarRow(id, how)}
       onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
@@ -775,12 +773,22 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
 // chevron stands at its left, on its tab's guide. A row's menu opens on a
 // right-click, or the menu key or ⇧F10 on the focused row; nothing on the
 // row stands for it.
-/** Where a project's name, a checkout's kind glyph, a plain folder's glyph, a group header's chevron and every fold start. */
-const PROJECT_COLUMN = "var(--spacing-sm)";
 /** Where a plain folder's name and its agent marks start. */
-const PROJECT_NAME_COLUMN = "calc(var(--spacing-sm) + var(--size-checkout-icon) + var(--spacing-sm))";
+const PROJECT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-sm))`;
 /** Where a checkout's name, its line two and its agents' marks start. */
 const CHECKOUT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
+/**
+ * Where another machine's work stands (B10, operator review 2026-11-25):
+ * after a checkout's rows, or at a project's end, on the column of the
+ * checkout's own rows; after a folder's rows on the folder's; and outside
+ * every project with its head where the list's folds start and its rows on
+ * a folder's column. Its rail runs down the glyph column a tab's guide hangs
+ * from.
+ */
+const GUEST_RAIL = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) / 2)`;
+const GUESTS_IN_CHECKOUT = { head: CHECKOUT_NAME_COLUMN, rows: CHECKOUT_NAME_COLUMN, rail: GUEST_RAIL };
+const GUESTS_IN_FOLDER = { head: PROJECT_NAME_COLUMN, rows: PROJECT_NAME_COLUMN, rail: GUEST_RAIL };
+const GUESTS_OUTSIDE = { head: PROJECT_COLUMN, rows: PROJECT_NAME_COLUMN, rail: GUEST_RAIL };
 /** Where a group header's briefcase stands, one step past the chevron it shares with the checkout's glyph column; its rows' guide hangs under it. */
 const GROUP_GLYPH_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-icon-sm) + var(--spacing-xs))`;
 
@@ -797,51 +805,6 @@ const ROW_REVEALED =
 /** A row's time and fold slot, a step apart as on an agent row, so every row's time ends on one column. */
 function RowEnd({ children }: { children: ReactNode }) {
   return <span className="relative flex shrink-0 items-center gap-xs self-stretch">{children}</span>;
-}
-
-/**
- * One disclosure for both inactive folds, the project level's and the checkout level's; its chevron stands in the fold slot.
- * It is `current` while it hides the focused checkout, and carries the selection for it.
- */
-function FoldRow({
-  label,
-  count,
-  expanded,
-  current = false,
-  badge,
-  onToggle,
-  ...data
-}: {
-  label: string;
-  count: number;
-  expanded: boolean;
-  current?: boolean;
-  /** The marks of what the fold holds (a `StatusBadge`), so a demand inside a fold is seen without opening it. */
-  badge?: ReactNode;
-  onToggle: () => void;
-} & Record<`data-${string}`, string>) {
-  const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
-  return (
-    <RowButton
-      aria-expanded={expanded}
-      aria-current={current ? "true" : undefined}
-      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-muted-foreground")}
-      style={{ paddingLeft: PROJECT_COLUMN }}
-      onClick={onToggle}
-      {...data}
-    >
-      <span className="min-w-0 flex-1 truncate">
-        {label} {count}
-      </span>
-      {/* The badge keeps a project row's gap to the fold slot, so its right edge lines up with the project badges around it. */}
-      <span className="flex shrink-0 items-center gap-xs">
-        {badge}
-        <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
-          <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
-        </span>
-      </span>
-    </RowButton>
-  );
 }
 
 /** The fold on a project or checkout row: a folded one is always shown, an open one waits for the pointer (D-3). */
@@ -989,10 +952,14 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const hideAiListed = useShellStore((s) => s.rest?.navigator?.hide_ai_checkouts);
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const expanded = !disclosure || projectExpanded(workspace);
-  // Another machine's panes started in this project's folders stand under the
-  // checkout row that holds them, and at the project's end when no row does,
-  // whatever is folded (PRD device-connect-iroh B10, `guestPlaces`).
-  const guestEnd = (rows: ReadonlySet<string>) => (workspace.remote_target_id ? null : <GuestProjectRows projectId={workspace.id} rows={rows} actions={actions} />);
+  // Another machine's panes started in this project's folders belong to it:
+  // under the checkout row that holds them, else at the project's end inside
+  // it, and hidden with it by the project's fold or the fold their checkout
+  // waits in (PRD device-connect-iroh B10, operator review 2026-11-25,
+  // `guestPlaces`). The one the center shows marks the fold that hides it
+  // (`guestFoldInFront`).
+  const guestRows = !workspace.remote_target_id;
+  const guestsInFront = useGuestInFront();
   const folder = folderCheckout(workspace);
   if (folder) {
     return (
@@ -1004,14 +971,15 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             agentRows={rowsByCheckout.get(folder.id) ?? NO_BOARD_ROWS}
             focused={context.workspaceScreen && folder.id === context.focusedCheckoutId}
             first={first}
+            guests={guestRows}
             context={context}
           />
         )}
-        {guestEnd(NO_CHECKOUT_ROWS)}
       </>
     );
   }
-  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestEnd(NO_CHECKOUT_ROWS);
+  // Every checkout waits under 정리할 것: the project draws no row, and its machines' heads stand in its place.
+  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} layout={NO_CHECKOUT_ROWS} columns={GUESTS_OUTSIDE} actions={actions} /> : null;
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1025,7 +993,6 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   const others = [...activeDrawn, ...emptyFold, ...inactiveDrawn].filter((checkout) => !checkout.is_primary);
   const othersOpen = workspace.inactive_checkouts.expanded;
   const othersMarks = sumMarks(others.map((checkout) => checkout.agent_summary?.marks));
-  const guestRows = !workspace.remote_target_id;
   const checkoutRow = (checkout: Checkout) => (
     <CheckoutRowView
       key={checkout.id}
@@ -1038,9 +1005,15 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
       context={context}
     />
   );
-  const rowCheckouts = new Set(expanded ? [...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id) : []);
+  const guestLayout: GuestLayout = {
+    open: expanded,
+    rows: new Set([...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id)),
+    folded: new Set(othersOpen ? [] : others.map((checkout) => checkout.id)),
+  };
+  const guestFold = guestRows ? guestFoldInFront(guestsInFront.panes, guestsInFront.inFront, workspace.id, guestLayout) : null;
+  const projectCurrent = hiding === "project" || guestFold === "project";
+  const othersCurrent = !othersOpen && ((context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)) || guestFold === "others");
   return (
-    <>
     <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
@@ -1050,13 +1023,13 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
         data-project-menu={workspace.id}
       >
         <div
-          className={cn("flex min-h-(--size-project-row) w-full items-center gap-xs rounded-sm pr-xs", hiding === "project" ? "bg-secondary" : "hover:bg-accent")}
+          className={cn("flex min-h-(--size-project-row) w-full items-center gap-xs rounded-sm pr-xs", projectCurrent ? "bg-secondary" : "hover:bg-accent")}
           style={{ paddingLeft: PROJECT_COLUMN }}
         >
           <button
             type="button"
             data-project-row={workspace.id}
-            aria-current={hiding === "project" ? "true" : undefined}
+            aria-current={projectCurrent ? "true" : undefined}
             aria-label={workspace.label}
             className="flex min-w-0 flex-1 self-stretch items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={() => {
@@ -1077,7 +1050,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               workspace={workspace}
               items={() => projectMenu(workspace, menuHost(), t, issueSource)}
               onSelect={(item) => runProjectItem(actions, workspace, item)}
-              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
+              fill={projectCurrent ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
             >
               <RepositoryMark workspace={workspace} actions={actions} />
             </RowActions>
@@ -1104,7 +1077,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
                 label={t("sidebar.otherCheckouts")}
                 count={others.length}
                 expanded={othersOpen}
-                current={!othersOpen && context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)}
+                current={othersCurrent}
                 badge={<StatusBadge counts={othersMarks} data-other-checkouts-status={workspace.id} />}
                 onToggle={() => actions.toggleInactiveCheckouts(workspace.path)}
                 data-other-checkouts={workspace.id}
@@ -1112,11 +1085,10 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               {othersOpen ? <ul>{others.map(checkoutRow)}</ul> : null}
             </li>
           ) : null}
+          {guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} layout={guestLayout} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
         </ul>
       ) : null}
     </li>
-    {guestEnd(rowCheckouts)}
-    </>
   );
 }
 
@@ -1289,7 +1261,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
-      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} inset={CHECKOUT_NAME_COLUMN} actions={actions} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} folder={checkout.path} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
     </li>
   );
 });
@@ -1308,6 +1280,7 @@ const FolderRowView = memo(function FolderRowView({
   agentRows,
   focused,
   first,
+  guests = false,
   context,
 }: {
   workspace: Workspace;
@@ -1316,6 +1289,8 @@ const FolderRowView = memo(function FolderRowView({
   focused: boolean;
   /** The first row of its list: no project-block hairline above it. */
   first: boolean;
+  /** Draw another machine's panes started in the folder after its own rows (B10). */
+  guests?: boolean;
   context: ListContext;
 }) {
   const { t } = useInterfaceTranslation();
@@ -1387,6 +1362,7 @@ const FolderRowView = memo(function FolderRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={PROJECT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} folder={checkout.path} columns={GUESTS_IN_FOLDER} actions={actions} /> : null}
     </li>
   );
 });
@@ -1782,7 +1758,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             tree={tree}
             remote={remote}
             selected={agent.pane_id === context.focusRowPane}
-            onOpen={depth === 0 || !parent ? (id) => context.actions.openListedAgent(id) : (id) => context.actions.followRelation(parent.pane_id, id, agent.identity_label)}
+            onOpen={depth === 0 || !parent ? (id, how) => context.actions.openSidebarRow(id, how) : (id, how) => (context.actions.rowOpensBesideDesk(how) ? context.actions.openDeskSession(id) : context.actions.followRelation(parent.pane_id, id, agent.identity_label))}
             onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
             inset={inset}
             // A tree row is one line with no branch (B14); the popover names a differing branch.
@@ -1800,6 +1776,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
 }
 
 const NO_PANES: ReadonlySet<string> = new Set();
+const NO_DESK_JOBS: DeskJob[] = [];
 
 /** What a row's menu reads from the host when it opens: the OS file manager, and the new-tab chord the registry binds here. */
 function menuHost(): MenuHost {

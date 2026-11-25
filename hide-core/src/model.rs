@@ -2268,6 +2268,12 @@ pub struct SidebarAgentSnapshot {
     /// state. Missing source content remains absent rather than inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the permission request the agent waits on asks to run, as its
+    /// hook named it (`HookAsked`), for an agent whose session names no call
+    /// until it is allowed (Codex): the phone's card shows it. Absent while
+    /// the agent waits on nothing a hook named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked: Option<hide_node_link::panes::HookAsked>,
     /// What the core asks on this row for the agent, when the question is
     /// the core's and not the agent's own; the row then draws no sentence
     /// of its own and every surface words the subject.
@@ -5148,6 +5154,12 @@ pub struct UiStateSnapshot {
     /// Absence is the default collapsed state.
     #[serde(default)]
     pub expanded_inactive_project_device_ids: Vec<String>,
+    /// Heads of another machine's work the operator folded, oldest first
+    /// (`guest_work_fold_toggle`, at most `guest_panes::MAX_FOLDS`).
+    /// Absence is the default open state, so an older store needs no
+    /// migration.
+    #[serde(default)]
+    pub folded_guest_work: Vec<crate::guest_panes::GuestWorkFold>,
     #[serde(default)]
     pub project_base_branches: BTreeMap<String, String>,
     /// Private choices keyed by machine plus canonical main-worktree root.
@@ -5279,6 +5291,10 @@ pub struct UiStateSnapshot {
     /// Content-free product statistics, shared by every window of this core.
     #[serde(default = "default_panel_visible")]
     pub product_analytics_enabled: bool,
+    /// Whether the tool rail draws the gray counts on the Project and Hide AI
+    /// icons (Settings > General). The hover text states the counts either way.
+    #[serde(default = "default_panel_visible")]
+    pub rail_counts_shown: bool,
     /// The UTC day each surface last sent `hide_active`. Persisted, never on
     /// the wire.
     #[serde(skip)]
@@ -6213,6 +6229,7 @@ impl Default for UiStateSnapshot {
             expanded_checkout_ids: Vec::new(),
             expanded_inactive_checkout_project_paths: Vec::new(),
             expanded_inactive_project_device_ids: Vec::new(),
+            folded_guest_work: Vec::new(),
             project_base_branches: BTreeMap::new(),
             project_settings: BTreeMap::new(),
             project_settings_writes: BTreeMap::new(),
@@ -6249,6 +6266,7 @@ impl Default for UiStateSnapshot {
             first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
             product_analytics_enabled: true,
+            rail_counts_shown: true,
             product_active_days: Default::default(),
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),
@@ -11935,6 +11953,7 @@ mod wire_enum_tests {
                 DeskNotice::InstallFailed,
                 DeskNotice::NoAskMode,
                 DeskNotice::TurnFailed,
+                DeskNotice::AttachmentsGone,
             ],
         );
         checked.insert("desk_notice");

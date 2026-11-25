@@ -10,7 +10,7 @@
 
 import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -43,20 +43,10 @@ export function handedSession(item: Extract<DeskItem, { kind: "handed" }>): Desk
   return { name: item.name, mark: item.mark, agent_kind: item.agent_kind, pane_id: item.pane_id };
 }
 
-/** Every card Desk's lane can open as a thread (B25, D-86): its jobs, their missions' workers, and the other sessions its conversation names. */
+/** Every card Desk has (D-86): its jobs, their missions' workers, and the other sessions its conversation names or opened beside it. */
 export function laneCards(section: DeskJobsSection | null | undefined): DeskJob[] {
   if (!section) return [];
   return [...section.jobs, ...section.workers, ...section.named];
-}
-
-/** The lane's key for the thread of a session that is no job of Desk's (D-87): the id its card carries once the core sends it. */
-export function sessionThreadId(paneId: string): string {
-  return `pane:${paneId}`;
-}
-
-/** The pane a lane thread key names when it is no job's id. */
-export function threadKeyPane(id: string): string | null {
-  return id.startsWith("pane:") ? id.slice("pane:".length) : null;
 }
 
 /** The card of the session a chip names: by its pane when the chip knows it, else by its name. */
@@ -107,6 +97,19 @@ export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonl
 
 export type DeskApproval = Extract<DeskItem, { kind: "approval" }>;
 
+/** The names a JSON-RPC peer gives its own errors; an agent's refusal arrives behind one, which says nothing to the operator. */
+const WIRE_ERROR_NAME = /^(?:parse error|invalid request|method not found|invalid params|internal error)\s*:\s*/i;
+
+/**
+ * The agent's reason a turn failed, in plain words (B5): without the protocol's error name, and none at all when the
+ * reply above the notice already says it, since a reason is shown once. `reply` is the reply the failed turn left.
+ */
+export function failureReason(detail: string | null, reply: string | null): string | null {
+  const reason = detail?.replace(WIRE_ERROR_NAME, "").trim() ?? "";
+  if (reason === "" || reply?.includes(reason)) return null;
+  return reason;
+}
+
 /**
  * The longest line `거절…` takes, in UTF-16 units: three bytes each at most
  * outside the astral planes, so it stays under the core's 2048-byte refusal
@@ -156,7 +159,7 @@ export type AcpContentBlock =
  * sender as written, a cut text or image, and when a call or its result was
  * written (Unix milliseconds).
  */
-export type AcpMeta = { hide?: { origin?: "letter" | "interrupted" | "injected"; from?: string; truncated?: boolean; at_ms?: number } } | null;
+export type AcpMeta = { hide?: { origin?: "letter" | "interrupted"; from?: string; truncated?: boolean; at_ms?: number } } | null;
 
 /** ACP `ToolCallContent`. */
 export type AcpToolCallContent =
@@ -213,7 +216,7 @@ export type ThreadHidePart =
 /** One drawn line of a thread, after chunks are joined and call updates folded into their call. */
 export type ThreadLine =
   /** `peer` is a letter's sender, when the record names it. */
-  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted" | "injected"; peer: DeskSessionRef | null }
+  | { kind: "user"; id: string; message: string | null; text: string; images: AcpContentBlock[]; origin: "operator" | "letter" | "interrupted"; peer: DeskSessionRef | null }
   | { kind: "agent"; id: string; message: string | null; text: string }
   | { kind: "thought"; id: string; message: string | null; text: string }
   /** `startedAtMs` is when the session made the call, when its record says. */
@@ -340,70 +343,9 @@ export function outputKindOf(kind: SessionViewKind): DeskOutputKind | null {
   }
 }
 
-export type ThreadGroupKey = "turn" | "working" | "done";
-
-/**
- * Which Threads group a job is listed in (B28): what waits on the operator,
- * what runs, what ended. A sleeping or archived thread is in none: the
- * list's foot counts them and opens them under it (`restingThreads`).
- */
-export function threadGroupOf(job: DeskJob): ThreadGroupKey | null {
-  switch (job.state) {
-    case "asking":
-    case "failed":
-      return "turn";
-    case "queued":
-    case "starting":
-    case "working":
-      return "working";
-    case "done":
-    case "cancelled":
-    case "closed":
-      return "done";
-    case "sleeping":
-    case "archived":
-    case "moved_out":
-      return null;
-  }
-}
-
-/** The threads the list's foot counts (proposal scene 6): asleep, and archived; a mission's workers stay under their Conductor. */
-export function restingThreads(jobs: readonly DeskJob[]): { sleeping: DeskJob[]; archived: DeskJob[] } {
-  const workers = new Set(jobs.flatMap((job) => job.workers));
-  const top = jobs.filter((job) => job.pane_id === null || !workers.has(job.pane_id));
-  return { sleeping: top.filter((job) => job.state === "sleeping"), archived: top.filter((job) => job.state === "archived") };
-}
-
-export type ThreadGroup = { key: ThreadGroupKey; jobs: DeskJob[] };
-
-/**
- * The Threads list (B28): the groups in their fixed order, each only while it
- * holds a thread; a mission's workers are listed under their Conductor, never
- * at the top level, and a job that left Desk is not listed.
- */
-export function threadGroups(jobs: readonly DeskJob[]): ThreadGroup[] {
-  const workers = new Set(jobs.flatMap((job) => job.workers));
-  const groups: ThreadGroup[] = [
-    { key: "turn", jobs: [] },
-    { key: "working", jobs: [] },
-    { key: "done", jobs: [] },
-  ];
-  for (const job of jobs) {
-    if (job.pane_id !== null && workers.has(job.pane_id)) continue;
-    const key = threadGroupOf(job);
-    if (key) groups.find((group) => group.key === key)!.jobs.push(job);
-  }
-  return groups.filter((group) => group.jobs.length > 0);
-}
-
-/** The ☰ badge: threads asking the operator (B28). */
+/** The sessions Desk started that ask the operator: the sidebar Desk row's warning mark (PRD desk-2-ui B46). */
 export function askingCount(jobs: readonly DeskJob[]): number {
   return jobs.filter((job) => job.state === "asking").length;
-}
-
-/** The ▣ badge: outputs not looked at yet (B31). */
-export function unseenOutputs(jobs: readonly DeskJob[]): number {
-  return jobs.reduce((sum, job) => sum + job.outputs.filter((output) => !output.seen).length, 0);
 }
 
 /**

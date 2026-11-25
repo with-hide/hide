@@ -103,6 +103,7 @@ export function DeskMentionMenu({ tree, searching = false, entered = null, activ
           <>
             {tree.rows.length ? <CommandGroup heading={t(searching ? "desk.mention.matched" : "desk.mention.sessions")} data-desk-mention-group="sessions">{tree.rows.map(session)}</CommandGroup> : null}
             {tree.found.length ? <CommandGroup heading={t("desk.mention.childSessions")} data-desk-mention-group="children">{tree.found.map(session)}</CommandGroup> : null}
+            {tree.rows.length + tree.found.length + tree.projects.length === 0 ? <p className="px-sm py-md text-caption text-muted-foreground" data-desk-mention-empty="true">{t("desk.mention.none")}</p> : null}
             {(tree.rows.length || tree.found.length) && tree.projects.length ? <CommandSeparator /> : null}
             {tree.projects.length ? (
               <CommandGroup heading={t("desk.mention.projects")} data-desk-mention-group="projects">

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { Blob as NodeBlob } from "node:buffer";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
+import { keepSent } from "../../deskComposer";
 import type { DeskJob } from "../../desk";
 import type { SessionThreadSection } from "../../snapshot";
 import { useShellStore } from "../../store";
@@ -30,7 +32,10 @@ let mounted: ReturnType<typeof createRoot>[] = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
+  useShellStore.setState({ connection: "live" });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });
@@ -43,7 +48,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -52,7 +57,7 @@ async function mount() {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={job} actions={actions} pinned={false} onBack={noop} onPin={noop} onClose={noop} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -79,6 +84,17 @@ it("opens its pane's thread while shown, draws what the core read, and closes it
   await act(async () => root.unmount());
   mounted = [];
   expect(actions.closeThread).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a sleeping session's record above the foot that wakes it once its card is gone with its pane (PRD desk-2-ui B43)", async () => {
+  const { container } = await mount(null, <p data-foot="true">에이전트 깨우기</p>);
+  await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.textContent).toContain("다크도 찍어줘");
+  expect(container.textContent).toContain("라이트는 끝났어요");
+  // The foot stands in the input box's place, after the conversation.
+  const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
+  expect(conversation.compareDocumentPosition(container.querySelector('[data-foot="true"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector("textarea")).toBeNull();
 });
 
 it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {
@@ -142,4 +158,75 @@ it("asks for the page before once per state the core shows, a failed read includ
   await reachTop();
   expect(actions.readOlderThread).toHaveBeenCalledTimes(2);
   expect(actions.readOlderThread).toHaveBeenLastCalledWith(4);
+});
+
+/** A file whose bytes the tray reads in, as a browser's File gives them (jsdom's has no `stream`). */
+function readable(name: string, bytes: Uint8Array<ArrayBuffer>): File {
+  const file = new File([bytes], name);
+  file.stream = () => new NodeBlob([bytes]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
+  return file;
+}
+
+/** A file the tray must never read: past the cap, its bytes stay where they are (desk-2-ui B42). */
+function unreadable(name: string, size: number): File {
+  const file = new File([], name);
+  Object.defineProperty(file, "size", { value: size });
+  file.stream = () => { throw new Error(`${name} was read`); };
+  file.arrayBuffer = () => Promise.reject(new Error(`${name} was read`));
+  return file;
+}
+
+async function drop(target: Element, files: File[]) {
+  const transfer = { types: ["Files"], files, dropEffect: "none" };
+  for (const kind of ["dragenter", "dragover", "drop"]) {
+    const event = new Event(kind, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: transfer });
+    await act(async () => { target.dispatchEvent(event); });
+  }
+}
+
+it("takes dropped files above the box, holds send while one is past 20 MB without reading it, and sends the rest once it is out (desk-2-ui B41, B42)", async () => {
+  const { container, type, enter } = await mount();
+  await act(async () => useShellStore.setState({ sessionThread: section() }));
+  await type("이 로그도 같이 봐 줘");
+  const frame = container.querySelector("[data-desk-composer-frame]")!;
+  await drop(frame, [readable("install.log", new Uint8Array([7, 8, 9])), unreadable("all-logs.zip", 20 * 1024 * 1024 + 1)]);
+  await vi.waitFor(() => expect(container.querySelector('[data-desk-attachment="ready"]')).not.toBeNull());
+
+  const big = container.querySelector('[data-desk-attachment="too_large"]');
+  expect(big?.textContent).toContain("Over 20 MB");
+  expect(container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(true);
+  await enter();
+  expect(events).toEqual([]);
+
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-desk-attachment-remove="all-logs.zip"]')!.click());
+  expect(container.querySelectorAll("[data-desk-attachment]")).toHaveLength(1);
+  expect(container.querySelector<HTMLButtonElement>('[data-desk-composer-send="true"]')?.disabled).toBe(false);
+  await enter();
+  expect(events.map((event) => event.kind)).toEqual(["attachment_stage", "thread_input"]);
+  expect(events[0]!.payload).toMatchObject({ name: "install.log", size: 3 });
+  expect(events[1]!.payload).toMatchObject({ text: "이 로그도 같이 봐 줘", stages: [events[0]!.payload.request_id] });
+});
+
+it("draws the files a sent message typed before its words over its bubble, by the names they were sent under (desk-2-ui B41)", async () => {
+  const { container } = await mount();
+  const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+  const typed = `"/Users/me/.hide/state/attachments/${stage}-0-화면 1.png" "C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log" 이것 좀 봐 줘`;
+  keepSent(`${stage}-1`, "install.log", null);
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: typed } }], parts: {}, sessions: {} } }) }));
+  const sent = container.querySelector("[data-desk-sent-attachments]");
+  expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
+  expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
+});
+
+it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
+  const { container } = await mount();
+  const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = container.querySelector('[data-desk-thread-line="interrupted"]');
+  expect(line?.textContent).toBe("Interrupted");
+  expect(container.textContent).not.toContain("Request interrupted");
+  // The only bubble is the operator's own words.
+  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
 });

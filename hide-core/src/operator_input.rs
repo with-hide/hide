@@ -616,9 +616,11 @@ impl Rows {
     /// The command the last approval dialog on `screen` asks for, when the
     /// dialog draws it as a one-line command: the dialog is the one the
     /// ask's first row (its lowest, highlighted or not) closes, found by the
-    /// nearest `slot.title` above that row; under the title, the first line
-    /// that begins with `slot.separator`, then the command, past its indent
-    /// only, then that same separator line again. A command behind a border
+    /// nearest `slot.title` above that row; under the title, either the first
+    /// line that begins with `slot.separator`, then the command, past its
+    /// indent only, then that same separator line again, or the lowest line
+    /// that begins with `slot.prompt`, with only blank lines before the row.
+    /// A command behind a border
     /// or a gutter (`│`), as an agent draws one of more lines, and a dialog
     /// of any other shape are `None`, so the shape is read before anything
     /// on it is taken for the command's text.
@@ -637,11 +639,25 @@ impl Rows {
             )
         })?;
         let title = lines[..row].iter().rposition(|line| *line == slot.title)?;
+        if let Some(prompt) = &slot.prompt {
+            // The command is the lowest line under the title that begins with
+            // the prompt, and nothing but blank lines stands between it and
+            // the row: a command the screen wraps puts text there.
+            let at = title
+                + 1
+                + lines[title + 1..row]
+                    .iter()
+                    .rposition(|line| line.starts_with(prompt.as_str()))?;
+            let command = lines[at].strip_prefix(prompt.as_str())?.trim();
+            return (lines[at + 1..row].iter().all(|line| line.is_empty()) && !command.is_empty())
+                .then_some(command);
+        }
+        let separator = slot.separator.as_deref()?;
         let opens = title
             + 1
             + lines[title + 1..row]
                 .iter()
-                .position(|line| line.starts_with(slot.separator.as_str()))?;
+                .position(|line| line.starts_with(separator))?;
         match lines[opens..row] {
             [separator, command, closes, ..]
                 if closes == separator
@@ -694,12 +710,14 @@ pub fn choice_screen(agent_kind: &str, ask: Ask, choice: &str, labels: &[String]
     }
 }
 
-/// Whether the agent's permission names no command, since it records a call
-/// only once it is allowed (`unnamed` in its key table).
-pub fn unnamed_permission(agent_kind: &str) -> bool {
+/// Whether the agent's permission is named by its hook, since the agent
+/// records a call only once it is allowed (`by_hook` in its key table): the
+/// card's command is the one its permission request hook gave, and no screen
+/// check is made of it.
+pub fn permission_by_hook(agent_kind: &str) -> bool {
     answer_table(agent_kind)
         .and_then(|answer| answer.permission.as_ref())
-        .is_some_and(|permission| permission.unnamed)
+        .is_some_and(|permission| permission.by_hook)
 }
 
 /// Whether `key` acts on the highlighted row, or moves it: every key but
@@ -755,6 +773,95 @@ mod tests {
     use crate::engine::fake::{FakeEngine, reply};
     use hide_node_link::terminal::{GridSize, InputPermitReply, KeyTarget, TerminalControl};
     use std::sync::Mutex;
+
+    /// One machine's node as an attachment meets it: the core's own reads
+    /// the staged files, a device's stages them and answers its own path.
+    #[derive(Default)]
+    struct FileNode {
+        staged: Mutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl crate::node_access::NodeLink for FileNode {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+            use hide_node_link::protocol::Call;
+            let answer = match call {
+                Call::ReadAttachments { paths } => serde_json::to_value(
+                    paths
+                        .iter()
+                        .map(|path| {
+                            let name = path.rsplit('/').next().unwrap().to_owned();
+                            hide_node_link::attachments::ReadFile::new(path.clone(), name, b"PNG")
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+                // The device's staging names each file itself (`hide_host::attachments`).
+                Call::StageAttachment {
+                    request,
+                    index,
+                    file,
+                    ..
+                } => {
+                    let path = format!(
+                        "C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-{index}.png"
+                    );
+                    self.staged
+                        .lock()
+                        .unwrap()
+                        .push((path.clone(), file.bytes().unwrap()));
+                    serde_json::Value::from(path)
+                }
+                other => panic!("an attachment asks no {other:?}"),
+            };
+            Ok(hide_node_link::LinkAnswer::Parsed(answer))
+        }
+    }
+
+    /// A session's input on a connected device (PRD desk-2-ui B41, Risks):
+    /// the file the composer staged on the core's machine crosses the link
+    /// and the agent is typed the device's own path, spelled as a path
+    /// crosses machines (`/` between names); with the link down nothing is
+    /// staged or typed and the input is refused, so the screen keeps it.
+    #[test]
+    fn a_device_session_s_file_crosses_the_link_and_the_agent_gets_the_device_s_path() {
+        let own = Arc::new(FileNode::default());
+        let device = Arc::new(FileNode::default());
+        let request = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+        let staged = format!("/state/attachments/{request}-0-shot.png");
+        let attach = Attach::new(
+            true,
+            Arc::clone(&own) as _,
+            Some(Ok(Arc::clone(&device) as _)),
+        );
+        assert_eq!(
+            attach.words("봐 줘", std::slice::from_ref(&staged), request),
+            Ok(format!(
+                "\"C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png\" 봐 줘"
+            ))
+        );
+        assert_eq!(
+            device.staged.lock().unwrap().as_slice(),
+            [(
+                format!("C:/Users/alice/.hide/state/terminal-attachments/hide-{request}-0.png"),
+                b"PNG".to_vec()
+            )]
+        );
+
+        let attach = Attach::new(
+            true,
+            Arc::clone(&own) as _,
+            Some(Err("not connected".to_owned())),
+        );
+        assert_eq!(
+            attach.words("봐 줘", &[staged], request),
+            Err("device_unreachable")
+        );
+        assert_eq!(device.staged.lock().unwrap().len(), 1);
+    }
 
     /// A node that answers every permit as `allow` says and records the
     /// bytes asked for; anything else a writer did to the terminal would be
@@ -1291,6 +1398,41 @@ mod tests {
         assert!(!antigravity.shows(
             "Requesting permission for:\n   touch a\n\nRun this command?\n> 1. Yes, run command",
             Some(0)
+        ));
+    }
+
+    /// Codex draws the command on its own `$ ` line under its title, with only
+    /// blank lines before the rows: a command the card names is typed on only
+    /// while that line holds the same command, never on another dialog, a
+    /// wrapped command, a line of another prompt or a row with no dialog.
+    #[test]
+    fn codexs_command_is_read_from_its_dollar_line_alone() {
+        let codex = choice_screen("codex", Ask::Permission, "allow", &[]).showing("cargo test");
+        let dialog = |body: &str| {
+            format!(
+                "Would you like to run the following command?\n\nEnvironment: local\n\n{body}\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)\n"
+            )
+        };
+        assert!(codex.shows(&dialog("Reason: why\n\n$ cargo test"), None));
+        assert!(codex.shows(&dialog("$ cargo test"), Some(0)));
+        assert!(!codex.shows(&dialog("$ cargo test --all"), None));
+        assert!(!codex.shows(&dialog("$ cargo"), None));
+        assert!(!codex.shows(&dialog("# cargo test"), None));
+        assert!(!codex.shows(&dialog("$ cargo test\n   --all"), None));
+        assert!(!codex.shows(&dialog("Reason: $ cargo test"), None));
+        assert!(!codex.shows("› 1. Yes, proceed (y)\n", None));
+        // The dialog of an edit has another title and draws no command line.
+        assert!(!codex.shows(
+            "Would you like to make the following edits?\n\n$ cargo test\n\n› 1. Yes, proceed (y)\n",
+            None
+        ));
+        // An earlier dialog's command above the title is not this one's.
+        assert!(!codex.shows(
+            &format!(
+                "$ cargo test\n\n{}",
+                dialog("Reason: why").replace("run the following command", "run the next command")
+            ),
+            None
         ));
     }
 

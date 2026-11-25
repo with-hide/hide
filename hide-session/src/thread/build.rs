@@ -43,7 +43,8 @@ pub(crate) enum Part<'a> {
 pub(crate) enum Origin {
     #[default]
     Operator,
-    /// Context the harness, a hook or Hide put in the conversation.
+    /// Context the harness, a hook or Hide put in the conversation: never
+    /// drawn, so `Thread::user` leaves it out.
     Injected,
     /// A Hide letter delivered as a prompt.
     Letter,
@@ -55,7 +56,9 @@ impl Origin {
     const fn as_str(self) -> Option<&'static str> {
         match self {
             Self::Operator => None,
-            Self::Injected => Some("injected"),
+            // `Thread::user` leaves an injected message out, so none is drawn
+            // with a mark.
+            Self::Injected => None,
             Self::Letter => Some("letter"),
             Self::Interrupted => Some("interrupted"),
         }
@@ -223,8 +226,11 @@ impl Thread {
         self.unreadable && self.updates.is_empty()
     }
 
-    /// A person's message. Text wrapped as pasted content becomes its own
-    /// block, so the operator's typed words stay apart from what they pasted.
+    /// A person's message, without what the harness, a hook or Hide put in
+    /// it (by the record's own mark or by the text's prefix, part by part,
+    /// so a message that mixes both keeps the operator's words). Text wrapped
+    /// as pasted content becomes its own block, so the operator's typed words
+    /// stay apart from what they pasted.
     pub fn user<'a>(
         &mut self,
         message: Option<&str>,
@@ -234,7 +240,28 @@ impl Thread {
         for part in parts {
             match part {
                 Part::Text(text) => {
+                    let had_text = !text.trim().is_empty();
+                    // A record's own mark is believed; without one, the text's
+                    // injected blocks come off its front and what follows
+                    // them is the operator's.
+                    let text = if origin == Origin::Operator {
+                        crate::strip_injected(text)
+                    } else {
+                        text
+                    };
                     let origin = classify(origin, text);
+                    // An interruption is one short line whatever the agent
+                    // wrote about it, as Claude Code writes its own: Codex's
+                    // note is for the model, in English, in tags.
+                    let text = if origin == Origin::Interrupted {
+                        INTERRUPTED
+                    } else {
+                        text
+                    };
+                    if origin == Origin::Injected || (text.is_empty() && had_text) {
+                        self.skip("injected");
+                        continue;
+                    }
                     // A letter names who wrote it, for the line that says
                     // whom it came from.
                     let from = (origin == Origin::Letter)
@@ -248,6 +275,7 @@ impl Thread {
                         self.letter_chunk(message, origin, from.as_deref(), block);
                     }
                 }
+                _ if origin == Origin::Injected => self.skip("injected"),
                 part => {
                     if let Some(block) = media_block(part) {
                         self.chunk(SessionUpdate::UserMessageChunk, message, origin, block);
@@ -459,6 +487,12 @@ impl Thread {
     }
 }
 
+/// The line an interrupted turn is drawn as, in every agent's thread. It
+/// replaces the text of every message read as an interruption on purpose,
+/// Claude Code's variants (`[Request interrupted by user for tool use]`)
+/// included: the thread says that the turn stopped, not why.
+const INTERRUPTED: &str = "[Request interrupted by user]";
+
 /// What the text itself says the message is, unless metadata already said.
 fn classify(origin: Origin, text: &str) -> Origin {
     if origin != Origin::Operator {
@@ -467,8 +501,6 @@ fn classify(origin: Origin, text: &str) -> Origin {
         Origin::Interrupted
     } else if crate::is_letter(text) {
         Origin::Letter
-    } else if crate::has_injected_prefix(text) {
-        Origin::Injected
     } else {
         Origin::Operator
     }

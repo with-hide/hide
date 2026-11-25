@@ -711,6 +711,9 @@ pub struct ToolCall {
     /// its task: Claude Code's `Agent` call (`Task` before 2.1),
     /// `subagent_type` and `description`.
     pub asks: Option<(Option<String>, String)>,
+    /// What the call asks to run, when its input names a command
+    /// (`tool_input.command`) and was read whole.
+    pub asked: Option<crate::report::HookAsked>,
 }
 
 impl ToolCall {
@@ -741,6 +744,11 @@ impl ToolCall {
                 input: input.tool_input.as_ref().map(hide_session::calls::digest),
                 transcript: input.transcript_path,
                 asks,
+                asked: input
+                    .tool_input
+                    .as_ref()
+                    .and_then(|tool| tool.get("command")?.as_str())
+                    .and_then(crate::report::HookAsked::of),
             };
         }
         Self {
@@ -749,6 +757,7 @@ impl ToolCall {
             input: None,
             transcript: prefix_string(payload, "transcript_path").map(PathBuf::from),
             asks: None,
+            asked: None,
         }
     }
 
@@ -1302,6 +1311,7 @@ mod tests {
             input: Some(input.to_owned()),
             transcript: None,
             asks: None,
+            asked: None,
         }
     }
 

@@ -123,9 +123,12 @@ pub struct PlanKeys {
 /// where the agent offers that, or refuse it (the operator says what to do
 /// instead in a reply after it). A permission is answered from another
 /// screen only when it names the command it waits on and the agent's screen
-/// shows that command as the keys are typed, unless `unnamed`: the agent
-/// records a call only once it is allowed (Codex), so its permission never
-/// names one and is answered as it stands.
+/// shows that command as the keys are typed (`command`). With `by_hook` the
+/// agent records a call only once it is allowed (Codex), so its session names
+/// no call while the operator is asked: its permission request hook names the
+/// command instead (`hide_agent_hooks::report::HookAsked`), which the card
+/// shows and the screen must show too, as for any other command. A permission
+/// whose hook named none is answered as it stands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionKeys {
@@ -136,10 +139,10 @@ pub struct PermissionKeys {
     #[serde(default)]
     pub row: Option<String>,
     #[serde(default)]
-    pub unnamed: bool,
+    pub by_hook: bool,
     /// Where the agent's approval dialog draws the command, which a
     /// permission that names one is checked against; a table with a `row`
-    /// that is not `unnamed` needs it.
+    /// needs it.
     #[serde(default)]
     pub command: Option<CommandSlot>,
 }
@@ -155,7 +158,14 @@ pub struct PermissionKeys {
 #[serde(deny_unknown_fields)]
 pub struct CommandSlot {
     pub title: String,
-    pub separator: String,
+    /// The line that opens and closes a command drawn between two of them
+    /// (Claude Code's `╌` rules); exactly one of this and `prompt`.
+    #[serde(default)]
+    pub separator: Option<String>,
+    /// What a command's own line begins with, the line after it blank
+    /// (Codex's `$ `); exactly one of this and `separator`.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 /// The key names an `[answer]` table may name, as the core's own engine
@@ -224,12 +234,20 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
     }
     if let Some(permission) = &answer.permission {
         match &permission.command {
-            Some(slot) if !text(&slot.title) || !text(&slot.separator) => {
+            Some(slot)
+                if !text(&slot.title)
+                    || slot.separator.is_some() == slot.prompt.is_some()
+                    || !slot
+                        .separator
+                        .iter()
+                        .chain(&slot.prompt)
+                        .all(|line| text(line)) =>
+            {
                 return Err(format!(
-                    "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
+                    "{name}: answer.permission.command names its title and one of separator or prompt in 1 to {MAX_ROW_BYTES} bytes of text"
                 ));
             }
-            None if permission.row.is_some() && !permission.unnamed => {
+            None if permission.row.is_some() => {
                 return Err(format!(
                     "{name}: answer.permission.command says where the dialog draws the command, which a permission with a row checks before its keys"
                 ));
@@ -431,7 +449,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
             file.schema
         ));
     }
-    if !valid_id(&file.id) {
+    if !id_is_valid(&file.id) {
         return Err(format!(
             "{name}: id {:?} is not 1 to 32 lowercase letters, digits and dashes",
             file.id
@@ -519,8 +537,15 @@ pub fn required<T>(name: &str, field: &str, value: Option<T>) -> Result<T, Strin
     value.ok_or_else(|| format!("{name}: {field} is missing"))
 }
 
-fn valid_id(id: &str) -> bool {
-    (1..=32).contains(&id.len())
+/// The longest id an agent definition may have.
+pub const MAX_ID_BYTES: usize = 32;
+
+/// Whether `id` can name an agent definition: lower-case letters, digits
+/// and `-`, not starting with `-`, at most [`MAX_ID_BYTES`]. Every agent kind
+/// Hide records is one, so a reader elsewhere (the peer link) checks a kind
+/// by this rule.
+pub fn id_is_valid(id: &str) -> bool {
+    (1..=MAX_ID_BYTES).contains(&id.len())
         && id
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
@@ -1278,6 +1303,8 @@ mod tests {
             "marker = \"❯\"\nplan_approval = { approve = [\"down\", \"enter\"], keep_planning = [\"esc\"], approve_label = \"Yes\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\" }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \" \", separator = \"╌\" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Run\", separator = \"╌\", prompt = \"$ \" } }\n",
+            "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", by_hook = true }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\" } }\n",
             "marker = \"❯\"\npermission = { allow = [\"enter\"], deny = [\"esc\"], row = \"{n}.\", command = { title = \"Bash command\", separator = \" \" } }\n",
             "plan_approval = { approve = [\"a\"], keep_planning = [\"s\"], approve_label = \"Yes\" }\n",

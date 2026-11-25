@@ -50,6 +50,7 @@ mod creation;
 pub(crate) mod herdr_session;
 mod ids;
 pub(crate) mod layout;
+mod prompt_file;
 mod restore;
 mod rules;
 mod shell_line;
@@ -151,6 +152,21 @@ struct Shared {
     /// The resumes typed since the core last took them
     /// ([`Engine::take_resumed`]), one per pane, so bounded by the panes.
     resumed: Mutex<Vec<crate::engine::ResumedPane>>,
+}
+
+/// A prompt file as long as a node's may name it, for the bound a start line
+/// is prepared against (`prepare_start`): its path in the node's state
+/// folder and the `hide` beside the node, each under a home of an ordinary
+/// length.
+fn prompt_file_bound() -> hide_node_link::protocol::PromptFileKept {
+    const HOME: &str = concat!(
+        "/0123456789012345678901234567890123456789012345678901234567890123456789",
+        "/0123456789012345678901234567890123456789012345678901234567890123456789",
+    );
+    hide_node_link::protocol::PromptFileKept {
+        path: format!("{HOME}/.hide/state/prompt-files/start-012345678901234567890123"),
+        exec: format!("{HOME}/.hide/host-helper/0123456789abcdef/hide.exe"),
+    }
 }
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
@@ -283,6 +299,13 @@ impl OwnEngine<'static> {
     #[cfg(test)]
     pub(crate) fn new(holders: Arc<dyn PaneHolders>) -> Self {
         Self::with(Topology::default(), holders, None, true).expect("a test engine starts")
+    }
+
+    /// [`OwnEngine::new`] on a machine `place` names, as a daemon's engine
+    /// reaches its node, still saving and restoring nothing: a test's.
+    #[cfg(test)]
+    pub(crate) fn placed(holders: Arc<dyn PaneHolders>, place: Place) -> Self {
+        Self::with(Topology::default(), holders, Some(place), true).expect("a test engine starts")
     }
 
     /// A daemon's engine (PRD engine-bundle-3-core-owns D-6, D-7): its
@@ -2553,18 +2576,23 @@ impl<'g> Engine for OwnEngine<'g> {
         let kind = launch.launch.kind();
         let definition = agents::definition(&catalog, kind)
             .ok_or_else(|| format!("no agent definition names {kind}"))?;
-        let argv = launch
-            .launch
-            .line(agents::start_argv(
-                definition,
-                launch.launch.agent_file(launch.program.as_ref()),
-                crate::codex_launch::start_arguments(
-                    &definition.id,
-                    launch.codex_daemon,
-                    launch.args.clone(),
-                )?,
-            )?)?
-            .words;
+        let line = launch.launch.line(agents::start_argv(
+            definition,
+            launch.launch.agent_file(launch.program.as_ref()),
+            crate::codex_launch::start_arguments(
+                &definition.id,
+                launch.codex_daemon,
+                launch.args.clone(),
+            )?,
+        )?)?;
+        // A first input is read from a file by the node's `hide`, whose
+        // words are bounded by the state folder's.
+        let argv = match launch.prompt {
+            Some(_) => {
+                prompt_file::read_by_hide(line.words, line.attempt.is_some(), &prompt_file_bound())
+            }
+            None => line.words,
+        };
         // The longest of the shells' lines, so the start is bounded as the
         // shell it meets will type it.
         let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
@@ -2618,12 +2646,32 @@ impl<'g> Engine for OwnEngine<'g> {
             .launch
             .line(argv.clone())
             .map_err(|message| refused("agent_start_refused", message))?;
-        let typed = shell_line::command(&line.words, shell).ok_or_else(|| {
-            refused(
+        // A first input is kept in a file of the pane's machine, which the
+        // node's `hide` reads, so no shell reads the text.
+        let staged = match launch.prompt.as_deref() {
+            Some(prompt) => Some(self.stage_prompt(pane, &launch.name, prompt)?),
+            None => None,
+        };
+        let typed = match &staged {
+            Some(staged) => shell_line::command(
+                &prompt_file::read_by_hide(
+                    line.words.clone(),
+                    line.attempt.is_some(),
+                    &staged.kept,
+                ),
+                shell,
+            ),
+            None => shell_line::command(&line.words, shell),
+        };
+        let Some(typed) = typed else {
+            if let Some(staged) = staged {
+                self.drop_prompt(pane, staged);
+            }
+            return Err(refused(
                 "agent_start_refused",
                 format!("the {} start cannot be typed into a shell", definition.id),
-            )
-        })?;
+            ));
+        };
         // A profile's start ends with what came of its attempt, which typing
         // the line does not say (PRD agent-profiles B22); whatever ends this
         // call ends the attempt with it.
@@ -2631,7 +2679,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .attempt
             .as_ref()
             .map(|attempt| attempt::Finish::new(self, pane, &attempt.id));
-        self.type_agent_start(
+        let typing = self.type_agent_start(
             pane,
             agents::PaneAgent::started(
                 &definition.id,
@@ -2641,7 +2689,13 @@ impl<'g> Engine for OwnEngine<'g> {
             &typed,
             launch.wakes,
             line.attempt.clone(),
-        )?;
+        );
+        // A refusal typed nothing, so no line will read the file; any other
+        // failure may have typed it, and the line removes the file it read.
+        if let (Err(EngineError::Refused { .. }), Some(staged)) = (&typing, staged) {
+            self.drop_prompt(pane, staged);
+        }
+        typing?;
         if let Some(finish) = finish {
             match self.await_attempt(finish, deadline(wait)) {
                 attempt::Outcome::Started => {}
@@ -4735,6 +4789,7 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         }
     }
 
@@ -6383,6 +6438,7 @@ mod tests {
                 waiting: None,
                 account: None,
                 refused: None,
+                asked: None,
             };
             facts.record(&pane, &report, 0).unwrap();
             engine

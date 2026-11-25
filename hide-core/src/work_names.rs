@@ -6,7 +6,8 @@
 //! called and where it stands. [`told`] reads, for each such machine, what
 //! this core shows each of its panes there by: the name (the agent's label,
 //! else the name its tab was given), the branch of the checkout it stands
-//! in, and the mark its row is drawn with. hided sends the list on the
+//! in, the mark its row is drawn with and the agent that runs in it.
+//! hided sends the list on the
 //! `core` stream whenever it reads differently, and the machine the panes
 //! run on names and marks its rows by it (`guest_panes::GuestPane`).
 
@@ -39,6 +40,12 @@ pub struct WorkName {
     /// [`RowMark::Quiet`] for a terminal no agent runs in, which has
     /// nothing for anyone to do.
     pub mark: RowMark,
+    /// The agent that runs in the pane (`claude`, `codex`, ...), for the
+    /// row's logo there; `None` for a terminal no agent runs in, and for a
+    /// kind no agent definition could be named by
+    /// ([`crate::guest_panes::agent_is_carried`]), which is left out rather
+    /// than have the machine refuse the whole list.
+    pub agent: Option<String>,
 }
 
 /// For each paired machine this core opens as a device, by its connection
@@ -61,10 +68,15 @@ pub fn told(
         else {
             continue;
         };
-        let marks: BTreeMap<&str, RowMark> = session
+        let agents: BTreeMap<&str, (RowMark, &str)> = session
             .agents
             .iter()
-            .map(|agent| (agent.pane_id.as_str(), agent.mark))
+            .map(|agent| {
+                (
+                    agent.pane_id.as_str(),
+                    (agent.mark, agent.agent_kind.as_str()),
+                )
+            })
             .collect();
         let mut seen = HashSet::new();
         let names: Vec<WorkName> = session
@@ -95,14 +107,16 @@ pub fn told(
                     .filter(|label| !label.is_empty())
                     .or(tab_name)
                     .and_then(shown);
+                let agent = agents.get(pane.id.as_str());
                 seen.insert(id).then(|| WorkName {
                     pane: id.to_owned(),
                     name,
                     branch,
-                    mark: marks
-                        .get(pane.id.as_str())
-                        .copied()
-                        .unwrap_or(RowMark::Quiet),
+                    mark: agent.map_or(RowMark::Quiet, |(mark, _)| *mark),
+                    agent: agent
+                        .map(|(_, kind)| *kind)
+                        .filter(|kind| crate::guest_panes::agent_is_carried(kind))
+                        .map(str::to_owned),
                 })
             })
             .take(MAX_NAMES)

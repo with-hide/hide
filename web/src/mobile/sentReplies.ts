@@ -31,20 +31,22 @@ function namedFile(base: string): NamedFile {
 
 /**
  * The files an operator's message attached, read from the front of its words: each a path in double quotes, as the computer types an
- * attached file, then the words. A message that does not start with one is all words.
+ * attached file, then the words, with each file's path as written. A message that does not start with one is all words.
  */
-export function attachedOf(text: string): { files: NamedFile[]; words: string } {
+export function attachedOf(text: string): { files: NamedFile[]; paths: string[]; words: string } {
   const named: NamedFile[] = [];
+  const paths: string[] = [];
   let rest = text;
   for (;;) {
     const match = /^"((?:[^"\\]|\\.)*)"(?: |$)/.exec(rest);
     if (!match) break;
     const path = match[1]!.replace(/\\(.)/g, "$1");
     if (!/^(?:\/|[A-Za-z]:[\\/])/.test(path)) break;
+    paths.push(path);
     named.push(namedFile(path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1)));
     rest = rest.slice(match[0].length);
   }
-  return { files: named, words: named.length > 0 ? rest : text };
+  return { files: named, paths, words: named.length > 0 ? rest : text };
 }
 
 /** The replies with `reply` added as the newest, the oldest past `SENT_REPLIES` gone. */

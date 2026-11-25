@@ -215,6 +215,11 @@ pub(crate) struct AgentLaunch {
     /// as the pane's node read it (`StartForm::Direct`); `None` starts the
     /// program by its name.
     pub(crate) program: Option<StartProgram>,
+    /// The start's first input as its last word (`start_prompt::launched`),
+    /// which the engine has the pane's node keep in a private file and the
+    /// line read from there (`Call::PromptFile`), so the text never crosses
+    /// the pane's shell; `None` for a start that carries none.
+    pub(crate) prompt: Option<String>,
 }
 
 /// A program a start names by its file, and the words before its own

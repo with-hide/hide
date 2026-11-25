@@ -1019,6 +1019,7 @@ fn start_or_degrade_agent(
             args,
             codex_daemon,
             program.clone(),
+            None,
             &|| Ok(()),
         );
         // A profile's program that did not start would not start a new
@@ -1065,6 +1066,7 @@ fn start_or_degrade_agent(
         launch,
         codex_daemon,
         program,
+        None,
         &|| Ok(()),
     ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
