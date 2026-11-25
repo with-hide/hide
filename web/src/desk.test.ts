@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, markedMention, mentionParts, missionMentions, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, missionMentions, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -217,5 +217,22 @@ describe("a chip's session (D-86, B50)", () => {
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.card).toBeNull();
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.listed).toBe(true);
     expect(sessionFacts(rows, cards, { name: "nobody", mark: null, agent_kind: null })).toBeNull();
+  });
+});
+
+describe("holdsFoot", () => {
+  it("keeps the foot when the browser nudges the view down while the content grows below it", () => {
+    // Scroll anchoring moved 3065 to 3066 as a reply grew by 314 px; the resize that pins the foot comes after.
+    expect(holdsFoot(true, 3065, 3066, 314, 48)).toBe(true);
+  });
+
+  it("lets go once the operator scrolls up, and holds again when they reach the foot", () => {
+    expect(holdsFoot(true, 3386, 2486, 900, 48)).toBe(false);
+    expect(holdsFoot(false, 2486, 2600, 786, 48)).toBe(false);
+    expect(holdsFoot(false, 2600, 3380, 6, 48)).toBe(true);
+  });
+
+  it("stays held when content shrinking under the foot pulls the view up", () => {
+    expect(holdsFoot(true, 3386, 3350, 0, 48)).toBe(true);
   });
 });

@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, deskPermissionLevel, deskPhase, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskOn, deskPermissionLevel, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -155,19 +155,32 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     }
   }, [items, queued, setDraft]);
 
+  // The conversation keeps its foot in view while the operator reads there (`stick`), and stays where they
+  // scrolled otherwise. It follows sizes, not events: a reply's text fills its editor after this pass, a card
+  // grows, the box under it grows a line, and Desk opened again would otherwise show the conversation's top.
+  const empty = shown.length === 0 && !answering && queued.length === 0;
+  const drawn = desk !== null;
   useLayoutEffect(() => {
     const box = scroller.current;
-    if (box && stick.current) box.scrollTop = box.scrollHeight;
-  }, [shown, liveText, answering, queued]);
-  useEffect(() => {
-    const box = scroller.current;
     if (!box) return;
-    const follow = () => {
-      stick.current = box.scrollHeight - box.scrollTop - box.clientHeight < STICK_PX;
+    const pin = () => {
+      if (stick.current) box.scrollTop = box.scrollHeight;
     };
+    let last = box.scrollTop;
+    const follow = () => {
+      stick.current = holdsFoot(stick.current, last, box.scrollTop, box.scrollHeight - box.scrollTop - box.clientHeight, STICK_PX);
+      last = box.scrollTop;
+    };
+    pin();
     box.addEventListener("scroll", follow, { passive: true });
-    return () => box.removeEventListener("scroll", follow);
-  }, []);
+    const resized = new ResizeObserver(pin);
+    resized.observe(box);
+    for (const child of box.children) resized.observe(child);
+    return () => {
+      box.removeEventListener("scroll", follow);
+      resized.disconnect();
+    };
+  }, [empty, drawn]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
 

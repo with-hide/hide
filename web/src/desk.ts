@@ -386,6 +386,17 @@ export function mentionParts(text: string, mentions: readonly DeskMention[], tok
 export type WorkingPhase = "thinking" | "answering" | "editing" | DeskStepKind;
 
 /** Desk's turn as the working line says it: the step its newest call does, else answering once it has written, else thinking. */
+/**
+ * Whether Desk's conversation keeps its foot in view after a scroll from `before` to `now` (scrollTop): reaching
+ * the foot holds it, and only a move up away from it lets go. A scroll the browser makes itself while the
+ * content grows (scroll anchoring moves it down) arrives before the resize that pins the foot, so a far foot
+ * alone never lets go.
+ */
+export function holdsFoot(held: boolean, before: number, now: number, distance: number, near: number): boolean {
+  if (distance < near) return true;
+  return now < before ? false : held;
+}
+
 export function deskPhase(step: DeskStepKind | null | undefined, text: string | null): WorkingPhase {
   return step ?? (text ? "answering" : "thinking");
 }
