@@ -1376,8 +1376,12 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     );
     let running = Running(BuiltHolders::start_in(vec![shell]));
     let built = &running.0;
-    // A zsh whose home holds no startup file opens its new-user menu on
-    // Debian and Ubuntu, which would take the typed start as its answer.
+    // The pane's shell runs in the test's own home, which holds startup
+    // files: a zsh whose home holds none opens its new-user menu on Debian
+    // and Ubuntu, and Ubuntu's global zshrc runs compinit, which asks about
+    // the runner's directories; either would take the typed start as its
+    // answer.
+    std::fs::write(built.home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
     std::fs::write(built.home.join(".zshrc"), "").unwrap();
     let engine = &built.engine;
     engine.set_agent_definitions(std::sync::Arc::new(
@@ -1391,7 +1395,7 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     let codex = bin.path().join("codex");
     std::fs::write(
         &codex,
-        "#!/bin/sh\nfor word in \"$@\"; do printf '%s\\0' \"$word\"; done > \"$HIDE_TEST_ARGV\"\n",
+        "#!/bin/sh\nprintf '%s' \"$HOME\" > \"$HIDE_TEST_ARGV.home\"\nfor word in \"$@\"; do printf '%s\\0' \"$word\"; done > \"$HIDE_TEST_ARGV\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1402,6 +1406,7 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
             written.to_str().unwrap().to_owned(),
         ),
         ("LC_ALL".to_owned(), "C".to_owned()),
+        ("HOME".to_owned(), built.home.to_str().unwrap().to_owned()),
     ]);
     let (_, _, pane) = engine
         .create_workspace(WAIT, &built.folder, "c-locale", false, env)
@@ -1448,6 +1453,11 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
                 .map(|read| read.text)
                 .unwrap_or_default()
         },
+    );
+    assert_eq!(
+        std::fs::read_to_string(bin.path().join("argv.home")).unwrap(),
+        built.home.to_str().unwrap(),
+        "{named} ran in the test's home, whose startup files it reads"
     );
     let given: Vec<String> = std::fs::read(&written)
         .unwrap()
