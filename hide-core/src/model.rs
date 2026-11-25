@@ -2262,6 +2262,12 @@ pub struct SidebarAgentSnapshot {
     /// state. Missing source content remains absent rather than inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the permission request the agent waits on asks to run, as its
+    /// hook named it (`HookAsked`), for an agent whose session names no call
+    /// until it is allowed (Codex): the phone's card shows it. Absent while
+    /// the agent waits on nothing a hook named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked: Option<hide_node_link::panes::HookAsked>,
     /// What the core asks on this row for the agent, when the question is
     /// the core's and not the agent's own; the row then draws no sentence
     /// of its own and every surface words the subject.

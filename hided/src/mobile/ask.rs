@@ -74,9 +74,27 @@ pub struct Shown {
 /// they are not read.
 pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
     let turn = turn_of(agent)?;
+    let by_hook = operator_input::permission_by_hook(&agent.agent_kind);
+    // The command its hook gave was cut before it arrived, or names a patch
+    // whose lines the dialog draws, which no screen is checked against.
+    let mut hook_cut = false;
+    let mut hook_patch = false;
     let (kind, call, command) = match kind_of(agent)? {
-        Ask::Permission if operator_input::unnamed_permission(&agent.agent_kind) => {
-            (Ask::Permission, None, None)
+        // The agent's session names no call while it asks (Codex): the
+        // permission request's own command is the one, and what its session
+        // has open is something else that runs.
+        Ask::Permission if by_hook => {
+            let asked = agent
+                .asked
+                .as_ref()
+                .filter(|asked| !asked.command.trim().is_empty());
+            hook_cut = asked.is_some_and(|asked| asked.cut);
+            hook_patch = asked.is_some_and(|asked| asked.patch);
+            (
+                Ask::Permission,
+                None,
+                asked.map(|asked| asked.command.clone()),
+            )
         }
         Ask::Permission => match pending {
             Some(Pending::One(open)) if open.plan => (Ask::PlanApproval, Some(&open.id), None),
@@ -131,7 +149,8 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
             let mut whole_line = false;
             if let Some(command) = &command {
                 let (shown, cut) = super::calls::cut(command);
-                whole_line = !cut && !shown.contains('\n');
+                let cut = cut || hook_cut;
+                whole_line = !cut && !shown.contains('\n') && !hook_patch;
                 frame["command"] = json!(shown);
                 frame["command_truncated"] = json!(cut);
             }
@@ -139,8 +158,7 @@ pub fn of(agent: &PhoneAgent, pending: Option<&Pending<'_>>) -> Option<Shown> {
             // one line, or the screen cannot be checked against, is answered
             // where the operator sees what it allows, and lists no choices:
             // it may be a plan's, which has others.
-            answerable = !offered.is_empty()
-                && (whole_line || operator_input::unnamed_permission(&agent.agent_kind));
+            answerable = !offered.is_empty() && (whole_line || (by_hook && command.is_none()));
             if answerable {
                 offered.iter().map(|id| json!({"id": id})).collect()
             } else {
@@ -240,6 +258,97 @@ mod tests {
             plan,
             since_ms: Some(90),
         }
+    }
+
+    /// An agent whose session records a call only once it is allowed (Codex)
+    /// shows the command its permission request gave, never what its session
+    /// has open, and types the keys only on a screen whose dialog draws that
+    /// same command; a command the card does not show whole on one line, one
+    /// that arrived cut and a patch are answered in the terminal, and an agent
+    /// whose table does not say so takes no command from a hook.
+    #[test]
+    fn a_hook_named_approval_shows_the_command_its_request_gave() {
+        let asking = |kind: &str, asked: Value| {
+            listed(
+                json!({"agent_kind": kind, "status_code": "approval", "demand": "approval",
+                "asked": asked}),
+            )
+        };
+        let dialog = |command: &str| {
+            format!(
+                "Would you like to run the following command?\n\nEnvironment: local\n\n\
+                 Reason: a check\n\n$ {command}\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No (esc)\n"
+            )
+        };
+        let running = open("call_9", Some("sleep 60"), false);
+        let codex = asking("codex", json!({"command": "cargo test --workspace"}));
+        let shown = of(agent(&codex), Some(&Pending::One(&running))).unwrap();
+        assert_eq!(
+            shown.frame,
+            json!({"kind": "permission", "turn": "100", "since_ms": 100,
+                "command": "cargo test --workspace", "command_truncated": false, "answerable": true,
+                "choices": [{"id": "allow"}, {"id": "allow_always"}, {"id": "deny"}]})
+        );
+        // The keys wait for the dialog that draws that same command: another
+        // dialog, a dialog of another command and a row with no dialog do not.
+        let (typed, screen) =
+            keys(agent(&codex), Some(&shown), "100", "permission", "allow").unwrap();
+        assert_eq!(typed, ["enter"]);
+        assert!(screen.shows(&dialog("cargo test --workspace"), None));
+        assert!(!screen.shows(&dialog("cargo test"), None));
+        assert!(!screen.shows(&dialog("cargo test --workspace --all"), None));
+        assert!(!screen.shows("› 1. Yes, proceed (y)\n", None));
+        assert!(!screen.shows(
+            &dialog("cargo test --workspace").replace("$ cargo", "# cargo"),
+            None
+        ));
+        // A command the screen wraps puts text between it and the rows.
+        assert!(!screen.shows(
+            &dialog("cargo test --workspace").replace("workspace\n\n", "workspace\n   --all\n\n"),
+            None
+        ));
+
+        let long = format!("echo {}", "x".repeat(crate::mobile::calls::COMMAND_CHARS));
+        for unseen in [
+            json!({"command": "cargo test\nrm -r build"}),
+            json!({"command": long}),
+            json!({"command": "cargo test", "cut": true}),
+            json!({"command": "apply_patch: src/a.rs", "patch": true}),
+        ] {
+            let cut = asking("codex", unseen.clone());
+            let shown = of(agent(&cut), None).unwrap();
+            assert!(shown.frame["command"].is_string(), "{unseen}");
+            assert_eq!(shown.frame["answerable"], false, "{unseen}");
+            assert_eq!(shown.frame["choices"], json!([]), "{unseen}");
+            assert_eq!(
+                keys(agent(&cut), Some(&shown), "100", "permission", "allow"),
+                Err("unknown_choice")
+            );
+        }
+        assert_eq!(
+            of(
+                agent(&asking(
+                    "codex",
+                    json!({"command": "cargo test", "cut": true})
+                )),
+                None
+            )
+            .unwrap()
+            .frame["command_truncated"],
+            true
+        );
+
+        // A request that named none is answered as it stands.
+        let bare =
+            listed(json!({"agent_kind": "codex", "status_code": "approval", "demand": "approval"}));
+        let shown = of(agent(&bare), None).unwrap();
+        assert_eq!((shown.frame.get("command"), shown.answerable), (None, true));
+
+        // Claude Code's command comes from its session's open call alone.
+        let claude = asking("claude", json!({"command": "rm -rf build"}));
+        let shown = of(agent(&claude), None).unwrap();
+        assert_eq!(shown.frame.get("command"), None);
+        assert_eq!(shown.frame["answerable"], false);
     }
 
     /// The agent's own question of one choice reaches the detail with each
@@ -392,7 +501,9 @@ mod tests {
             );
         }
 
-        // Codex records the call only once it is allowed: no command, ever.
+        // Codex records the call only once it is allowed: what its session
+        // has open is never the call asked about, and without a command from
+        // its hook the card has none.
         let codex = waiting("codex");
         let shown = of(agent(&codex), Some(&Pending::One(&command))).unwrap();
         assert_eq!(

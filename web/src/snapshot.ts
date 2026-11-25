@@ -184,6 +184,8 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
+  /** What the permission request the agent waits on asks to run, as its hook named it (Codex); the phone's approval card shows it. */
+  asked?: { command: string; cut?: boolean };
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
   /** The questions the session put to the operator that still wait and that the operator sent nothing since, oldest first (`OpenAsksSnapshot`, status-model.md: A question still waiting): the row's `?N`, the pane's mark and the turn card's list; absent while none does. */
