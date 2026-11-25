@@ -134,8 +134,8 @@ impl OriginHolds {
     }
 }
 
-/// Which connection opened the core's one session thread
-/// (`session_thread_open`). The panel closes the thread when it unmounts, but
+/// Which window opened the core's one session thread
+/// (`session_thread_open`); a tool's open names no opener. The panel closes the thread when it unmounts, but
 /// a window that reloads, crashes or loses its socket says nothing, and the
 /// thread's file looks would then outlive every screen that showed it; so the
 /// connection that opened it closes it when it ends, unless another window

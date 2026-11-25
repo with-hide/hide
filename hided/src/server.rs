@@ -3067,11 +3067,13 @@ fn handle_client_text(
             }
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // The core holds one session thread; the connection that opened it
-        // closes it when it ends without a close (a reload, a crash, a lost
-        // socket), so its file looks do not outlive the screen.
+        // The core holds one session thread; a window that opened it closes
+        // it when it ends without a close (a reload, a crash, a lost socket),
+        // so its file looks do not outlive the screen. A tool draws no thread
+        // and owns none: its connection ends with its one event.
         Some(kind @ ("session_thread_open" | "session_thread_close")) => {
-            let opener = (kind == "session_thread_open").then_some(connection);
+            let opener =
+                (kind == "session_thread_open" && client != Client::Tool).then_some(connection);
             let bytes =
                 serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
             state
