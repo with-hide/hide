@@ -1356,8 +1356,17 @@ fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_sh() {
 
 /// The shell the lane names in `variable`.
 #[cfg(unix)]
+/// The shell `variable` names. A machine without that shell fails the test
+/// naming the variable rather than pass it unrun (scripts/prepare-ignored-tests.sh
+/// sets each one only where the shell is found, and CI installs them all).
 fn shell_named(variable: &str) -> std::ffi::OsString {
-    std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell"))
+    std::env::var_os(variable).unwrap_or_else(|| {
+        panic!(
+            "{variable} names no shell: this machine has none of that kind, or \
+             scripts/prepare-ignored-tests.sh was not sourced; run the other \
+             shells' tests by name"
+        )
+    })
 }
 
 /// The variables of a home made for one test's shell, every shell alike:
