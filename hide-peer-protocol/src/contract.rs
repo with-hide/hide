@@ -327,6 +327,7 @@ fn sample_work() -> crate::core::Work {
         name: Some(String::new()),
         branch: Some(String::new()),
         mark: Some(String::new()),
+        agent: Some(String::new()),
     }
 }
 
@@ -483,6 +484,7 @@ pub fn shape() -> Value {
         folder: Some(String::new()),
         name: Some(String::new()),
         branch: Some(String::new()),
+        agent: Some(String::new()),
     };
     let streams: Vec<Value> = StreamKind::ALL
         .into_iter()

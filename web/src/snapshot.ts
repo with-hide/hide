@@ -3402,6 +3402,8 @@ export type DeskIrreversible = "end_working_session" | "force_push" | "delete_re
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
+/** A message sent while a reply was being written, waiting for the turn before it (`desk_queued_remove` takes it out); none is in `items` until its turn starts. */
+export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[] };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
@@ -3438,7 +3440,7 @@ export type DeskItem =
    * archive ends or the path a deletion reaches; `refusal` is the line the
    * operator sent with 거절.
    */
-  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; /** The row of Settings › Labs › Desk › 권한 the request reads as, whose name is the card's kind; none on a card kept from before it was sent. */ row?: DeskPermissionRow | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, the blocked call, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
@@ -3465,8 +3467,8 @@ export type DeskOutputKind = "image" | "page" | "doc" | "pr";
  * carry `url`.
  */
 export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thumb: string | null; seen: boolean; pr_state: PrState | null; device_id: string | null; checkout: string | null; path: string | null; url: string | null };
-/** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
-export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
+/** The widths of Desk's two panels as the operator last dragged them, in CSS pixels; null until dragged (PRD desk-2-ui B22, B23). */
+export type DeskLane = { view_width: number | null; session_width: number | null };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
 /** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
 export type MissionTurn = "decision" | "attention";
@@ -3640,12 +3642,12 @@ export type DeskSection = {
   agents: DeskAgent[];
   host: { state: DeskHostState; detail: string | null };
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
-  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
-  /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
-  lane: { pinned: boolean; kept: DeskKeptTab[] };
+  /** The panels' widths the core keeps (PRD desk-2-ui B23); which session, panel and tab show is the window's. */
+  lane: DeskLane;
 };
 
 /** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
@@ -3941,8 +3943,9 @@ export type GuestPanes = {
    * `name`: what the guest's core shows the pane by (its agent's label, else its tab's name), once it told one.
    * `branch`: the branch the guest's core says the pane stands on, once it told one.
    * `mark`: the mark the guest's core draws the pane's row with, while it is connected and has told one.
+   * `agent`: the agent kind the guest's core says runs in the pane (`claude`, `codex`, ...), once it told one; absent for a plain terminal or an earlier build.
    */
-  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null; branch?: string | null; mark?: string | null }[];
+  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null; branch?: string | null; mark?: string | null; agent?: string | null }[];
 };
 
 /**
@@ -4051,6 +4054,8 @@ export type SnapshotRest = {
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
     expanded_checkout_ids?: string[];
+    /** Heads of another machine's work the operator folded, by its device id and the folder of the place it stands in (`""` outside every project); absence is open. */
+    folded_guest_work?: { device_id: string; folder: string }[];
     session_collapsed_checkout_ids?: string[];
     /** Agents whose children the sidebar tree opened; absence is folded. */
     expanded_agent_pane_ids?: string[];
@@ -4091,6 +4096,8 @@ export type SnapshotRest = {
     /** Settings > Notifications' Notify me when an agent needs me (D-21); the desktop app shows agent notifications only while it is on. */
     desktop_notifications?: boolean;
     product_analytics_enabled?: boolean;
+    /** Settings > General's gray counts on the tool rail's Project and Hide AI icons; absent reads as on. */
+    rail_counts_shown?: boolean;
     desktop_notifications_done?: boolean;
     usage?: UsagePreferences;
     /** The screens whose one-line introduction was shown (B43). */
@@ -4221,6 +4228,35 @@ export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
 }
 
+/** A listed checkout with its project and its machine (PRD desk-2-ui B19, B35, B37). */
+export type CheckoutPlace = { device: string; workspace: string; checkout: Checkout };
+
+/** Every listed checkout: this machine's, then each connected device's. */
+export function checkoutPlaces(rest: SnapshotRest | null): CheckoutPlace[] {
+  return catalogWorkspaces(rest).flatMap((workspace) => workspace.checkouts.map((checkout) => ({ device: workspace.device_id, workspace: workspace.id, checkout })));
+}
+
+/** The checkout at `root` on `device`, null when it is not listed. */
+export function checkoutAtRoot(rest: SnapshotRest | null, device: string, root: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.device === device && place.checkout.path === root) ?? null;
+}
+
+/** The checkout whose tab holds `paneId`, null when no listed tab does. */
+export function checkoutOfPane(rest: SnapshotRest | null, paneId: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId))) ?? null;
+}
+
+/** The pane row of `paneId` as its tab lists it, local or on a device, for the ancestor path (PRD desk-2-ui B47). */
+export function paneRowOf(rest: SnapshotRest | null, paneId: string): PaneRow | null {
+  for (const place of checkoutPlaces(rest)) {
+    for (const tab of place.checkout.tabs) {
+      const pane = tab.panes.find((one) => one.id === paneId);
+      if (pane) return pane as PaneRow;
+    }
+  }
+  return null;
+}
+
 const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
 
 /**
@@ -4321,14 +4357,18 @@ export function agentPermission(rest: SnapshotRest | null, deviceId: string, age
  * own device, so the same path on two machines never shares a row (S5.5 B2).
  */
 export function explorerContext(rest: SnapshotRest | null): { device: string; checkout: Checkout | null; expanded: string[] } {
-  const node = localDeviceId(rest);
-  const device = focusedRemoteDevice(rest)?.id ?? node;
-  const state = rest?.ui_state;
+  const device = focusedRemoteDevice(rest)?.id ?? localDeviceId(rest);
   return {
     device,
     checkout: frontCheckout(rest),
-    expanded: (device === node ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS,
+    expanded: expandedOn(rest, device),
   };
+}
+
+/** One device's expanded Explorer folders, by absolute path (S5.5 B2); the same set for any checkout on it. */
+export function expandedOn(rest: SnapshotRest | null, device: string): string[] {
+  const state = rest?.ui_state;
+  return (device === localDeviceId(rest) ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS;
 }
 
 /** The changes of the checkout a listing belongs to, or null when they are another checkout's. */

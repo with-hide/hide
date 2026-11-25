@@ -27,9 +27,9 @@ pub use hide_screen_rules::{Asks, Rules, State};
 mod file;
 pub use file::{
     ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Answer, Base, By, CommandSlot, Hooks,
-    KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, McpFormat, PathRule,
-    PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Template, TrustFormat,
-    is_plain_command, is_typable_word, reserved_variable, valid_variable,
+    KEY_NAMES, LINE_BYTES, LINE_WORDS, LoginRule, MAX_ANSWER_KEYS, MAX_ID_BYTES, McpFormat,
+    PathRule, PermissionKeys, PlanKeys, QuestionKeys, ROW_LABEL, ROW_NUMBER, SCHEMA, Template,
+    TrustFormat, id_is_valid, is_plain_command, is_typable_word, reserved_variable, valid_variable,
 };
 use file::{Fields, Origin, required};
 

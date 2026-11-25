@@ -85,7 +85,7 @@ export function groupMissions<M extends MissionBrief>(entries: readonly MissionE
   });
 }
 
-/** The sidebar row's number (B1): open missions with anything in their `내 차례`. */
+/** The phone's Missions tab badge: open missions with anything in their `내 차례`. The desktop's sidebar draws no such number. */
 export function turnCount(entries: readonly Pick<MissionEntry<MissionBrief>, "group">[]): number {
   return entries.filter((entry) => entry.group === "turn").length;
 }

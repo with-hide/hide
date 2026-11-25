@@ -337,7 +337,7 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 .map(wire_word)
                 .unwrap_or_else(|| place.cwd.to_owned());
             let mut line = Line::default();
-            read_line(command, &vec![Some(cwd)], place, 0, &mut line);
+            read_line(command, &vec![Some(cwd.clone())], place, 0, &mut line);
             // A line that changes the environment its programs read may
             // change which program a name runs and what it does.
             let unreadable = line.unreadable || line.environment;
@@ -352,7 +352,9 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 card: Card {
                     kind: CardKind::Command,
                     command: command.clone(),
-                    folder: folder.clone(),
+                    // Where it runs: the folder the agent named, else
+                    // Desk's own, which is where the agent's shell starts.
+                    folder: Some(cwd),
                     reason: reason.clone(),
                 },
                 deletes: line.changed(Change::Delete),
@@ -372,7 +374,11 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             card: Card {
                 kind: CardKind::Edit,
                 command: paths.join("\n"),
-                folder: None,
+                folder: holding_folder(
+                    paths
+                        .iter()
+                        .map(|path| path_of(path, Some(place.cwd), place.home)),
+                ),
                 reason: reason.clone(),
             },
             ends: Vec::new(),
@@ -402,7 +408,8 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             card: Card {
                 kind: CardKind::Read,
                 command: what.clone(),
-                folder: None,
+                // Where a name it reads is found.
+                folder: Some(place.cwd.to_owned()),
                 reason: None,
             },
             ends: Vec::new(),
@@ -428,6 +435,27 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
             unreadable: false,
         },
     }
+}
+
+/// The folder that holds every one of `paths`: the deepest folder they all
+/// lie below, by the wire's own path rules, so a drive's root is `C:/` and
+/// paths on two drives share none. None when a path cannot be named or
+/// they share no folder.
+fn holding_folder(paths: impl Iterator<Item = Option<String>>) -> Option<String> {
+    use hide_platform::path::{wire_parent, wire_relative};
+    let mut holding: Option<String> = None;
+    for path in paths {
+        let path = normalize(&path?);
+        let mut held = match holding {
+            Some(held) => held,
+            None => wire_parent(&path)?.to_owned(),
+        };
+        while wire_relative(&held, &path).is_err() {
+            held = wire_parent(&held)?.to_owned();
+        }
+        holding = Some(held);
+    }
+    holding
 }
 
 /// What a shell line runs, as far as Hide reads it.

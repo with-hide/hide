@@ -1,11 +1,12 @@
-import { ArrowLeftRightIcon, ChevronRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon } from "lucide-react";
+import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
+import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
 import { Elapsed, formatElapsed } from "../elapsed";
@@ -51,6 +52,26 @@ export function DeskUserMessage({ text, mentions, onMention }: { text: string; m
     <p className="max-w-(--size-pr-popover) self-end whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-item="user">
       <MentionText text={text} mentions={mentions} token={markedMention} onMention={onMention} />
     </p>
+  );
+}
+
+/**
+ * A message sent while a reply was being written, waiting for the turn before
+ * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble with `대기 중` and `✕`, which takes it out before it
+ * goes (it is not in the conversation until its turn starts).
+ */
+export function DeskQueuedBubble({ message, held = false, onRemove, onMention }: { message: DeskQueuedMessage; held?: boolean; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-queued={message.id}>
+      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} onMention={onMention} /></div>
+      <span className="flex items-center gap-xxs text-micro text-muted-foreground">
+        {t(held ? "desk.queued.held" : "desk.queued.waiting")}
+        <Hint label={t("desk.queued.remove")}>
+          <Button variant="ghost" size="icon-xs" aria-label={t("desk.queued.remove")} data-desk-queued-remove="true" onClick={onRemove}><XIcon /></Button>
+        </Hint>
+      </span>
+    </div>
   );
 }
 
@@ -138,6 +159,7 @@ const NOTICE_ACTION: Partial<Record<DeskNoticeKind, DeskNoticeAction>> = {
   install_failed: "reinstall",
   blocked: "retry",
   host_stopped: "restart",
+  login_needed: "restart",
   turn_failed: "retry",
 };
 
@@ -155,20 +177,27 @@ const SWITCH_WORDS: Record<Extract<DeskItem, { kind: "switch" }>["carried"], Mes
 
 /**
  * A notice at the chat's end (B5, B6, B11, B13, B15), one line with no box
- * (D-75): what happened and the one action that answers it, as words. A
- * sign-in notice carries the command to run, copyable; the words the
- * operator sent stay in the composer.
+ * (D-75): what happened and the one action that answers it, as words, a
+ * failure in the failed colour. A sign-in notice carries the command to run,
+ * copyable; the words the operator sent stay in the composer. A failed turn
+ * names the agent's own reason in plain words when it gave one and the reply
+ * above did not already say it (`reason`); once a newer turn ran or a message waits
+ * (`settled`) its `다시 시도` is gone, since the answer to it was given; the
+ * notice that stopped a held line (`restartable`) offers `다시 시작`, which frees it.
  */
-export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
+export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, restartable = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; restartable?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
-  const action = NOTICE_ACTION[item.notice];
-  // A failed turn names the agent's own reason when it gave one (a provider's refusal).
-  const key = item.notice === "turn_failed" && item.detail ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
-  const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: item.detail ?? "" });
+  const turn = item.notice === "turn_failed";
+  // The failed colour is the failed turn's alone, as Doop's DeskNotice draws it; a stopped host is neutral words, as its `stopped`.
+  const tone = turn ? "text-destructive" : item.notice === "blocked" || item.notice === "install_failed" ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground";
+  const failed = turn || item.notice === "blocked" || item.notice === "install_failed";
+  // The notice that stopped a held line always offers the restart that frees it, whatever its kind.
+  const action = settled ? undefined : NOTICE_ACTION[item.notice] ?? (restartable ? "restart" : undefined);
+  const key = turn && reason ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
+  const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: turn ? (reason ?? "") : (item.detail ?? "") });
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
-      <span className={cn("min-w-0", failed ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground")}>{words}</span>
+      <span className={cn("min-w-0", tone)}>{words}</span>
       {item.notice === "login_needed" && item.detail ? (
         <span className="inline-flex min-w-0 items-center gap-xxs rounded-xs bg-secondary px-xs font-mono text-micro text-foreground">
           <TerminalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
@@ -178,7 +207,7 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
           </Hint>
         </span>
       ) : null}
-      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(ACTION_WORDS[action])}</Button> : null}
+      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(item.notice === "login_needed" && action === "restart" ? "desk.action.signedIn" : ACTION_WORDS[action])}</Button> : null}
     </p>
   );
 }
@@ -197,6 +226,11 @@ const APPROVAL_CARD: Record<DeskApproval["card"], MessageKey> = {
   read: "desk.approval.card.read",
   other: "desk.approval.card.other",
 };
+
+/** The card's kind in the words of the permission row it reads as: a `hide` line is `hide 명령`, not a shell command. */
+function cardLabel(item: DeskApproval): MessageKey {
+  return item.row === "hide" ? "desk.settings.permissions.hide" : APPROVAL_CARD[item.card];
+}
 
 const IRREVERSIBLE_WHY: Record<DeskIrreversible, MessageKey> = {
   end_working_session: "desk.approval.why.endWorkingSession",
@@ -244,11 +278,11 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
   const irreversible = approvalIrreversible(item);
   const refuse = () => onAnswer("reject", line.trim() || undefined);
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(cardLabel(item))} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
       <p className="flex min-w-0 items-center gap-sm">
         <StatusMark mark="turn" />
         <span className="font-medium text-foreground">{t(irreversible.length > 0 ? "desk.approval.irreversibleTitle" : "desk.approval.title")}</span>
-        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
+        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(cardLabel(item))}</span>
       </p>
       {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
       <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
@@ -277,7 +311,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             data-desk-approval-refusal="true"
             onChange={(event) => setLine(event.target.value)}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
+              if (composingKey(event)) return;
               if (event.key === "Enter") { event.preventDefault(); refuse(); }
               else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setRefusing(false); setLine(""); }
             }}
@@ -323,6 +357,7 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 
 export type DeskChatActions = DeskJobCardActions & {
   onApproval: (id: number, answer: DeskApprovalAnswer, text?: string) => void;
+  onQueuedRemove: (id: number) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   onCopy: (text: string) => void;
   onMention: (mention: DeskMention) => void;
@@ -341,6 +376,18 @@ function replyMentions(item: Extract<DeskItem, { kind: "reply" }>): DeskMention[
   return mentions;
 }
 
+/** Whether the item after `index` is the notice that a failed turn did not finish, which says the reply stopped. */
+function failsAfter(items: readonly DeskItem[], index: number): boolean {
+  const next = items[index + 1];
+  return next?.kind === "notice" && next.notice === "turn_failed";
+}
+
+/** The reply a notice follows directly, which a failed turn's notice does not repeat. */
+function replyBefore(items: readonly DeskItem[], index: number): string | null {
+  const before = items[index - 1];
+  return before?.kind === "reply" ? before.text : null;
+}
+
 /** A job card's job: an item naming a job the snapshot does not carry is a broken snapshot, not an empty card. */
 function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
   const job = jobs[id];
@@ -355,11 +402,15 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `thinking`
  * shows until it starts.
  */
-export function DeskChat({ items, jobs, agents, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
+  /** Messages waiting for the turn before them, after everything else. */
+  queued?: readonly DeskQueuedMessage[];
+  /** The line is stopped on its first message until a send or a restart. */
+  held?: boolean;
   /** The answer streaming now, after the last item. */
   live?: string | null;
   thinking?: boolean;
@@ -373,19 +424,20 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
   const choice = (id: string | null, of: "models" | "efforts") => id === null ? t("desk.bar.default") : (agents.flatMap((agent) => agent[of]).find((one) => one.id === id)?.label ?? id);
   return (
     <ol className="mx-auto flex w-full max-w-(--size-editor-measure) min-w-0 flex-col gap-md px-lg py-lg text-subhead" aria-label={t("desk.name")} data-desk-chat={items.length}>
-      {items.map((item) => (
+      {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped"} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
-            : item.kind === "notice" ? <DeskNotice item={item} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
       {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
+      {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );
 }
@@ -395,7 +447,7 @@ export function DeskChat({ items, jobs, agents, live = null, thinking = false, s
  * as plain rows a press sends, and while threads run their real marks and
  * counts with the way to them. ◆ stays in the sidebar (D-38).
  */
-export function DeskEmpty({ working, asking, onExample, onShowThreads }: { working: number; asking: number; onExample: (text: string) => void; onShowThreads?: () => void }) {
+export function DeskEmpty({ working, asking, onExample }: { working: number; asking: number; onExample: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
   const examples = [t("desk.empty.example1"), t("desk.empty.example2"), t("desk.empty.example3")];
   return (
@@ -417,15 +469,6 @@ export function DeskEmpty({ working, asking, onExample, onShowThreads }: { worki
           {working > 0 ? <span className="flex items-center gap-xxs"><StatusMark mark="going" />{t("desk.empty.working", { count: working })}</span> : null}
           {working > 0 && asking > 0 ? <span aria-hidden="true">·</span> : null}
           {asking > 0 ? <span className="flex items-center gap-xxs text-warning"><StatusMark mark="turn" />{t("desk.empty.asking", { count: asking })}</span> : null}
-          {onShowThreads ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <Button variant="text" size="inline" className="gap-0 text-caption" onClick={onShowThreads}>
-                {t("desk.empty.showThreads")}
-                <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-              </Button>
-            </>
-          ) : null}
         </p>
       ) : null}
     </div>

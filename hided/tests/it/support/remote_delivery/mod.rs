@@ -412,6 +412,41 @@ pub fn ready_panes(home: &Path) -> Result<Vec<String>> {
     Ok(panes)
 }
 
+/// The arguments the stand-in in `pane` (as the account's machine calls
+/// it) started with, `None` until it wrote them.
+/// The prompt files the node of `environment`'s account keeps for its
+/// panes' starts (`hide_kit::layout::prompt_files` of its state folder).
+pub fn prompt_files(environment: &Environment) -> Result<Vec<PathBuf>> {
+    let state = hide_kit::layout::state_dir(
+        &environment.home,
+        environment.var("HIDE_STATE_DIR").as_deref(),
+        environment.var("XDG_STATE_HOME").as_deref(),
+    );
+    let folder = hide_kit::layout::prompt_files(&state);
+    match fs::read_dir(&folder) {
+        Ok(entries) => Ok(entries
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<_>>()?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub fn started_with(home: &Path, pane: &str) -> Result<Option<Vec<String>>> {
+    let file = home.join(".fixture-argv").join(pane.replace(':', "-"));
+    match fs::read(&file) {
+        Ok(bytes) => Ok(Some(
+            bytes
+                .split(|byte| *byte == 0)
+                .filter(|word| !word.is_empty())
+                .map(|word| String::from_utf8_lossy(word).into_owned())
+                .collect(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// The conversation file a provider keeps for `session`, holding one
 /// finished turn. The doorbell rings a Claude Code pane only once its
 /// session read says nothing waits for the operator, and the fixture's
@@ -455,7 +490,9 @@ pub struct Agent {
     device: Option<&'static str>,
     daemon: Daemon,
     root: PathBuf,
-    sequence: u32,
+    /// The account's pane commands so far, counted from any thread: a
+    /// spawn's pane and the pane it makes are asked at once.
+    sequence: std::sync::atomic::AtomicU32,
 }
 
 impl Agent {
@@ -497,7 +534,7 @@ impl Agent {
             device,
             daemon: daemon.clone(),
             root: commands,
-            sequence: 0,
+            sequence: std::sync::atomic::AtomicU32::new(0),
         };
         agent.view(&agent.pane.clone())?;
         let registered = agent
@@ -546,7 +583,7 @@ impl Agent {
     /// session Hide waits for before it calls a spawned agent started. The
     /// fixture's provider is a shim that reports nothing by itself, so its
     /// SessionStart hook runs from inside the pane.
-    pub fn report_session(&mut self, pane: &str, session: &str) -> Result<()> {
+    pub fn report_session(&self, pane: &str, session: &str) -> Result<()> {
         self.view(pane)?;
         finished_session(&self.environment.home, session)?;
         let started = json!({
@@ -571,17 +608,20 @@ impl Agent {
         Ok(())
     }
 
-    pub fn run_in_pane(&mut self, command: &str) -> Result<PaneOutput> {
+    pub fn run_in_pane(&self, command: &str) -> Result<PaneOutput> {
         let pane = self.pane.clone();
         self.run_in(&pane, command)
     }
 
     /// Runs a command in a pane of this account whose provider is the
     /// fixture shim, such as the pane of an agent Hide spawned here.
-    pub fn run_in(&mut self, pane: &str, command: &str) -> Result<PaneOutput> {
-        ensure!(self.sequence < 32, "private pane command cap");
-        self.sequence += 1;
-        let base = self.root.join(format!("command-{}", self.sequence));
+    pub fn run_in(&self, pane: &str, command: &str) -> Result<PaneOutput> {
+        let sequence = self
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        ensure!(sequence <= 32, "private pane command cap");
+        let base = self.root.join(format!("command-{sequence}"));
         let script = base.with_extension("sh");
         let out = base.with_extension("out");
         let err = base.with_extension("err");
@@ -1236,8 +1276,15 @@ impl Fixture {
 
     /// The device's project folder as a repository a worktree can branch from.
     pub fn commit_remote_project(&self) -> Result<PathBuf> {
-        let project = self.remote.environment.home.join("project");
-        let mut commit = self.remote.environment.command("/usr/bin/git");
+        self.commit_project(true)
+    }
+
+    /// Commits to the project of the device's account, or of this machine's
+    /// with `on_device` false, so a branch can be made from it.
+    pub fn commit_project(&self, on_device: bool) -> Result<PathBuf> {
+        let account = if on_device { &self.remote } else { &self.local };
+        let project = account.environment.home.join("project");
+        let mut commit = account.environment.command("/usr/bin/git");
         commit.arg("-C").arg(&project).args([
             "-c",
             "user.name=fixture",
@@ -1470,10 +1517,12 @@ pub fn place_stand_in(build: &Environment, scratch: &Path, home: &Path) -> Resul
 }
 
 /// The stand-in agent: it reads its terminal raw, draws Claude Code's empty
-/// composer again after each Enter, marks itself ready under
-/// `$HOME/.fixture-ready` by the pane its machine names (`HIDE_PANE_ID`), and
-/// runs each script `$HOME/.fixture-run` hands that pane (`run_order`),
-/// writing the script's run time beside it once the script ended.
+/// composer again after each Enter, keeps the arguments it started with
+/// under `$HOME/.fixture-argv` and marks itself ready under
+/// `$HOME/.fixture-ready`, both by the pane its machine names
+/// (`HIDE_PANE_ID`), and runs each script `$HOME/.fixture-run` hands that
+/// pane (`run_order`), writing the script's run time beside it once the
+/// script ended.
 pub const SHIM: &str = r#"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1488,21 +1537,38 @@ static void composer(void) {
   fputs("\r\n────────────────\r\n❯ \r\n────────────────\r\n", stdout);
   fflush(stdout);
 }
+/* The file under `$HOME/<folder>` named for this pane, into `name`. */
+static int pane_file(const char *folder, char *name, size_t size) {
+  const char *home = getenv("HOME"), *pane = getenv("HIDE_PANE_ID");
+  if (!home || !pane || !*pane) return 0;
+  snprintf(name, size, "%s/%s", home, folder);
+  mkdir(name, 0700);
+  size_t at = strlen(name);
+  if (at + 1 < size) name[at++] = '/';
+  for (const char *c = pane; *c && at + 1 < size; c++) name[at++] = *c == ':' ? '-' : *c;
+  name[at] = 0;
+  return 1;
+}
+/* The arguments after the program, each ended by a NUL, written whole by a
+   rename. */
+static void arguments(int argc, char **argv) {
+  char name[4096], staged[4200];
+  if (!pane_file(".fixture-argv", name, sizeof name)) return;
+  snprintf(staged, sizeof staged, "%s.tmp", name);
+  FILE *out = fopen(staged, "wb");
+  if (!out) return;
+  for (int i = 1; i < argc; i++) fwrite(argv[i], 1, strlen(argv[i]) + 1, out);
+  fclose(out);
+  rename(staged, name);
+}
 /* Written whole by a rename, so a reader never sees it half made. */
 static void ready(void) {
-  const char *home = getenv("HOME"), *pane = getenv("HIDE_PANE_ID");
-  if (!home || !pane || !*pane) return;
-  char folder[4096], name[4096], staged[4200];
-  snprintf(folder, sizeof folder, "%s/.fixture-ready", home);
-  mkdir(folder, 0700);
-  snprintf(name, sizeof name, "%s/", folder);
-  size_t at = strlen(name);
-  for (const char *c = pane; *c && at + 1 < sizeof name; c++) name[at++] = *c == ':' ? '-' : *c;
-  name[at] = 0;
+  char name[4096], staged[4200];
+  if (!pane_file(".fixture-ready", name, sizeof name)) return;
   snprintf(staged, sizeof staged, "%s.tmp", name);
   FILE *out = fopen(staged, "w");
   if (!out) return;
-  fputs(pane, out);
+  fputs(getenv("HIDE_PANE_ID"), out);
   fclose(out);
   rename(staged, name);
 }
@@ -1569,6 +1635,7 @@ int main(int argc, char **argv) {
     tcsetattr(0, TCSANOW, &t);
   }
   puts("DELIVERY_FIXTURE_READY"); fflush(stdout);
+  arguments(argc, argv);
   composer();
   ready();
   /* Keys are read as they come, and the run order is looked at every 20 ms;

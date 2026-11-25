@@ -78,6 +78,10 @@ pub(crate) struct PlanRuntime {
     /// once `input.undelivered` has logged it. Bounded by the unconfirmed
     /// inputs.
     pub(crate) input_undelivered: std::collections::BTreeSet<String>,
+    /// Typed input past its record wait with no verdict, by input id, with
+    /// the typing `input.waiting` logged it for, so it is logged once per
+    /// typing (`typed::overdue_wait`). Bounded by the unconfirmed inputs.
+    pub(crate) input_waiting: BTreeMap<String, u8>,
     /// Each unconfirmed input's fresh session read, asked once per typing
     /// before the input is judged unconfirmed: the typing and when it was
     /// asked. Bounded by the unconfirmed inputs.

@@ -389,7 +389,7 @@
     "web/src/coreError.ts": {"max": 1, "reason": "old-value"},
     "web/src/diskCleanup.test.ts": {"max": 4, "reason": "test"},
     "web/src/gallery/AddProjectScene.tsx": {"max": 4, "reason": "old-value"},
-    "web/src/gallery/DeskScene.tsx": {"max": 2, "reason": "fixture"},
+    "web/src/gallery/DeskScene.tsx": {"max": 1, "reason": "fixture"},
     "web/src/gallery/HideAiScene.tsx": {"max": 1, "reason": "fixture"},
     "web/src/gallery/OnboardingScene.tsx": {"max": 17, "reason": "import"},
     "web/src/gallery/SharedPartsScene.tsx": {"max": 1, "reason": "fixture"},

@@ -153,7 +153,7 @@ export function DividerGuide({ left, pair = false }: { left: number; pair?: bool
 }
 
 /** The divider's grip: a hairline with a ⇆ pill at its middle, drawn on hover, keyboard focus and while dragging. */
-function DividerGrip({ className = "" }: { className?: string }) {
+export function DividerGrip({ className = "" }: { className?: string }) {
   return (
     <span aria-hidden="true" className={`relative h-full w-(--size-hairline) ${className}`} data-lane-grip="true">
       <span className="absolute inset-0 bg-muted-foreground opacity-[var(--opacity-secondary)]" />

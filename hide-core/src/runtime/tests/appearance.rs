@@ -74,6 +74,38 @@ fn product_analytics_opt_out_survives_restart_and_stale_ui_saves() {
     );
 }
 
+#[test]
+fn rail_counts_switch_survives_restart_and_stale_ui_saves_and_reads_on_in_an_old_store() {
+    let (_state, path) = state_path("rail-counts");
+    let mut runtime = runtime_at(&path);
+    assert!(runtime.snapshot().ui_state.rail_counts_shown);
+    let stale = ui_state_update(&runtime, serde_json::json!({"font_size": 15}));
+    let off = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "rail_counts_set",
+        "payload": {"shown": false}
+    }))
+    .unwrap();
+    assert!(runtime.dispatch_json(&off));
+    assert!(
+        !runtime.dispatch_json(&off),
+        "the desired value is idempotent"
+    );
+    runtime.dispatch_json(&stale);
+    assert!(!runtime.snapshot().ui_state.rail_counts_shown);
+    drop(runtime);
+    let restarted = runtime_at(&path);
+    assert!(!restarted.snapshot().ui_state.rail_counts_shown);
+    drop(restarted);
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    stored.as_object_mut().unwrap().remove("rail_counts_shown");
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    assert!(
+        runtime_at(&path).snapshot().ui_state.rail_counts_shown,
+        "a store from before the switch shows the counts"
+    );
+}
+
 fn theme_set(theme: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,

@@ -14,8 +14,8 @@ pub(crate) enum Refusal {
     /// The prompt itself: a control character, or past [`MAX_PROMPT_BYTES`];
     /// a task refuses such a prompt before anything starts.
     Prompt(String),
-    /// The start: its native arguments give a prompt already, or it runs
-    /// where no journey cell proves a launch.
+    /// The start: its native arguments give a prompt already, or its node
+    /// did not say it reaches the program whole.
     Start(String),
 }
 
@@ -31,29 +31,24 @@ impl Refusal {
 /// carry `prompt` as its launch prompt, in the agent's own form
 /// (`LaunchDialect::prompt_form`); `Ok(None)` for an agent that does not
 /// declare the launch prompt, typed as every input is by default. The
-/// journey proves a launch only for an agent that declares it, started on
-/// this machine (`here`) as `form` says its node starts the program
+/// journey proves a launch for an agent that declares it, started as `form`
+/// says the pane's node, this machine's or a device's, starts the program
 /// ([`start_form`]): by its name on macOS and Linux, by its file on Windows,
-/// npm's launcher read as the program it runs. A device's start, a start
-/// whose node did not say, one whose program Windows runs through `cmd.exe`
-/// (`StartForm::Batch`), and one whose Windows command line would pass the
-/// system's limit are typed.
+/// npm's launcher read as the program it runs. The machine is not a cell:
+/// a device's node answers `form` for its own system as this machine's does.
+/// A start whose node did not say, one whose program Windows runs through
+/// `cmd.exe` (`StartForm::Batch`), and one whose Windows command line would
+/// pass the system's limit are typed.
 pub(crate) fn launched(
     kind: &str,
     native: &[String],
     prompt: &str,
-    here: bool,
     form: Option<&StartForm>,
 ) -> Result<Option<Vec<String>>, Refusal> {
     if !hide_agent_adapter::adapter(kind).is_some_and(|row| row.launch_prompt()) {
         return Ok(None);
     }
     let words = carried(kind, native, prompt)?;
-    if !here {
-        return Err(Refusal::Start(
-            "it starts on a device, where no journey cell proves a launch".into(),
-        ));
-    }
     match form {
         None => Err(Refusal::Start(
             "the pane's machine did not say how the agent's program starts".into(),
@@ -71,6 +66,16 @@ pub(crate) fn launched(
         }
         Some(StartForm::Program | StartForm::Direct { .. }) => Ok(Some(words)),
     }
+}
+
+/// The words a start carries its first input in ([`launched`], or a
+/// launched record's saved words), as the arguments the start adds and the
+/// last word, the input itself (`--prompt=<text>` for OpenCode's form): the
+/// engine reads that word from a file of the pane's machine rather than
+/// typing it into the shell (`AgentLaunch::prompt`).
+pub(crate) fn split_carried(mut words: Vec<String>) -> (Vec<String>, Option<String>) {
+    let prompt = words.pop();
+    (words, prompt)
 }
 
 /// How the pane's node starts the program `program` now
@@ -274,38 +279,34 @@ mod tests {
     #[test]
     fn a_first_input_launches_only_where_the_agent_declares_it_and_the_journey_proves_it() {
         let by_name = StartForm::Program;
-        let words = |kind: &str, native: &[&str], prompt: &str, here: bool| {
+        let words = |kind: &str, native: &[&str], prompt: &str| {
             let native: Vec<String> = native.iter().map(|word| (*word).to_owned()).collect();
-            launched(kind, &native, prompt, here, Some(&by_name))
+            launched(kind, &native, prompt, Some(&by_name))
         };
         // Typed by default: OpenCode, Pi and Cursor declare no launch.
         for kind in ["opencode", "pi", "cursor"] {
-            assert_eq!(words(kind, &[], "go", true), Ok(None), "{kind}");
+            assert_eq!(words(kind, &[], "go"), Ok(None), "{kind}");
         }
         assert!(matches!(
-            words("codex", &[], "a\u{7}b", true),
+            words("codex", &[], "a\u{7}b"),
             Err(Refusal::Prompt(_))
         ));
         assert!(matches!(
-            words("codex", &["--", "mine"], "go", true),
-            Err(Refusal::Start(_))
-        ));
-        assert!(matches!(
-            words("codex", &[], "go", false),
+            words("codex", &["--", "mine"], "go"),
             Err(Refusal::Start(_))
         ));
         assert_eq!(
-            words("codex", &[], "-x\ny", true),
+            words("codex", &[], "-x\ny"),
             Ok(Some(vec!["--".into(), "-x\u{2028}y".into()]))
         );
         assert_eq!(
-            words("antigravity", &[], "@a", true),
+            words("antigravity", &[], "@a"),
             Ok(Some(vec!["-i".into(), "@a".into()]))
         );
         // A whole brief, 16 KiB, rides the start.
         let brief = "x".repeat(16 * 1024);
         assert_eq!(
-            words("claude", &[], &brief, true),
+            words("claude", &[], &brief),
             Ok(Some(vec!["--".into(), brief]))
         );
     }
@@ -322,23 +323,23 @@ mod tests {
         };
         let brief = format!("-{}", "x".repeat(16 * 1024 - 1));
         assert_eq!(
-            launched("codex", &[], &brief, true, Some(&direct)),
+            launched("codex", &[], &brief, Some(&direct)),
             Ok(Some(vec!["--".into(), brief.clone()]))
         );
         for form in [None, Some(&StartForm::Batch)] {
             assert!(matches!(
-                launched("codex", &[], &brief, true, form),
+                launched("codex", &[], &brief, form),
                 Err(Refusal::Start(_))
             ));
         }
         // A task's first prompt may be 64 KiB, twice what Windows takes.
         let long = "x".repeat(MAX_PROMPT_BYTES);
         assert!(matches!(
-            launched("codex", &[], &long, true, Some(&direct)),
+            launched("codex", &[], &long, Some(&direct)),
             Err(Refusal::Start(_))
         ));
         assert_eq!(
-            launched("codex", &[], &long, true, Some(&StartForm::Program)),
+            launched("codex", &[], &long, Some(&StartForm::Program)),
             Ok(Some(vec!["--".into(), long]))
         );
     }

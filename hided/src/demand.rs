@@ -9,7 +9,8 @@
 //! connection only owns its own demand.
 
 use hide_core::links::ledger::BacklogOriginIdentity;
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -134,6 +135,173 @@ impl OriginHolds {
     }
 }
 
+/// The files one window's Desk room may hold at once; its tab panel drops
+/// its oldest file tab past this (`web/src/deskRoom.ts`).
+pub const DESK_FILES_PER_CONNECTION: usize = 32;
+
+/// A file a window's Desk room shows: its checkout's ids, the device the
+/// checkout is on, and its path as this daemon checked it.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeskFileKey {
+    pub workspace_id: String,
+    pub checkout_id: String,
+    pub device_id: String,
+    pub path: String,
+}
+
+/// Which connections' Desk rooms hold each file (PRD desk-2-ui B19, B36).
+/// The core keeps a held file's document out of every View, so the hold
+/// belongs to the window that shows it: one window letting a file go must
+/// not close another's, and a window that leaves without saying so (a quit,
+/// a reload, a dropped socket) lets its files go with its connection.
+#[derive(Default)]
+pub struct DeskFileHolds {
+    holders: Mutex<BTreeMap<DeskFileKey, HashSet<u64>>>,
+}
+
+impl DeskFileHolds {
+    /// Makes `files` the whole set `connection` holds. When files no
+    /// connection held become held, or the last connection holding a file
+    /// lets it go, `change` receives both lists in one call, made while the
+    /// holds are still locked so two windows' changes reach the core in the
+    /// order they happened. Refused past `DESK_FILES_PER_CONNECTION` files.
+    pub fn set(
+        &self,
+        connection: u64,
+        files: Vec<DeskFileKey>,
+        change: impl FnOnce(&[DeskFileKey], &[DeskFileKey]),
+    ) -> Result<(), String> {
+        let mut wanted = Vec::with_capacity(files.len());
+        for file in files {
+            if !wanted.contains(&file) {
+                wanted.push(file);
+            }
+        }
+        if wanted.len() > DESK_FILES_PER_CONNECTION {
+            return Err(format!(
+                "desk_files: one window holds at most {DESK_FILES_PER_CONNECTION} files"
+            ));
+        }
+        let mut holders = self.holders.lock().expect("desk file holds");
+        let mut close = Vec::new();
+        holders.retain(|key, connections| {
+            if !wanted.contains(key) && connections.remove(&connection) && connections.is_empty() {
+                close.push(key.clone());
+                return false;
+            }
+            !connections.is_empty()
+        });
+        let mut open = Vec::new();
+        for file in wanted {
+            let connections = holders.entry(file.clone()).or_default();
+            if connections.is_empty() {
+                open.push(file);
+            }
+            connections.insert(connection);
+        }
+        if !open.is_empty() || !close.is_empty() {
+            change(&open, &close);
+        }
+        Ok(())
+    }
+
+    /// Lets go of every file a closed connection held, in one `change` for
+    /// the files no connection holds any more.
+    pub fn release(&self, connection: u64, change: impl FnOnce(&[DeskFileKey], &[DeskFileKey])) {
+        // An empty set is never refused.
+        let _ = self.set(connection, Vec::new(), change);
+    }
+}
+
+/// Which windows show the core's one session thread, and how many panels of
+/// each (`session_thread_open`, `session_thread_close`). One window closing
+/// its panel must not empty another's, and a window that reloads, crashes or
+/// loses its socket says nothing, so the daemon counts each connection's holds
+/// and tells the core to close only when the last one is let go or leaves.
+/// The core holds one thread: another pane's open replaces it, and the holds
+/// on the replaced one with it, so they can never close the new thread. A
+/// tool draws no thread and holds none; its close closes the thread.
+#[derive(Default)]
+pub struct ThreadHolds {
+    held: Mutex<HeldThread>,
+}
+
+#[derive(Default)]
+struct HeldThread {
+    pane: Option<String>,
+    windows: HashMap<u64, usize>,
+}
+
+impl ThreadHolds {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HeldThread> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A window (`Some(connection)`) or a tool (`None`) opens `pane`'s
+    /// thread. `dispatch` hands the open to the core while the holds are
+    /// still locked, so the holds kept and the order the core hears agree; a
+    /// refused dispatch changes nothing.
+    pub fn open(
+        &self,
+        window: Option<u64>,
+        pane: &str,
+        dispatch: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut held = self.lock();
+        dispatch()?;
+        if held.pane.as_deref() != Some(pane) {
+            held.pane = Some(pane.to_owned());
+            held.windows.clear();
+        }
+        if let Some(connection) = window {
+            *held.windows.entry(connection).or_default() += 1;
+        }
+        Ok(())
+    }
+
+    /// A window lets go of one hold (`Some(connection)`), or a tool closes
+    /// the thread (`None`). The core hears the close, through `dispatch`
+    /// under the lock, only when no window holds the thread any more.
+    /// Returns whether it was told.
+    pub fn close(
+        &self,
+        window: Option<u64>,
+        dispatch: impl FnOnce() -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let mut held = self.lock();
+        if let Some(connection) = window
+            && let Some(holds) = held.windows.get_mut(&connection)
+        {
+            *holds -= 1;
+            if *holds == 0 {
+                held.windows.remove(&connection);
+            }
+        }
+        if !held.windows.is_empty() {
+            return Ok(false);
+        }
+        dispatch()?;
+        *held = HeldThread::default();
+        Ok(true)
+    }
+
+    /// Drops the holds of a closed connection; when they were the last, the
+    /// thread is closed through `close`, called under the lock. Returns
+    /// whether it was.
+    pub fn release(&self, connection: u64, close: impl FnOnce()) -> bool {
+        let mut held = self.lock();
+        if held.windows.remove(&connection).is_none() || !held.windows.is_empty() {
+            return false;
+        }
+        *held = HeldThread::default();
+        close();
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +312,59 @@ mod tests {
             device_id: "device-a".into(),
             task_key: key.into(),
         }
+    }
+
+    #[test]
+    fn a_session_thread_closes_only_when_the_last_window_showing_it_lets_go_or_leaves() {
+        let ok = || Ok(());
+        let holds = ThreadHolds::default();
+        let mut closed = 0;
+
+        // Two windows show the thread: one leaving keeps it for the other.
+        holds.open(Some(1), "w1:p1", ok).unwrap();
+        holds.open(Some(2), "w1:p1", ok).unwrap();
+        assert!(!holds.release(1, || closed += 1), "another window shows it");
+        assert!(holds.release(2, || closed += 1), "the last window left");
+        assert!(!holds.release(2, || closed += 1), "closed once");
+        assert_eq!(closed, 1);
+
+        // Two panels of one window: closing one keeps the other's.
+        holds.open(Some(3), "w1:p1", ok).unwrap();
+        holds.open(Some(3), "w1:p1", ok).unwrap();
+        assert_eq!(holds.close(Some(3), ok), Ok(false));
+        assert_eq!(holds.close(Some(3), ok), Ok(true));
+
+        // One window's panel closing does not empty another window's.
+        holds.open(Some(4), "w1:p1", ok).unwrap();
+        holds.open(Some(5), "w1:p1", ok).unwrap();
+        assert_eq!(holds.close(Some(4), ok), Ok(false));
+        assert!(holds.release(5, || closed += 1));
+        assert_eq!(closed, 2);
+
+        // Another pane's open replaces the thread: the replaced pane's
+        // window leaving does not close the new one.
+        holds.open(Some(6), "w1:p1", ok).unwrap();
+        holds.open(Some(7), "w1:p2", ok).unwrap();
+        assert!(!holds.release(6, || closed += 1));
+        assert_eq!(holds.close(Some(6), ok), Ok(false), "it holds nothing now");
+        assert!(holds.release(7, || closed += 1));
+        assert_eq!(closed, 3);
+
+        // A tool holds nothing, and its close reaches the core.
+        holds.open(None, "w1:p1", ok).unwrap();
+        assert!(!holds.release(8, || closed += 1));
+        assert_eq!(holds.close(None, ok), Ok(true));
+
+        // A refused dispatch keeps the holds it had.
+        holds.open(Some(9), "w1:p1", ok).unwrap();
+        assert!(
+            holds
+                .open(Some(10), "w1:p1", || Err("full".into()))
+                .is_err()
+        );
+        assert!(!holds.release(10, || closed += 1));
+        assert!(holds.release(9, || closed += 1));
+        assert_eq!(closed, 4);
     }
 
     #[test]
@@ -303,6 +524,74 @@ mod tests {
         assert_eq!(
             demand.set(3, false, |_| panic!("nothing to announce")),
             None
+        );
+    }
+
+    fn file(path: &str) -> DeskFileKey {
+        DeskFileKey {
+            workspace_id: "workspace:a".into(),
+            checkout_id: "checkout:a".into(),
+            device_id: "device-a".into(),
+            path: path.into(),
+        }
+    }
+
+    type Changes = std::cell::RefCell<Vec<(Vec<String>, Vec<String>)>>;
+
+    fn record(changes: &Changes) -> impl FnOnce(&[DeskFileKey], &[DeskFileKey]) + '_ {
+        |open, close| {
+            let paths =
+                |files: &[DeskFileKey]| files.iter().map(|file| file.path.clone()).collect();
+            changes.borrow_mut().push((paths(open), paths(close)));
+        }
+    }
+
+    #[test]
+    fn a_desk_file_closes_only_when_the_last_window_holding_it_lets_it_go_or_leaves() {
+        let holds = DeskFileHolds::default();
+        let changes = Changes::default();
+        holds
+            .set(1, vec![file("/a"), file("/b")], record(&changes))
+            .unwrap();
+        holds.set(2, vec![file("/a")], record(&changes)).unwrap();
+        // A preview replace in window 1: one change opens /c and lets /b go.
+        holds
+            .set(1, vec![file("/a"), file("/c")], record(&changes))
+            .unwrap();
+        // The same set again changes nothing.
+        holds
+            .set(1, vec![file("/a"), file("/c")], record(&changes))
+            .unwrap();
+        holds.set(1, Vec::new(), record(&changes)).unwrap();
+        holds.release(2, record(&changes));
+        assert_eq!(
+            changes.into_inner(),
+            vec![
+                (vec!["/a".into(), "/b".into()], vec![]),
+                (vec!["/c".into()], vec!["/b".into()]),
+                (vec![], vec!["/c".into()]),
+                (vec![], vec!["/a".into()]),
+            ],
+            "window 2 kept /a open after window 1 let it go, until it left"
+        );
+    }
+
+    #[test]
+    fn a_window_past_its_desk_file_cap_is_refused_and_keeps_what_it_held() {
+        let holds = DeskFileHolds::default();
+        let changes = Changes::default();
+        holds.set(1, vec![file("/kept")], record(&changes)).unwrap();
+        let many = (0..=DESK_FILES_PER_CONNECTION)
+            .map(|n| file(&format!("/{n}")))
+            .collect();
+        assert!(holds.set(1, many, record(&changes)).is_err());
+        holds.release(1, record(&changes));
+        assert_eq!(
+            changes.into_inner(),
+            vec![
+                (vec!["/kept".into()], vec![]),
+                (vec![], vec!["/kept".into()])
+            ]
         );
     }
 }

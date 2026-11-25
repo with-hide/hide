@@ -33,7 +33,16 @@ fn record(record: &Value, thread: &mut Thread) {
     };
     match &update {
         SessionUpdate::UserMessageChunk(chunk) => {
-            thread.user(None, Origin::Operator, part(&chunk.content));
+            // Grok's own wake prompts are no words of the operator's.
+            let meta = record["params"]["update"].get("_meta");
+            let origin = if crate::grok_flag(meta, "hideFromScrollback")
+                || crate::grok_flag(meta, "hostTurn")
+            {
+                Origin::Injected
+            } else {
+                Origin::Operator
+            };
+            thread.user(None, origin, part(&chunk.content));
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let Some(part) = part(&chunk.content) {

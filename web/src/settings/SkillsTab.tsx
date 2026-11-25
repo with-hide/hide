@@ -1,4 +1,3 @@
-import type { TFunction } from "i18next";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, FolderIcon, GitBranchIcon, GlobeIcon, HandIcon, PackageIcon, PlusIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentMark } from "../AgentMark";
@@ -17,10 +16,11 @@ import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { kitUnavailableText } from "../kitWhy";
+import { storeAskTitle } from "../storeAskNotice";
 import { cn } from "../lib/utils";
 import { lastSeen } from "../mobileSettings";
 import { machineName, windowDeviceId, windowFirst } from "../screenMachine";
-import type { Device, StoreAsk, StoreCell, StoreFoundCopy, StoreItem, StoreItemKind, StoreReport, StoreUnmanaged } from "../snapshot";
+import type { Device, StoreCell, StoreFoundCopy, StoreItem, StoreItemKind, StoreReport, StoreUnmanaged } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { agentMachines, type AgentMachine } from "./agentRows";
@@ -207,7 +207,7 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
           {asks.map((row) => (
             <div key={row.id} className="flex items-center gap-sm">
               <StatusMark mark="turn" />
-              <span className="min-w-0 flex-1 truncate text-body text-foreground" data-store-ask-line={row.id}>{askTitle(row, t)}</span>
+              <span className="min-w-0 flex-1 truncate text-body text-foreground" data-store-ask-line={row.id}>{storeAskTitle(row, t)}</span>
               <Button size="sm" variant="secondary" onClick={() => actions.openStoreAsk(row.id)} data-store-ask-open={row.id}>
                 {t("agents.human.confirm")}
               </Button>
@@ -254,19 +254,6 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
 }
 
 const EMPTY_REPORT: StoreReport = { columns: {}, items: [], unmanaged: [], trash: [], previews: [], diffs: [] };
-
-function askTitle(ask: StoreAsk, t: TFunction<"translation">): string {
-  switch (ask.what) {
-    case "install":
-      return t("store.ask.install", { names: ask.names.join(", ") });
-    case "update":
-      return t("store.ask.update", { name: ask.item.split(":").slice(1).join(":") });
-    case "add_mcp":
-      return t("store.ask.addMcp", { name: ask.server.name });
-    case "set_mcp":
-      return t("store.ask.setMcp", { name: ask.server.name });
-  }
-}
 
 /** docs/agent-hooks.md, When the MCP keys' secret is lost: the operator's start-over by hand. */
 const KEYS_LOST_URL = "https://github.com/with-hide/hide/blob/main/docs/agent-hooks.md#when-the-mcp-keys-secret-is-lost";

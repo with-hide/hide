@@ -119,7 +119,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     // (PRD right-lane B17): its documents button counts the prepared views,
     // and pressing it shows them.
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge="2"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "2 views open");
     await showDocuments(page);
     await expect(page.locator(`[data-view-tab-bar] [data-display="${opened.result.view_id}"]`)).toHaveAttribute("data-tab-kind", "file");
     await expect(page.locator(`[data-view-tab-bar] [data-display="${diff.result.view_id}"]`)).toHaveAttribute("data-tab-kind", "diff");

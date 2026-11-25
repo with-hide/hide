@@ -141,6 +141,11 @@ pub struct AppState {
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
+    /// The files each window's Desk room holds (`desk_files`).
+    pub desk_files: Arc<crate::demand::DeskFileHolds>,
+    /// Which windows show the core's session thread; the last to let go or
+    /// leave closes it.
+    pub thread_holds: Arc<crate::demand::ThreadHolds>,
     /// What Settings > About reads about this daemon, sent once after
     /// a handshake. No token, no environment beyond the paths it names.
     pub daemon_info: Arc<Value>,
@@ -1072,6 +1077,10 @@ async fn screen_loop(
     // The operator's comments and Sends from this screen, in the order it
     // made them, off the socket loop; started by the first one.
     let mut feedback: Option<FeedbackQueue> = None;
+    // This screen's search across every project, and its asks of agents,
+    // each one at a time, off the socket loop.
+    let file_search = OneAtATime::<Option<Value>>::default();
+    let screen_asks = OneAtATime::<ScreenAsks>::default();
     let mut device_reads: std::collections::VecDeque<DeviceRead> =
         std::collections::VecDeque::new();
     let daemon = json!({"type": "daemon", "payload": state.daemon_info.as_ref()});
@@ -1456,6 +1465,12 @@ async fn screen_loop(
                                     continue;
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
+                            Ok(ClientAction::ScreenAsk(event)) => {
+                                screen_asks.ask(&state, device_frames_tx.clone(), |asks| asks.add(event), screen_ask);
+                            }
+                            Ok(ClientAction::FileIndexAll(event)) => {
+                                file_search.ask(&state, device_frames_tx.clone(), |waiting| { *waiting = Some(event); Ok(()) }, file_index_all);
                             }
                             Ok(ClientAction::Automation(event)) => {
                                 crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
@@ -2804,6 +2819,12 @@ enum ClientAction {
     /// The operator's comment or Send, which the screen's feedback queue
     /// hands the core in order.
     Feedback(Value),
+    /// The palette's search across every project (`file_index_all`),
+    /// answered off the socket loop by `OneAtATime`.
+    FileIndexAll(Value),
+    /// An agent's ask read (`pane_ask`) or answered (`pane_choice`) from a
+    /// window as a phone does (`mobile::screen_ask`), off the socket loop.
+    ScreenAsk(Value),
     Replies(Vec<Message>),
 }
 
@@ -2813,7 +2834,7 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 12] = [
+const DEVICE_FILE_EVENTS: [&str; 13] = [
     "create_workspace",
     "clone_repository",
     "file_list",
@@ -2826,6 +2847,7 @@ const DEVICE_FILE_EVENTS: [&str; 12] = [
     "path_move",
     "path_copy",
     "path_trash",
+    "desk_file_retry",
 ];
 
 /// The SSH device a file event names, or `None` for this machine. Any id
@@ -2867,6 +2889,15 @@ fn handle_client_text(
     }
     if event.get("kind").and_then(Value::as_str) == Some("file_index") {
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
+    }
+    if matches!(
+        event.get("kind").and_then(Value::as_str),
+        Some("pane_ask" | "pane_choice")
+    ) {
+        return Ok(ClientAction::ScreenAsk(event));
+    }
+    if event.get("kind").and_then(Value::as_str) == Some("file_index_all") {
+        return Ok(ClientAction::FileIndexAll(event));
     }
     match event.get("kind").and_then(Value::as_str) {
         Some("home_folder_list" | "importable_projects") => {
@@ -2996,6 +3027,15 @@ fn handle_client_text(
             let owner = origin_identity(&event)?;
             state.origin_holds.hold(connection, &owner)?;
         }
+        // A window's Desk room names every file it shows; hided owns the
+        // holds and the core hears one change for the whole message.
+        Some("desk_files") => {
+            let (files, refusals) = desk_files_admitted(state, &event)?;
+            state.desk_files.set(connection, files, |open, close| {
+                dispatch_desk_file(&state.core, connection, open, close)
+            })?;
+            return Ok(ClientAction::Replies(refusals));
+        }
         Some("backlog_origin_close") => {
             let owner = origin_identity(&event)?;
             state.origin_holds.let_go(connection, &owner, |key| {
@@ -3061,6 +3101,27 @@ fn handle_client_text(
         Some(kind) if kind.starts_with("mobile_") => {
             if mobile_event_reaches(kind, own_screen)? {
                 state.mobile.handle_event(connection, &event)?;
+            }
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
+        // A window that shows the core's session thread holds it; the
+        // thread closes when the last hold is let go or its window leaves
+        // without a close (a reload, a crash, a lost socket), so its file
+        // looks do not outlive the screens. A tool draws no thread and holds
+        // none.
+        Some(kind @ ("session_thread_open" | "session_thread_close")) => {
+            let window = (client != Client::Tool).then_some(connection);
+            let bytes =
+                serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
+            let dispatch = || state.core.dispatch(bytes);
+            if kind == "session_thread_open" {
+                let pane = event
+                    .pointer("/payload/pane_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                state.thread_holds.open(window, pane, dispatch)?;
+            } else {
+                state.thread_holds.close(window, dispatch)?;
             }
             return Ok(ClientAction::Replies(Vec::new()));
         }
@@ -3642,6 +3703,74 @@ fn close_backlog_origin(
         eprintln!(
             "{}",
             json!({"component": "hided", "kind": "backlog.origin_release_failed", "connection": connection, "message": error})
+        );
+    }
+}
+
+/// The files a `desk_files` message names, each checked as an open is: a
+/// file of this machine's checkout by its root, a device's by the core and
+/// that device's helper. A refused file is answered and left out of the set.
+fn desk_files_admitted(
+    state: &AppState,
+    event: &Value,
+) -> Result<(Vec<crate::demand::DeskFileKey>, Vec<Message>), String> {
+    let files: Vec<crate::demand::DeskFileKey> = serde_json::from_value(
+        event
+            .get("payload")
+            .and_then(|payload| payload.get("files"))
+            .cloned()
+            .ok_or_else(|| "desk_files.files is required".to_owned())?,
+    )
+    .map_err(|error| format!("desk_files: {error}"))?;
+    let mut admitted = Vec::with_capacity(files.len());
+    let mut refusals = Vec::new();
+    for mut file in files {
+        let mut check = json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "desk_files",
+            "payload": {
+                "workspace_id": file.workspace_id,
+                "checkout_id": file.checkout_id,
+                "device_id": file.device_id,
+                "path": file.path,
+            },
+        });
+        if event_device(&state.boundary, &check).is_none() {
+            if let Some(reply) =
+                admit_event(&state.boundary, &mut check, || roots_current(&state.roots))
+            {
+                refusals.push(Message::Text(reply.to_string().into()));
+                continue;
+            }
+            file.path = payload_str(&check, "path");
+        }
+        admitted.push(file);
+    }
+    Ok((admitted, refusals))
+}
+
+/// Tells the core which files Desk's rooms newly hold and which none holds
+/// any more, as one event.
+fn dispatch_desk_file(
+    core: &CoreHandle,
+    connection: u64,
+    open: &[crate::demand::DeskFileKey],
+    close: &[crate::demand::DeskFileKey],
+) {
+    let files = |list: &[crate::demand::DeskFileKey]| {
+        list.iter()
+            .map(|file| json!({"workspace_id": file.workspace_id, "checkout_id": file.checkout_id, "path": file.path}))
+            .collect::<Vec<_>>()
+    };
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "desk_file",
+        "payload": {"open": files(open), "close": files(close)},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        eprintln!(
+            "{}",
+            json!({"component": "hided", "kind": "desk.file_dispatch_failed", "connection": connection, "message": error})
         );
     }
 }
@@ -4237,25 +4366,313 @@ fn handle_path_import(state: &AppState, event: &Value) -> Vec<Message> {
 fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     let root = payload_str(event, "root");
     let query = payload_str(event, "query");
-    if let Some(device) = event_device(&state.boundary, event) {
-        return vec![Message::Text(
-            device_file_index(state, &device, &root, &query)
-                .to_string()
-                .into(),
-        )];
+    let answer = match event_device(&state.boundary, event) {
+        Some(device) => device_file_index(state, &device, &root, &query),
+        None => local_file_index(state, &root, &query),
+    };
+    vec![Message::Text(answer.to_string().into())]
+}
+
+/// What one screen has asked a [`OneAtATime`] worker and not had answered.
+trait Waiting: Default + Send + 'static {
+    /// The next request to answer, if any.
+    fn next(&mut self) -> Option<Value>;
+    /// Whether a request waits.
+    fn any(&self) -> bool;
+}
+
+/// The search keeps only the newest query.
+impl Waiting for Option<Value> {
+    fn next(&mut self) -> Option<Value> {
+        self.take()
     }
-    let found = match state.boundary.open_directory(Path::new(&root), &root) {
+
+    fn any(&self) -> bool {
+        self.is_some()
+    }
+}
+
+/// A screen's asks of agents (`mobile::screen_ask`, PRD desk-2-ui B14): its
+/// choices in the order pressed, each answered, and the newest `pane_ask` of
+/// each pane, since an older one would only be answered with what the newer
+/// one reads. A choice goes first: it is what the operator pressed.
+#[derive(Default)]
+struct ScreenAsks {
+    choices: std::collections::VecDeque<Value>,
+    asks: Vec<Value>,
+}
+
+/// Choices a screen may have waiting; one past it is answered `busy`.
+const SCREEN_CHOICES_WAITING: usize = 8;
+/// Panes whose ask a screen may have waiting; past it the oldest gives way,
+/// as the newer read answers what the window shows now.
+const SCREEN_ASKS_WAITING: usize = 16;
+
+impl ScreenAsks {
+    /// Adds `event`, or answers it at once when a choice finds the line full.
+    fn add(&mut self, event: Value) -> Result<(), Value> {
+        if event.get("kind").and_then(Value::as_str) == Some("pane_choice") {
+            if self.choices.len() >= SCREEN_CHOICES_WAITING {
+                return Err(json!({"type": "pane_choice_result", "payload": {
+                    "request_id": event.pointer("/payload/request_id"), "ok": false, "reason": "busy",
+                }}));
+            }
+            self.choices.push_back(event);
+            return Ok(());
+        }
+        let pane = |event: &Value| {
+            (
+                event.pointer("/payload/device_id").cloned(),
+                event.pointer("/payload/pane_id").cloned(),
+            )
+        };
+        self.asks.retain(|waiting| pane(waiting) != pane(&event));
+        if self.asks.len() >= SCREEN_ASKS_WAITING {
+            self.asks.remove(0);
+        }
+        self.asks.push(event);
+        Ok(())
+    }
+}
+
+impl Waiting for ScreenAsks {
+    fn next(&mut self) -> Option<Value> {
+        self.choices
+            .pop_front()
+            .or_else(|| (!self.asks.is_empty()).then(|| self.asks.remove(0)))
+    }
+
+    fn any(&self) -> bool {
+        !self.choices.is_empty() || !self.asks.is_empty()
+    }
+}
+
+/// A screen's `pane_ask` or `pane_choice`, answered on the blocking pool.
+fn screen_ask(state: &AppState, event: &Value) -> Value {
+    let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+    match event.get("kind").and_then(Value::as_str) {
+        Some("pane_choice") => crate::mobile::screen_ask::choose(&state.mobile, &payload),
+        _ => crate::mobile::screen_ask::ask_frame(&state.mobile, &payload),
+    }
+}
+
+/// One screen's requests that read every project or every agent, answered
+/// one at a time on a blocking worker and never on the socket loop: the
+/// search across every project (`file_index_all`, PRD desk-2-ui B38, D-23),
+/// which ranks up to 50,000 paths per project, and an agent's ask read or
+/// answered from a window (`pane_ask`, `pane_choice`), each a core snapshot
+/// and a projection of every agent. What waits is `W`'s to bound: a query
+/// typed while one runs replaces the one waiting, so a fast typist starts at
+/// most one more and the answers end on the newest query.
+struct OneAtATime<W> {
+    waiting: Arc<std::sync::Mutex<W>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<W> Clone for OneAtATime<W> {
+    fn clone(&self) -> Self {
+        Self {
+            waiting: Arc::clone(&self.waiting),
+            running: Arc::clone(&self.running),
+        }
+    }
+}
+
+impl<W: Waiting> Default for OneAtATime<W> {
+    fn default() -> Self {
+        Self {
+            waiting: Arc::default(),
+            running: Arc::default(),
+        }
+    }
+}
+
+impl<W: Waiting> OneAtATime<W> {
+    fn waiting(&self) -> std::sync::MutexGuard<'_, W> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Puts a request in line with `put`, which may answer it at once
+    /// instead, and starts the worker unless it runs; `answer` makes each
+    /// request's frame.
+    fn ask(
+        &self,
+        state: &AppState,
+        frames: tokio::sync::mpsc::Sender<String>,
+        put: impl FnOnce(&mut W) -> Result<(), Value>,
+        answer: fn(&AppState, &Value) -> Value,
+    ) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if let Err(frame) = put(&mut self.waiting()) {
+            tokio::spawn(async move {
+                let _ = frames.send(frame.to_string()).await;
+            });
+            return;
+        }
+        if self.running.swap(true, SeqCst) {
+            return;
+        }
+        let (worker, state) = (self.clone(), state.clone());
+        tokio::spawn(async move {
+            loop {
+                let Some(event) = worker.waiting().next() else {
+                    worker.running.store(false, SeqCst);
+                    // A request that arrived between the take and the store
+                    // finds the worker still running and leaves it here.
+                    if worker.waiting().any() && !worker.running.swap(true, SeqCst) {
+                        continue;
+                    }
+                    return;
+                };
+                let state = state.clone();
+                let frame = tokio::task::spawn_blocking(move || answer(&state, &event))
+                    .await
+                    .unwrap_or_else(|error| {
+                        json!({"type": "error", "payload": {}, "message": format!("request failed: {error}")})
+                    });
+                if frames.send(frame.to_string()).await.is_err() {
+                    worker.running.store(false, SeqCst);
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// The `file_index_all_result` frame for one query: each project's root (one
+/// per project, `IndexService::set_projects`) asked of its own index, at most
+/// `SEARCH_WALKS_MAX` walks at once, merged and capped at `RESULT_LIMIT`, and
+/// only the rows kept resolved to the paths a screen opens. `prefer`, the
+/// project the screen shows first, keeps up to half of them.
+fn file_index_all(state: &AppState, event: &Value) -> Value {
+    let query = payload_str(event, "query");
+    let prefer = event.pointer("/payload/prefer").and_then(|prefer| {
+        Some((
+            prefer.get("device_id")?.as_str()?.to_owned(),
+            prefer.get("root_path")?.as_str()?.to_owned(),
+        ))
+    });
+    let node = state.boundary.node().as_str().to_owned();
+    let searched = state.index.search(
+        &query,
+        prefer.as_ref(),
+        crate::index::RESULT_LIMIT,
+        |(device, root)| {
+            if *device == node {
+                local_walk(state, root)
+            } else {
+                device_walk(state, device, root)
+            }
+        },
+    );
+    let files: Vec<Value> = searched
+        .hits
+        .iter()
+        .filter_map(|hit| {
+            let (device, root) = &hit.project;
+            let relative = hide_platform::path::RelPath::parse(&hit.relative_path).ok()?;
+            let path = hide_platform::path::wire_join(root, &relative);
+            // This machine's file is answered only while it is still inside
+            // its checkout; a device's helper confines its own.
+            if *device == node && state.boundary.resolve_target(&path).is_err() {
+                return None;
+            }
+            Some(json!({
+                "device_id": device,
+                "root_path": root,
+                "path": path,
+                "relative_path": hit.relative_path,
+            }))
+        })
+        .collect();
+    json!({"type": "file_index_all_result", "payload": {
+        "query": query,
+        "files": files,
+        "more": searched.more,
+        "index_truncated": searched.index_truncated,
+        "indexing": searched.indexing,
+        "unavailable": searched.unavailable.iter().map(|((device, root), code)| json!({
+            "device_id": device,
+            "root_path": root,
+            "code": code,
+        })).collect::<Vec<_>>(),
+    }})
+}
+
+/// The walk of this machine's checkout `root`, opened on the walk's own
+/// thread; a root the boundary no longer holds fails as `outside_checkout`.
+fn local_walk(state: &AppState, root: &str) -> crate::index::WalkFn {
+    let (boundary, core, root) = (
+        Arc::clone(&state.boundary),
+        Arc::clone(&state.core),
+        root.to_owned(),
+    );
+    Box::new(move || {
+        let (known, opened) = boundary
+            .open_directory(Path::new(&root), &root)
+            .map_err(|refusal| refusal.code().to_owned())?;
+        let node = boundary.node().as_str().to_owned();
+        let others: Vec<PathBuf> = core
+            .registered_paths(&node)?
+            .iter()
+            .filter_map(|path| hide_host::root::native_absolute(path))
+            .collect();
+        Ok(hide_host::index::walk(
+            &cap_std::fs::Dir::from_std_file(opened),
+            &known,
+            Some(boundary.home()),
+            &others,
+        ))
+    })
+}
+
+/// The walk of a device's checkout `root`, by that device's helper; a
+/// failure answers the code the palette words and logs the helper's sentence.
+fn device_walk(state: &AppState, device: &str, root: &str) -> crate::index::WalkFn {
+    let core = Arc::clone(&state.core);
+    let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
+    Box::new(move || {
+        let log = |code: &str, message: String| {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "hided",
+                    "kind": "device.index_unavailable",
+                    "device": walk_device,
+                    "code": code,
+                    "message": message,
+                })
+            );
+            code.to_owned()
+        };
+        let channel = core
+            .node_link(&walk_device)
+            .map_err(|message| log("link.not_connected", message))?;
+        let others = core
+            .registered_paths(&walk_device)
+            .map_err(|message| log("core.unavailable", message))?;
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
+            log(
+                &hide_core::node_access::link_failure_code(&error),
+                error.to_string(),
+            )
+        })
+    })
+}
+
+/// A `file_index` query for a checkout of this machine: the root is checked
+/// against the registered checkouts and the daemon answers from its index.
+fn local_file_index(state: &AppState, root: &str, query: &str) -> Value {
+    let found = match state.boundary.open_directory(Path::new(root), root) {
         Err(_) if roots_current(&state.roots) => {
-            state.boundary.open_directory(Path::new(&root), &root)
+            state.boundary.open_directory(Path::new(root), root)
         }
         found => found,
     };
     let Ok((known, opened)) = found else {
-        return vec![Message::Text(
-            refused("file_index", &root, Refusal::OutsideCheckout)
-                .to_string()
-                .into(),
-        )];
+        return refused("file_index", root, Refusal::OutsideCheckout);
     };
     let root_path = hide_platform::path::to_wire_lossy(&known);
     let walk_root = known.clone();
@@ -4267,7 +4684,7 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     let answer = state.index.query(
         state.boundary.node().as_str(),
         &root_path,
-        &query,
+        query,
         move || {
             // The other projects of this machine, which the home project's
             // walk leaves to their own (PRD home-folder-project D-05); asked
@@ -4285,21 +4702,17 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
             ))
         },
     );
-    vec![Message::Text(
-        index_result(
-            state.boundary.node().as_str(),
-            &root_path,
-            &query,
-            answer,
-            |relative| {
-                let relative = hide_platform::path::RelPath::parse(relative).ok()?;
-                let path = hide_platform::path::wire_join(&root_path, &relative);
-                state.boundary.resolve_target(&path).ok().map(|_| path)
-            },
-        )
-        .to_string()
-        .into(),
-    )]
+    index_result(
+        state.boundary.node().as_str(),
+        &root_path,
+        query,
+        answer,
+        |relative| {
+            let relative = hide_platform::path::RelPath::parse(relative).ok()?;
+            let path = hide_platform::path::wire_join(&root_path, &relative);
+            state.boundary.resolve_target(&path).ok().map(|_| path)
+        },
+    )
 }
 
 /// The `file_index_result` frame for one answer. `path_of` gives an entry's
@@ -4348,37 +4761,11 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
     if !device_root_known(&state.boundary, &state.roots, device, root) {
         return refused("file_index", root, Refusal::OutsideCheckout);
     }
-    let core = Arc::clone(&state.core);
-    let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
     // A walk that failed answers the code the palette words; the helper's
     // sentence goes to the log.
-    let answer = state.index.query(device, root, query, move || {
-        let log = |code: &str, message: String| {
-            eprintln!(
-                "{}",
-                json!({
-                    "component": "hided",
-                    "kind": "device.index_unavailable",
-                    "device": walk_device,
-                    "code": code,
-                    "message": message,
-                })
-            );
-            code.to_owned()
-        };
-        let channel = core
-            .node_link(&walk_device)
-            .map_err(|message| log("link.not_connected", message))?;
-        let others = core
-            .registered_paths(&walk_device)
-            .map_err(|message| log("core.unavailable", message))?;
-        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
-            log(
-                &hide_core::node_access::link_failure_code(&error),
-                error.to_string(),
-            )
-        })
-    });
+    let answer = state
+        .index
+        .query(device, root, query, device_walk(state, device, root));
     index_result(device, root, query, answer, |relative| {
         hide_platform::path::RelPath::parse(relative)
             .ok()
@@ -4804,6 +5191,8 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
+        // A file Desk's room holds, or reads again, is checked as an open is.
+        "desk_files" | "desk_file_retry" => explorer_open(boundary, event, &kind),
         "file_save" => explorer_save(boundary, event, &kind),
         "file_create" | "dir_create" => explorer_create(boundary, event, &kind),
         "path_rename" => explorer_rename(boundary, event, &kind),
@@ -5495,6 +5884,20 @@ pub(crate) fn renderers_drawn(state: &AppState, attached: bool) {
     dispatch_ui_attached(&state.core, attached);
 }
 
+/// Closes the session thread whose last window left without closing it.
+fn close_session_thread(core: &CoreHandle, connection: u64) {
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "session_thread_close",
+        "payload": {},
+    });
+    let failed = core.dispatch(event.to_string().into_bytes()).err();
+    eprintln!(
+        "{}",
+        json!({"component": "hided", "kind": "session_thread.closed_with_connection", "connection": connection, "failed": failed})
+    );
+}
+
 /// Tells the core whether any window draws its snapshot.
 fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
     let event = json!({
@@ -5597,6 +6000,12 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });
+    state.desk_files.release(connection, |open, close| {
+        dispatch_desk_file(&state.core, connection, open, close)
+    });
+    state
+        .thread_holds
+        .release(connection, || close_session_thread(&state.core, connection));
     let remaining = state
         .clients
         .fetch_sub(1, Ordering::SeqCst)
