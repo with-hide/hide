@@ -8,7 +8,7 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskPermissions, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
@@ -389,6 +389,28 @@ export function agentPickable(agent: DeskAgent): boolean {
 /** The agents a row of Settings › Labs › Desk › 권한 cannot hold (`always_runs`), named on that row; one that cannot be chosen is left out. */
 export function agentsRunningUnasked(agents: readonly DeskAgent[], row: DeskPermissionRow): string[] {
   return agents.filter((agent) => agentPickable(agent) && agent.always_runs.includes(row)).map((agent) => agent.label);
+}
+
+/**
+ * The three levels under Desk's box (feedback 1, frame A), each a setting of
+ * the core's permission table: `다 묻기` runs only reading, `고칠 땐 묻기` also
+ * `hide` commands, `알아서` (the table's default) every row. What cannot be
+ * undone asks whatever the level, since the core never reads it from the table.
+ */
+export const DESK_PERMISSION_LEVELS = {
+  ask_all: { hide: "ask", read: "run", shell: "ask", edit: "ask" },
+  ask_changes: { hide: "run", read: "run", shell: "ask", edit: "ask" },
+  auto: { hide: "run", read: "run", shell: "run", edit: "run" },
+} as const satisfies Record<string, DeskPermissions>;
+
+export type DeskPermissionLevel = keyof typeof DESK_PERMISSION_LEVELS;
+
+export const DESK_PERMISSION_LEVEL_ORDER: readonly DeskPermissionLevel[] = ["ask_all", "ask_changes", "auto"];
+
+/** The level a table is, or null for a mix no level matches (`줄마다 정함`), set row by row in Settings. */
+export function deskPermissionLevel(permissions: DeskPermissions): DeskPermissionLevel | null {
+  const rows = Object.keys(permissions) as DeskPermissionRow[];
+  return DESK_PERMISSION_LEVEL_ORDER.find((level) => rows.every((row) => DESK_PERMISSION_LEVELS[level][row] === permissions[row])) ?? null;
 }
 
 /** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */

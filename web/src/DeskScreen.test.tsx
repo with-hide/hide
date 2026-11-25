@@ -425,14 +425,51 @@ describe("Desk's room", () => {
       expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("~/repo");
     });
 
-    it("asks about a working session's archive with three answers and no 'always', and says what it ends", async () => {
+    it("asks about a working session's archive with no answer that keeps allowing it, says what it ends, and that it asks at every level", async () => {
       await render(desk([archive]));
       expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Asking because this can't be undone");
       expect(document.body.querySelector("[data-desk-approval-why='end_working_session']")?.textContent).toBe("Archives a session that is working·project panel results");
-      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
-      await press("[data-desk-approval-answer='conversation']");
+      expect(answers()).toEqual(["Reject…", "Allow once"]);
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks even when Desk works on its own");
       await press("[data-desk-approval-answer='once']");
-      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "conversation" }, { id: 7, answer: "once" }]);
+      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "once" }]);
+    });
+
+    it("keeps allowing a row's card for the conversation and says the level it asks under", async () => {
+      const shell: DeskItem = { ...archive, id: 11, command: "pnpm --dir web test", asks: [{ kind: "row", value: "shell" }], subject: null };
+      const changes = { ...desk([shell]), settings: { ...desk([]).settings, permissions: { hide: "run" as const, read: "run" as const, shell: "ask" as const, edit: "ask" as const } } };
+      await render(changes);
+      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks because you chose Ask before changes");
+      await press("[data-desk-approval-answer='conversation']");
+      expect(sent("desk_approval")).toEqual([{ id: 11, answer: "conversation" }]);
+      // A table set row by row in Settings is said as that.
+      await show({ ...changes, settings: { ...changes.settings, permissions: { ...changes.settings.permissions, hide: "ask" as const, edit: "run" as const } } });
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks as you set this row");
+    });
+
+    it("sets the whole table from one of three levels under the box in one event, and reads a mix as set per row", async () => {
+      const open = async () => {
+        const trigger = document.body.querySelector<HTMLElement>("[data-desk-bar='permissions']")!;
+        await act(async () => { trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })); });
+      };
+      const levels = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-level-choice]")].map((item) => [item.dataset.deskPermissionLevelChoice, item.getAttribute("data-state")]);
+      await render(desk([]));
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("On its own");
+      await open();
+      expect(levels()).toEqual([["ask_all", "unchecked"], ["ask_changes", "unchecked"], ["auto", "checked"]]);
+      await press("[data-desk-permission-level-choice='ask_changes']");
+      expect(sent("desk_settings_set")).toEqual([{ permissions: { hide: "run", read: "run", shell: "ask", edit: "ask" } }]);
+
+      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "ask", read: "run", shell: "ask", edit: "ask" } } });
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Ask for everything");
+      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "run", read: "ask", shell: "run", edit: "run" } } });
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Set per row");
+      await open();
+      expect(levels().every(([, state]) => state === "unchecked")).toBe(true);
+      await press("[data-desk-permission-per-row]");
+      expect(useUiStore.getState().settingsTab).toBe("labs");
+      expect(sent("desk_settings_set")).toHaveLength(1);
     });
 
     it("sends a refusal's line to Desk on Enter, never mid-composition, and refuses plainly when the line is empty", async () => {
@@ -455,10 +492,10 @@ describe("Desk's room", () => {
       await press("[data-desk-approval-answer='reject_send']");
       expect(sent("desk_approval").slice(1)).toEqual([{ id: 7, answer: "reject" }, { id: 7, answer: "reject" }]);
 
-      // Escape takes the line back to the three answers.
+      // Escape takes the line back to the card's answers.
       await key("Escape");
       expect(refusal()).toBeNull();
-      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+      expect(answers()).toEqual(["Reject…", "Allow once"]);
     });
 
     it("folds an answered card to how it was answered", async () => {

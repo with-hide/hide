@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskOn, deskPermissionLevel, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -28,7 +28,8 @@ import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
 import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
-import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
+import { DeskAgentBar, DeskComposer, DeskPermissionMenu } from "./components/desk/desk-composer";
+import { Separator } from "./components/ui/separator";
 import type { MentionInputHandle } from "./components/desk/mention-input";
 import { DeskPaneReturn } from "./components/desk/desk-entry";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "./components/desk/desk-room";
@@ -339,6 +340,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       onSend={() => send()}
       onStop={() => actions.deskStop()}
     >
+      <DeskPermissionMenu permissions={desk.settings.permissions} onLevel={(permissions) => actions.deskPermissions(permissions)} onPerRow={() => actions.openSettings("labs")} />
+      <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
       <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
   );
@@ -353,7 +356,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} level={deskPermissionLevel(desk.settings.permissions)} queued={queued} held={queuedHeld} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}
