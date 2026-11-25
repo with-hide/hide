@@ -545,14 +545,14 @@ test("editing a document marks it dirty, saves it, and a disk change asks how to
     await page.locator('[data-conflict-action="reload"]').click();
     await expect(page.locator("[data-editor-conflict]")).toHaveCount(0);
     await expect(content).toContainText("export const answer = 0;");
-    expect(sent.get("file_conflict")).toBeGreaterThanOrEqual(1);
-    expect(lastSent.get("file_conflict")).toMatchObject({ action: "reload" });
+    expect(sent.get("file_conflict.reload")).toBe(1);
 
     // A tab with nothing of the operator's follows the file when something
     // else writes it, as an agent does (file_changed).
+    const follows = sent.get("file_conflict.follow") ?? 0;
     fs.writeFileSync(file, "export const answer = 7;\n");
     await expect(content).toContainText("export const answer = 7;");
-    expect(lastSent.get("file_conflict")).toMatchObject({ action: "follow" });
+    expect(sent.get("file_conflict.follow")).toBeGreaterThan(follows);
     await expect(page.locator('[data-editor-dirty="true"]')).toHaveCount(0);
     await expect(page.locator("[data-editor-conflict]")).toHaveCount(0);
   } finally {
