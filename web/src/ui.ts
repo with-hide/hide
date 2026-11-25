@@ -127,9 +127,11 @@ export type AutomationPlace = {
   arriving: boolean;
   /** The starting point a new automation's form opens on, picked on the empty screen (B2, B4); null opens it blank. */
   example: AutomationExample | null;
+  /** The done once automations are unfolded under the table (mission-104 S-1); folded each time the screen is entered. */
+  doneOpen: boolean;
 };
 
-export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null };
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null, doneOpen: false };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };

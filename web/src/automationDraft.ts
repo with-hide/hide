@@ -11,8 +11,8 @@ import type { Automation, AutomationAgent, AutomationSchedule, AutomationWeekday
 
 export type ScheduleKind = AutomationSchedule["kind"];
 
-/** Every schedule field the form keeps, so switching the kind back finds what was typed (B6). */
-export type ScheduleDraft = { kind: ScheduleKind; time: string; days: AutomationWeekday[]; minutes: number; hours: number; expr: string };
+/** Every schedule field the form keeps, so switching the kind back finds what was typed (B6); `date` is a once schedule's (`YYYY-MM-DD`), empty until one is picked. */
+export type ScheduleDraft = { kind: ScheduleKind; time: string; days: AutomationWeekday[]; minutes: number; hours: number; expr: string; date: string };
 
 export type FormDraft = {
   name: string;
@@ -24,7 +24,7 @@ export type FormDraft = {
   schedule: ScheduleDraft;
 };
 
-const NEW_SCHEDULE: ScheduleDraft = { kind: "daily", time: "09:00", days: ["mon"], minutes: 30, hours: 1, expr: "0 9 * * 1-5" };
+const NEW_SCHEDULE: ScheduleDraft = { kind: "daily", time: "09:00", days: ["mon"], minutes: 30, hours: 1, expr: "0 9 * * 1-5", date: "" };
 
 function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
   switch (schedule.kind) {
@@ -39,6 +39,8 @@ function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
       return { ...NEW_SCHEDULE, kind: "every_hours", time: schedule.time, hours: schedule.hours };
     case "cron":
       return { ...NEW_SCHEDULE, kind: "cron", expr: schedule.expr };
+    case "once":
+      return { ...NEW_SCHEDULE, kind: "once", date: schedule.date, time: schedule.time };
   }
 }
 
@@ -95,7 +97,22 @@ export function draftSchedule(schedule: ScheduleDraft): AutomationSchedule {
       return { kind: "every_hours", hours: schedule.hours, time: schedule.time };
     case "cron":
       return { kind: "cron", expr: schedule.expr.trim() };
+    case "once":
+      return { kind: "once", date: schedule.date, time: schedule.time };
   }
+}
+
+/** The quick picks of a once schedule (mission-104 S-2): each fills the date this many days after today. */
+export const ONCE_QUICK_DAYS = [1, 3, 7] as const;
+
+/**
+ * `2026-12-02`: the date `days` after `today` (`YYYY-MM-DD`, the machine's
+ * own today), counted on the calendar so a day the clocks change on is one
+ * day like any other. The form sends the absolute date; the core reads it.
+ */
+export function datePlus(today: string, days: number): string {
+  const [year, month, day] = today.split("-").map(Number);
+  return new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1) + days)).toISOString().slice(0, 10);
 }
 
 /** The agent as a run starts it: the built-in profile, the agent's own model and effort are sent as none. */
@@ -172,6 +189,9 @@ const REFUSAL_KEYS = {
   schedule_cron_invalid: "automationScreen.refusal.schedule_cron_invalid",
   schedule_too_often: "automationScreen.refusal.schedule_too_often",
   schedule_never: "automationScreen.refusal.schedule_never",
+  schedule_once_past: "automationScreen.refusal.schedule_once_past",
+  schedule_once_too_far: "automationScreen.refusal.schedule_once_too_far",
+  schedule_date_invalid: "automationScreen.refusal.schedule_date_invalid",
   automation_name_missing: "automationScreen.refusal.automation_name_missing",
   automation_name_invalid: "automationScreen.refusal.automation_name_invalid",
   automation_name_taken: "automationScreen.refusal.automation_name_taken",

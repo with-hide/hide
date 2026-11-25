@@ -95,16 +95,19 @@ function Buttons({ automation, connected }: { automation: PhoneAutomation; conne
           {pending === "run" ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : null}
           {t("mobile.automations.run")}
         </Button>
-        <Button
-          variant="secondary"
-          className="h-(--size-touch-target) rounded-lg px-lg text-body"
-          disabled={busy}
-          data-phone-automation-press={toggle}
-          onClick={() => pressAutomation(automation.id, toggle)}
-        >
-          {pending === toggle ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : null}
-          {t(toggle === "pause" ? "mobile.automations.pause" : "mobile.automations.resume")}
-        </Button>
+        {/* A done once automation has no time left to pause for (mission-104 S-3); it is made again on the computer. */}
+        {automation.done && !automation.paused ? null : (
+          <Button
+            variant="secondary"
+            className="h-(--size-touch-target) rounded-lg px-lg text-body"
+            disabled={busy}
+            data-phone-automation-press={toggle}
+            onClick={() => pressAutomation(automation.id, toggle)}
+          >
+            {pending === toggle ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : null}
+            {t(toggle === "pause" ? "mobile.automations.pause" : "mobile.automations.resume")}
+          </Button>
+        )}
       </div>
       {notice ? <p role="alert" className="text-body text-warning" data-phone-automation-notice="true">{noticeText(t, notice)}</p> : null}
     </div>

@@ -10,7 +10,7 @@ import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAcc
 import { agentWithProfile, recordWords, withoutLook } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
-import { automationNames, automationRun, homeTurnLine, originLine } from "../hideAiOrigin";
+import { automationBadge, automationNames, automationRun, homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
 import { RevisitStar, starred } from "./revisit-mark";
 import { RowLetterMark } from "./letter-mark";
@@ -286,7 +286,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
         mark={<>
-          <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
+          <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} automation={automationBadge(agent)} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). An automation run's row wears the automation's repeat mark instead (operator decision 2026-11-21). */}
           <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree && !automationRun(agent) ? "sidebar" : null} bot={botStarter(agent)} profile={agent.profile} />
         </>}

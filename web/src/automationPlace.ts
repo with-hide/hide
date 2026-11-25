@@ -14,7 +14,7 @@ export function settledPlace(place: AutomationPlace, section: AutomationsSection
   const automation = section.items.find((item) => item.id === place.selected);
   if (!automation) {
     if (place.arriving) return null;
-    return { selected: null, run: null, form: place.form === "new" ? "new" : null, arriving: false, example: place.form === "new" ? place.example : null };
+    return { selected: null, run: null, form: place.form === "new" ? "new" : null, arriving: false, example: place.form === "new" ? place.example : null, doneOpen: place.doneOpen };
   }
   const runHeld = place.run === null || automation.records.some((record) => record.kind === "run" && record.number === place.run);
   if (!runHeld) return place.arriving ? null : { ...place, run: null };

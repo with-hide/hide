@@ -8,7 +8,7 @@ import type { Automation } from "./snapshot";
 function automation(fields: Partial<Automation> = {}): Automation {
   return {
     id: "a1", name: "아침 이슈 정리", task: "새 이슈 정리", schedule: { kind: "weekly", days: ["mon", "wed"], time: "10:00" }, reads_as: { kind: "weekly", days: ["mon", "wed"], time: "10:00" },
-    next_run_at_unix_ms: null, agent: { kind: "codex", model: "gpt-5", effort: "high" }, folder: { path: "/home/u/hide/automations/a1", default: true, worktree: false }, running: false, unseen: 0, records: [], ...fields,
+    next_run_at_unix_ms: null, agent: { kind: "codex", model: "gpt-5", effort: "high" }, folder: { path: "/home/u/hide/automations/a1", default: true, worktree: false }, running: false, done: false, unseen: 0, records: [], ...fields,
   };
 }
 

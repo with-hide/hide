@@ -30,7 +30,7 @@ vi.mock("./automationCall", async (original) => ({
 
 const automation = {
   id: "a1", name: "점검", task: "의존성 점검", schedule: { kind: "cron", expr: "*/4 * * * *" }, reads_as: { kind: "cron", expr: "*/4 * * * *" }, next_run_at_unix_ms: null,
-  agent: { kind: "claude" }, folder: { path: "/srv/hide/automations/a1", default: true, worktree: false }, running: false, unseen: 0, records: [],
+  agent: { kind: "claude" }, folder: { path: "/srv/hide/automations/a1", default: true, worktree: false }, running: false, done: false, unseen: 0, records: [],
 } as Automation;
 const section: AutomationsSection = { items: [automation], unseen: 0 };
 

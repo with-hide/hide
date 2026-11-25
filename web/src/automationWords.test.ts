@@ -20,7 +20,7 @@ const run = (fields: Partial<Extract<AutomationRecord, { kind: "run" }>>): Autom
 function automation(fields: Partial<Automation>): Automation {
   return {
     id: "a1", name: "아침 이슈 정리", task: "새 이슈 정리", schedule: { kind: "daily", time: "09:00" }, reads_as: { kind: "daily", time: "09:00" },
-    next_run_at_unix_ms: null, agent: { kind: "claude" }, folder: { path: "/home/u/hide/automations/a", default: true, worktree: false }, running: false, unseen: 0, records: [], ...fields,
+    next_run_at_unix_ms: null, agent: { kind: "claude" }, folder: { path: "/home/u/hide/automations/a", default: true, worktree: false }, running: false, done: false, unseen: 0, records: [], ...fields,
   };
 }
 

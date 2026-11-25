@@ -10,11 +10,16 @@
 // there (PRD device-connect-iroh D-60), is worded the same way and a click
 // selects that machine's tile, as does the notice that a phone was paired
 // with such a machine (D-70). The app icon counts root agents in each
-// notification group whose switch is on.
+// notification group whose switch is on. A once automation whose run ended
+// is a Needs You line no agent row carries (mission-104 S-4), so this window
+// notifies it itself, once, when the line appears; a click opens that run.
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Actions } from "./actions";
 import { statusText } from "./agentStatus";
+import { lookText } from "./automationWords";
+import { requireInterfaceLanguage } from "./i18n/locale";
+import { automationLooks, type AutomationLook } from "./ownAsks";
 import { askSubjectLead, askSubjectNotice } from "./askSubject";
 import { AGENT_NOTICE_PREFIX } from "./firstRun";
 import type { AgentNotice } from "./generated/hided-ws";
@@ -23,6 +28,18 @@ import { useInterfaceTranslation } from "./i18n/client";
 import type { SnapshotRest } from "./snapshot";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { useShellStore } from "./store";
+
+/** How this window tags a once automation's ended run: `automation-look:<automation id>|<run number>`. */
+const LOOK_TAG_PREFIX = "automation-look:";
+
+function lookTag(look: AutomationLook): string {
+  return `${AGENT_NOTICE_PREFIX}${LOOK_TAG_PREFIX}${look.automation.id}|${look.automation.look_run ?? ""}`;
+}
+
+/** Every device's once automations whose run waits to be opened, which a notification announces and a click opens. */
+function everyLook(rest: SnapshotRest | null, section: Parameters<typeof automationLooks>[0]): AutomationLook[] {
+  return (rest?.navigator?.devices ?? []).flatMap((device) => automationLooks(section, device.agent_scope.automation_looks ?? [], device.id));
+}
 
 /** How hided tags a notice another machine handed over: `peer:<connection id>|<that machine's tag>`. */
 const PEER_TAG_PREFIX = "peer:";
@@ -62,7 +79,7 @@ export function notificationBadgeCount(rest: SnapshotRest | null): number {
     for (const group of scope.raised) {
       if (group.group === "needs_you") count += group.shown.length + group.more.length;
     }
-    count += (scope.mission_asks?.length ?? 0) + (scope.automation_asks?.length ?? 0);
+    count += (scope.mission_asks?.length ?? 0) + (scope.automation_asks?.length ?? 0) + (scope.automation_looks?.length ?? 0);
   }
   return count;
 }
@@ -73,7 +90,7 @@ export function notificationBadgeCount(rest: SnapshotRest | null): number {
  * opens what a click names, and keeps the enabled groups' app icon count.
  */
 export function useAgentNotifications(actions: Actions) {
-  const { t } = useInterfaceTranslation();
+  const { t, i18n } = useInterfaceTranslation();
   const bridge = hostBridge();
   const live = useShellStore((s) => s.connection === "live");
   const needsYouEnabled = useShellStore((s) => s.rest?.ui_state?.desktop_notifications === true);
@@ -123,11 +140,43 @@ export function useAgentNotifications(actions: Actions) {
       listeners.delete(listener);
     };
   }, [bridge, live, needsYouEnabled, doneEnabled, t]);
+  // A once automation's line appearing is notified once, as the Needs You switch says; the lines there when the page went live are
+  // not, as hided seeds its own (B33); a line put away takes its notification back.
+  const rest = useShellStore((s) => s.rest);
+  const section = useShellStore((s) => s.automations);
+  const looks = useMemo(() => (live ? everyLook(rest, section) : null), [live, rest, section]);
+  const shownLooks = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!bridge || looks === null) {
+      shownLooks.current = null;
+      return;
+    }
+    const now = new Set(looks.map(lookTag));
+    const before = shownLooks.current;
+    shownLooks.current = now;
+    if (before === null) return;
+    const gone = [...before].filter((tag) => !now.has(tag));
+    if (gone.length > 0) bridge.withdrawNotifications(gone);
+    if (!needsYouEnabled) return;
+    const language = requireInterfaceLanguage(i18n.language);
+    for (const look of looks) {
+      const tag = lookTag(look);
+      if (before.has(tag)) continue;
+      const result = look.run ? lookText(look.run, language, t).text : null;
+      const body = [t("automationScreen.look.kind"), result, look.run?.answer?.trim()].filter(Boolean).join(" · ");
+      bridge.notify(tag, cut(look.automation.name, TITLE_LIMIT), cut(body, BODY_LIMIT), { unlessFocused: true });
+    }
+  }, [bridge, looks, needsYouEnabled, t, i18n.language]);
   useEffect(() => {
     if (!bridge) return undefined;
     return bridge.onNotificationOpen((id) => {
       if (!id.startsWith(AGENT_NOTICE_PREFIX)) return;
       const tag = id.slice(AGENT_NOTICE_PREFIX.length);
+      if (tag.startsWith(LOOK_TAG_PREFIX)) {
+        const [automation, run] = tag.slice(LOOK_TAG_PREFIX.length).split("|");
+        if (automation) actions.openAutomation(automation, run ? Number(run) : null);
+        return;
+      }
       // Another machine's work opens in that machine's tile, as pressing its row does (D-50).
       if (tag.startsWith(PEER_TAG_PREFIX)) {
         const key = tag.slice(PEER_TAG_PREFIX.length, tag.indexOf("|"));

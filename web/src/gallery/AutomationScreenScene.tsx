@@ -5,7 +5,8 @@
 // `unreadable` is the table under the line for a book set aside; `detail` is
 // one automation's facts and runs; `form` makes a new one, its schedule read
 // back by a stand-in core; `run` is a finished run whose terminal is closed, its summary with the agent's last answer and the results its agent opened (shown, not pressable: the run has no tab);
-// `loading` is the section not yet sent. No daemon is used.
+// `loading` is the section not yet sent; `once` is the table with its done once automations unfolded (mission-104 S-1). The
+// table also holds a once automation a week ahead and one done. No daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { configureAutomationCalls, receiveAutomationResult, type AutomationCall } from "../automationCall";
@@ -19,7 +20,7 @@ import { AUTOMATION_ENTRY, useUiStore, type AutomationPlace } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["table", "empty", "unreadable", "detail", "form", "run", "loading"] as const;
+const STATES = ["table", "once", "empty", "unreadable", "detail", "form", "run", "loading"] as const;
 type AutomationScreenState = (typeof STATES)[number];
 
 type AutomationScreenParams = SceneParams & { state: AutomationScreenState };
@@ -38,7 +39,7 @@ function automations(project: string, now: number): Automation[] {
     {
       id: "a-issues", name: "아침 이슈 정리", task: "새로 올라온 이슈를 읽고 우선순위와 담당 후보를 정리해 줘.",
       schedule: { kind: "weekdays", time: "09:00" }, reads_as: { kind: "weekdays", time: "09:00" }, next_run_at_unix_ms: now + 15 * HOUR,
-      agent: { kind: "claude", model: "opus", effort: "high" }, folder: { path: `${ROOT}/아침-이슈-정리-a1`, default: true, worktree: false }, running: false, unseen: 1, recent_spend: { tokens: 16_440, micro_usd: 510_000, unpriced: true, runs: 2 },
+      agent: { kind: "claude", model: "opus", effort: "high" }, folder: { path: `${ROOT}/아침-이슈-정리-a1`, default: true, worktree: false }, running: false, done: false, unseen: 1, recent_spend: { tokens: 16_440, micro_usd: 510_000, unpriced: true, runs: 2 },
       records: [
         { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, spend: { tokens: 12_340, micro_usd: 420_000, unpriced: false }, answer: "새 이슈 3건에 라벨을 붙였고, 먼저 올라온 이슈와 겹치는 1건은 닫았어요. 사람이 볼 건 없어요.", results: [{ key: "0a1b2c3d4e5f6071", kind: "file", label: "triage-report.md" }, { key: "1b2c3d4e5f607182", kind: "diff", label: "labels.diff" }, { key: "2c3d4e5f60718293", kind: "browser", label: "Issues - with-hide/hide" }] },
         { kind: "run", number: 3, trigger: "manual", started_at_unix_ms: now - 30 * HOUR, ended_at_unix_ms: now - 30 * HOUR + 8 * 60_000, state: "stopped", reason: "stopped_by_person", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true, spend: { tokens: 4_100, micro_usd: 90_000, unpriced: true } },
@@ -50,7 +51,7 @@ function automations(project: string, now: number): Automation[] {
     {
       id: "a-deps", name: "의존성 점검", task: "lockfile의 오래된 의존성과 보안 공지를 확인하고 올릴 것만 PR로 묶어 줘.",
       schedule: { kind: "weekly", days: ["mon", "thu"], time: "10:00" }, reads_as: { kind: "weekly", days: ["mon", "thu"], time: "10:00" }, next_run_at_unix_ms: null,
-      agent: { kind: "codex", model: "gpt-5", effort: "medium" }, folder: { path: project, default: false, worktree: true }, paused: { reason: "operator", at_unix_ms: now - 50 * HOUR }, running: false, unseen: 0,
+      agent: { kind: "codex", model: "gpt-5", effort: "medium" }, folder: { path: project, default: false, worktree: true }, paused: { reason: "operator", at_unix_ms: now - 50 * HOUR }, running: false, done: false, unseen: 0,
       records: [
         { kind: "run", number: 1, trigger: "scheduled", due_unix_ms: now - 74 * HOUR, started_at_unix_ms: now - 74 * HOUR, ended_at_unix_ms: now - 74 * HOUR + 3 * 60_000, state: "failed", reason: "stopped_without_answer", attempt: 2, opened: false, resumable: true, conversation_missing: false, seen: true },
       ],
@@ -58,12 +59,37 @@ function automations(project: string, now: number): Automation[] {
     {
       id: "a-logs", name: "로그 정리", task: "어제 쌓인 진단 로그에서 같은 실패를 묶고 처음 보는 것만 알려 줘.",
       schedule: { kind: "every_minutes", minutes: 30 }, reads_as: { kind: "every_minutes", minutes: 30 }, next_run_at_unix_ms: now + 19 * 60_000,
-      agent: { kind: "claude" }, folder: { path: `${ROOT}/로그-정리-a3`, default: true, worktree: false }, running: true, unseen: 0,
+      agent: { kind: "claude" }, folder: { path: `${ROOT}/로그-정리-a3`, default: true, worktree: false }, running: true, done: false, unseen: 0,
       records: [
         { kind: "run", number: 7, trigger: "scheduled", due_unix_ms: now - 11 * 60_000, started_at_unix_ms: now - 11 * 60_000, state: "running", attempt: 1, opened: false, resumable: false, conversation_missing: false, seen: true },
       ],
     },
+    {
+      id: "a-webhook", name: "결제 웹훅 점검", task: "배포 뒤 웹훅 실패율이 0인지 로그로 확인해 줘.",
+      schedule: onceIn(now, 7), reads_as: onceIn(now, 7), next_run_at_unix_ms: onceUnix(onceIn(now, 7)),
+      agent: { kind: "claude" }, folder: { path: `${ROOT}/결제-웹훅-점검-a4`, default: true, worktree: false }, running: false, done: false, unseen: 0, records: [],
+    },
+    {
+      id: "a-migration", name: "DB 마이그레이션 확인", task: "어제 돌린 마이그레이션이 모든 테이블에 들어갔는지 확인해 줘.",
+      schedule: onceIn(now, -1), reads_as: onceIn(now, -1), next_run_at_unix_ms: null,
+      agent: { kind: "codex" }, folder: { path: `${ROOT}/DB-마이그레이션-확인-a5`, default: true, worktree: false }, running: false, done: true, look_run: 1, unseen: 1,
+      records: [
+        { kind: "run", number: 1, trigger: "scheduled", due_unix_ms: onceUnix(onceIn(now, -1)), started_at_unix_ms: onceUnix(onceIn(now, -1)), ended_at_unix_ms: onceUnix(onceIn(now, -1)) + 6 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, answer: "모든 테이블에 새 열이 들어갔고, 빈 값은 없어요." },
+      ],
+    },
   ];
+}
+
+/** A once schedule `days` from today at 09:00 on this machine's clock. */
+function onceIn(now: number, days: number): Extract<Automation["schedule"], { kind: "once" }> {
+  const day = new Date(now);
+  day.setDate(day.getDate() + days);
+  const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  return { kind: "once", date, time: "09:00" };
+}
+
+function onceUnix(schedule: { date: string; time: string }): number {
+  return new Date(`${schedule.date}T${schedule.time}:00`).getTime();
 }
 
 /** A stand-in core: a schedule reads back as itself with its next run; an opening is taken and opens nothing, so a closed run stays closed. */
@@ -98,6 +124,7 @@ export function AutomationScreenScene({ theme, scale, content, state }: Automati
       selected: state === "detail" || state === "run" ? "a-issues" : null,
       run: state === "run" ? 4 : null,
       form: state === "form" ? "new" : null,
+      doneOpen: state === "once",
     };
     return { scene, section, place, now };
   }, [content, state]);

@@ -42,7 +42,32 @@ export function scheduleText(schedule: AutomationSchedule, language: InterfaceLa
       return t("automation.schedule.everyHours", { count: schedule.hours, time: schedule.time });
     case "cron":
       return t("automation.schedule.cron", { expr: schedule.expr });
+    case "once":
+      return t("automation.schedule.once");
   }
+}
+
+/** A once schedule's own time, `12-02(수) 09:00`: the wall date and time it was set for, which the machine reads in its own zone. */
+export function onceText(schedule: Extract<AutomationSchedule, { kind: "once" }>, language: InterfaceLanguage, t: Translate): string {
+  const [year, month, day] = schedule.date.split("-").map(Number);
+  const weekday = new Intl.DateTimeFormat(language, { weekday: "short", timeZone: "UTC" }).format(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1, 12));
+  return t("automation.when.once", { date: schedule.date.slice(5), weekday, time: schedule.time });
+}
+
+/** `12-02(수) 09:00 · 한 번` for a once schedule, which says its date where a repeating one says how often; any other reads as `scheduleText`. */
+export function scheduleWithDate(schedule: AutomationSchedule, language: InterfaceLanguage, t: Translate): string {
+  if (schedule.kind !== "once") return scheduleText(schedule, language, t);
+  return t("automation.schedule.onceAt", { when: onceText(schedule, language, t) });
+}
+
+/** Whether it runs one time, at a date, rather than again and again (mission-104). */
+export function isOnce(automation: { schedule: AutomationSchedule }): boolean {
+  return automation.schedule.kind === "once";
+}
+
+/** `2026-11-25`: the day `unixMs` falls on in `zone`, the machine's own today when it is now. */
+export function wallDay(unixMs: number, zone: string | undefined): string {
+  return wall(unixMs, zone).day;
 }
 
 /** The wall date and time of `unixMs` in `zone`. */
@@ -62,19 +87,20 @@ export function whenText(unixMs: number, now: number, zone: string | undefined, 
   return t("automation.when.date", { weekday, date: at.day.slice(5), time: at.time });
 }
 
-/** What 다음 실행 says (B3, B25): a run going, the automation paused, its next time, or none (a schedule that never runs again). */
-export type NextRun = { kind: "running" } | { kind: "paused" } | { kind: "at"; unixMs: number } | { kind: "none" };
+/** What 다음 실행 says (B3, B25): a run going, the automation paused, its next time, a once automation done (mission-104), or none (a schedule that never runs again). */
+export type NextRun = { kind: "running" } | { kind: "paused" } | { kind: "at"; unixMs: number } | { kind: "done" } | { kind: "none" };
 
-/** The fields of an automation its next run is read from; the phone's frame carries only these. */
-export type NextRunFacts = Pick<Automation, "running" | "paused" | "next_run_at_unix_ms">;
+/** The fields of an automation its next run is read from; the phone's frame carries only these, `done` absent from a Mac older than once automations. */
+export type NextRunFacts = Pick<Automation, "running" | "paused" | "next_run_at_unix_ms"> & { done?: boolean };
 
 export function nextRun(automation: NextRunFacts): NextRun {
   if (automation.running) return { kind: "running" };
   if (automation.paused) return { kind: "paused" };
+  if (automation.done) return { kind: "done" };
   return automation.next_run_at_unix_ms == null ? { kind: "none" } : { kind: "at", unixMs: automation.next_run_at_unix_ms };
 }
 
-/** `도는 중`, `멈춤`, `내일 09:00`, `—`: the words after the mark the screen draws (●, ⏸). */
+/** `도는 중`, `멈춤`, `내일 09:00`, `끝남`, `—`: the words after the mark the screen draws (●, ⏸). */
 export function nextRunText(automation: NextRunFacts, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
   const next = nextRun(automation);
   switch (next.kind) {
@@ -84,6 +110,8 @@ export function nextRunText(automation: NextRunFacts, now: number, zone: string 
       return t("automation.next.paused");
     case "at":
       return whenText(next.unixMs, now, zone, language, t);
+    case "done":
+      return t("automation.next.done");
     case "none":
       return t("automation.next.none");
   }
@@ -224,4 +252,15 @@ export function lastResult(automation: Automation): Extract<AutomationRecord, { 
     if (record.kind === "run" && record.state !== "starting" && record.state !== "running") return record;
   }
   return null;
+}
+
+/**
+ * How a once automation's run ended, as its Needs You line says it after `자동화 · 한 번 ·` (mission-104 S-4): `✓ 끝남 · 4분`,
+ * `✗ 실패 · 로그인 만료`, `✗ 실패 · 3번 시도`, `■ 멈춤 · 사람이 끝냄`.
+ */
+export function lookText(run: RunFacts, language: InterfaceLanguage, t: Translate): RecordText {
+  const shown = runText(run, language, t);
+  if (run.state === "succeeded") return { tone: "ok", text: t("automationScreen.look.done", { time: shown.text }) };
+  if (run.state === "failed" && run.reason && PAUSE_CODES[run.reason]) return { tone: "failed", text: t("automationScreen.look.failed", { reason: shown.text }) };
+  return shown;
 }

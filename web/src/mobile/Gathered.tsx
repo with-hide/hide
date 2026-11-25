@@ -10,9 +10,10 @@ import { ChevronRightIcon, Loader2Icon, RepeatIcon } from "lucide-react";
 import { RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/translator";
-import { AskLine, AutomationAskRows } from "./AutomationsScreen";
+import { StatusMark } from "../components/status-mark";
+import { AskLine, AutomationAskRows, LookLine } from "./AutomationsScreen";
 import { MissionAskRows, OtherMissionAskRow } from "./MissionsScreen";
-import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type HostLine } from "./gather";
+import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type GatheredLook, type HostLine } from "./gather";
 import { automationLink, dropHostPush, hostLink, hostStore, missionLink, type PairedHost } from "./hosts";
 import { FoldButton, GatheredRowItem } from "./ListRows";
 import { DeviceTag } from "./parts";
@@ -111,6 +112,9 @@ function usePresences(hosts: readonly ConnectableHost[], activeRoom: string, wat
 /** Another computer's automation that stopped for a person, in the gathered view's 내 차례 with that computer's mark. */
 type OtherAsk = { host: GatheredHost; ask: GatheredAsk };
 
+/** Another computer's once automation whose run ended, in the gathered view's 내 차례 with that computer's mark. */
+type OtherLook = { host: GatheredHost; look: GatheredLook };
+
 /** Another computer's mission that is its own 내 차례 item, in the gathered view's 내 차례 with that computer's mark. */
 type OtherMission = { host: GatheredHost; mission: PhoneMission };
 
@@ -122,7 +126,7 @@ type OtherMission = { host: GatheredHost; mission: PhoneMission };
 export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { hosts: readonly ConnectableHost[]; activeRoom: string; dim: boolean; watch?: Watch }) {
   const { t } = useInterfaceTranslation();
   const groups = usePhone((s) => s.groups);
-  const asksHere = usePhone((s) => s.automationAsks.length + s.missionAsks.length);
+  const asksHere = usePhone((s) => s.automationAsks.length + s.automationLooks.length + s.missionAsks.length);
   const omittedHere = usePhone((s) => s.agentsOmitted);
   const unreachable = usePhone((s) => s.unreachable);
   const presence = usePresences(hosts, activeRoom, watch);
@@ -134,8 +138,9 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
     ...listed.map((host) => ({ host, here: false, groups: presence[host.room]!.gathered! })),
   ]);
   const otherAsks: OtherAsk[] = listed.flatMap((host) => (presence[host.room]?.asks ?? []).map((ask) => ({ host, ask })));
+  const otherLooks: OtherLook[] = listed.flatMap((host) => (presence[host.room]?.looks ?? []).map((look) => ({ host, look })));
   const otherMissions: OtherMission[] = listed.flatMap((host) => (presence[host.room]?.missions ?? []).map((mission) => ({ host, mission })));
-  const asks = asksHere + otherAsks.length + otherMissions.length;
+  const asks = asksHere + otherAsks.length + otherLooks.length + otherMissions.length;
   const ownLine = here ? hereLine(groups !== null, unreachable) : null;
   const lines = [
     ...(here && ownLine ? [{ host: here, line: ownLine }] : []),
@@ -152,7 +157,7 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
     }),
   ];
   const needs = gathered.find((group) => group.group === "needs_you");
-  const askRows = <AskRows here={here} others={otherAsks} missions={otherMissions} />;
+  const askRows = <AskRows here={here} others={otherAsks} looks={otherLooks} missions={otherMissions} />;
   return (
     <div data-phone-gathered-list="">
       {asks > 0 && !needs ? (
@@ -181,7 +186,7 @@ export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { ho
  * The automations that stopped for a person and the missions that are their own item, on every computer: this one's with their
  * [다시 켜기] and opening here, another's opening on that computer.
  */
-function AskRows({ here, others, missions }: { here: GatheredHost | undefined; others: readonly OtherAsk[]; missions: readonly OtherMission[] }) {
+function AskRows({ here, others, looks, missions }: { here: GatheredHost | undefined; others: readonly OtherAsk[]; looks: readonly OtherLook[]; missions: readonly OtherMission[] }) {
   return (
     <>
       <AutomationAskRows computer={here?.name} />
@@ -189,6 +194,11 @@ function AskRows({ here, others, missions }: { here: GatheredHost | undefined; o
       {others.length > 0 ? (
         <ul className="divide-y divide-border border-b border-border" data-phone-gathered-asks={others.length}>
           {others.map(({ host, ask }) => <OtherAskRow key={`${host.room}|${ask.id}`} host={host} ask={ask} />)}
+        </ul>
+      ) : null}
+      {looks.length > 0 ? (
+        <ul data-phone-gathered-looks={looks.length}>
+          {looks.map(({ host, look }) => <OtherLookRow key={`${host.room}|${look.id}`} host={host} look={look} />)}
         </ul>
       ) : null}
       {missions.length > 0 ? (
@@ -213,6 +223,24 @@ function OtherAskRow({ host, ask }: OtherAsk) {
         <RepeatIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" />
         <span className="flex min-w-0 flex-1 flex-col items-start gap-xs">
           <AskLine name={ask.name} reason={ask.reason} />
+          <DeviceTag label={host.name} computer />
+        </span>
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+      </div>
+    </li>
+  );
+}
+
+function OtherLookRow({ host, look }: OtherLook) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <li className="relative" data-phone-gathered-look={`${host.room}|${look.id}`}>
+      <RowOverlayButton aria-label={`${t("mobile.automations.open", { name: look.name })}, ${host.name}`} hover={false} className="active:bg-accent" onClick={() => window.location.assign(automationLink(host, look.id))} />
+      <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
+        <StatusMark mark="turn" automation="once" className="size-(--size-icon)" />
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-xs">
+          <span className="break-keep text-body font-medium text-foreground wrap-anywhere">{look.name}</span>
+          <span className="break-keep text-body wrap-anywhere"><LookLine automation={look} /></span>
           <DeviceTag label={host.name} computer />
         </span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />

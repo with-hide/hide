@@ -5,11 +5,15 @@
 // pausing and the runs are. Making, editing and
 // removing stay with an agent, so the tab has no button for them. An
 // automation that stopped for a person is also its own line of the agent
-// list's 내 차례 (D-12, B23), drawn here too. How a schedule and a next run
+// list's 내 차례 (D-12, B23), drawn here too, and so is a once automation whose
+// run ended (mission-104 S-5). A once automation reads its date with the clock
+// mark, and the done ones come after the rest. How a schedule and a next run
 // read is `automationWords.ts`, shared with the desktop.
 
-import { Loader2Icon, RepeatIcon } from "lucide-react";
-import { nextRun, nextRunText, pauseReasonText, scheduleText } from "../automationWords";
+import { ClockIcon, Loader2Icon, RepeatIcon } from "lucide-react";
+import { doneLast } from "../automationGroups";
+import { lookText, nextRun, nextRunText, pauseReasonText, scheduleText, scheduleWithDate } from "../automationWords";
+import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { RowOverlayButton } from "../components/ui/row-button";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -51,7 +55,7 @@ export function AutomationsScreen() {
           </div>
         ) : automations ? (
           <ul className="mx-xl">
-            {automations.map((automation) => (
+            {doneLast(automations).map((automation) => (
               <li key={automation.id}>
                 <Row automation={automation} connected={connected} />
               </li>
@@ -76,7 +80,7 @@ function Row({ automation, connected }: { automation: PhoneAutomation; connected
   const { t } = useInterfaceTranslation();
   const asks = automation.paused !== null && automation.paused !== undefined && automation.paused.reason !== "operator";
   return (
-    <div className="relative" data-phone-automation={automation.id} data-phone-automation-state={automation.running ? "running" : automation.paused ? "paused" : "on"}>
+    <div className="relative" data-phone-automation={automation.id} data-phone-automation-state={automation.running ? "running" : automation.paused ? "paused" : automation.done ? "done" : "on"}>
       <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => openAutomation(automation.id)} />
       <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
         <span className={cn("flex min-w-0 flex-1", automation.paused && !asks && "opacity-(--opacity-dimmed)")}>
@@ -99,7 +103,8 @@ const LINE_TONE = { working: "text-agent-working", warning: "text-warning", quie
 /**
  * The schedule as it reads and what comes next, the whole line in the state's colour (B3, B25, Doop 15): `· 도는 중` while a run
  * goes, `· <why> · 고치고` for what a person fixes, `· 멈춤` for the operator's own pause, else when it runs next in the
- * computer's zone, which the page says as `다음 <when>` (`page`).
+ * computer's zone, which the page says as `다음 <when>` (`page`). A once automation leads with the clock and its own date,
+ * `◷ 12-02(수) 09:00 · 한 번`, which already says when it runs; once done it says `· 끝남` (mission-104 S-5).
  */
 export function ScheduleLine({ automation, page = false, className }: { automation: PhoneAutomation; page?: boolean; className?: string }) {
   const { t, i18n } = useInterfaceTranslation();
@@ -108,15 +113,17 @@ export function ScheduleLine({ automation, page = false, className }: { automati
   const next = nextRun(automation);
   const paused = automation.paused;
   const when = nextRunText(automation, Date.now(), zone, language, t);
+  const once = automation.schedule.kind === "once";
   const after = next.kind === "running" ? when
     : paused ? (paused.reason === "operator" ? pauseReasonText(paused.reason, t) : t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) }))
-      : page && next.kind === "at" ? t("mobile.automations.nextAt", { when }) : when;
+      : once && next.kind === "at" ? null
+        : page && next.kind === "at" ? t("mobile.automations.nextAt", { when }) : when;
   const tone = next.kind === "running" ? "working" : paused && paused.reason !== "operator" ? "warning" : "quiet";
   return (
-    <span className={cn("break-keep text-body wrap-anywhere", LINE_TONE[tone], className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason} data-phone-automation-tone={tone}>
-      {scheduleText(automation.schedule, language, t)}
-      {" · "}
-      {after}
+    <span className={cn("break-keep text-body wrap-anywhere", LINE_TONE[tone], className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason} data-phone-automation-tone={tone} data-phone-automation-once={once ? "true" : undefined}>
+      {once ? <ClockIcon aria-hidden="true" className="mr-xxs inline size-(--size-icon-sm) align-[-0.125em] text-automation-once" /> : null}
+      {once ? scheduleWithDate(automation.schedule, language, t) : scheduleText(automation.schedule, language, t)}
+      {after === null ? null : <>{" · "}{after}</>}
     </span>
   );
 }
@@ -135,13 +142,43 @@ export function AutomationAskRows({ computer }: { computer?: string } = {}) {
   const { t } = useInterfaceTranslation();
   const automations = usePhone((s) => s.automations);
   const asks = usePhone((s) => s.automationAsks);
+  const looks = usePhone((s) => s.automationLooks);
   const connected = usePhone((s) => s.connected);
   const asking = asks.flatMap((id) => {
     const automation = automationOf(automations, id);
     return automation?.paused ? [{ automation, paused: automation.paused }] : [];
   });
-  if (asking.length === 0) return null;
+  const looking = looks.flatMap((id) => {
+    const automation = automationOf(automations, id);
+    return automation ? [automation] : [];
+  });
+  if (asking.length + looking.length === 0) return null;
   return (
+    <>
+    {looking.length > 0 ? (
+      <ul data-phone-automation-looks={looking.length}>
+        {looking.map((automation) => (
+          <li key={automation.id} className="relative" data-phone-automation-look={automation.id}>
+            <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => openAutomation(automation.id)} />
+            <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
+              <span className="flex min-w-0 flex-1">
+                <TwoLineRow
+                  lead={<StatusMark mark="turn" automation="once" className="size-(--size-icon)" />}
+                  head={<span className="min-w-0 break-keep text-title font-medium text-foreground wrap-anywhere">{automation.name}</span>}
+                  line={
+                    <span className="min-w-0 break-keep wrap-anywhere">
+                      {computer ? <DeviceTag label={computer} computer /> : null}
+                      <LookLine automation={automation} />
+                    </span>
+                  }
+                />
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    ) : null}
+    {asking.length === 0 ? null : (
     <ul data-phone-automation-asks={asking.length}>
       {asking.map(({ automation, paused }) => (
         <li key={automation.id} className="relative" data-phone-automation-ask={automation.id}>
@@ -167,8 +204,27 @@ export function AutomationAskRows({ computer }: { computer?: string } = {}) {
         </li>
       ))}
     </ul>
+    )}
+    </>
   );
 }
+
+/** `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, as the desktop's line says it (S-4, S-5). */
+export function LookLine({ automation }: { automation: Pick<PhoneAutomation, "look_run" | "records"> }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const run = automation.records.find((record) => record.kind === "run" && record.number === automation.look_run);
+  const shown = run?.kind === "run" ? lookText(run, language, t) : null;
+  return (
+    <span data-phone-automation-look-line={shown?.tone ?? "none"}>
+      <span className="text-muted-foreground">{t("automationScreen.look.kind")}</span>
+      {shown ? <><span className="text-muted-foreground">{" · "}</span><span className={LOOK_TONE[shown.tone]}>{`${LOOK_MARK[shown.tone]} ${shown.text}`}</span></> : null}
+    </span>
+  );
+}
+
+const LOOK_MARK = { ok: "✓", failed: "✗", skipped: "–", running: "●", stopped: "■" } as const;
+const LOOK_TONE = { ok: "text-success", failed: "text-destructive", skipped: "text-muted-foreground", running: "text-agent-working", stopped: "text-muted-foreground" } as const;
 
 /** An automation's name and why it stopped for a person, as one line of 내 차례; the gathered view draws other computers' with it. */
 export function AskLine({ name, reason, grow = false }: { name: string; reason: NonNullable<PhoneAutomation["paused"]>["reason"]; grow?: boolean }) {

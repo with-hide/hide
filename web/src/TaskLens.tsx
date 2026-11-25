@@ -20,7 +20,7 @@ import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
 import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
 import { LookChip } from "./components/linked-view";
-import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { SidebarAutomationLookRow, SidebarAutomationRow, useEveryDeviceAutomationAsks, useEveryDeviceAutomationLooks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { DeviceChip } from "./components/device-chip";
 import { RowLineText } from "./components/row-line-text";
@@ -36,7 +36,7 @@ import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./Si
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
-import { automationNames, automationRun, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
+import { automationBadge, automationNames, automationRun, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
@@ -126,8 +126,10 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const ownAsks = useMissionAsks(deviceId, filter?.workspace_id ?? null);
   const everyAsk = useEveryDeviceMissionAsks(deviceId);
   // An automation stopped for a person stands in 내 차례 beside them (PRD automations B23); it is no project's, so a project filter leaves it out.
+  // A once automation whose run ended stands there after them (mission-104 S-4).
   const everyAutomation = useEveryDeviceAutomationAsks(deviceId);
-  const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation)]), [filter, ownAsks, everyAsk, everyAutomation]);
+  const everyLook = useEveryDeviceAutomationLooks(deviceId);
+  const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation, everyLook)]), [filter, ownAsks, everyAsk, everyAutomation, everyLook]);
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
   const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
   // A connected machine's own rows are listed with this computer's, so a list with nothing of its own, or a computer with no project yet, still draws them (PRD device-connect-iroh B49).
@@ -324,7 +326,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
             {band.rows.map((row) => (row.kind === "ask"
               ? row.own.kind === "mission"
                 ? <SidebarMissionRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
-                : <SidebarAutomationRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
+                : row.own.kind === "automation"
+                  ? <SidebarAutomationRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
+                  : <SidebarAutomationLookRow key={ownAskKey(row.own)} look={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
               : rows([row.tree])[0]))}
           </ul>
         </Fragment>
@@ -545,7 +549,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationRun(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} />}
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationBadge(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationBadge(agent)} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} bot={botStarter(agent)} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className="text-caption font-medium" />
             <AgentForkMark agent={agent} />

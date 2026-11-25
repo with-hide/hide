@@ -225,7 +225,9 @@ export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exc
  * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
  * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
  */
-export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused" | "look_run"> & {
+  /** A once automation whose time ran (mission-104); a Mac older than it sends none, which reads as not done. */
+  done?: boolean;
   schedule: AutomationSchedule;
   records: PhoneAutomationRecord[];
   records_omitted?: number;
@@ -411,7 +413,7 @@ export type ServerFrame =
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
   /** The automations this computer's core runs, in its order; `omitted` counts the ones past the frame's caps; `zone` is the IANA zone their times are read in. */
-  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; unreadable?: boolean }
+  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; looks?: string[]; unreadable?: boolean }
   /** hided's answer to an `automation` press: whether it sent the core's event; what the core did comes back on the automation. */
   | { type: "automation_result"; request_id?: string; action: AutomationAction | null; id?: string | null; ok: boolean; reason: string | null }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */

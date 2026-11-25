@@ -2,10 +2,10 @@ import { ChevronLeftIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
-import { addCall, draftOf, draftSchedule, editCall, emptyField, exampleDraft, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
-import { scheduleText, whenText, WEEKDAYS, weekdayText } from "./automationWords";
+import { addCall, datePlus, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ONCE_QUICK_DAYS, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
+import { onceText, scheduleText, wallDay, whenText, WEEKDAYS, weekdayText } from "./automationWords";
 import { AgentPicker } from "./components/agent-picker";
-import { useMinuteClock } from "./components/elapsed";
+import { formatElapsed, useMinuteClock } from "./components/elapsed";
 import { Button } from "./components/ui/button";
 import { Checkbox } from "./components/ui/checkbox";
 import { Input } from "./components/ui/input";
@@ -31,8 +31,10 @@ import { useUiStore } from "./ui";
 
 const OWN_FOLDER = "__own";
 const DEFAULT_EFFORT = "__default";
-const KINDS: readonly ScheduleKind[] = ["daily", "weekdays", "weekly", "every_minutes", "every_hours", "cron"];
+/** 한 번 first among the choices (mission-104 S-2). */
+const KINDS: readonly ScheduleKind[] = ["once", "daily", "weekdays", "weekly", "every_minutes", "every_hours", "cron"];
 const KIND_KEY = {
+  once: "automationScreen.form.kind.once",
   daily: "automationScreen.form.kind.daily",
   weekdays: "automationScreen.form.kind.weekdays",
   weekly: "automationScreen.form.kind.weekly",
@@ -177,7 +179,7 @@ export function AutomationForm({ section, automation, example = null, actions }:
             {field("folder")}
           </Field>
           <Field label={t("automationScreen.form.schedule")}>
-            <ScheduleFields schedule={draft.schedule} change={changeSchedule} language={language} />
+            <ScheduleFields schedule={draft.schedule} change={changeSchedule} language={language} zone={section.zone} />
             {scheduleRefusal ? <RefusalLine code={scheduleRefusal} field="schedule" /> : <PreviewLine preview={preview} />}
           </Field>
         </div>
@@ -210,13 +212,18 @@ function RefusalLine({ code, field }: { code: string; field: string }) {
   return <p role="alert" className="text-caption text-destructive" data-automation-refusal={code} data-automation-refusal-field={field}>{t(refusalKey(code))}</p>;
 }
 
-/** `평일 09:00 · 다음: 목 11-20 09:00 · 이 기계 시간대` (B6). */
+/** `평일 09:00 · 다음: 목 11-20 09:00 · 이 기계 시간대` (B6); a once schedule `12-02(수) 09:00 한 번 · 7일 뒤 · 이 기계 시간대` (S-2). */
 function PreviewLine({ preview }: { preview: Preview }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const now = useMinuteClock();
   if (preview.state !== "read") return <p className="text-caption text-muted-foreground" aria-hidden="true">&nbsp;</p>;
   const { value } = preview;
+  if (value.reads_as.kind === "once" && value.next_run_at_unix_ms !== null) {
+    const left = value.next_run_at_unix_ms - now;
+    const until = left < 60_000 ? t("automationScreen.soon") : t("automationScreen.inTime", { time: formatElapsed(language, left) });
+    return <p className="text-caption text-subtle-foreground" data-automation-preview="once">{t("automationScreen.form.previewOnce", { when: onceText(value.reads_as, language, t), until })}</p>;
+  }
   const reads = scheduleText(value.reads_as, language, t);
   const text = value.next_run_at_unix_ms === null
     ? t("automationScreen.form.previewNever", { reads })
@@ -295,18 +302,45 @@ function AgentFields({ draft, change, actions }: { draft: FormDraft; change: (pa
   );
 }
 
-/** 매일 / 평일 / 매주 with its days / N시간마다 with its interval, each with its time; N분마다 from each hour's start; or a cron line (B6). */
-function ScheduleFields({ schedule, change, language }: { schedule: ScheduleDraft; change: (patch: Partial<ScheduleDraft>) => void; language: ReturnType<typeof requireInterfaceLanguage> }) {
+/**
+ * 한 번 with its date, its time and the quick picks 내일, 3일 뒤, 1주일 뒤 / 매일 / 평일 / 매주 with its days / N시간마다 with its
+ * interval, each with its time; N분마다 from each hour's start; or a cron line (B6, S-2). The choices are all in view, 한 번 first.
+ */
+function ScheduleFields({ schedule, change, language, zone }: { schedule: ScheduleDraft; change: (patch: Partial<ScheduleDraft>) => void; language: ReturnType<typeof requireInterfaceLanguage>; zone: string | undefined }) {
   const { t } = useInterfaceTranslation();
+  // Today on the machine that runs it, which the quick picks count from and a first pick of 한 번 starts the day after.
+  const today = wallDay(useMinuteClock(), zone);
   return (
     <div className="flex min-w-0 flex-col gap-xs">
+      <ToggleGroup
+        type="single"
+        className="flex-wrap self-start"
+        value={schedule.kind}
+        onValueChange={(value) => {
+          if (!value) return;
+          const kind = value as ScheduleKind;
+          change(kind === "once" && !schedule.date ? { kind, date: datePlus(today, 1) } : { kind });
+        }}
+        aria-label={t("automationScreen.form.schedule")}
+        data-automation-field="schedule-kind"
+      >
+        {KINDS.map((kind) => <ToggleGroupItem key={kind} size="sm" value={kind} data-automation-schedule-kind={kind}>{t(KIND_KEY[kind])}</ToggleGroupItem>)}
+      </ToggleGroup>
+      {schedule.kind === "once" ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-xs" data-automation-once-fields="true">
+          <Input type="date" className="w-auto shrink-0" value={schedule.date} min={today} aria-label={t("automationScreen.form.date")} onChange={(event) => change({ date: event.target.value })} data-automation-field="date" />
+          <Input type="time" step={60} className="w-auto shrink-0" value={schedule.time} aria-label={t("automationScreen.form.time")} onChange={(event) => change({ time: event.target.value })} data-automation-field="time" />
+          {ONCE_QUICK_DAYS.map((days) => {
+            const date = datePlus(today, days);
+            return (
+              <Button key={days} type="button" variant="outline" size="sm" aria-pressed={schedule.date === date} onClick={() => change({ date })} data-automation-once-quick={days}>
+                {t(days === 1 ? "automationScreen.form.quick.tomorrow" : days === 3 ? "automationScreen.form.quick.threeDays" : "automationScreen.form.quick.week")}
+              </Button>
+            );
+          })}
+        </div>
+      ) : (
       <div className="flex min-w-0 flex-wrap items-center gap-xs">
-        <Select value={schedule.kind} onValueChange={(value) => change({ kind: value as ScheduleKind })}>
-          <SelectTrigger aria-label={t("automationScreen.form.schedule")} className="w-auto shrink-0" data-automation-field="schedule-kind"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {KINDS.map((kind) => <SelectItem key={kind} value={kind} data-automation-schedule-kind={kind}>{t(KIND_KEY[kind])}</SelectItem>)}
-          </SelectContent>
-        </Select>
         {schedule.kind === "every_minutes" ? (
           <Select value={String(schedule.minutes)} onValueChange={(value) => change({ minutes: Number(value) })}>
             <SelectTrigger aria-label={t("automationScreen.form.interval")} className="w-auto shrink-0" data-automation-field="minutes"><SelectValue /></SelectTrigger>
@@ -329,6 +363,7 @@ function ScheduleFields({ schedule, change, language }: { schedule: ScheduleDraf
           <Input type="time" step={60} className="w-auto shrink-0" value={schedule.time} aria-label={t("automationScreen.form.time")} onChange={(event) => change({ time: event.target.value })} data-automation-field="time" />
         )}
       </div>
+      )}
       {schedule.kind === "weekly" ? (
         <ToggleGroup type="multiple" className={cn("flex-wrap self-start")} value={schedule.days} onValueChange={(days) => change({ days: days as AutomationWeekday[] })} aria-label={t("automationScreen.form.days")} data-automation-field="days">
           {WEEKDAYS.map((day) => <ToggleGroupItem key={day} size="sm" value={day} data-automation-day={day}>{weekdayText(language, day)}</ToggleGroupItem>)}

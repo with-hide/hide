@@ -122,7 +122,7 @@ export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | 
  * With a `home` the row belongs to that screen: it is listed only while the operator has something to do,
  * `workspace_id` names the catalog Project whose home shows it and `turn` what that home waits for.
  */
-export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn };
+export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn; once?: boolean };
 
 /**
  * An external tool's work (PRD hide-external-control D-09, D-15): an agent the tool started, or one started under it.
@@ -3535,7 +3535,9 @@ export type AutomationSchedule =
   | { kind: "weekly"; days: AutomationWeekday[]; time: string }
   | { kind: "every_minutes"; minutes: number }
   | { kind: "every_hours"; hours: number; time: string }
-  | { kind: "cron"; expr: string };
+  | { kind: "cron"; expr: string }
+  /** Once, at `date` (`YYYY-MM-DD`) and `time` on the machine's wall clock (mission-104): it runs one time and is then done. */
+  | { kind: "once"; date: string; time: string };
 
 /** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
 export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
@@ -3599,7 +3601,7 @@ export type Automation = {
   schedule: AutomationSchedule;
   /** The choice it reads as. */
   reads_as: AutomationSchedule;
-  /** None while it is paused. */
+  /** None while it is paused, and for a once automation from the start of its run on. */
   next_run_at_unix_ms: number | null;
   agent: AutomationAgent;
   /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
@@ -3607,6 +3609,10 @@ export type Automation = {
   paused?: { reason: AutomationPauseReason; at_unix_ms: number };
   /** A run goes now: [지금 실행] is refused (B19). */
   running: boolean;
+  /** A once automation whose time ran: it runs no more on its own (mission-104); a run by hand still goes (`running` says so). */
+  done: boolean;
+  /** The run of a done once automation whose end waits in Needs You (`automation_looks`); its record carries the agent's `answer`. */
+  look_run?: number;
   unseen: number;
   /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
   recent_spend?: AutomationSpend & { runs: number };

@@ -3,11 +3,13 @@ import { useMemo } from "react";
 import type { Actions } from "../actions";
 import { useAgentLogosShown } from "../agentLogoMode";
 import { deviceScope } from "../agentScope";
-import { pauseReasonText } from "../automationWords";
+import { lookText, pauseReasonText } from "../automationWords";
+import { AgentRowMark } from "../AgentRowMark";
+import { requireInterfaceLanguage } from "../i18n/locale";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { automationAsks, type AutomationAsk } from "../ownAsks";
+import { automationAsks, automationLooks, type AutomationAsk, type AutomationLook } from "../ownAsks";
 import { machineName } from "../screenMachine";
 import type { SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
@@ -37,6 +39,24 @@ export function useEveryDeviceAutomationAsks(frontId: string): AutomationAsk[] {
   }, [devices, section, frontId]);
 }
 
+/** The once automations whose run waits to be opened that `deviceId`'s scope names as its own Needs You items (mission-104 S-4). */
+export function useAutomationLooks(deviceId: string | null | undefined): AutomationLook[] {
+  const ids = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.automation_looks : undefined));
+  const section = useShellStore((s) => s.automations);
+  return useMemo(() => (deviceId && ids ? automationLooks(section, ids, deviceId) : []), [section, ids, deviceId]);
+}
+
+/** Every device's, the front device's first, as `useEveryDeviceAutomationAsks` lists the asks. */
+export function useEveryDeviceAutomationLooks(frontId: string): AutomationLook[] {
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const section = useShellStore((s) => s.automations);
+  return useMemo(() => {
+    if (!devices) return [];
+    const ordered = [...devices.filter((device) => device.id === frontId), ...devices.filter((device) => device.id !== frontId)];
+    return ordered.flatMap((device) => automationLooks(section, device.agent_scope.automation_looks ?? [], device.id));
+  }, [devices, section, frontId]);
+}
+
 /** `useAutomationAsks` read once from a snapshot, for a count drawn outside a render's subscription. */
 export function deviceAutomationAsks(rest: SnapshotRest | null, section: Parameters<typeof automationAsks>[0], deviceId: string): AutomationAsk[] {
   return automationAsks(section, deviceScope(rest, deviceId)?.automation_asks ?? [], deviceId);
@@ -61,15 +81,39 @@ export function AutomationAskChoices({ ask, actions, className }: { ask: Automat
   );
 }
 
+/** `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, the result in its tone (S-4). */
+export function AutomationLookLine({ look, className }: { look: AutomationLook; className?: string }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const shown = look.run ? lookText(look.run, language, t) : null;
+  const mark = shown ? TONE_MARK[shown.tone] : null;
+  return (
+    <span className={cn("min-w-0 truncate text-caption text-muted-foreground", className)} data-automation-look-line={shown?.tone ?? "none"}>
+      {t("automationScreen.look.kind")}
+      {shown ? <>{" · "}<span className={TONE_CLASS[shown.tone]}>{mark ? `${mark} ` : ""}{shown.text}</span></> : null}
+    </span>
+  );
+}
+
+/** The run's answer, one quoted muted line under it (S-4); none while the core carries no answer. */
+export function AutomationLookAnswer({ look, className }: { look: AutomationLook; className?: string }) {
+  const answer = look.run?.answer?.trim();
+  if (!answer) return null;
+  return <span className={cn("min-w-0 truncate text-caption text-muted-foreground", className)} title={answer} data-automation-look-answer="true">{`"${answer}"`}</span>;
+}
+
+const TONE_MARK = { ok: "✓", failed: "✗", skipped: "–", running: "●", stopped: "■" } as const;
+const TONE_CLASS = { ok: "text-success", failed: "text-destructive", skipped: "text-muted-foreground", running: "text-agent-working", stopped: "text-muted-foreground" } as const;
+
 /** The automation mark, where an agent's logo stands on the rows beside it. */
 export function AutomationMark({ className }: { className?: string }) {
   return <RepeatIcon aria-hidden="true" className={cn("shrink-0 text-muted-foreground", className)} />;
 }
 
 /** The name of the machine that runs it while another is in front, for its row's chip. */
-function useAskDevice(ask: AutomationAsk): string | null {
+function useRowDevice(deviceId: string): string | null {
   const { t } = useInterfaceTranslation();
-  return useShellStore((s) => (ask.device_id === frontDeviceId(s.rest) ? null : machineName(s.rest?.navigator?.devices, ask.device_id, t)));
+  return useShellStore((s) => (deviceId === frontDeviceId(s.rest) ? null : machineName(s.rest?.navigator?.devices, deviceId, t)));
 }
 
 /**
@@ -83,7 +127,7 @@ function useAskDevice(ask: AutomationAsk): string | null {
 export function SidebarAutomationRow({ ask, inset, actions, ...data }: { ask: AutomationAsk; inset: string; actions: Actions } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   const logos = useAgentLogosShown();
-  const device = useAskDevice(ask);
+  const device = useRowDevice(ask.device_id);
   const reason = pauseReasonText(ask.reason, t);
   const name = [ask.automation.name, device, t("automationScreen.title"), reason].filter(Boolean).join(", ");
   return (
@@ -118,3 +162,48 @@ export function SidebarAutomationRow({ ask, inset, actions, ...data }: { ask: Au
     </li>
   );
 }
+
+/**
+ * A once automation whose run ended, its own Needs You row (mission-104 S-4):
+ * `<이름>` with the Needs You badge carrying a clock, `자동화 · 한 번 · ✓ 끝남
+ * · 4분` under it and the run's answer quoted; the row opens that run in the
+ * automation screen, which puts it away. The 프로젝트 list's Needs You and the
+ * 태스크 list's 내 차례 both draw it, after the automations stopped for a person.
+ */
+export function SidebarAutomationLookRow({ look, inset, actions, ...data }: { look: AutomationLook; inset: string; actions: Actions } & Record<`data-${string}`, string>) {
+  const { t } = useInterfaceTranslation();
+  const device = useRowDevice(look.device_id);
+  const name = [look.automation.name, device, t("automationScreen.look.kind")].filter(Boolean).join(", ");
+  return (
+    <li data-automation-look={look.automation.id} data-automation-look-run={look.run?.number} className="group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent" style={{ paddingLeft: inset }}>
+      <Hint label={name} reveals>
+        <Button
+          variant="text"
+          size="inline"
+          aria-label={name}
+          data-automation-look-open={look.automation.id}
+          {...data}
+          className="absolute inset-0 rounded-sm focus-visible:ring-inset"
+          onClick={() => actions.openAutomation(look.automation.id, look.automation.look_run ?? null)}
+        />
+      </Hint>
+      <SessionRowBody
+        markClassName="pointer-events-none"
+        mark={<>
+          <StatusMark mark="turn" automation="once" />
+          <AgentRowMark kind={look.automation.agent.kind} />
+        </>}
+        head={<>
+          <span aria-hidden="true" className="pointer-events-none min-w-0 flex-1 truncate text-foreground">{look.automation.name}</span>
+          {device ? <DeviceChip label={device} className="pointer-events-none max-w-2/5" /> : null}
+          {look.since_unix_ms > 0 ? <Elapsed since={look.since_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-automation-look-elapsed="true" /> : null}
+          <FoldLane />
+        </>}
+      >
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs leading-(--size-sidebar-line-detail)"><AutomationLookLine look={look} /></span>
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AutomationLookAnswer look={look} /></span>
+      </SessionRowBody>
+    </li>
+  );
+}
+
