@@ -449,9 +449,9 @@ use crate::error::HostError;
 /// failed commands, so it is refused at Hello and upgraded with its core.
 /// The list read asks `mergeable` from 102 on, so a 101 node's allow-list
 /// would refuse that query too.
-/// 103: both ends of every node link write `crate::panes::PING_LINE` every
-/// `crate::panes::HEARTBEAT` and end the link after
-/// `crate::panes::HEARTBEAT_LIMIT` without a byte from the other. A node on
+/// 103: both ends of every node link write `crate::liveness::PING_LINE` every
+/// `crate::liveness::HEARTBEAT` and end the link after
+/// `crate::liveness::HEARTBEAT_LIMIT` without a byte from the other. A node on
 /// 102 reads the core's ping as a request it cannot read and keeps a link
 /// whose core went silent, holding its pane ownership, so it is refused at
 /// Hello and upgraded with its core.

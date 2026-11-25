@@ -32,9 +32,7 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
             // a device's own stderr reaches no log.
             hide_node::diagnostics::install(hide_node::terminal::device::forward_diagnostic);
             ask_for_the_helpers_folder();
-            // The node reads its input on a thread of its own and this
-            // process exits with the link, so the input is not locked here.
-            let input = BufReader::new(io::stdin());
+            let input = BufReader::new(io::stdin().lock());
             // The node's terminals ride the same link (PRD
             // core-host-node-terminal D-18).
             let terminals = hide_node::terminal::device::NodeTerminals::new();

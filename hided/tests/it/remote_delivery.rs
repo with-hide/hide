@@ -804,7 +804,7 @@ fn last_logged(state: &std::path::Path, kind: &str) -> String {
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_device_link_cut_without_a_close_gives_its_panes_to_the_next_link() -> Result<()> {
-    use hide_node_link::panes::HEARTBEAT_LIMIT;
+    use hide_node_link::liveness::HEARTBEAT_LIMIT;
     /// How long the next link's node waits for the pane ownership before
     /// its restore fails (`hide_core::engine::own::restore`, `RECOVERY_WAIT`).
     const RECOVERY_WAIT: Duration = Duration::from_secs(120);

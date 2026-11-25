@@ -1632,10 +1632,6 @@ fn carry_link(
             browser: Arc::clone(browser),
             generation,
         });
-    // The link's end closes its stream, so the node's reader and writer of
-    // it end too, whichever end ended the link (the core's silence
-    // included).
-    let ending = link.shutdown_handle();
     let link_end = serve(
         BufReader::new(link.duplicate()),
         link,
@@ -1646,7 +1642,6 @@ fn carry_link(
             .as_ref()
             .map(|browser| browser as &dyn hide_host::link_bridge::BrowserGateway),
     );
-    ending.shutdown();
     shared.live.send_replace(None);
     if let Some(changed) = &shared.roots_changed {
         changed(&[]);
@@ -1660,17 +1655,21 @@ fn carry_link(
 /// Answers the core's calls until the link ends. The reader keeps what it
 /// buffered past the handshake: the core's first call.
 fn serve(
-    reader: impl BufRead + Send + 'static,
+    reader: impl BufRead,
     writer: LocalStream,
     identity: &NodeIdentity,
     terminals: &NodeTerminals,
     roots: &hide_host::serve::OpenedRoots,
     browser: Option<&dyn hide_host::link_bridge::BrowserGateway>,
 ) -> Result<String, String> {
+    // The link's end closes its stream (`LinkEnd::Shut`), whichever end
+    // ended the link.
+    let ending = writer.shutdown_handle();
     hide_host::serve::serve_with(
         reader,
         writer,
         hide_host::serve::Services {
+            end: hide_host::serve::LinkEnd::Shut(Box::new(move || ending.shutdown())),
             terminals: Some(terminals),
             checkout_callers: true,
             opened_roots: Some(roots),

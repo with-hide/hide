@@ -69,64 +69,6 @@ pub const PROJECT_OPEN_ACCEPT: std::time::Duration = std::time::Duration::from_s
 /// How long a node waits for the outcome of an accepted open: past the
 /// core's own 30 s wait for the registration, which answers on its own.
 pub const PROJECT_OPEN_ANSWER: std::time::Duration = std::time::Duration::from_secs(40);
-/// How often each end of every node link writes [`PING_LINE`]: the node,
-/// whatever its link, and the core on every link it holds (SSH, WSL, a node
-/// that dialed it, a paired machine's guest node).
-pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
-/// How long each end of a node link waits for a byte from the other before
-/// it ends the link as gone: three heartbeats. A connection can die without
-/// a close reaching one side (a Wi-Fi roam leaves a server's TCP open for
-/// about fifteen minutes), and a node holds its state folder's pane
-/// ownership until its link ends, so no link may go without this limit.
-pub const HEARTBEAT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
-/// The line each end of a node link writes every [`HEARTBEAT`] and the
-/// other drops as it reads it: the node's [`NodeEvent::Ping`], which the
-/// core writes back as it is.
-pub const PING_LINE: &[u8] = b"{\"event\":\"ping\"}\n";
-
-/// When one end of a node link last read a byte from the other, on the
-/// monotonic clock, so a step of the wall clock neither ends a healthy link
-/// nor hides a silent one. Its reader hears every read; whoever waits on
-/// the link ends it once [`Heard::silent`] says so.
-#[derive(Debug)]
-pub struct Heard {
-    started: std::time::Instant,
-    /// Milliseconds after `started` of the last read.
-    at: std::sync::atomic::AtomicU64,
-}
-
-impl Heard {
-    /// Heard now, as a link starts.
-    pub fn new() -> Self {
-        Self {
-            started: std::time::Instant::now(),
-            at: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
-    /// A read brought bytes.
-    pub fn hear(&self) {
-        let at = self.started.elapsed().as_millis() as u64;
-        self.at.store(at, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// How long until the other end has sent nothing for
-    /// [`HEARTBEAT_LIMIT`]; `None` once it has, and the link is gone.
-    pub fn silent(&self) -> Option<std::time::Duration> {
-        let at =
-            std::time::Duration::from_millis(self.at.load(std::sync::atomic::Ordering::Relaxed));
-        (at + HEARTBEAT_LIMIT)
-            .checked_sub(self.started.elapsed())
-            .filter(|left| !left.is_zero())
-    }
-}
-
-impl Default for Heard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Which shell a pane runs, as its terminal and the shell's pid and
 /// start: the identity a bootstrap checks a caller against.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -215,9 +157,9 @@ pub enum NodeEvent {
     StreamData { stream: u64, data: String },
     /// The command's side of the stream ended.
     StreamClosed { stream: u64 },
-    /// The node is alive: a node that dialed its core says so every
-    /// [`HEARTBEAT`], so the attach role on the core's machine ends a link
-    /// whose node fell silent (PRD core-host-node-remote-core B20).
+    /// The link is alive: each end says so every
+    /// [`HEARTBEAT`](crate::liveness::HEARTBEAT) as
+    /// [`PING_LINE`](crate::liveness::PING_LINE) (`crate::liveness`).
     Ping,
     /// Base64 bytes the node read from a stream's end (the
     /// browser relay or a loopback server) on a stream the core opened with `link_open`.
@@ -297,7 +239,7 @@ mod tests {
     fn the_ping_line_is_the_node_s_ping_event() {
         let mut line = serde_json::to_vec(&NodeEvent::Ping).unwrap();
         line.push(b'\n');
-        assert_eq!(line, PING_LINE);
+        assert_eq!(line, crate::liveness::PING_LINE);
     }
 
     /// A device kit older than letter bundles asks without `bundle`, which

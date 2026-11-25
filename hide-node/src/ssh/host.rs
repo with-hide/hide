@@ -32,7 +32,8 @@ pub mod peer;
 pub mod wsl;
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
-use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, NodeEvent, PING_LINE, PanesStarted};
+use hide_node_link::liveness::{HEARTBEAT_LIMIT, Liveness, PING_LINE};
+use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
 pub use kit::ReleaseIdentity;
@@ -557,11 +558,15 @@ struct Inner {
     /// The link runs over the attach role's local stream: a node that dialed
     /// this core, not a device it dialed.
     dialed_by_node: bool,
+    /// When the node last sent a byte, and the link's watch and pinger
+    /// (`start_liveness`).
+    liveness: Arc<Liveness>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.closing.notify_one();
+        self.liveness.end();
     }
 }
 
@@ -635,6 +640,7 @@ impl RemoteHost {
                 protocol: std::sync::OnceLock::new(),
                 streams: Default::default(),
                 dialed_by_node: false,
+                liveness: Arc::default(),
             }),
         }
     }
@@ -1052,6 +1058,7 @@ fn mark_closed(inner: &Inner, reason: String) {
     lock_recover(&inner.pending).clear();
     inner.streams.end_all();
     inner.stop_gates(&reason);
+    inner.liveness.end();
 }
 
 /// Why a line the device helper sent, whole or still arriving, is longer
@@ -2221,43 +2228,36 @@ fn start_reader(
         protocol: std::sync::OnceLock::new(),
         streams: Default::default(),
         dialed_by_node,
+        // Until the node's first byte, the program may still be starting (a
+        // new helper's first start on Windows is scanned for tens of
+        // seconds), and the first call's own deadline bounds that wait
+        // (`hello_timeout`).
+        liveness: Arc::new(Liveness::unheard()),
     });
     let reader = Arc::downgrade(&inner);
-    start_heartbeat(&inner);
+    let liveness = Arc::clone(&inner.liveness);
+    start_liveness(&inner);
     runtime.spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
         // How far `buffer` has been searched for a line end, so a large
         // answer arriving in many chunks is scanned once.
         let mut scanned = 0;
         let mut stderr: Vec<u8> = Vec::new();
-        // When the node last sent a byte. Until its first one, the program
-        // may still be starting (a new helper's first start on Windows is
-        // scanned for tens of seconds), and the first call's own deadline
-        // bounds that wait (`hello_timeout`).
-        let mut heard: Option<tokio::time::Instant> = None;
         let reason = 'read: loop {
-            let silent = async {
-                match heard {
-                    Some(heard) => tokio::time::sleep_until(heard + HEARTBEAT_LIMIT).await,
-                    None => std::future::pending().await,
-                }
-            };
             let arrival = tokio::select! {
-                // Bytes that arrived while a line was being handled are read
-                // before the silence is judged.
-                biased;
                 arrival = source.next() => arrival,
-                () = closing.notified() => break "this Hide closed the link".to_owned(),
-                () = silent => {
-                    break format!(
-                        "the node sent nothing for {} s",
-                        HEARTBEAT_LIMIT.as_secs()
-                    );
+                // The link was closed, by this Hide or by its watch: its
+                // reason, when it gave one.
+                () = closing.notified() => {
+                    break reader
+                        .upgrade()
+                        .and_then(|inner| inner.closed.borrow().clone())
+                        .unwrap_or_else(|| "this Hide closed the link".to_owned());
                 }
             };
             match arrival {
                 Arrival::Data(data) => {
-                    heard = Some(tokio::time::Instant::now());
+                    liveness.hear();
                     buffer.extend_from_slice(&data);
                     while let Some(offset) = buffer[scanned..].iter().position(|byte| *byte == b'\n') {
                         let end = scanned + offset;
@@ -2307,47 +2307,54 @@ fn start_reader(
     RemoteHost { inner }
 }
 
-/// Writes [`PING_LINE`] to the node every [`HEARTBEAT`] until the link
-/// ends, so the node ends a link whose core went silent as the core ends
-/// one whose node did. On a thread of its own rather than the link's
-/// runtime: a line the reader hands to the core may take its one worker for
-/// a while, and a ping that waits behind it would read to the node as a
-/// core gone. A ping waiting behind another line's write goes without
-/// harm, since that write is bytes too.
+/// Starts the link's watch and pinger (`hide_node_link::liveness`): the
+/// watch closes a link whose node sent nothing for [`HEARTBEAT_LIMIT`], and
+/// the pinger writes [`PING_LINE`] every heartbeat, so the node ends a link
+/// whose core went silent as the core ends one whose node did. On threads
+/// of their own rather than the link's runtime: a line the reader hands to
+/// the core may take its one worker for a while, and a ping that waits
+/// behind it would read to the node as a core gone. A ping waiting behind
+/// another line's write goes without harm, since that write is bytes too.
 ///
-/// The thread is the link's and ends with it, on every path a link ends
-/// by: each of them sets the link's `closed` reason (`mark_closed`: the
-/// reader's end, whatever ended it, the silence limit included;
-/// [`RemoteHost::close`]; a write that failed), which wakes the wait at
-/// once; dropping the last clone drops that reason's sender, which wakes it
-/// too; and a ping the link refuses as closed ends it. It holds no clone of
-/// the link while it waits, so it never keeps one alive.
-fn start_heartbeat(inner: &Arc<Inner>) {
-    let link = Arc::downgrade(inner);
-    let runtime = Arc::clone(&inner.runtime);
-    let mut closed = inner.closed.subscribe();
-    let spawned = std::thread::Builder::new()
-        .name("node-link-ping".into())
-        .spawn(move || {
-            loop {
-                // Holds no clone of the link while it waits, so dropping the
-                // last one still ends it at once.
-                let ended = runtime.block_on(async {
-                    tokio::time::timeout(HEARTBEAT, closed.wait_for(Option::is_some))
-                        .await
-                        .is_ok()
+/// Both are the link's and end with it, on every path a link ends by: each
+/// of them ends its liveness (`mark_closed`: the reader's end, the watch's
+/// close, [`RemoteHost::close`], a write that failed; and the last clone's
+/// drop), which wakes both at once, and a ping the link refuses as closed
+/// ends the pinger. Neither holds a clone of the link while it waits, so
+/// neither keeps one alive.
+fn start_liveness(inner: &Arc<Inner>) {
+    let watched = {
+        let link = Arc::downgrade(inner);
+        let liveness = Arc::clone(&inner.liveness);
+        std::thread::Builder::new()
+            .name("node-link-watch".into())
+            .spawn(move || {
+                liveness.watch(|gone| {
+                    if let Some(inner) = link.upgrade() {
+                        RemoteHost { inner }.close(&gone.error("the node").to_string());
+                    }
                 });
-                let Some(inner) = link.upgrade().filter(|_| !ended) else {
-                    return;
-                };
-                let host = RemoteHost { inner };
-                match host.write_line(PING_LINE, Instant::now() + HEARTBEAT_LIMIT, true) {
-                    Ok(()) | Err(LinkError::Busy) => {}
-                    Err(_) => return,
-                }
-            }
-        });
-    if let Err(error) = spawned {
+            })
+    };
+    let pinged = watched.and_then(|_| {
+        let link = Arc::downgrade(inner);
+        let liveness = Arc::clone(&inner.liveness);
+        std::thread::Builder::new()
+            .name("node-link-ping".into())
+            .spawn(move || {
+                liveness.pinger(|| {
+                    let Some(inner) = link.upgrade() else {
+                        return false;
+                    };
+                    let host = RemoteHost { inner };
+                    matches!(
+                        host.write_line(PING_LINE, Instant::now() + HEARTBEAT_LIMIT, true),
+                        Ok(()) | Err(LinkError::Busy)
+                    )
+                });
+            })
+    });
+    if let Err(error) = pinged {
         crate::diagnostic!(json!({
             "component": "remote_host",
             "kind": "host.heartbeat_unstarted",
@@ -2750,7 +2757,9 @@ mod tests {
         .expect("a local link");
         let writer = node_end.duplicate();
         node_end
-            .set_read_timeout(Some(HEARTBEAT + Duration::from_secs(5)))
+            .set_read_timeout(Some(
+                hide_node_link::liveness::HEARTBEAT + Duration::from_secs(5),
+            ))
             .expect("a read bound");
         (link, writer, std::io::BufReader::new(node_end), ended)
     }

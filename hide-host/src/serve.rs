@@ -8,8 +8,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use serde_json::Value;
 
@@ -20,7 +19,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
-use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, Heard, PING_LINE};
+use hide_node_link::liveness::{Liveness, PING_LINE};
 use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
@@ -80,15 +79,17 @@ pub trait Terminals: Send + Sync {
 }
 
 pub fn serve(
-    input: impl BufRead + Send + 'static,
+    input: impl BufRead,
     output: impl Write + Send + 'static,
+    end: LinkEnd,
 ) -> io::Result<()> {
-    serve_in(input, output, Env::of_process(), Services::none())
+    serve_in(input, output, Env::of_process(), Services::none(end))
 }
 
-/// [`serve`] with the node's terminal service.
+/// [`serve`] with the node's terminal service, for a node whose process is
+/// its link (`LinkEnd::Process`).
 pub fn serve_with_terminals(
-    input: impl BufRead + Send + 'static,
+    input: impl BufRead,
     output: impl Write + Send + 'static,
     terminals: &dyn Terminals,
 ) -> io::Result<()> {
@@ -96,6 +97,7 @@ pub fn serve_with_terminals(
         input,
         output,
         Services {
+            end: LinkEnd::Process,
             terminals: Some(terminals),
             checkout_callers: false,
             opened_roots: None,
@@ -111,8 +113,27 @@ pub fn serve_with_terminals(
     )
 }
 
+/// How a node ends its link once the link is gone while a read or a write
+/// of it may still wait (the core fell silent, or a write failed): a dead
+/// connection returns neither, so the link ends by ending the connection
+/// under them.
+pub enum LinkEnd {
+    /// The process is the link (`hided node serve` on its standard input
+    /// and output, which no thread of it can end): the link's end steps
+    /// run, its pane ownership let go with them, and the process exits.
+    Process,
+    /// Shuts the link's connection, so its blocked read returns the end and
+    /// its blocked writes fail, as `hide_platform::ipc::ShutdownHandle`
+    /// does on every system; the node also shuts it once its link ended
+    /// any other way.
+    Shut(Box<dyn Fn() + Send + Sync>),
+}
+
 /// What a node serves on its link besides its files and machine work.
 pub struct Services<'a> {
+    /// How the node ends its link once the link is gone; every link has
+    /// one.
+    pub end: LinkEnd,
     /// The node's terminal service.
     pub terminals: Option<&'a dyn Terminals>,
     /// Whether a caller in no pane is proved by its working directory
@@ -201,8 +222,9 @@ impl OpenedRoots {
 
 impl Services<'_> {
     /// Files and machine work only.
-    pub fn none() -> Self {
+    pub fn none(end: LinkEnd) -> Self {
         Self {
+            end,
             terminals: None,
             checkout_callers: false,
             opened_roots: None,
@@ -216,7 +238,7 @@ impl Services<'_> {
 
 /// [`serve`] with what `services` names.
 pub fn serve_with(
-    input: impl BufRead + Send + 'static,
+    input: impl BufRead,
     output: impl Write + Send + 'static,
     services: Services<'_>,
 ) -> io::Result<()> {
@@ -224,7 +246,7 @@ pub fn serve_with(
 }
 
 fn serve_in(
-    input: impl BufRead + Send + 'static,
+    mut input: impl BufRead,
     output: impl Write + Send + 'static,
     env: Env,
     services: Services<'_>,
@@ -254,10 +276,16 @@ fn serve_in(
     };
     let terminals = services.terminals;
     let opened_roots = services.opened_roots;
-    // The core's lines and this node's each cross on a thread of their own,
-    // so the link's end never waits on a read or a write (`Wire`).
-    let wire = Arc::new(Wire::default());
-    let output = start_wire(input, output, &wire)?;
+    let end = services.end;
+    // When the core was last heard, and the link's watch and pinger
+    // (`hide_node_link::liveness`); a failed write tells the watch.
+    let liveness = Arc::new(Liveness::new());
+    let link_output = Arc::new(Mutex::new(LinkOutput {
+        output,
+        liveness: Arc::clone(&liveness),
+    }));
+    start_pinger(&link_output, &liveness)?;
+    let output = &*link_output;
     let link = crate::link_bridge::LinkBridge::new(services.browser);
     let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
     // The calls handed to a worker and not yet answered, each with whether
@@ -284,38 +312,70 @@ fn serve_in(
     let control_receiver = Arc::new(Mutex::new(control_receiver));
     let background_receiver = Arc::new(Mutex::new(background_receiver));
     let pane_receiver = Arc::new(Mutex::new(pane_receiver));
-    let result = std::thread::scope(|scope| {
-        if let Some(terminals) = terminals {
-            let output = &output;
-            scope.spawn(move || {
-                // One line per turn of the output lock, so an answer waits
-                // behind at most one terminal line.
-                while let Some(line) = terminals.next_up() {
-                    if write_raw(output, &line).is_err() {
-                        terminals.stop();
-                        return;
-                    }
+    // The link's end steps, run once, by whichever finds the end first: the
+    // request loop once its input ended, or the watch of a node whose
+    // process is its link, which exits after them.
+    let stopped = std::sync::Once::new();
+    let stop_link = || {
+        stopped.call_once(|| {
+            // The connection is gone: the terminal sessions end with it, so
+            // no attach child outlives the link that asked for it (D-20,
+            // B20).
+            if let Some(terminals) = terminals {
+                terminals.stop();
+            }
+            // Each link stream's reader ends with its connection, and a
+            // request staged in part goes with it, a file being written once
+            // it is.
+            link.stop();
+            staging.end();
+            // A kit step still running ends its child rather than keep the
+            // helper alive after it, and the pane service ends its listener
+            // and streams so the scope can close.
+            env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            // A resident node's ownership of its panes is the node's, not
+            // this link's.
+            if !resident_panes {
+                env.panes.close();
+            }
+            panes.stop();
+        });
+    };
+    // The link's watch runs until every other thread of the link ended, so
+    // a write still stuck on a dead connection ends with the link.
+    let result =
+        std::thread::scope(|watching| {
+            watching.spawn(|| watch_link(&liveness, &end, &stop_link, &panes));
+            let _ending = Ending(&liveness);
+            std::thread::scope(|scope| {
+                if let Some(terminals) = terminals {
+                    scope.spawn(move || {
+                        // One line per turn of the output lock, so an answer waits
+                        // behind at most one terminal line.
+                        while let Some(line) = terminals.next_up() {
+                            if write_raw(output, &line).is_err() {
+                                terminals.stop();
+                                return;
+                            }
+                        }
+                    });
                 }
-            });
-        }
-        let lanes = std::iter::repeat_n(&receiver, CONCURRENCY)
-            .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY))
-            .chain(std::iter::repeat_n(
-                &background_receiver,
-                BACKGROUND_CONCURRENCY,
-            ))
-            .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
-        let mut workers = Vec::new();
-        for receiver in lanes {
-            let receiver = Arc::clone(receiver);
-            let output = &output;
-            let panes = &panes;
-            let bridges = &bridges;
-            let env = &env;
-            let running = &running;
-            let link = &link;
-            let staging = &staging;
-            workers.push(scope.spawn(move || {
+                let lanes = std::iter::repeat_n(&receiver, CONCURRENCY)
+                    .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY))
+                    .chain(std::iter::repeat_n(
+                        &background_receiver,
+                        BACKGROUND_CONCURRENCY,
+                    ))
+                    .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
+                for receiver in lanes {
+                    let receiver = Arc::clone(receiver);
+                    let panes = &panes;
+                    let bridges = &bridges;
+                    let env = &env;
+                    let running = &running;
+                    let link = &link;
+                    let staging = &staging;
+                    scope.spawn(move || {
                 loop {
                     let request = match receiver.lock().map(|receiver| receiver.recv()) {
                         Ok(Ok(request)) => request,
@@ -415,73 +475,81 @@ fn serve_in(
                         return;
                     }
                 }
-            }));
-        }
-        drop(receiver);
-        drop(control_receiver);
-        drop(background_receiver);
-        drop(pane_receiver);
-        {
-            let wire = &*wire;
-            scope.spawn(move || watch(wire));
-        }
-        let result = read_requests(
-            &wire.inbox,
-            [&sender, &control_sender, &background_sender, &pane_sender],
-            &output,
-            &running,
-            terminals,
-        );
-        // The core's lines are done with: a reader still waiting on its
-        // input ends at its next line.
-        wire.inbox.end(io::ErrorKind::BrokenPipe, "the link ended");
-        // A link that failed or fell silent carries nothing more, and
-        // nothing here waits on its output.
-        if let Err(error) = &result {
-            wire.outbox.end(error.kind(), &error.to_string());
-        }
-        drop(sender);
-        drop(control_sender);
-        drop(background_sender);
-        drop(pane_sender);
-        // The connection is gone: the terminal sessions end with it, so no
-        // attach child outlives the link that asked for it (D-20, B20).
-        if let Some(terminals) = terminals {
-            terminals.stop();
-        }
-        // Each link stream's reader ends with its connection, and a request
-        // staged in part goes with it, a file being written once it is.
-        link.stop();
-        staging.end();
-        // The connection is gone: a kit step still running ends its child
-        // rather than keep the helper alive after it, and the pane service
-        // ends its listener and streams so the scope can close.
-        env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // A resident node's ownership of its panes is the node's, not this
-        // link's.
-        if !resident_panes {
-            env.panes.close();
-        }
-        panes.stop();
-        // What the core asked before its input ended is answered while the
-        // link carries it, and written before this returns, since a node
-        // whose process is its link exits then; the silence watch ends both
-        // waits on a link that carries nothing.
-        let mut panicked = None;
-        for worker in workers {
-            if let Err(panic) = worker.join() {
-                panicked.get_or_insert(panic);
-            }
-        }
-        wire.outbox.finish();
-        wire.outbox.wait_done(None);
-        if let Some(panic) = panicked {
-            std::panic::resume_unwind(panic);
-        }
-        result
-    });
+            });
+                }
+                drop(receiver);
+                drop(control_receiver);
+                drop(background_receiver);
+                drop(pane_receiver);
+                let result = read_requests(
+                    &mut input,
+                    &liveness,
+                    [&sender, &control_sender, &background_sender, &pane_sender],
+                    output,
+                    &running,
+                    terminals,
+                );
+                // A link its watch ended says why.
+                let result = match liveness.gone() {
+                    Some(gone) => Err(gone.error("the core")),
+                    None => result,
+                };
+                drop(sender);
+                drop(control_sender);
+                drop(background_sender);
+                drop(pane_sender);
+                stop_link();
+                // What the core asked before its input ended is answered while the
+                // link carries it, and written before this returns, since a node
+                // whose process is its link exits then; on a link that carries
+                // nothing, the watch ends the writes still waiting.
+                result
+            })
+        });
+    // The link's connection ends with it, whichever end ended it.
+    if let LinkEnd::Shut(shut) = &end {
+        shut();
+    }
     panes.remove_folder();
     result
+}
+
+/// Watches the link until it ends (`Liveness::watch`), and ends a link
+/// found gone its owner's way (`LinkEnd`).
+fn watch_link(
+    liveness: &Liveness,
+    end: &LinkEnd,
+    stop_link: &(impl Fn() + Sync),
+    panes: &crate::panes::Panes,
+) {
+    liveness.watch(|gone| {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "node",
+                "kind": "link.gone",
+                "reason": gone.error("the core").to_string(),
+            })
+        );
+        match end {
+            LinkEnd::Process => {
+                stop_link();
+                panes.remove_folder();
+                std::process::exit(1);
+            }
+            LinkEnd::Shut(shut) => shut(),
+        }
+    });
+}
+
+/// Ends a link's liveness when dropped, on a panic's unwind too, so the
+/// link's watch and pinger never outlive it.
+struct Ending<'a>(&'a Liveness);
+
+impl Drop for Ending<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
 }
 
 /// Where this machine shows the Windows PC's drives, for `Hello` and for a
@@ -514,266 +582,78 @@ pub fn windows_drives() -> Option<String> {
     }
 }
 
-/// A link's two hand-offs, the core's lines in and this node's lines out,
-/// and when the core was last heard. A read blocks until a byte comes and a
-/// write until the other end takes it, and a connection that died without
-/// its close does neither, so the reads and the writes run on threads of
-/// their own (`start_wire`) that the link's end never waits for: whichever
-/// thread finds the end (the input's reader, the output's writer, the
-/// silence `watch`, the request loop) ends the hand-offs, and every thread
-/// waiting on one wakes. A thread still stuck in its read or its write ends
-/// with the connection: a node whose process is its link (`hided node
-/// serve`) exits once `serve` returns, and a resident node's owner closes
-/// its link stream then.
-#[derive(Default)]
-struct Wire {
-    inbox: Handoff,
-    outbox: Handoff,
-    heard: Heard,
+/// The link's output as the node writes it: a write that fails tells the
+/// link's watch, which ends the link even while the core still writes.
+/// Every line is written with one `write_all` under the output's lock
+/// (`write_line`, `write_raw`, `crate::panes::write_event`), so a line is
+/// never cut by another.
+struct LinkOutput<W> {
+    output: W,
+    liveness: Arc<Liveness>,
 }
 
-impl Wire {
-    fn end(&self, kind: io::ErrorKind, reason: &str) {
-        self.inbox.end(kind, reason);
-        self.outbox.end(kind, reason);
-    }
-}
-
-/// One line at a time from one of a link's threads to another, until the
-/// link ends.
-#[derive(Default)]
-struct Handoff {
-    state: Mutex<Handed>,
-    changed: Condvar,
-}
-
-#[derive(Default)]
-struct Handed {
-    line: Option<Vec<u8>>,
-    /// Nothing more is put; the line handed is still taken.
-    finished: bool,
-    /// The taker came back after the last line: it has taken, and on the
-    /// output written, everything put.
-    drained: bool,
-    /// Why the link ended, the first reason found; nothing is put or taken
-    /// after it.
-    ended: Option<(io::ErrorKind, String)>,
-}
-
-impl Handed {
-    fn ended(&self) -> Option<io::Error> {
-        self.ended
-            .as_ref()
-            .map(|(kind, reason)| io::Error::new(*kind, reason.clone()))
-    }
-
-    fn done(&self) -> bool {
-        self.ended.is_some() || self.drained
-    }
-}
-
-impl Handoff {
-    /// Hands `line` over once the line before it was taken; refused once
-    /// the link finished or ended.
-    fn put(&self, line: Vec<u8>) -> io::Result<()> {
-        let mut state = lock(&self.state);
-        loop {
-            if let Some(error) = state.ended() {
-                return Err(error);
-            }
-            if state.finished {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "the link finished",
-                ));
-            }
-            if state.line.is_none() {
-                state.line = Some(line);
-                self.changed.notify_all();
-                return Ok(());
-            }
-            state = wait(&self.changed, state);
+impl<W> LinkOutput<W> {
+    fn failed<T>(&self, written: io::Result<T>) -> io::Result<T> {
+        if let Err(error) = &written
+            && error.kind() != io::ErrorKind::Interrupted
+        {
+            self.liveness.fail(error);
         }
-    }
-
-    /// Hands `line` over only if nothing waits to be taken: a ping behind a
-    /// busy or stuck output would say nothing the waiting line does not.
-    fn offer(&self, line: &[u8]) {
-        let mut state = lock(&self.state);
-        if state.line.is_none() && !state.finished && state.ended.is_none() {
-            state.line = Some(line.to_vec());
-            self.changed.notify_all();
-        }
-    }
-
-    /// The next line; `None` once the link finished and every line was
-    /// taken.
-    fn take(&self) -> io::Result<Option<Vec<u8>>> {
-        let mut state = lock(&self.state);
-        loop {
-            if let Some(error) = state.ended() {
-                return Err(error);
-            }
-            if let Some(line) = state.line.take() {
-                self.changed.notify_all();
-                return Ok(Some(line));
-            }
-            if state.finished {
-                state.drained = true;
-                self.changed.notify_all();
-                return Ok(None);
-            }
-            state = wait(&self.changed, state);
-        }
-    }
-
-    /// Nothing more is put: the taker takes the line handed, then hears
-    /// the end.
-    fn finish(&self) {
-        lock(&self.state).finished = true;
-        self.changed.notify_all();
-    }
-
-    /// Ends the link: what waits on either side, and what comes later, is
-    /// refused with `reason`.
-    fn end(&self, kind: io::ErrorKind, reason: &str) {
-        let mut state = lock(&self.state);
-        if state.ended.is_none() {
-            state.ended = Some((kind, reason.to_owned()));
-            state.line = None;
-        }
-        drop(state);
-        self.changed.notify_all();
-    }
-
-    /// Waits at most `within`, or with `None` for as long as it takes,
-    /// until the link ended or finished with every line taken; whether it
-    /// has.
-    fn wait_done(&self, within: Option<Duration>) -> bool {
-        let state = lock(&self.state);
-        match within {
-            Some(within) => self
-                .changed
-                .wait_timeout_while(state, within, |state| !state.done())
-                .unwrap_or_else(PoisonError::into_inner)
-                .0
-                .done(),
-            None => self
-                .changed
-                .wait_while(state, |state| !state.done())
-                .unwrap_or_else(PoisonError::into_inner)
-                .done(),
-        }
+        written
     }
 }
 
-fn wait<'a, T>(changed: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-    changed.wait(guard).unwrap_or_else(PoisonError::into_inner)
-}
+impl<W: Write> Write for LinkOutput<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.output.write(bytes);
+        self.failed(written)
+    }
 
-/// This node's end of the link's output: each write is one whole line,
-/// handed to the link's writer. Every line here is written with one
-/// `write_all` under the output's lock (`write_line`, `write_raw`,
-/// `crate::panes::write_event`), so a line is never cut by another.
-struct Outgoing(Arc<Wire>);
-
-impl Write for Outgoing {
-    fn write(&mut self, line: &[u8]) -> io::Result<usize> {
-        self.0.outbox.put(line.to_vec())?;
-        Ok(line.len())
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let written = self.output.write_all(bytes);
+        self.failed(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        let flushed = self.output.flush();
+        self.failed(flushed)
     }
 }
 
-/// Starts the link's reader of the core's lines and writer of this node's,
-/// each on a thread of its own (`Wire`), and returns this node's end of the
-/// output.
-fn start_wire(
-    mut input: impl BufRead + Send + 'static,
-    mut output: impl Write + Send + 'static,
-    wire: &Arc<Wire>,
-) -> io::Result<Mutex<Outgoing>> {
-    let reading = Arc::clone(wire);
+/// Starts the link's pinger (`Liveness::pinger`) on a thread of its own: it
+/// writes a ping only while no other line is being written, since a line
+/// being written says as much, and a write stuck on a dead connection holds
+/// the output, where the core's own silence limit ends the link. The thread
+/// is the link's: it returns once the link ends, and a ping stuck in its
+/// write ends with the connection (`LinkEnd`).
+fn start_pinger<W: Write + Send + 'static>(
+    output: &Arc<Mutex<LinkOutput<W>>>,
+    liveness: &Arc<Liveness>,
+) -> io::Result<()> {
+    let output = Arc::clone(output);
+    let liveness = Arc::clone(liveness);
     std::thread::Builder::new()
-        .name("node-link-read".into())
+        .name("node-link-ping".into())
         .spawn(move || {
-            let wire = reading;
-            loop {
-                match read_line(&mut input, &wire.heard) {
-                    Ok(Some(line)) => {
-                        if wire.inbox.put(line).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => return wire.inbox.finish(),
-                    Err(error) => return wire.inbox.end(error.kind(), &error.to_string()),
-                }
-            }
-        })?;
-    let writing = Arc::clone(wire);
-    let started = std::thread::Builder::new()
-        .name("node-link-write".into())
-        .spawn(move || {
-            let wire = writing;
-            while let Ok(Some(line)) = wire.outbox.take() {
-                if let Err(error) = output.write_all(&line).and_then(|()| output.flush()) {
-                    // The core takes nothing more: the link ends here, the
-                    // request loop's wait for the core's next line with it.
-                    wire.end(error.kind(), &format!("the link's output failed: {error}"));
-                    return;
-                }
-            }
-        });
-    if let Err(error) = started {
-        // The reader ends at its next line.
-        wire.end(error.kind(), "the link's writer did not start");
-        return Err(error);
-    }
-    Ok(Mutex::new(Outgoing(Arc::clone(wire))))
-}
-
-/// Says this node is alive every [`HEARTBEAT`], on every link, so the core
-/// ends a link whose node fell silent as this node ends one whose core did:
-/// a core that sent no byte for [`HEARTBEAT_LIMIT`] (it pings every
-/// heartbeat) is a connection that died without its close reaching this
-/// machine, and the link ends as an ended input's would, letting go of what
-/// it holds (its pane ownership). Ends with the link's output.
-fn watch(wire: &Wire) {
-    let mut ping_at = Instant::now() + HEARTBEAT;
-    loop {
-        let Some(left) = wire.heard.silent() else {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "component": "node",
-                    "kind": "link.silent",
-                    "limit_ms": HEARTBEAT_LIMIT.as_millis() as u64,
-                })
-            );
-            wire.end(
-                io::ErrorKind::TimedOut,
-                &format!("the core sent nothing for {} s", HEARTBEAT_LIMIT.as_secs()),
-            );
-            return;
-        };
-        let now = Instant::now();
-        if now >= ping_at {
-            wire.outbox.offer(PING_LINE);
-            ping_at = now + HEARTBEAT;
-        }
-        if wire.outbox.wait_done(Some(left.min(ping_at - now))) {
-            return;
-        }
-    }
+            liveness.pinger(|| {
+                let mut output = match output.try_lock() {
+                    Ok(output) => output,
+                    Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                    Err(TryLockError::WouldBlock) => return true,
+                };
+                output
+                    .write_all(PING_LINE)
+                    .and_then(|()| output.flush())
+                    .is_ok()
+            });
+        })
+        .map(drop)
 }
 
 /// One whole line, newline included, or what is left of the input when it
 /// ends without one; `None` at its end. Every read that brings bytes is
 /// heard, so a line still arriving keeps the link alive.
-fn read_line(input: &mut impl BufRead, heard: &Heard) -> io::Result<Option<Vec<u8>>> {
+fn read_line(input: &mut impl BufRead, liveness: &Liveness) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
     loop {
         let available = match input.fill_buf() {
@@ -784,7 +664,7 @@ fn read_line(input: &mut impl BufRead, heard: &Heard) -> io::Result<Option<Vec<u
         if available.is_empty() {
             return Ok((!line.is_empty()).then_some(line));
         }
-        heard.hear();
+        liveness.hear();
         let (taken, whole) = match available.iter().position(|byte| *byte == b'\n') {
             Some(end) => (end + 1, true),
             None => (available.len(), false),
@@ -807,14 +687,15 @@ fn read_line(input: &mut impl BufRead, heard: &Heard) -> io::Result<Option<Vec<u
 /// Reads requests and hands each to its lane: `[machine, control,
 /// background, pane]`.
 fn read_requests(
-    inbox: &Handoff,
+    input: &mut impl BufRead,
+    liveness: &Liveness,
     [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
     output: &Mutex<impl Write>,
     running: &Mutex<HashMap<u64, bool>>,
     terminals: Option<&dyn Terminals>,
 ) -> io::Result<()> {
     loop {
-        let Some(line) = inbox.take()? else {
+        let Some(line) = read_line(input, liveness)? else {
             return Ok(());
         };
         if line == PING_LINE {
@@ -2348,6 +2229,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// The end of a link whose input ends by itself, as a test's bytes do.
+    fn ends_by_itself() -> LinkEnd {
+        LinkEnd::Shut(Box::new(|| {}))
+    }
+
+    /// The end of a link over `stream`, as a resident node's.
+    #[cfg(unix)]
+    fn shuts(stream: &std::os::unix::net::UnixStream) -> LinkEnd {
+        let stream = stream.try_clone().unwrap();
+        LinkEnd::Shut(Box::new(move || {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }))
+    }
+
     /// An OpenCode route proof that meets OpenCode writing its database
     /// answers busy, which the core reads again (Windows run 39104633599
     /// refused a wake on it), and answers the session once OpenCode is done.
@@ -2661,19 +2556,30 @@ mod tests {
 
     #[test]
     fn a_closed_channel_ends_the_helper_with_requests_still_arriving() {
-        // More requests than workers: each worker stops on its first failed
-        // answer, and the rest must not leave the reader waiting forever.
+        // More requests than workers: the first failed answer ends the link,
+        // and the requests still arriving must not keep the helper running.
         let requests: String = (1..=CONCURRENCY as u64 * 3)
             .map(|id| format!("{{\"id\":{id},\"op\":\"hello\"}}\n"))
             .collect();
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = done.send(serve(io::Cursor::new(requests.into_bytes()), Closed));
+            let _ = done.send(serve(
+                io::Cursor::new(requests.into_bytes()),
+                Closed,
+                ends_by_itself(),
+            ));
         });
         let result = finished
             .recv_timeout(Duration::from_secs(10))
             .expect("the helper kept running after its channel closed");
-        assert!(result.is_ok(), "{result:?}");
+        // Whichever ends the link first: the input's end, or the failed
+        // answer, which is the link's failure.
+        assert!(
+            result
+                .as_ref()
+                .map_or_else(|error| error.kind() == io::ErrorKind::BrokenPipe, |()| true),
+            "{result:?}"
+        );
     }
 
     /// What the helper writes, kept for the test to read.
@@ -2724,10 +2630,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         let mut text = String::new();
@@ -2827,10 +2733,10 @@ mod tests {
         let (written, lines) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             );
         });
         for id in 1..=BACKGROUND_CONCURRENCY as u64 {
@@ -2900,7 +2806,7 @@ mod tests {
             io::BufReader::new(&b""[..]),
             Vec::new(),
             Env::of_process(),
-            Services::none(),
+            Services::none(ends_by_itself()),
         )
         .unwrap();
 
@@ -2919,10 +2825,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         input.write_all(&line).unwrap();
@@ -3050,12 +2956,13 @@ mod tests {
             };
             let (mut core, theirs) = hide_platform::ipc::LocalStream::pair().unwrap();
             let (done, finished) = mpsc::channel();
+            let ending = theirs.shutdown_handle();
             std::thread::spawn(move || {
                 let _ = done.send(serve_in(
                     io::BufReader::new(theirs),
                     output,
                     env,
-                    Services::none(),
+                    Services::none(LinkEnd::Shut(Box::new(move || ending.shutdown()))),
                 ));
             });
             let mut recover = serde_json::to_vec(&Request {
@@ -3111,7 +3018,7 @@ mod tests {
     /// one is once the connection's buffers are full, holds none of it up.
     #[test]
     fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
-        use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, PING_LINE};
+        use hide_node_link::liveness::{HEARTBEAT, HEARTBEAT_LIMIT, PING_LINE};
 
         /// The core's end of the output: it takes the node's lines until
         /// the answer for its panes, then holds the next write, telling the
@@ -3176,8 +3083,6 @@ mod tests {
     /// the input alive, and only the failed write says the link is gone.
     #[test]
     fn a_node_whose_output_fails_ends_its_link_while_its_core_still_pings() {
-        use hide_node_link::panes::PING_LINE;
-
         /// The core's end of the output: it takes the node's lines until the
         /// answer for its panes and fails every write after it.
         struct Fails {
@@ -3263,10 +3168,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 output,
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         input.write_all(&line(7, watch())).unwrap();
@@ -3307,7 +3212,12 @@ mod tests {
         ];
         let input = requests.join("\n") + "\n";
         let kept = Kept::default();
-        serve(io::Cursor::new(input.into_bytes()), kept.clone()).unwrap();
+        serve(
+            io::Cursor::new(input.into_bytes()),
+            kept.clone(),
+            ends_by_itself(),
+        )
+        .unwrap();
         let written = String::from_utf8(kept.0.lock().unwrap().clone()).unwrap();
         let mut answers: Vec<Response> = written
             .lines()

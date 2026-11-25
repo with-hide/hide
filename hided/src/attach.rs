@@ -18,7 +18,7 @@
 //!
 //! The attach role ends when its node's channel ends, when the core's socket
 //! closes, or when its node has sent nothing for
-//! [`hide_node_link::panes::HEARTBEAT_LIMIT`], so neither a half-open SSH
+//! [`hide_node_link::liveness::HEARTBEAT_LIMIT`], so neither a half-open SSH
 //! connection nor a stopped core leaves it running (B20).
 
 use std::collections::{HashMap, HashSet};
@@ -698,11 +698,19 @@ fn find_core(state_dir: &Path) -> Result<LocalStream, AttachOutcome> {
 /// either ends or the node falls silent, then exits the process, so no
 /// direction is left waiting on the other.
 fn pipe(core: LocalStream) -> ! {
-    let heard = Arc::new(hide_node_link::panes::Heard::new());
-    let (done, ended) = std::sync::mpsc::channel::<&'static str>();
+    let liveness = Arc::new(hide_node_link::liveness::Liveness::new());
+    // Why a direction ended, the first one's.
+    let ended: Arc<Mutex<Option<&'static str>>> = Arc::default();
+    let done = {
+        let ended = Arc::clone(&ended);
+        move |liveness: &hide_node_link::liveness::Liveness, reason: &'static str| {
+            lock(&ended).get_or_insert(reason);
+            liveness.end();
+        }
+    };
     let mut to_core = core.duplicate();
     {
-        let heard = Arc::clone(&heard);
+        let liveness = Arc::clone(&liveness);
         let done = done.clone();
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin().lock();
@@ -711,7 +719,7 @@ fn pipe(core: LocalStream) -> ! {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break "node_closed",
                     Ok(read) => {
-                        heard.hear();
+                        liveness.hear();
                         if to_core.write_all(&buffer[..read]).is_err() {
                             break "core_closed";
                         }
@@ -720,10 +728,11 @@ fn pipe(core: LocalStream) -> ! {
                     Err(_) => break "node_closed",
                 }
             };
-            let _ = done.send(reason);
+            done(&liveness, reason);
         });
     }
     {
+        let liveness = Arc::clone(&liveness);
         let done = done.clone();
         let mut from_core = core.duplicate();
         std::thread::spawn(move || {
@@ -745,18 +754,13 @@ fn pipe(core: LocalStream) -> ! {
                     Err(_) => break "core_closed",
                 }
             };
-            let _ = done.send(reason);
+            done(&liveness, reason);
         });
     }
-    let reason = loop {
-        let Some(left) = heard.silent() else {
-            break "node_silent";
-        };
-        match ended.recv_timeout(left) {
-            Ok(reason) => break reason,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break "ended",
-        }
+    liveness.watch(|_| {});
+    let reason = match liveness.gone() {
+        Some(_) => "node_silent",
+        None => lock(&ended).unwrap_or("ended"),
     };
     core.shutdown_handle().shutdown();
     eprintln!(
