@@ -182,8 +182,8 @@ pub struct Manifest {
 }
 
 /// What the screen a rule matches asks the operator, when it is a question
-/// Hide answers before it starts the agent: a key of Hide's own, which
-/// Herdr's grammar does not have and a value it does not know is refused.
+/// Hide answers before it starts the agent: a key of Hide's own, not of
+/// the copied grammar, and a value it does not know is refused.
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Asks {
