@@ -642,6 +642,64 @@ fn a_program_named_by_path_or_run_with_a_changed_environment_always_asks() {
 }
 
 #[test]
+fn a_line_that_sets_a_variable_is_judged_by_the_command_it_runs() {
+    // The operator's "Desk keeps asking": a value the agent keeps in a
+    // variable changes no program, so the line takes its command's row.
+    for (line, row) in [
+        ("F=/tmp/x; cat \"$F\"", Row::Read),
+        ("FOO=1 cat README.md", Row::Read),
+        ("NO_COLOR=1 rg desk /r/herdr-ide", Row::Read),
+        ("env FOO=1 cat README.md", Row::Read),
+        ("for F in a.md b.md; do wc -l \"$F\"; done", Row::Read),
+        ("GIT_PAGER=cat git log --oneline -5", Row::Read),
+        ("PAGER= git log --oneline -5", Row::Read),
+        ("ID=agent-1; hide agent read \"$ID\" --lines 20", Row::Hide),
+        ("export FOO=1; cat README.md", Row::Shell),
+        ("DIR=/r/herdr-ide; mkdir -p \"$DIR/notes\"", Row::Shell),
+    ] {
+        assert_eq!(reading(line).row, row, "{line}");
+        assert_eq!(asks(line), [], "{line}");
+    }
+    // What the command does that cannot be undone still asks, and only that.
+    assert_eq!(asks("FOO=1 rm -f /fixture/outside/victim"), [OUTSIDE]);
+    assert_eq!(asks("F=/r/herdr-ide/a.md; rm -f \"$F\""), [OUTSIDE]);
+    assert_eq!(
+        asks("GIT_PAGER='rm -f /fixture/outside/victim' git log"),
+        [OUTSIDE]
+    );
+}
+
+#[test]
+fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
+    for line in [
+        // Which program a name runs, what it loads, where a path leads.
+        "Path=/fixture/bin; cat README.md",
+        "LD_PRELOAD=/fixture/lib.so cat README.md",
+        "DYLD_INSERT_LIBRARIES=/fixture/lib.dylib cat README.md",
+        "CDPATH=/fixture; cd outside; cat README.md",
+        // git's repository and configuration may name a program it runs.
+        "GIT_DIR=/fixture/outside/.git git status",
+        "GIT_CONFIG_PARAMETERS=\"'core.pager=sh'\" git log",
+        "RIPGREP_CONFIG_PATH=/fixture/rg.conf rg desk",
+        // The Hide a `hide` command reaches is not the one the core knows.
+        "HIDE_STATE_DIR=/fixture/state hide agent list",
+        // A program another one runs, set to one Hide cannot read or to a
+        // value it does not see.
+        "EDITOR=vim git commit",
+        "PAGER+=' -R' git log",
+        "read PAGER; git log",
+        "export GIT_PAGER; git log",
+        // A line Hide cannot read at all.
+        "cat \"README.md",
+        "CMD='cat README.md'; eval \"$CMD\"",
+        "bash <<'EOF'\ncat README.md\nEOF",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
+        assert_eq!(reading(line).row, Row::Shell, "{line}");
+    }
+}
+
+#[test]
 fn a_relative_delete_is_judged_in_every_folder_the_shell_may_be_in_then() {
     for line in [
         // A subshell's `cd` ends with it.

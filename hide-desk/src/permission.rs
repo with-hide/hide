@@ -338,8 +338,8 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
                 .unwrap_or_else(|| place.cwd.to_owned());
             let mut line = Line::default();
             read_line(command, &vec![Some(cwd.clone())], place, 0, &mut line);
-            // A line that changes the environment its programs read may
-            // change which program a name runs and what it does.
+            // A line that sets a variable choosing which program a name
+            // runs, or what a program runs for it, may run anything.
             let unreadable = line.unreadable || line.environment;
             Reading {
                 row: if line.other || unreadable {
@@ -473,7 +473,9 @@ struct Line {
     force_push: bool,
     delete_remote: bool,
     unreadable: bool,
-    /// The line sets a variable programs read from the environment.
+    /// The line sets a variable that chooses which program a name runs or
+    /// what a program runs for it ([`Sets::Choice`]), or one that names a
+    /// program to a value Hide does not see.
     environment: bool,
     /// A command has run that may make or move a link, so a path deleted
     /// after it may lead somewhere it does not lead now.
@@ -1310,9 +1312,9 @@ fn read_command(
     if CONTROL.contains(&first.as_str()) {
         // `for NAME in` and `select NAME in` set NAME.
         if matches!(first.as_str(), "for" | "select")
-            && words.get(1).is_some_and(|name| sets_environment(name))
+            && let Some(name) = words.get(1)
         {
-            line.environment = true;
+            assign(name, folders, place, depth, line);
         }
         return Move::Stay;
     }
@@ -1321,7 +1323,7 @@ fn read_command(
         && hide_shell::is_assignment(first)
     {
         assigned = true;
-        line.environment |= sets_environment(first);
+        assign(first, folders, place, depth, line);
         words = rest;
     }
     if words.is_empty() {
@@ -1334,17 +1336,117 @@ fn read_command(
     }
 }
 
-/// Whether a word that sets a variable (`NAME=value`, `NAME+=value`, or a
-/// name a command sets) sets one programs read from the environment: a
-/// name in capitals, as the environment's are, or zsh's `path`, which is
-/// `PATH`.
-fn sets_environment(word: &str) -> bool {
-    let name = word.split(['=', '+', '[']).next().unwrap_or(word);
-    let is_name = name
-        .chars()
-        .enumerate()
-        .all(|(index, c)| c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit()));
-    !name.is_empty() && is_name && (name.chars().any(|c| c.is_ascii_uppercase()) || name == "path")
+/// What setting a variable can change of what a line runs. Any other
+/// variable is a value the command it runs reads, so the line is judged by
+/// that command (`F=/tmp/x; cat "$F"`, `NO_COLOR=1 rg x`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Sets {
+    /// Nothing Hide reads: the line is judged by the commands it runs.
+    Value,
+    /// A program another program runs for it, given as a command line
+    /// (`GIT_PAGER=cat`): read as a command of the line.
+    Program,
+    /// Which program a name runs, what a program loads or reads as its
+    /// configuration, or where a path leads: Hide cannot read what runs.
+    Choice,
+}
+
+/// Variables that choose which program a name runs or where a path leads
+/// (`PATH`, zsh's `path`, `PATHEXT`, `CDPATH`, `HOME`, `PWD`, `OLDPWD`),
+/// how the shell reads a line or what it runs first (`IFS`, `ENV`,
+/// `BASH_ENV`, `ZDOTDIR`, `SHELLOPTS`, `BASHOPTS`, `PS4`,
+/// `PROMPT_COMMAND`), what runs a command line for a program (`SHELL`,
+/// `LESSOPEN`, `LESSCLOSE`) or the configuration it reads, which may name
+/// one (`XDG_CONFIG_HOME`, `RIPGREP_CONFIG_PATH`). Compared without case,
+/// as Windows reads the environment's names.
+const CHOOSING: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "CDPATH",
+    "HOME",
+    "PWD",
+    "OLDPWD",
+    "IFS",
+    "ENV",
+    "BASH_ENV",
+    "ZDOTDIR",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PS4",
+    "PROMPT_COMMAND",
+    "SHELL",
+    "LESSOPEN",
+    "LESSCLOSE",
+    "XDG_CONFIG_HOME",
+    "RIPGREP_CONFIG_PATH",
+];
+
+/// Name prefixes of the same kind: what the loader puts into every program
+/// (`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`), git's repository, configuration
+/// and the programs it runs (`GIT_DIR`, `GIT_CONFIG_PARAMETERS`,
+/// `GIT_EXTERNAL_DIFF`), and the Hide a `hide` command reaches
+/// (`HIDE_STATE_DIR`), which the core's facts would not describe.
+const CHOOSING_PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "HIDE_"];
+
+/// Variables whose value is the command line of a program another program
+/// runs for it.
+const PROGRAMS: &[&str] = &[
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "MANPAGER",
+    "BROWSER",
+    "GIT_PAGER",
+    "GIT_EDITOR",
+    "GIT_SEQUENCE_EDITOR",
+];
+
+fn sets(name: &str) -> Sets {
+    let name = name.to_ascii_uppercase();
+    if PROGRAMS.contains(&name.as_str()) {
+        Sets::Program
+    } else if CHOOSING.contains(&name.as_str())
+        || CHOOSING_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    {
+        Sets::Choice
+    } else {
+        Sets::Value
+    }
+}
+
+/// A word that sets a variable: `NAME=value`, `NAME+=value`, `NAME[i]=value`,
+/// or a bare name a command sets to a value Hide does not see (`export
+/// NAME`, `read NAME`, `for NAME in`). A word that is no variable's name is
+/// not one.
+fn assign(word: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
+    let (target, value) = match word.split_once('=') {
+        Some((target, value)) => (target, Some(value)),
+        None => (word, None),
+    };
+    let name = target.split(['+', '[']).next().unwrap_or(target);
+    let is_name = !name.is_empty()
+        && name.chars().enumerate().all(|(index, c)| {
+            c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
+        });
+    if !is_name {
+        return;
+    }
+    match sets(name) {
+        Sets::Value => {}
+        Sets::Choice => line.environment = true,
+        // Set outright, the program it names is read as any other; an
+        // empty value leaves the program's own default.
+        Sets::Program => match value {
+            Some(value) if target == name => {
+                if !value.trim().is_empty() {
+                    read_line(value, folders, place, depth + 1, line);
+                }
+            }
+            _ => line.environment = true,
+        },
+    }
 }
 
 /// Whether the shell expands a program word into something Hide does not
@@ -1417,8 +1519,10 @@ fn run_program(
         }
         return Move::Stay;
     }
-    if ASSIGNING.contains(&name) && args.iter().any(|word| sets_environment(word)) {
-        line.environment = true;
+    if ASSIGNING.contains(&name) {
+        for word in args {
+            assign(word, folders, place, depth, line);
+        }
     }
     match name {
         // It runs in this shell, so where it leaves the shell is not
@@ -1544,7 +1648,7 @@ fn wrapped(
         }
         if name == "env" && hide_shell::is_assignment(word) {
             assigned = true;
-            line.environment |= sets_environment(word);
+            assign(word, &folders, place, depth, line);
             continue;
         }
         if !word.starts_with('-') || word == "-" {
