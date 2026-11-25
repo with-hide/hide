@@ -1360,6 +1360,30 @@ fn shell_named(variable: &str) -> std::ffi::OsString {
     std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell"))
 }
 
+/// The variables of a home made for one test's shell, every shell alike:
+/// `HOME` and each XDG folder under `home`, so nothing a shell reads or
+/// writes at its start is the runner's. zsh finds startup files there, so
+/// Debian's and Ubuntu's zsh opens no new-user menu, and Ubuntu's global
+/// zshrc runs no compinit, which asks about the runner's folders; either
+/// would take the typed start as its answer.
+#[cfg(unix)]
+fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
+    std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
+    std::fs::write(home.join(".zshrc"), "").unwrap();
+    let mut env = BTreeMap::from([("HOME".to_owned(), home.to_str().unwrap().to_owned())]);
+    for (name, folder) in [
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("XDG_STATE_HOME", ".local/state"),
+    ] {
+        let folder = home.join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        env.insert(name.to_owned(), folder.to_str().unwrap().to_owned());
+    }
+    env
+}
+
 #[cfg(unix)]
 fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     use std::os::unix::fs::PermissionsExt;
@@ -1376,13 +1400,7 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     );
     let running = Running(BuiltHolders::start_in(vec![shell]));
     let built = &running.0;
-    // The pane's shell runs in the test's own home, which holds startup
-    // files: a zsh whose home holds none opens its new-user menu on Debian
-    // and Ubuntu, and Ubuntu's global zshrc runs compinit, which asks about
-    // the runner's directories; either would take the typed start as its
-    // answer.
-    std::fs::write(built.home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
-    std::fs::write(built.home.join(".zshrc"), "").unwrap();
+    let home = shell_home(&built.home);
     let engine = &built.engine;
     engine.set_agent_definitions(std::sync::Arc::new(
         hide_agent_adapter::definition::Catalog::read(Vec::new()),
@@ -1400,23 +1418,26 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     .unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
     let written = bin.path().join("argv");
-    let env = BTreeMap::from([
-        (
-            "HIDE_TEST_ARGV".to_owned(),
-            written.to_str().unwrap().to_owned(),
-        ),
-        ("LC_ALL".to_owned(), "C".to_owned()),
-        ("HOME".to_owned(), built.home.to_str().unwrap().to_owned()),
-    ]);
+    let mut env = home;
+    env.insert(
+        "HIDE_TEST_ARGV".to_owned(),
+        written.to_str().unwrap().to_owned(),
+    );
+    env.insert("LC_ALL".to_owned(), "C".to_owned());
     let (_, _, pane) = engine
         .create_workspace(WAIT, &built.folder, "c-locale", false, env)
         .expect("a workspace is made");
     prompted(engine, &pane);
-    until("the shell alone holds its terminal", || {
-        engine
-            .pane_processes(WAIT, &pane)
-            .is_ok_and(|processes| processes.shell_holds_terminal())
-    });
+    until_within_showing(
+        &format!("{named} alone holds its terminal"),
+        SHELL_START_WITHIN,
+        || {
+            engine
+                .pane_processes(WAIT, &pane)
+                .is_ok_and(|processes| processes.shell_holds_terminal())
+        },
+        || format!("{:?}", engine.pane_processes(WAIT, &pane)),
+    );
     let input = "한글 첫 지시입니다: '따옴표' \"큰따옴표\" $HOME `tick`\n둘째 줄 -x";
     let form = hide_node_link::protocol::StartForm::Direct {
         program: codex.to_str().unwrap().to_owned(),
