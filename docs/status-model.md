@@ -298,7 +298,9 @@ The engine's done/idle distinction supplies completion evidence only; Hide's own
 
 A completion is news only when it appears.
 A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restarted engine no longer reports it.
-A demand is the same: one the row no longer shows is a question answered, whose work moves the sequence, or a label summary withheld while Hide AI is paused or summaries are off, and neither is anything to look at; a demand that appears, or turns into another, is news.
+A demand is the same: one the row no longer shows is a question answered, whose work moves the sequence, or a label summary withheld while summaries are off, and neither is anything to look at; a demand that appears, or turns into another, is news.
+Hide AI's usage-limit pause withholds no label, so it moves no demand: a label made before the pause stays laid through it and its end ([AI_PROVIDERS.md: The usage limit](AI_PROVIDERS.md#the-usage-limit)); regression owner `a_usage_pause_keeps_every_label_shown_and_asks_nothing_until_it_ends` in `labels/tests.rs`.
+Known limitation: the operator turning summaries off or on still withholds or lays a label, so a read row whose label's block lies over a question laid on it turns from one demand into the other and reads unread once; the operator moved it themselves.
 A session the row cannot name yet is no other session: another session is news only when the record and the row both name one.
 Any other change to the fingerprint (the agent working again, a state change between two looks, another session in the pane) still turns the row unread.
 Regression owners: `a_read_demand_stays_read_when_the_engine_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.

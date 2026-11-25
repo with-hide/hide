@@ -2472,9 +2472,7 @@ impl Runtime {
         }
 
         if changed {
-            if !self.ai_settings.as_ref().is_some_and(|settings| {
-                settings.enabled && settings.chosen && settings.agent_summary
-            }) {
+            if !self.agent_summary() {
                 self.drop_missed_backlog();
             }
             self.refresh_background_ai();
@@ -2482,18 +2480,22 @@ impl Runtime {
         true
     }
 
-    /// Whether agent labels are asked of a provider and shown (D-11): the
+    /// Whether agent labels are shown and asked of a provider (D-11): the
     /// switch is on, Hide AI is on and an agent is chosen to run on (B33,
     /// B47). A turn that is not asked is not lost: the row shows the session's
     /// own text and the label is made once this is true again.
     pub(crate) fn agent_summary(&self) -> bool {
-        self.ai_settings
-            .as_ref()
-            .is_some_and(|settings| settings.agent_summary && self.ai_active())
-            // The pause as the last refresh found it: this runs every
-            // coordinator tick, and the refresh runs on each usage read,
-            // settings change and wake that can move it.
-            && !self.usage_pause_announced
+        super::backlog::summaries_on(self.ai_settings.as_ref())
+    }
+
+    /// Whether the usage limit holds Hide AI's label requests back. It asks
+    /// nothing new but takes no label already made off a row, so a pause or
+    /// its end never changes what a row the operator read shows. The pause
+    /// as the last refresh found it: this runs every coordinator tick, and
+    /// the refresh runs on each usage read, settings change and wake that
+    /// can move it.
+    pub(crate) fn labels_paused(&self) -> bool {
+        self.usage_pause_announced
     }
 
     /// Whether Hide makes any model call: Use Hide AI is on and an agent is

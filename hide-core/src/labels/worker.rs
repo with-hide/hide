@@ -522,6 +522,11 @@ pub(crate) struct LabelWorker {
     /// asked for and the overlay lays no AI field; reads go on, because the
     /// rows stand on what they find.
     summaries: bool,
+    /// Hide AI's usage-limit pause: no analysis is asked for while it holds,
+    /// but no label already made is taken off a row (docs/AI_PROVIDERS.md,
+    /// The usage limit).
+    paused: bool,
+    /// Since when analyses are asked ([`Self::asks`]).
     summaries_on_since: u64,
     /// The core's output language, which every new request is asked in
     /// (PRD ai-output-language B1, B2, B10): a device's labels too, whatever
@@ -579,6 +584,7 @@ impl LabelWorker {
             receipts: Vec::new(),
             handed_sessions: Default::default(),
             summaries: true,
+            paused: false,
             summaries_on_since: 0,
             language: config.language,
             start_delay: config.start_delay,
@@ -601,6 +607,7 @@ impl LabelWorker {
         // projection already shows what the store proves.
         let mut changed = self.ensure_generator(now);
         let has_ledger = self.ledger.lock().is_ok_and(|ledger| ledger.is_some());
+        let asks = self.asks();
         let mut seen = HashSet::new();
         for observed in agents {
             seen.insert(observed.pane_id.as_str());
@@ -708,7 +715,7 @@ impl LabelWorker {
             }
             // Only an observed turn ending owes a notice judgment. A
             // restart seeds notifications without replaying past work.
-            record.notice_owed = if !self.summaries
+            record.notice_owed = if !asks
                 || !self.generator.held()
                 || reference_token.is_none()
                 || !matches!(status.as_str(), "idle" | "done")
@@ -1211,29 +1218,66 @@ impl LabelWorker {
     }
 
     /// Takes what the core says labels follow: the operator's agent-summary
-    /// switch (see [`Self::set_summaries`]) and the output language of the
+    /// switch, Hide AI's usage-limit pause and the output language of the
     /// requests made from now on; a label already shown keeps the language
     /// it was asked in (D-09). One call, so a caller cannot hand one without
-    /// the other. Returns whether what the projection shows changed.
+    /// the others. Returns whether what the projection shows changed.
     pub(crate) fn follow_core(
         &mut self,
         summaries: bool,
+        paused: bool,
         language: hide_ai::OutputLanguage,
         now: Instant,
     ) -> bool {
         self.language = language;
-        self.set_summaries(summaries, now)
+        self.follow_switches(summaries, paused, now)
     }
 
-    /// Takes the operator's agent-summary switch. Off cancels the request
-    /// running and asks for nothing more; on asks each pane for its current
-    /// turn only, since the turns that ended while it was off are not owed.
-    /// Returns whether what the projection shows changed.
+    /// Takes the operator's agent-summary switch alone; see
+    /// [`Self::follow_switches`].
+    #[cfg(test)]
     pub(crate) fn set_summaries(&mut self, on: bool, now: Instant) -> bool {
-        if self.summaries == on {
+        self.follow_switches(on, self.paused, now)
+    }
+
+    /// Takes Hide AI's usage-limit pause alone; see
+    /// [`Self::follow_switches`].
+    #[cfg(test)]
+    pub(crate) fn set_paused(&mut self, paused: bool, now: Instant) -> bool {
+        self.follow_switches(self.summaries, paused, now)
+    }
+
+    /// Takes the switch and the pause together, then lets the asking follow
+    /// them once, so a switch turned on in the same call a pause starts asks
+    /// nothing. The switch off takes every AI field off the rows and on lays
+    /// the stored labels again; the pause stops the asking only
+    /// ([`Self::follow_asks`]), so the labels already made stay on the rows
+    /// and a row the operator read does not change while its agent does
+    /// nothing. Returns whether the rows' AI fields or the asking moved, the
+    /// asking stopping settling the notices owed.
+    fn follow_switches(&mut self, summaries: bool, paused: bool, now: Instant) -> bool {
+        let asked = self.asks();
+        let shown = self.summaries != summaries;
+        self.summaries = summaries;
+        self.paused = paused;
+        self.follow_asks(asked, now) | shown
+    }
+
+    /// Whether analyses are asked: summaries are on and Hide AI is not
+    /// paused.
+    fn asks(&self) -> bool {
+        self.summaries && !self.paused
+    }
+
+    /// Starts or stops the asking when it moved from `asked`. Stopping
+    /// cancels the request running and asks for nothing more; starting asks
+    /// each pane for its current turn only, since the turns that ended while
+    /// nothing was asked are not owed. Returns whether it moved.
+    fn follow_asks(&mut self, asked: bool, now: Instant) -> bool {
+        let on = self.asks();
+        if on == asked {
             return false;
         }
-        self.summaries = on;
         self.restart_context_waits();
         if on {
             self.summaries_on_since = crate::links::now_ms();
@@ -1447,10 +1491,11 @@ impl LabelWorker {
             record.is_some_and(|record| record.read_reference.as_ref() == Some(&reference));
         // An in-memory reader appends after the checkpoint; a reader that
         // lost its events (a restart) starts at the last human record, and a
-        // new file starts at its beginning. While labels are made, a pane
-        // with no goal yet starts at the beginning too: its context is the
-        // operator's requests from the first one on, and the first lies
-        // before the last human record.
+        // new file starts at its beginning. While summaries are on, a usage
+        // pause included (its end asks this pane), a pane with no goal yet
+        // starts at the beginning too: its context is the operator's
+        // requests from the first one on, and the first lies before the
+        // last human record.
         let checkpoint = if !same_file {
             None
         } else if pane.events_loaded {
@@ -1708,6 +1753,7 @@ impl LabelWorker {
         if self.read_in_flight.as_deref() == Some(pane_id) {
             self.read_in_flight = None;
         }
+        let asks = self.asks();
         let Some(pane) = self.panes.get(pane_id) else {
             return false;
         };
@@ -2047,7 +2093,7 @@ impl LabelWorker {
                     .iter()
                     .filter(|request| {
                         request.letter_from.is_none()
-                            && (!self.summaries || request.at_unix_ms < self.summaries_on_since)
+                            && (!asks || request.at_unix_ms < self.summaries_on_since)
                     })
                     .map(|request| request.offset)
                     .collect();
@@ -2308,7 +2354,7 @@ impl LabelWorker {
     /// Whether the pane owes an analysis now and, if the analyzer is free
     /// for this server, hands it in. Returns whether anything shown changed.
     fn decide(&mut self, pane_id: &str, now: Instant) -> bool {
-        if !self.summaries {
+        if !self.asks() {
             return false;
         }
         let Some(pane) = self.panes.get_mut(pane_id) else {
@@ -2753,9 +2799,9 @@ impl LabelWorker {
             }
             return false;
         }
-        // Switched off while it ran: nothing it said is kept, and the turn
-        // is asked again when the switch comes back.
-        if !self.summaries {
+        // Switched off or paused while it ran: nothing it said is kept, and
+        // the turn is asked again when the asking comes back.
+        if !self.asks() {
             return false;
         }
         // Reads and analyses can finish in either order. Keep an older

@@ -3083,7 +3083,12 @@ fn a_label_is_asked_in_the_language_the_core_last_handed_the_worker() {
     let helper: Arc<dyn crate::node_access::NodeLink> =
         Arc::new(HelperAt(harness.home.path().to_path_buf()));
     let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&helper))));
-    worker.follow_core(true, hide_ai::OutputLanguage::English, Instant::now());
+    worker.follow_core(
+        true,
+        false,
+        hide_ai::OutputLanguage::English,
+        Instant::now(),
+    );
     let idle = agent(&path, "idle", 1);
     observe(&mut worker, &idle);
     settle(&mut worker, &woken);
@@ -3984,6 +3989,59 @@ fn turning_summaries_off_ends_the_request_and_on_asks_for_the_current_turn() {
     );
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 3, "the current turn, once");
+}
+
+/// A usage-limit pause stops the asking only: the block a turn ended on
+/// stays on the row through the pause and its end, so a row the operator
+/// read does not turn unread while its agent did nothing; a turn that ends
+/// during the pause is asked once the pause ends.
+#[test]
+fn a_usage_pause_keeps_every_label_shown_and_asks_nothing_until_it_ends() {
+    let harness = Harness::new();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first = [
+        ("user", "Play 출시 준비해줘"),
+        ("assistant", "본인 확인이 필요합니다"),
+    ];
+    let path = harness.session("a", "native-a", &first);
+    harness.backend.answer("Play 출시 작업", "blocked", "");
+    let blocked = agent(&path, "done", 3);
+    observe(&mut worker, &blocked);
+    settle(&mut worker, &woken);
+    let before = shown(&worker, &blocked).expect("the turn was judged");
+    assert!(before.blocked);
+
+    assert!(worker.set_paused(true, Instant::now()));
+    assert_eq!(
+        shown(&worker, &blocked),
+        Some(before.clone()),
+        "the pause takes nothing off the row"
+    );
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            first[0],
+            first[1],
+            ("user", "다시 확인해줘"),
+            ("assistant", "확인했습니다"),
+        ],
+    );
+    harness.backend.answer("Play 출시 작업", "done", "");
+    let next = agent(&path, "idle", 5);
+    observe(&mut worker, &next);
+    worker.tick(Instant::now());
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 1, "nothing is asked while paused");
+    assert!(
+        !shown(&worker, &next).unwrap().blocked,
+        "a turn the pause left unjudged carries no earlier turn's block"
+    );
+
+    assert!(worker.set_paused(false, Instant::now()));
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 2, "the current turn, once");
 }
 
 /// D-19: a transcript that starts over is judged again against the submits
