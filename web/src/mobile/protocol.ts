@@ -341,8 +341,16 @@ export type StartTarget = {
   /** The checkout's id. */
   id: string;
   device_id: string;
-  /** The place on the device: `project · branch`, or a folder's name. */
+  /** The place on the device: `project · branch`, or a folder's name; from a Mac that predates `project`, the sheet lists each target as a project of its own named by it. */
   place: string;
+  /** The project's name alone, the sheet's project word; absent from a Mac that predates it. */
+  project?: string;
+  /** The project's id, which gathers its checkouts under one project; absent from a Mac that predates it. */
+  project_id?: string;
+  /** The checkout's branch, the sheet's branch word; null for a folder, and absent from a Mac that predates it. */
+  branch?: string | null;
+  /** The project's main checkout, where choosing the project starts; absent from a Mac that predates it. */
+  main?: boolean;
   /** The device's name; null is the core's own machine, named from the catalog's `core_platform`. */
   device_label: string | null;
   connected: boolean;

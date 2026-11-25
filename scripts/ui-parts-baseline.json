@@ -192,7 +192,6 @@
     "select": 2
   },
   "web/src/mobile/StartSheet.tsx": {
-    "select": 1,
     "textarea": 1
   },
   "web/src/overviewGraphNodes.tsx": {
