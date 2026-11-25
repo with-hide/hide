@@ -64,6 +64,11 @@ pub struct GuestPane {
     /// and the row is drawn without a dot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark: Option<String>,
+    /// The agent the guest's core says runs in the pane (`work_names`,
+    /// B10): the logo its row draws while rows draw logos. A plain
+    /// terminal, or a build of the guest that tells none, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// Whether `id` can name a guest in a pane's address: not empty, bounded,
@@ -105,6 +110,30 @@ pub fn mark_is_carried(mark: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
+/// Whether `agent` is an agent kind a list carries: an agent definition's
+/// id (`hide_agent_adapter::definition::id_is_valid`), the rule the peer
+/// link checks a kind by. Which kinds a screen has a logo for is the
+/// screen's to know.
+pub fn agent_is_carried(agent: &str) -> bool {
+    hide_agent_adapter::definition::id_is_valid(agent)
+}
+
+/// A folded head of another machine's work in the 프로젝트 list (B10,
+/// operator review 2026-11-25): that machine's work in one place, the
+/// folder of the checkout or project whose rows it stands after, or `""`
+/// for its work outside every project. Keyed by folder, as the 다른 체크아웃
+/// fold is, so it holds across navigator rebuilds.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GuestWorkFold {
+    pub device_id: String,
+    pub folder: String,
+}
+
+/// The most folded heads the core keeps; folding one past it drops the
+/// oldest fold no head draws any more (its machine or folder no longer
+/// listed), else lets the oldest fold open again.
+pub const MAX_FOLDS: usize = 256;
+
 /// Whether `pane` is a pane id a list carries.
 pub fn pane_is_listed(pane: &str) -> bool {
     !pane.is_empty() && pane.len() <= MAX_PANE_BYTES
@@ -136,6 +165,7 @@ pub fn valid(guests: &[GuestPanes]) -> bool {
                         && pane.name.as_deref().is_none_or(name_is_shown)
                         && pane.branch.as_deref().is_none_or(branch_is_shown)
                         && pane.mark.as_deref().is_none_or(mark_is_carried)
+                        && pane.agent.as_deref().is_none_or(agent_is_carried)
                         && panes.insert(pane.pane.as_str())
                         && pane.id
                             == hide_node_link::address::guest_pane_id(&guest.device_id, &pane.pane)
@@ -220,6 +250,7 @@ mod tests {
                     name: None,
                     branch: None,
                     mark: None,
+                    agent: None,
                 })
                 .collect(),
         }
@@ -268,6 +299,18 @@ mod tests {
         assert!(!told("a\nb", "going"));
         assert!(!told("main", "Going"));
         assert!(!told("main", &"a".repeat(MAX_MARK_BYTES + 1)));
+        // A told agent is one word an agent definition could be named by.
+        let agent = |agent: &str| {
+            let mut told = guest("macbook", &["w1:p1"]);
+            told.panes[0].agent = Some(agent.to_owned());
+            valid(&[told])
+        };
+        assert!(agent("claude") && agent("cursor-agent") && agent("qwen3"));
+        assert!(!agent("") && !agent("Claude") && !agent("claude code"));
+        assert!(!agent("-claude") && !agent("my_agent"));
+        assert!(!agent(
+            &"a".repeat(hide_agent_adapter::definition::MAX_ID_BYTES + 1)
+        ));
     }
 
     fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {

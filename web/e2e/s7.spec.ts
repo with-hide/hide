@@ -1154,7 +1154,7 @@ test("a checkout holds at most thirty-two views: opening one more closes its vie
     stack.daemon = await stack.daemon.restart((dir) => fs.writeFileSync(path.join(dir, "workspace-views.json"), JSON.stringify(seeded)));
     await page.goto("about:blank");
     await open(page, stack.daemon);
-    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("32", { timeout: 30_000 });
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "32 views open", { timeout: 30_000 });
     await showDocuments(page);
     await expect(page.locator('[data-view-area-id] [role="tab"][data-view-state="open"]')).toHaveCount(32, { timeout: 30_000 });
     await showExplorer(page);
@@ -1452,7 +1452,7 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
     stack.daemon = await stack.daemon.restart((dir) => fs.writeFileSync(path.join(dir, "workspace-views.json"), JSON.stringify(v1)));
     await reopen(page, stack.daemon);
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed", { timeout: 20_000 });
-    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("3");
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "3 views open");
     await showDocuments(page);
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => shape(page), { timeout: 15_000 }).toBe("@(a.txt >b.txt c.txt*)");
@@ -1549,7 +1549,7 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     await page.keyboard.press(chord("toggle_lane"));
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     await expect(page.locator("[data-view-area-id]")).toHaveCount(0);
-    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("3");
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "3 views open");
     const sentBefore = laneSent();
     await page.keyboard.press(chord("open_file"));
     const input = page.locator('[data-palette="Open file"] [data-palette-input]');

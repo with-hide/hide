@@ -458,6 +458,7 @@ impl Guests {
                             folder: pane.folder,
                             name: pane.name,
                             branch: pane.branch,
+                            agent: pane.agent,
                             mark,
                         })
                         .collect(),
@@ -2445,6 +2446,7 @@ mod tests {
                     folder: Some("/work/shop-api".to_owned()),
                     name: Some("로그인 고치기".to_owned()),
                     branch: Some("main".to_owned()),
+                    agent: Some("claude".to_owned()),
                 }],
             })
             .unwrap(),
@@ -2814,6 +2816,7 @@ mod tests {
                     name: Some("로그인 고치기".to_owned()),
                     branch: Some("main".to_owned()),
                     mark: None,
+                    agent: Some("claude".to_owned()),
                 }],
             }],
             "the panes show before the node is back"

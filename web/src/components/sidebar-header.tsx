@@ -72,15 +72,16 @@ export function SidebarHeader({
   onSearch,
 }: {
   compact?: boolean;
-  overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
+  /** The Overview's row: no number, since the device rail, a project's chip and the 태스크 list's 내 차례 band carry the one 내 차례 count. */
+  overview?: { selected: boolean; chord: string | null; onOpen: () => void };
   /**
    * Desk's row (PRD desk-2-ui D-32, B46; feedback 1 D2), drawn only while Settings › Labs › Desk has it on: its warning mark the
    * sessions Desk started that ask the operator. While Desk is in front the row is selected and marked `켜짐`, a ✕ shows on hover,
    * and a press leaves Desk for `leaveTo`, the tab in front before it.
    */
   desk?: { selected: boolean; asking: number; chord: string | null; leaveTo?: string | null; onOpen: () => void };
-  /** The mission screen's row (B1): selected while the screen shows, its count the missions with something in their 내 차례. */
-  missions?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
+  /** The mission screen's row (B1): selected while the screen shows, with no number of its own. */
+  missions?: { selected: boolean; chord: string | null; onOpen: () => void };
   /** The automation screen's row (PRD automations B1): selected while the screen shows, its count the runs not looked at. */
   automations?: { selected: boolean; count: number; onOpen: () => void };
   addProject?: { chord: string | null; onOpen: () => void };
@@ -103,12 +104,11 @@ export function SidebarHeader({
         </button>
       </div>
       {overview ? (
-        <Hint label={overview.count > 0 ? t("overview.needsYouHint", { count: overview.count }) : t("overview.title")} shortcut={overview.chord}>
+        <Hint label={t("overview.title")} shortcut={overview.chord}>
           <button type="button" aria-current={overview.selected ? "page" : undefined} data-sidebar-overview="true" onClick={overview.onOpen}
             className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject || desk || missions || automations ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
             <LayoutDashboardIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 flex-1 truncate text-left">{t("overview.title")}</span>
-            {overview.count > 0 ? <span data-overview-count="true" className="text-caption text-warning">{t("overview.askingCount", { count: overview.count })}</span> : null}
             {overview.chord && !compact ? <Kbd className="sidebar-command-keycap">{overview.chord}</Kbd> : null}
           </button>
         </Hint>
@@ -131,12 +131,11 @@ export function SidebarHeader({
         </Hint>
       ) : null}
       {missions ? (
-        <Hint label={missions.count > 0 ? t("missionScreen.rowHint", { count: missions.count }) : t("missionScreen.title")} shortcut={missions.chord}>
+        <Hint label={t("missionScreen.title")} shortcut={missions.chord}>
           <RowButton aria-current={missions.selected ? "page" : undefined} data-sidebar-missions="true" onClick={missions.onOpen}
             className={cn("h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", !addProject && !automations && "border-b border-border", missions.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
             <WaypointsIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 flex-1 truncate text-left">{t("missionScreen.title")}</span>
-            {missions.count > 0 ? <span data-missions-count={missions.count} className="text-caption tabular-nums text-warning">{missions.count}</span> : null}
             {missions.chord && !compact ? <Kbd className="sidebar-command-keycap">{missions.chord}</Kbd> : null}
           </RowButton>
         </Hint>
