@@ -2180,7 +2180,9 @@ impl Runtime {
     /// Showing it also puts the run's summary card first on its tab's desk
     /// and brings onto the desk what its agent opened unwatched
     /// (`place_run_summary`, `gather_run_views`); whether either moved a
-    /// View comes back with the answer.
+    /// View, or the run's once line was put away, comes back with the
+    /// answer, so the change is announced even when the run's terminal has
+    /// closed and nothing else moved.
     fn view_run(
         &mut self,
         id: &str,
@@ -2200,7 +2202,7 @@ impl Runtime {
             let arriving = !self.automations.viewing.contains_key(&key);
             self.automations.viewing.insert(key.clone(), now);
             if arriving {
-                self.put_away_viewed_run(&key);
+                laid |= self.put_away_viewed_run(&key);
             }
             if let Some(pane) = self.viewed_run_pane(&id, number) {
                 laid |= self.place_run_summary(&pane, &id, number);
@@ -2399,23 +2401,27 @@ impl Runtime {
     /// 2026-11-21): its row is resolved, so it leaves Needs You, and comes
     /// back when the run's agent asks again. A run going, or an agent that
     /// works or waits on an approval, keeps its row (`resolve_refusal`). A
-    /// once automation's line for the run goes too (mission-104 O-4).
-    fn put_away_viewed_run(&mut self, key: &RunKey) {
+    /// once automation's line for the run goes too (mission-104 O-4); the
+    /// answer is whether it did.
+    fn put_away_viewed_run(&mut self, key: &RunKey) -> bool {
+        let mut put_away = false;
         if self.run_of(key).is_some_and(|run| !run.state.active())
             && let Some(automation) = self.automation_mut(&key.0)
             && automation.look_run == Some(key.1)
         {
             automation.look_run = None;
             self.automations_changed(true);
+            put_away = true;
         }
         let Some(run) = self.run_of(key).filter(|run| !run.state.active()) else {
-            return;
+            return put_away;
         };
         let ledger = self.delivery_state().ok();
         let Some(pane) = self.run_pane(run, ledger.as_ref()) else {
-            return;
+            return put_away;
         };
         self.resolve_session(&pane, crate::agent_state::sessions::ResolveSource::Operator);
+        put_away
     }
 
     /// Puts on each run what its conversation spent, from the sessions the
@@ -2627,18 +2633,24 @@ impl Runtime {
             "folder": automation.folder.path,
             "next_run_at_unix_ms": automation.next_due_unix_ms,
         });
+        let once = automation.schedule.is_once();
         self.automations.book.automations.push(automation);
         self.automations.book.last_choice = Some(agent);
         if let Some(sink) = &self.product_analytics {
             use crate::automations::Example;
-            use crate::product_analytics::{AutomationStart, Event};
+            use crate::product_analytics::{AutomationSchedule, AutomationStart, Event};
             let start = match draft.example {
                 Some(Example::Report) => AutomationStart::Report,
                 Some(Example::Briefing) => AutomationStart::Briefing,
                 Some(Example::Ci) => AutomationStart::Ci,
                 None => AutomationStart::Own,
             };
-            sink.capture(Event::AutomationCreated { start });
+            let schedule = if once {
+                AutomationSchedule::Once
+            } else {
+                AutomationSchedule::Repeat
+            };
+            sink.capture(Event::AutomationCreated { start, schedule });
         }
         // The operator works in the screen that said the book before was
         // lost: the line has been read.

@@ -1979,6 +1979,88 @@ mod tests {
         assert_eq!(kept[0], "f5");
     }
 
+    fn once(date: &str, time: &str) -> Schedule {
+        Schedule::Once {
+            date: Day::parse(date).unwrap(),
+            time: Clock::parse(time).unwrap(),
+        }
+    }
+
+    /// mission-104 O-2, O-3: a once automation's time is handed over once
+    /// and leaves no next time; a zone the machine moves to keeps a waiting
+    /// one at its wall time there, even one that is past then, which runs
+    /// as missed, and never gives a done one a time again.
+    #[test]
+    fn a_once_time_is_handed_over_once_and_a_zone_move_never_brings_a_done_one_back() {
+        let zone = seoul();
+        let made = at("2026-11-25T08:00");
+        let mut automation = automation(once("2026-12-02", "09:00"), made);
+        assert_eq!(automation.next_due_unix_ms, Some(at("2026-12-02T09:00")));
+        assert!(!automation.done() && automation.waits());
+        let due = automation
+            .take_due(at("2026-12-02T09:00:01"), &zone, Notice::OnTick)
+            .unwrap();
+        assert_eq!(
+            (due.due_unix_ms, due.missed),
+            (at("2026-12-02T09:00"), None)
+        );
+        assert_eq!(automation.next_due_unix_ms, None);
+        automation.new_run(Trigger::Scheduled, Some(due.due_unix_ms), due.due_unix_ms);
+        assert!(!automation.done(), "its run goes");
+        automation.records.clear();
+        assert!(automation.done() && !automation.waits());
+
+        // West of Seoul, 09:00 on that day is still to come: a done one
+        // stays done.
+        let new_york = TimeZone::get("America/New_York").unwrap();
+        assert_eq!(
+            automation.next_time(at("2026-12-02T09:30"), &new_york),
+            None
+        );
+
+        // A waiting one keeps its wall time in the new zone, even past.
+        let mut waiting = self::automation(once("2026-12-02", "09:00"), made);
+        let utc = TimeZone::UTC;
+        let moved = waiting.next_time(at("2026-12-02T20:00"), &utc).unwrap();
+        assert_eq!(moved, once("2026-12-02", "09:00").once_at(&utc).unwrap());
+        waiting.next_due_unix_ms = Some(moved);
+        let late = waiting
+            .take_due(moved + 3 * HOUR, &utc, Notice::OnTick)
+            .unwrap();
+        assert!(matches!(late.missed, Some(Entry::Missed { count: 1, .. })));
+    }
+
+    /// mission-104 O-7: a book with no once automation is written as an
+    /// older build wrote it, so that build still reads it; one with a once
+    /// automation names the kind an older build refuses.
+    #[test]
+    fn a_book_with_no_once_automation_writes_nothing_an_older_build_refuses() {
+        let now = at("2026-11-19T09:00");
+        let mut repeating = automation(daily("09:00"), now);
+        let number = repeating.new_run(Trigger::Scheduled, Some(now), now);
+        repeating.run_mut(number).unwrap().state = RunState::Succeeded;
+        let book = Stored {
+            automations: vec![repeating],
+            ..Stored::default()
+        };
+        let written = String::from_utf8(encode(&book).unwrap()).unwrap();
+        for new in ["look_run", "once", "done"] {
+            assert!(!written.contains(new), "{new} in {written}");
+        }
+        let mut with_once = automation(once("2026-12-02", "09:00"), now);
+        with_once.look_run = Some(1);
+        let written = String::from_utf8(
+            encode(&Stored {
+                automations: vec![with_once.clone()],
+                ..Stored::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(written.contains(r#""kind": "once""#), "{written}");
+        assert_eq!(decode(written.as_bytes()).unwrap().automations, [with_once]);
+    }
+
     #[test]
     fn a_book_written_by_a_newer_build_is_refused_and_records_are_capped() {
         assert!(decode(br#"{"schema_version": 9}"#).is_err());
