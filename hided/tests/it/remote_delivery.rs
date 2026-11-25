@@ -757,6 +757,105 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
     })
 }
 
+/// A spawn's brief on a device rides the agent's start as its launch prompt,
+/// by the same decision as a start on this machine (`docs/delivery.md`, The
+/// input ladder): the stand-in starts with the brief as its last argument,
+/// nothing is typed into its terminal for it, and the agent's own record of
+/// its first prompt confirms it (with-hide/hide#2900, where a typed brief's
+/// Enter was lost on a device and nothing came after).
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_spawns_brief_on_a_device_rides_the_agents_start() -> Result<()> {
+    Fixture::journey(|fixture| {
+        let project = fixture.commit_remote_project()?;
+        fixture.agent_ready_on_device("claude-code", ".claude")?;
+        // Korean over many lines, a few KB, as the issue's brief was.
+        let brief = (1..=40)
+            .map(|line| format!("{line}번째 줄: 원격 기기에서 시작하는 에이전트의 첫 지시입니다."))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let spawn = format!(
+            "{} agent spawn --parent here --machine remote --name remote-briefed --intent spawn-remote-brief --kind claude --repo {} --branch remote-briefed --brief {}",
+            quote(&fixture.hide),
+            quote(&project),
+            quote(&brief)
+        );
+        let before = fixture::ready_panes(&fixture.remote.environment.home)?;
+        let finished = AtomicBool::new(false);
+        let (local, remote) = (&mut fixture.local, &mut fixture.remote);
+        let (first, spawned) = std::thread::scope(|scope| {
+            let reporter = scope.spawn(|| -> Result<Option<String>> {
+                let pane = wait_for("the spawned agent's pane on the device", || {
+                    if finished.load(Ordering::Relaxed) {
+                        return Ok(Some(None));
+                    }
+                    let ready = fixture::ready_panes(&remote.environment.home)?;
+                    Ok(ready
+                        .into_iter()
+                        .find(|pane| !before.contains(pane))
+                        .map(Some))
+                })?;
+                if let Some(pane) = &pane {
+                    remote.report_session(&remote.core_pane(pane), "fixture-briefed-session")?;
+                }
+                Ok(pane)
+            });
+            let output = local.run_in_pane(&spawn);
+            finished.store(true, Ordering::Relaxed);
+            let reported = reporter
+                .join()
+                .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
+            let output = output?;
+            Ok::<_, anyhow::Error>((output, reported?))
+        })?;
+        ensure!(
+            first.status == 0,
+            "remote spawn refused: {} {}",
+            first.stdout,
+            first.stderr
+        );
+        let spawned = spawned.context("the spawned agent's pane on the device")?;
+        // The start carried the brief, its line breaks as U+2028, after `--`.
+        let argv = fixture::started_with(&fixture.remote.environment.home, &spawned)?
+            .context("the stand-in's arguments")?;
+        let carried = brief.replace('\n', "\u{2028}");
+        ensure!(
+            argv.ends_with(&["--".to_owned(), carried]),
+            "the device's start did not carry the brief: {argv:?}"
+        );
+        let record = |ledger: &hide_core::delivery::ledger::Ledger| -> Result<Value> {
+            Ok(serde_json::to_value(
+                ledger
+                    .spawns
+                    .iter()
+                    .find(|record| record.intent == "spawn-remote-brief")
+                    .context("spawn receipt")?,
+            )?)
+        };
+        let saved = record(&fixture.ledger()?)?;
+        ensure!(
+            saved["brief_input"]["route"] == "launch" && saved["brief_input"]["attempts"] == 1,
+            "the brief was not sent as the start's launch prompt: {}",
+            saved["brief_input"]
+        );
+        // The agent's first turn records the brief as Claude Code does, with
+        // its line breaks, which confirms it.
+        let screen_pane = fixture.remote.core_pane(&spawned);
+        let remote_hooks = fixture.remote.hooks.clone();
+        fixture.remote.run_in(
+            &screen_pane,
+            &hook(&remote_hooks, "fixture-briefed-session", &brief),
+        )?;
+        wait_for("the launched brief confirmed by its record", || {
+            let saved = record(&fixture.ledger()?)?;
+            Ok(saved["brief_input"]["confirmed_at_unix_ms"]
+                .is_u64()
+                .then_some(()))
+        })?;
+        Ok(())
+    })
+}
+
 /// `hide <path>` from a plain shell on the device, an ssh login with no
 /// Hide pane: its node proves it only as a process of its own account, the
 /// core registers the device's folder as the device's helper judges it, and
