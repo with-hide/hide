@@ -1187,6 +1187,7 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
         line.unreadable();
         return;
     }
+    expansion_assigns(text, folders, place, depth, line);
     if cfg!(windows) && text.contains('\\') {
         // On Windows the line may be PowerShell's, where `\` separates a
         // path's names; read as POSIX it would name another path.
@@ -1348,6 +1349,102 @@ fn read_command(
         // A loop's test runs again and again.
         Move::To(_) if looped => Move::Unknown,
         moved => moved,
+    }
+}
+
+/// The variables a line sets inside an expansion, wherever it stands (a
+/// word, a redirection, a here-document's body): `${NAME=value}` and
+/// `${NAME:=value}`, zsh's `${NAME::=value}`, and arithmetic's
+/// `$((NAME = value))` and `$[NAME = value]`, each with an element of a
+/// table too. An expansion whose name Hide cannot read (zsh's flags in
+/// `${(P)NAME::=value}`, bash's `${!NAME}`) that holds an `=` may set any
+/// variable. The raw text is read, so one inside single quotes counts too.
+fn expansion_assigns(
+    text: &str,
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let is_start = |c: char| c == '_' || c.is_ascii_alphabetic();
+    let is_inner = |c: char| c == '_' || c.is_ascii_alphanumeric();
+    // A name and an element of it at the start of `rest`, as written.
+    let target = |rest: &str| -> Option<usize> {
+        if !rest.starts_with(is_start) {
+            return None;
+        }
+        let mut end = rest.find(|c: char| !is_inner(c)).unwrap_or(rest.len());
+        if rest[end..].starts_with('[') {
+            let mut level = 0;
+            for (at, c) in rest[end..].char_indices() {
+                match c {
+                    '[' => level += 1,
+                    ']' => level -= 1,
+                    _ => {}
+                }
+                if level == 0 {
+                    end += at + 1;
+                    break;
+                }
+            }
+        }
+        Some(end)
+    };
+    for (at, _) in text.match_indices("${") {
+        let rest = &text[at + 2..];
+        match target(rest) {
+            Some(end) => {
+                let after = &rest[end..];
+                if after.starts_with('=') || after.starts_with(":=") || after.starts_with("::=") {
+                    assign(&rest[..end], folders, place, depth, line);
+                }
+            }
+            None => {
+                let body = rest.split('}').next().unwrap_or(rest);
+                if body.contains('=') {
+                    line.rewrites_what_runs();
+                }
+            }
+        }
+    }
+    for (open, close) in [("$((", "))"), ("$[", "]")] {
+        for (at, _) in text.match_indices(open) {
+            let rest = &text[at + open.len()..];
+            // `$[` closes at its last `]` before the next `$[`, so an
+            // element's own brackets stay inside.
+            let body = match close {
+                "]" => {
+                    &rest[..rest
+                        .split("$[")
+                        .next()
+                        .unwrap_or(rest)
+                        .rfind(']')
+                        .unwrap_or(rest.len())]
+                }
+                _ => &rest[..rest.find(close).unwrap_or(rest.len())],
+            };
+            let bytes = body.as_bytes();
+            for (index, _) in body.match_indices('=') {
+                let before = index.checked_sub(1).map(|i| bytes[i]);
+                // `<<=` and `>>=` assign; `<=`, `>=`, `==` and `!=` compare.
+                let shift = matches!(before, Some(b'<' | b'>'))
+                    && index.checked_sub(2).map(|i| bytes[i]) == before;
+                if bytes.get(index + 1) == Some(&b'=')
+                    || (!shift && matches!(before, Some(b'=' | b'!' | b'<' | b'>')))
+                {
+                    continue;
+                }
+                // The name before the operator (`=`, `+=`, `<<=` and the like).
+                let left = body[..index].trim_end_matches(|c: char| "+-*/%&^|<> ".contains(c));
+                let start = left
+                    .rfind(|c: char| !(is_inner(c) || matches!(c, '[' | ']' | '"' | '\'')))
+                    .map_or(0, |i| i + 1);
+                match &left[start..] {
+                    "" => line.rewrites_what_runs(),
+                    name => assign(name, folders, place, depth, line),
+                }
+            }
+        }
     }
 }
 
@@ -1640,6 +1737,17 @@ fn run_program(
     }
     if ASSIGNING.contains(&name) {
         assigns(name, args, folders, place, depth, line);
+    }
+    if name == "set" {
+        // zsh's `set -A NAME values` and `set +A NAME values` set an array.
+        let mut words = args.iter();
+        while let Some(word) = words.next() {
+            if (word.starts_with('-') || word.starts_with('+')) && word.contains('A') {
+                if let Some(target) = words.next() {
+                    assign(target, folders, place, depth, line);
+                }
+            }
+        }
     }
     match name {
         // It runs in this shell, so where it leaves the shell is not

@@ -671,6 +671,10 @@ fn a_line_that_sets_a_variable_is_judged_by_the_command_it_runs() {
         // prints are words, not a table's element.
         ("printf '%s' 'items[0]'", Row::Read),
         ("printf -v OUT '%s' x; echo \"$OUT\"", Row::Read),
+        // An expansion that only reads, or sets a value.
+        ("echo \"${HOME:-/tmp}\" \"${PATH%%:*}\"", Row::Read),
+        (": \"${OUT:=notes.md}\"; cat \"$OUT\"", Row::Read),
+        ("[ \"$a\" = \"$b\" ] && echo same", Row::Read),
     ] {
         assert_eq!(reading(line).row, row, "{line}");
         assert_eq!(asks(line), [], "{line}");
@@ -717,8 +721,23 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
         // A name made to stand for another variable may stand for any.
         "declare -n P=PATH; P=/fixture/bin; cat x",
         "local -n table=BASH_CMDS; cat x",
+        // zsh's `set -A` sets an array (zshbuiltins(1)).
+        "set -A path /fixture/bin; cat x",
+        "set -A commands cat /bin/rm; cat /fixture/outside/victim",
+        // An expansion that sets one, in any word (bash(1) Parameter
+        // Expansion `${NAME:=word}`, zshexpn(1) `${NAME::=word}`), in a
+        // here-document's body too, or through a name Hide cannot read.
+        ": \"${BASH_CMDS[cat]:=/bin/rm}\"; cat /fixture/outside/victim",
+        "echo \"${BASH_CMDS[cat]:=/bin/rm}\" >/dev/null; cat x",
+        ": ${PATH::=/fixture/bin}; cat x",
+        ": ${PATH=/fixture/bin}; cat x",
+        ": ${commands[cat]::=/bin/rm}; cat x",
+        ": ${(P)name::=/fixture/bin}; cat x",
+        "cat <<EOF\n${PATH:=/fixture/bin}\nEOF",
         // Arithmetic that sets one.
         "let PATH=1; cat x",
+        ": $((BASH_CMDS[cat] = 1)); cat x",
+        ": $[PATH<<=1]; cat x",
         // A program another one runs, set to one Hide cannot read or to a
         // value it does not see.
         "EDITOR=vim git commit",
