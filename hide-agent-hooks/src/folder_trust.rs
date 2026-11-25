@@ -1,5 +1,8 @@
 //! The folder trust Hide records in an agent's own state for the folders it
-//! starts agents in. Claude Code, Codex, agy, Grok and Pi each ask, the first
+//! starts agents in. Which agents it records it for, and where, is said by
+//! each agent's definition file alone (`[account.paths] folder_trust` and
+//! `folder_trust_format`, [`Agent::of_kind`]); this module has one writer per
+//! format. Claude Code, Codex, agy, Grok, Pi and Qwen Code each ask, the first
 //! time they start interactively in a folder they have not been told to
 //! trust, whether to trust it, and a delegated child stopped at that question
 //! waits for an answer nobody is there to give. So Hide records that trust
@@ -22,6 +25,8 @@
 //!   on that file.
 //! - Pi: `"<folder>": true` in `~/.pi/agent/trust.json`, changed while Hide
 //!   holds Pi's own lock on that file.
+//! - Qwen Code: `"<folder>": "TRUST_FOLDER"` in `~/.qwen/trustedFolders.json`,
+//!   changed while Hide holds Qwen Code's own lock on that file.
 //!
 //! The entry names the worktree itself, never the repository it was made
 //! from, for every agent that reads one: answering an agent's own question in
@@ -51,8 +56,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use hide_agent_adapter::definition::{self, Definition};
 use hide_agent_adapter::{
-    Account, AccountKey, AccountPath, AgentAdapter, AgentId, LaunchDialect, NodeEnv, Profile,
+    Account, AccountKey, AccountPath, NodeEnv, Profile, Refusal, TrustFormat,
 };
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
@@ -80,31 +86,51 @@ pub enum Agent {
     Antigravity,
     Grok,
     Pi,
+    QwenCode,
 }
 
 impl Agent {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ClaudeCode,
         Self::Codex,
         Self::Antigravity,
         Self::Grok,
         Self::Pi,
+        Self::QwenCode,
     ];
 
-    /// The agent a start of `dialect` records trust for, when it asks one
-    /// (`LaunchDialect::trusts_worktrees`).
-    pub fn of(dialect: LaunchDialect) -> Option<Self> {
-        if !dialect.trusts_worktrees() {
-            return None;
+    /// The writer for a trust file of `format`: every format a definition
+    /// can declare has one.
+    pub const fn of(format: TrustFormat) -> Self {
+        match format {
+            TrustFormat::Claude => Self::ClaudeCode,
+            TrustFormat::Codex => Self::Codex,
+            TrustFormat::Agy => Self::Antigravity,
+            TrustFormat::Grok => Self::Grok,
+            TrustFormat::Pi => Self::Pi,
+            TrustFormat::Qwen => Self::QwenCode,
         }
-        match dialect {
-            LaunchDialect::Claude => Some(Self::ClaudeCode),
-            LaunchDialect::Codex => Some(Self::Codex),
-            LaunchDialect::Antigravity => Some(Self::Antigravity),
-            LaunchDialect::Grok => Some(Self::Grok),
-            LaunchDialect::Pi => Some(Self::Pi),
-            _ => None,
+    }
+
+    /// The format this writer records a folder in, the one [`Self::of`]
+    /// takes it from.
+    pub const fn format(self) -> TrustFormat {
+        match self {
+            Self::ClaudeCode => TrustFormat::Claude,
+            Self::Codex => TrustFormat::Codex,
+            Self::Antigravity => TrustFormat::Agy,
+            Self::Grok => TrustFormat::Grok,
+            Self::Pi => TrustFormat::Pi,
+            Self::QwenCode => TrustFormat::Qwen,
         }
+    }
+
+    /// The writer that records `kind`'s folder trust, from the trust file
+    /// its definition declares ([`hide_agent_adapter::folder_trust_format`]):
+    /// `None` for a kind that declares none, which never asks or whose trust
+    /// Hide cannot record.
+    pub fn of_kind(kind: &str) -> Option<Self> {
+        hide_agent_adapter::folder_trust_format(kind).map(Self::of)
     }
 
     /// The agent's name in a reason the operator reads.
@@ -115,6 +141,7 @@ impl Agent {
             Self::Antigravity => "agy",
             Self::Grok => "Grok",
             Self::Pi => "Pi",
+            Self::QwenCode => "Qwen Code",
         }
     }
 
@@ -126,21 +153,40 @@ impl Agent {
         match self {
             Self::ClaudeCode => AgentRuntime::ClaudeCode.trust_path(at),
             Self::Codex => AgentRuntime::Codex.trust_path(at),
-            Self::Antigravity | Self::Grok | Self::Pi => {
-                at.place(self.adapter(), AccountPath::FolderTrust)
+            Self::Antigravity | Self::Grok | Self::Pi | Self::QwenCode => match at {
+                AccountAt::Home(home) => self
+                    .resolve(&Profile::builtin_default(&self.definition().id), home)
+                    .expect("a default profile under a known home names no variable to refuse"),
+                AccountAt::Account { account, .. } => account.clone(),
             }
+            .path(AccountPath::FolderTrust)
+            .expect("a writer's definition declares its folder_trust file")
+            .to_path_buf(),
         }
     }
 
-    fn adapter(self) -> &'static AgentAdapter {
-        match self {
-            Self::ClaudeCode => AgentId::ClaudeCode,
-            Self::Codex => AgentId::Codex,
-            Self::Antigravity => AgentId::Antigravity,
-            Self::Grok => AgentId::Grok,
-            Self::Pi => AgentId::Pi,
-        }
-        .adapter()
+    /// The built-in definition that declares this writer's format, whose
+    /// account names the file it writes: one definition per format
+    /// (`folder_trust_contract`).
+    fn definition(self) -> &'static Definition {
+        definition::builtins()
+            .iter()
+            .find(|definition| {
+                definition
+                    .account
+                    .as_ref()
+                    .is_some_and(|account| account.folder_trust_format == Some(self.format()))
+            })
+            .expect("a built-in definition declares every trust format")
+    }
+
+    /// The account `profile` of this writer's agent runs in under `home`.
+    fn resolve(self, profile: &Profile, home: &Path) -> Result<Account, Refusal> {
+        hide_agent_adapter::resolve(
+            self.definition(),
+            profile,
+            &NodeEnv::new(Some(home.to_path_buf())),
+        )
     }
 
     /// The longest one change holds Hide's lock for this agent: a Codex
@@ -149,7 +195,7 @@ impl Agent {
     fn longest_hold(self) -> Duration {
         let own = match self {
             Self::Codex => crate::codex_trust::SESSION_BOUND,
-            Self::ClaudeCode | Self::Pi => LOCK_FOLDER_WAIT,
+            Self::ClaudeCode | Self::Pi | Self::QwenCode => LOCK_FOLDER_WAIT,
             Self::Grok => GROK_LOCK_WAIT,
             Self::Antigravity => Duration::ZERO,
         };
@@ -169,6 +215,7 @@ impl Agent {
             Self::Antigravity => "antigravity-trust",
             Self::Grok => "grok-trust",
             Self::Pi => "pi-trust",
+            Self::QwenCode => "qwen-trust",
         }
     }
 
@@ -371,13 +418,12 @@ fn account_of(
     let Some(spelled) = key.account() else {
         return Ok(None);
     };
-    let adapter = agent.adapter();
     let profile = Profile {
         account: Some(spelled),
-        ..Profile::builtin_default(adapter.id)
+        ..Profile::builtin_default(&agent.definition().id)
     };
-    adapter
-        .resolve(&profile, &NodeEnv::new(Some(home.to_path_buf())))
+    agent
+        .resolve(&profile, home)
         .map(Some)
         .map_err(|refusal| InstallFailure::UnexpectedShape {
             path: home.display().to_string(),
@@ -547,6 +593,7 @@ fn trust_in(
             Agent::Antigravity => antigravity::add(&settings, &key, &gone_entries, &mut remember),
             Agent::Grok => grok::add(&settings, &key, &gone_entries, tools.stop, &mut remember),
             Agent::Pi => pi::add(&settings, &key, &gone_entries, &mut remember),
+            Agent::QwenCode => qwen::add(&settings, &key, &gone_entries, &mut remember),
         })
     };
     match written {
@@ -831,6 +878,7 @@ fn forget_where(
             Agent::Antigravity => antigravity::remove(&settings, &entries)?,
             Agent::Grok => grok::remove(&settings, &entries, tools.stop)?,
             Agent::Pi => pi::remove(&settings, &entries)?,
+            Agent::QwenCode => qwen::remove(&settings, &entries)?,
         };
     }
     write_record(agent, home, &kept)?;
@@ -1244,6 +1292,116 @@ pub(crate) mod lock_folder {
     }
 }
 
+/// proper-lockfile's lock on `settings`, the `.lock` folder beside the file
+/// as spelled, which Pi and Qwen Code each take around a write of their
+/// trust file; the folder the file goes in is made first, as the agent makes
+/// it.
+fn lock_beside(settings: &Path, agent: Agent) -> Result<lock_folder::LockFolder, InstallFailure> {
+    if let Some(parent) = settings.parent() {
+        hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
+            InstallFailure::NotWritable {
+                path: settings.display().to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+    }
+    let mut path = settings.as_os_str().to_owned();
+    path.push(".lock");
+    lock_folder::LockFolder::take(PathBuf::from(path), settings, agent.label())
+}
+
+/// Qwen Code's trust: `"<folder>": "TRUST_FOLDER"` in `trustedFolders.json`
+/// of its own folder, one JSON object of folders, each `TRUST_FOLDER`,
+/// `TRUST_PARENT` (the folder above the one it names) or `DO_NOT_TRUST`
+/// (`packages/cli/src/config/trustedFolders.ts`, v0.28.4). A rule decides its
+/// folder and every folder below it, the deepest rule wins, and a folder is
+/// compared by its resolved path and by its path as written
+/// (`trust-precedence.ts`, `path-comparison.ts`). Qwen Code asks only while
+/// its `security.folderTrust.enabled` setting is on, which is off unless the
+/// operator turns it on; Hide records the trust either way, so turning it on
+/// later finds Hide's folders trusted. Qwen Code takes proper-lockfile's lock
+/// on `trustedFolders.json.lock` beside the file, as spelled
+/// (`realpath: false`), around every write, and reads the file once at its
+/// start without it.
+mod qwen {
+    use super::lock_folder::LockFolder;
+    use super::*;
+
+    const TRUSTED: &str = "TRUST_FOLDER";
+
+    fn lock(settings: &Path) -> Result<LockFolder, InstallFailure> {
+        lock_beside(settings, Agent::QwenCode)
+    }
+
+    /// Whether a rule of Qwen Code's already decides `key`, trusted or not:
+    /// one for the folder or a folder above it, or a `TRUST_PARENT` for a
+    /// folder below the one that names it. A value Qwen Code does not know
+    /// decides nothing, as it reads it.
+    fn decided(rules: &Map<String, Value>, key: &str) -> bool {
+        rules.iter().any(|(folder, level)| {
+            let decides = match level.as_str() {
+                Some("TRUST_FOLDER" | "DO_NOT_TRUST") => Some(Path::new(folder.as_str())),
+                Some("TRUST_PARENT") => Path::new(folder.as_str()).parent(),
+                _ => None,
+            };
+            decides.is_some_and(|decides| Path::new(key).starts_with(decides))
+        })
+    }
+
+    /// Records `key` as trusted unless Qwen Code already decides it, and
+    /// takes out the entries in `gone` in the same write. A folder the
+    /// operator answered for, the worktree or a folder above it, is left as
+    /// it is, "Don't trust" included, as Pi's is.
+    pub(super) fn add(
+        settings: &Path,
+        key: &str,
+        gone: &[String],
+        remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
+    ) -> Result<Added, InstallFailure> {
+        let lock = lock(settings)?;
+        let mut document = read_document(settings)?
+            .unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
+        let rules = root_object(&mut document, settings, Agent::QwenCode)?;
+        if decided(rules, key) {
+            return Ok(Added::Present);
+        }
+        remember()?;
+        take_out(rules, gone);
+        rules.insert(key.to_owned(), Value::String(TRUSTED.to_owned()));
+        lock.still_held()?;
+        write_document(settings, &document).map(|()| Added::New)
+    }
+
+    pub(super) fn remove(settings: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
+        if !settings.exists() {
+            return Ok(0);
+        }
+        let lock = lock(settings)?;
+        let Some(mut document) = read_document(settings)? else {
+            return Ok(0);
+        };
+        let removed = take_out(root_object(&mut document, settings, Agent::QwenCode)?, gone);
+        if removed > 0 {
+            lock.still_held()?;
+            write_document(settings, &document)?;
+        }
+        Ok(removed)
+    }
+
+    /// Takes out each entry in `gone` that Qwen Code still trusts as Hide
+    /// wrote it; one the operator has since changed stays theirs.
+    fn take_out(rules: &mut Map<String, Value>, gone: &[String]) -> usize {
+        let mut removed = 0;
+        for key in gone {
+            if rules.get(key).and_then(Value::as_str) == Some(TRUSTED) {
+                rules.shift_remove(key);
+                removed += 1;
+            }
+        }
+        removed
+    }
+}
+
 /// Pi's trust: `"<folder>": true` in `trust.json` of Pi's agent folder, a
 /// JSON object of resolved folders, each `true`, `false` or `null`. Pi 1.0.4
 /// asks in a folder whose project files it would load (a `.pi/` resource of
@@ -1259,17 +1417,7 @@ mod pi {
     use super::*;
 
     fn lock(settings: &Path) -> Result<LockFolder, InstallFailure> {
-        if let Some(parent) = settings.parent() {
-            hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
-                InstallFailure::NotWritable {
-                    path: settings.display().to_string(),
-                    detail: error.to_string(),
-                }
-            })?;
-        }
-        let mut path = settings.as_os_str().to_owned();
-        path.push(".lock");
-        LockFolder::take(PathBuf::from(path), settings, "Pi")
+        lock_beside(settings, Agent::Pi)
     }
 
     /// Whether Pi reads a decision for `key`: the folder's own entry, or the

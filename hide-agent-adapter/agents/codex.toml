@@ -34,6 +34,7 @@ hook_trust = "{CODEX_HOME}/config.toml"
 plugins = false
 skills = "shared"
 folder_trust = "{CODEX_HOME}/config.toml"
+folder_trust_format = "codex"
 sessions = "{CODEX_HOME}/sessions"
 login = "{CODEX_HOME}/auth.json"
 state = "{CODEX_HOME}"

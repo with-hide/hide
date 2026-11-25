@@ -28,6 +28,7 @@ hook_trust = false
 plugins = false
 skills = "~/.gemini/config/skills"
 folder_trust = "~/.gemini/antigravity-cli/settings.json"
+folder_trust_format = "agy"
 sessions = "~/.gemini/antigravity-cli/brain"
 login = false
 state = "~/.gemini/config"

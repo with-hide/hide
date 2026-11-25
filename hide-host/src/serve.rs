@@ -1504,12 +1504,9 @@ pub fn handle_with_progress(
         } => {
             use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&kind)
-                .and_then(|adapter| adapter.start)
-                .and_then(Agent::of)
-                .ok_or_else(|| {
-                    HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
-                })?;
+            let agent = Agent::of_kind(&kind).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
+            })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
             let account = match &profile {

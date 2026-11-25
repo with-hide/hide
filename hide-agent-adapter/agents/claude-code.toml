@@ -37,6 +37,7 @@ skills = "{CLAUDE_CONFIG_DIR}/skills"
 # Claude keeps folder trust in its global config, which moves into the
 # folder for any account but the default.
 folder_trust = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
+folder_trust_format = "claude"
 sessions = "{CLAUDE_CONFIG_DIR}/projects"
 login = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
 state = "{CLAUDE_CONFIG_DIR}"
