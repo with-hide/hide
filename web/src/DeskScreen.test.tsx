@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { Blob as NodeBlob } from "node:buffer";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
+import { configureAttachments } from "./attachments";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { DeskAgent, DeskItem, DeskJob } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
@@ -134,7 +136,78 @@ describe("Desk's room", () => {
       { kind: "notice", id: 2, notice: "turn_failed", agent: "claude", detail: null },
     ]));
     await press("[data-desk-notice-action='retry']");
-    expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo] }]);
+    // The core sends the files of message 1 with it again, when it had any.
+    expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo], again: 1 }]);
+  });
+
+  const dropFile = async (name: string, bytes: number[]) => {
+    const file = new File([new Uint8Array(bytes)], name);
+    file.stream = () => new NodeBlob([new Uint8Array(bytes)]).stream() as ReadableStream<Uint8Array<ArrayBuffer>>;
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
+    await act(async () => { document.body.querySelector("[data-desk-composer-frame]")!.dispatchEvent(drop); });
+    await vi.waitFor(() => expect(document.body.querySelector('[data-desk-attachment="reading"]')).toBeNull());
+  };
+  const tiles = () => [...document.body.querySelectorAll("[data-desk-composer-frame] [data-desk-attachment]")].map((tile) => [tile.getAttribute("data-desk-attachment"), tile.textContent]);
+
+  it("sends a dropped file's stage with the words, keeps it in the box until the conversation shows the message, and draws it on the bubble (desk-2-ui B41)", async () => {
+    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+    useUiStore.setState({ deskDraft: { text: "왜 끊기는지 봐 줘", mentions: [] } });
+    await render(desk([]));
+    await dropFile("install.log", [7, 8]);
+
+    await press("[data-desk-composer-send]");
+    const [message] = sent("desk_send") as { request_id: string; stages: string[] }[];
+    expect(message).toEqual({ text: "왜 끊기는지 봐 줘", mentions: [], request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), stages: [`${message!.request_id}-0`] });
+    expect(sent("attachment_stage")).toEqual([{ request_id: `${message!.request_id}-0`, name: "install.log", size: 2, clipboard: false }]);
+    expect(tiles()).toHaveLength(1);
+    // A file dropped while the message is on its way stays for the next one.
+    await dropFile("later.txt", [1]);
+
+    await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-install.log` }] }]));
+    expect(tiles()).toEqual([["ready", expect.stringContaining("later.txt")]]);
+    expect(document.body.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("install.log");
+  });
+
+  // letter-47579: the line is the one way back, so a refused message never also returns to the box, where the next send carried its words twice.
+  it("leaves the box empty after a refused send and shows the message held first in line with its file (B6)", async () => {
+    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+    useUiStore.setState({ deskDraft: { text: "이거 봐 줘", mentions: [] } });
+    await render(desk([]));
+    await dropFile("shot.png", [1, 2]);
+    await press("[data-desk-composer-send]");
+    const [message] = sent("desk_send") as { request_id: string }[];
+    const file = { name: "shot.png", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-shot.png` };
+    await show(desk([{ kind: "user", id: 1, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [file] }]));
+    expect(useUiStore.getState().deskDraft.text).toBe("");
+
+    // The agent was not signed in: the core moved the message, file and all, to the head of the line and holds the line.
+    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", true, [{ id: 3, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [file] }], true));
+    expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+    expect(tiles()).toEqual([]);
+    const held = document.body.querySelector("[data-desk-queued='3']");
+    expect(held?.textContent).toContain("이거 봐 줘");
+    expect(held?.textContent).toContain("Sent after you restart");
+    expect(held?.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("shot.png");
+  });
+
+  // letter-47596: a message whose file is gone stays in the conversation, unsent, and is not offered again.
+  it("keeps a message whose file is gone in the conversation with its line and leaves the box empty", async () => {
+    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+    useUiStore.setState({ deskDraft: { text: "이거 봐 줘", mentions: [] } });
+    await render(desk([]));
+    await dropFile("shot.png", [1, 2]);
+    await press("[data-desk-composer-send]");
+    const [message] = sent("desk_send") as { request_id: string }[];
+    const user: DeskItem = { kind: "user", id: 1, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "shot.png", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-shot.png` }] };
+    await show(desk([user]));
+
+    await show(desk([user, { kind: "notice", id: 2, notice: "attachments_gone", agent: "claude", detail: null }]));
+    expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+    expect(tiles()).toEqual([]);
+    expect(document.body.querySelector("[data-desk-notice='attachments_gone']")?.textContent).toContain("The file is gone, so this wasn't sent");
+    expect(document.body.querySelector("[data-desk-notice='attachments_gone'] [data-desk-notice-action]")).toBeNull();
+    expect(document.body.querySelectorAll("[data-desk-queued]")).toHaveLength(0);
   });
 
   it("draws only a failed turn in the failed colour: a stopped host is neutral words, a blocked turn and a failed install keep the warning colour", async () => {

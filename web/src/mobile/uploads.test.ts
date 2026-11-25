@@ -217,9 +217,10 @@ it("reads the quoted paths in front of an operator's message as its files and th
       { name: "holder.log", stage },
       { name: 'shot "1".png', stage: null },
     ],
+    paths: [`/Users/me/.hide/state/attachments/${stage}-holder.log`, 'C:\\Users\\me\\shot "1".png'],
     words: "차이 나는 부분 봐 줘.",
   });
-  expect(attachedOf('"not a path" 그대로')).toEqual({ files: [], words: '"not a path" 그대로' });
+  expect(attachedOf('"not a path" 그대로')).toEqual({ files: [], paths: [], words: '"not a path" 그대로' });
 });
 
 const KEY: AgentKey = { device_id: "local", pane_id: "w1:p1" };

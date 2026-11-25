@@ -26,7 +26,8 @@ import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
-import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
+import { keepSent, mentionAt, mentionTree, outgoing, pickMention, useComposerTray } from "./deskComposer";
+import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
 import type { MentionInputHandle } from "./components/desk/mention-input";
@@ -121,8 +122,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const [caret, setCaret] = useState(draft.text.length);
   const [menu, setMenu] = useState<MenuPlace>({ dismissed: null, entered: null, active: "", folds: {} });
   const box = useRef<MentionInputHandle>(null);
-  // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
-  const pending = useRef<{ text: string; after: number; queued: ReadonlySet<number> } | null>(null);
+  // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box; its files' request, when it had files.
+  const pending = useRef<{ text: string; after: number; request: string | null; tiles: string[]; queued: ReadonlySet<number> } | null>(null);
+  const tray = useComposerTray();
+  const [notice, setNotice] = useState<string | null>(null);
+  const refusal = useShellStore((s) => s.composerRefusal);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -134,8 +138,9 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
   // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
-  // A message the agent could not take (its sign-in, a session that did not open) comes back as the first waiting one, so
-  // the box never gets it again (B6). The core refuses one more when the line is full: then the words stay in the box.
+  // A message the agent could not take (its sign-in, a session that did not open, a file that is gone) comes back as the
+  // first waiting one with its files, so the box never gets it again (B6). The core refuses one more when the line is
+  // full: then the words and files stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
   const queuedFull = desk?.conversation.queued_full ?? false;
   const queuedHeld = desk?.conversation.queued_held ?? false;
@@ -149,8 +154,17 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (shown) {
       pending.current = null;
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
+      // Only the files this send carried: one dropped since stays for the next.
+      sent.tiles.forEach(tray.remove);
     }
   }, [items, queued, setDraft]);
+  // hided refused the files before Desk's agent saw the message: the words and the files stay, and the line says why.
+  useEffect(() => {
+    const sent = pending.current;
+    if (!refusal || !sent?.request || refusal.request_id !== sent.request) return;
+    pending.current = null;
+    setNotice(refusalText(refusal.reason, t));
+  }, [refusal, t]);
 
   useLayoutEffect(() => {
     const box = scroller.current;
@@ -171,10 +185,18 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const send = (words = draft) => {
     if (!canSend || !items) return;
     const out = outgoing(words);
-    if (!out.text) return;
-    pending.current = { text: out.text, after: lastUserId(items), queued: new Set(queued.map((one) => one.id)) };
+    const files = tray.outgoing();
+    if (!files || (!out.text && files.length === 0)) return;
+    const stagedOrRefused = files.length > 0 ? stageDeskFiles(files.map(({ name, bytes }) => ({ name, bytes }))) : null;
+    if (stagedOrRefused && "refused" in stagedOrRefused) return setNotice(refusalText(stagedOrRefused.refused, t));
+    if (files.length > 0 && !stagedOrRefused) return setNotice(refusalText("forward_failed", t));
+    const staged = stagedOrRefused;
+    // The pictures this window sent stay drawn on their bubble while the page lives.
+    if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.image));
+    setNotice(null);
+    pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null, tiles: files.map((file) => file.id), queued: new Set(queued.map((one) => one.id)) };
     stick.current = true;
-    actions.deskSend(out.text, out.mentions);
+    actions.deskSend(out.text, out.mentions, staged);
   };
 
   // The `@` menu: open while the caret ends an `@` word Esc did not close; when nothing matches it says so in one row.
@@ -265,7 +287,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       case "retry": {
         // 다시 시도 sends the operator's last message again, as they wrote it.
         const last = [...(now?.conversation.items ?? [])].reverse().find((item) => item.kind === "user");
-        if (last?.kind === "user") actions.deskSend(last.text, last.mentions);
+        if (last?.kind === "user") actions.deskSend(last.text, last.mentions, null, last.id);
         return;
       }
     }
@@ -303,12 +325,13 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const shownOutput = front?.kind === "output" ? front.output.id : null;
   const composer = (
     <DeskComposer
-      notice={queuedFull ? t("desk.queued.full") : null}
       value={draft.text}
       draft={draft}
       inputRef={box}
       label={t("desk.composer.label")}
       placeholder={t("desk.composer.placeholder")}
+      tray={tray}
+      notice={queuedFull ? t("desk.queued.full") : notice}
       answering={answering}
       held={!canSend}
       focused={menuOpen}

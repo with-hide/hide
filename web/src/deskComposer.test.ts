@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipDelete, chipStep, mentionAt, mentionTree, outgoing, pickMention, type MentionSession } from "./deskComposer";
+import { chipDelete, chipStep, keepSent, mentionAt, mentionTree, outgoing, pickMention, sentAttachment, sentWords, traySendable, trayEntries, type MentionSession, type TrayFile } from "./deskComposer";
 
 const session = { kind: "session" as const, id: "w1:p2", name: "record-now", mark: "going" as const, agent_kind: "codex" };
 const project = { kind: "project" as const, id: "/work/herdr-ide", name: "herdr-ide" };
@@ -79,8 +79,15 @@ describe("chips in the box (D-85, B49)", () => {
     const end = 4 + SESSION.length;
     expect(chipDelete(draft, end, false)).toEqual({ draft: { text: "ask  now", mentions: [session] }, caret: 4 });
     expect(chipDelete(draft, 4, true)).toEqual({ draft: { text: "ask  now", mentions: [session] }, caret: 4 });
-    expect(chipDelete(draft, end + 1, false)).toBeNull();
+    expect(chipDelete(draft, end + 2, false)).toBeNull();
     expect(chipDelete(draft, 4, false)).toBeNull();
+  });
+
+  it("takes the space a pick put after the chip with it, so one ⌫ right after a pick leaves the words as they were", () => {
+    const picked = pickMention({ text: "ask @rec", mentions: [] }, { start: 4, query: "rec" }, session);
+    expect(chipDelete(picked.draft, picked.caret, false)).toEqual({ draft: { text: "ask ", mentions: [session] }, caret: 4 });
+    const middle = { text: `ask ${SESSION} now`, mentions: [session] };
+    expect(chipDelete(middle, 4 + SESSION.length + 1, false)).toEqual({ draft: { text: "ask now", mentions: [session] }, caret: 4 });
   });
 
   it("steps over a chip whole with ← after it and → before it", () => {
@@ -101,5 +108,44 @@ describe("what a Desk send carries (B49)", () => {
       text: `${PROJECT} 에 ${SESSION} 붙여 ${SESSION}`,
       mentions: [project, session],
     });
+  });
+});
+
+describe("a composer's tray (desk-2-ui B41, B42)", () => {
+  const MIB20 = 20 * 1024 * 1024;
+
+  it("takes a file of 20 MiB to read and holds one byte past it red and unread", () => {
+    expect(trayEntries([], [{ id: "a", name: "edge.bin", size: MIB20 }, { id: "b", name: "big.png", size: MIB20 + 1 }]).map((one) => one.state)).toEqual(["reading", "too_large"]);
+  });
+
+  it("reads no file a message could not carry: past 8 files or 40 MiB with the ones it holds, the rest are held red and unread", () => {
+    const held = (id: string, state: TrayFile["state"], size: number): TrayFile => ({ id, name: id, size, preview: null, state, read: 0 });
+    const photos = Array.from({ length: 50 }, (_, index) => ({ id: `p${index}`, name: `p${index}.jpg`, size: 1024 }));
+    const fifty = trayEntries([], photos).map((one) => one.state);
+    expect(fifty.filter((state) => state === "reading")).toHaveLength(8);
+    expect(fifty.slice(8).every((state) => state === "over_batch")).toBe(true);
+    // Bytes count what the tray already holds; a file past 20 MiB or a red one does not.
+    const holding = [held("a", "ready", MIB20), held("x", "too_large", MIB20 + 1), held("y", "over_batch", 1)];
+    expect(trayEntries(holding, [{ id: "b", name: "b", size: MIB20 }, { id: "c", name: "c", size: 1 }]).map((one) => one.state)).toEqual(["reading", "over_batch"]);
+  });
+
+  it("sends every file once all are read, and holds the send while one reads, is past the cap or could not be read", () => {
+    const file = (id: string, state: TrayFile["state"]): TrayFile => ({ id, name: id, size: 1, preview: null, state, read: 0 });
+    expect(traySendable([])).toEqual([]);
+    expect(traySendable([file("a", "ready"), file("b", "ready")])?.map((one) => one.id)).toEqual(["a", "b"]);
+    for (const held of ["reading", "too_large", "over_batch", "unreadable"] as const) expect(traySendable([file("a", "ready"), file("b", held)])).toBeNull();
+  });
+
+  it("names a sent file by the name the operator's file had, whichever machine staged it", () => {
+    const stage = "0b7a3c52-9a1e-4f7d-8c2b-1a2b3c4d5e6f";
+    expect(sentAttachment(`/Users/me/.hide/state/attachments/${stage}-0-화면 1.png`, 10)).toEqual({ name: "화면 1.png", size: 10, preview: null });
+    expect(sentAttachment(`C:\\Users\\me\\.hide\\state\\attachments\\${stage}-1-a-b.log`).name).toBe("a-b.log");
+    // A device stages a file under a name Hide makes; this window knows the file it sent under that stage.
+    expect(sentAttachment(`C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log`).name).toBe(`hide-${stage}-1.log`);
+    keepSent(`${stage}-1`, "설치 로그.log", null);
+    expect(sentAttachment(`C:/Users/me/.hide/state/terminal-attachments/hide-${stage}-1.log`).name).toBe("설치 로그.log");
+    expect(sentAttachment(`/home/me/notes-${stage}.md`).name).toBe(`notes-${stage}.md`);
+    expect(sentWords(`"/s/attachments/${stage}-0-x.png" 봐 줘`)).toEqual({ files: [{ name: "x.png", size: null, preview: null }], words: "봐 줘" });
+    expect(sentWords("그냥 말")).toEqual({ files: [], words: "그냥 말" });
   });
 });
