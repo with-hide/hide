@@ -457,13 +457,18 @@ pub struct DeskConversationSnapshot {
 
 /// A message waiting for the turn before it to end (desk.md: "while a reply
 /// is being written, the next message waits"); `desk_queued_remove` takes
-/// it out before it goes.
+/// it out before it goes. It is the whole message: its words, chips and
+/// files go together, whether it waits from the start or came back first in
+/// line because the agent never took it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskQueuedMessage {
     pub id: u64,
     pub text: String,
     pub at_ms: u64,
     pub mentions: Vec<DeskMention>,
+    /// The files sent with it, which reach the agent as paths when it goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DeskAttachment>,
 }
 
 /// Messages that wait at once; one more is refused `desk_queued_full`.

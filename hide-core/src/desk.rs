@@ -351,9 +351,10 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
             job.state = QueuedState::Waiting;
         }
     }
-    stored
-        .queued
-        .retain(|message| !message.text.is_empty() && message.text.len() <= MAX_MESSAGE_BYTES);
+    stored.queued.retain(|message| {
+        (!message.text.is_empty() || !message.attachments.is_empty())
+            && message.text.len() <= MAX_MESSAGE_BYTES
+    });
     // One past the cap: a message the agent did not take goes back ahead
     // of a full line.
     stored.queued.truncate(crate::model::DESK_QUEUED_MAX + 1);
@@ -752,6 +753,7 @@ mod restart_tests {
             text,
             at_ms: 0,
             mentions: Vec::new(),
+            attachments: Vec::new(),
         };
         let mut stored = Stored::default();
         stored
