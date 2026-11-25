@@ -79,6 +79,19 @@ export function asksOf(automations: readonly PhoneAutomation[], asks: readonly s
   });
 }
 
+/** A once automation of another computer whose run ended (mission-104 S-5): its name and the run its 내 차례 line words. */
+export type GatheredLook = Pick<PhoneAutomation, "id" | "name" | "look_run" | "records">;
+
+/** The automations a computer's `looks` names, each with only the run its line says; the rest is not kept. */
+export function looksOf(automations: readonly PhoneAutomation[], looks: readonly string[]): GatheredLook[] {
+  return looks.flatMap((id) => {
+    const automation = automations.find((candidate) => candidate.id === id);
+    if (!automation) return [];
+    const records = automation.records.filter((record) => record.kind === "run" && record.number === automation.look_run);
+    return [{ id, name: automation.name, look_run: automation.look_run, records }];
+  });
+}
+
 /**
  * The open computer's own line in the gathered view: none once its list arrived (its rows say the rest, dimmed while it is out of
  * reach), else connecting or out of reach, so a page opened on a computer that is off still gathers the others (B62).

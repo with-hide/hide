@@ -7,6 +7,7 @@ import { notificationBadgeCount, receiveAgentNotice, useAgentNotifications } fro
 import type { AgentScope } from "./agentScope";
 import { clientI18n } from "./i18n/translator";
 import { useShellStore } from "./store";
+import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
@@ -263,16 +264,66 @@ it("counts 내 차례 across devices, moves with it alone, and counts nothing wh
 });
 
 // Operator decision 2026-11-23: the icon says the number 내 차례 says, so a
-// mission or an automation that is its own Needs You item counts with the
+// mission or an automation that is its own Needs You item, a once automation's
+// ended run among them (mission-104 S-4), counts with the
 // agents, under the Needs You switch only.
 it("counts a device's own mission and automation asks with its agents under Needs You", () => {
   const rest = (needsYou: boolean) => ({
     ui_state: { desktop_notifications: needsYou, desktop_notifications_done: false },
     navigator: { devices: [
-      { id: "node", agent_scope: { ...device("node", 1, 0, 0).agent_scope, mission_asks: ["mission-1", "mission-2"], automation_asks: ["auto-1"] } },
+      { id: "node", agent_scope: { ...device("node", 1, 0, 0).agent_scope, mission_asks: ["mission-1", "mission-2"], automation_asks: ["auto-1"], automation_looks: ["once-1"] } },
       device("mini", 1, 0, 0),
     ] },
   }) as never;
-  expect(notificationBadgeCount(rest(true))).toBe(5);
+  expect(notificationBadgeCount(rest(true))).toBe(6);
   expect(notificationBadgeCount(rest(false))).toBe(0);
+});
+
+// mission-104 S-4: a once automation's ended run is one desktop notification
+// when its line appears, none for a line already there when the page went
+// live, taken back when the line goes, and a click opens that run.
+it("notifies a once automation's ended run once, takes it back when it is opened, and opens the run when clicked", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const shown: unknown[][] = [];
+  const withdrawn: string[][] = [];
+  let open: ((id: string) => void) | null = null;
+  window.hideHost = {
+    kind: "electron",
+    platform: "darwin",
+    notify: (...args: unknown[]) => shown.push(args),
+    withdrawNotifications: (ids: string[]) => withdrawn.push(ids),
+    reportBadge: () => undefined,
+    onNotificationOpen: (listener: (id: string) => void) => {
+      open = listener;
+      return () => (open = null);
+    },
+  } as never;
+  const actions = createActions(() => true);
+  const saved = useShellStore.getState();
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const ended = (id: string, name: string) => ({
+    id, name, task: "t", schedule: { kind: "once", date: "2026-11-25", time: "18:56" }, reads_as: { kind: "once", date: "2026-11-25", time: "18:56" }, next_run_at_unix_ms: null,
+    agent: { kind: "claude" }, folder: { path: "/a", default: true, worktree: false }, running: false, done: true, look_run: 1, unseen: 1,
+    records: [{ kind: "run", number: 1, trigger: "scheduled", started_at_unix_ms: 0, ended_at_unix_ms: 4 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, answer: "All tables migrated" }],
+  });
+  const automations = { items: [ended("old", "Earlier check"), ended("db", "Check migration")], zone: "UTC" };
+  const rest = (looks: string[]) => ({ ui_state: { desktop_notifications: true }, navigator: { devices: [{ id: "node", agent_scope: { raised: [], automation_looks: looks } }] } });
+  try {
+    await act(async () => {
+      useShellStore.setState({ connection: "live", rest: rest(["old"]), automations } as never);
+      root.render(<Probe actions={actions} />);
+    });
+    // The line there when the page went live is hided's to have told; a new one is told once, words and all.
+    await act(async () => useShellStore.setState({ rest: rest(["old", "db"]) } as never));
+    await act(async () => useShellStore.setState({ rest: rest(["old", "db"]) } as never));
+    expect(shown).toEqual([["agent:automation-look:db|1", "Check migration", "Automation · once · Done · 4m · All tables migrated", { unlessFocused: true }]]);
+    await act(async () => useShellStore.setState({ rest: rest(["old"]) } as never));
+    expect(withdrawn).toEqual([["agent:automation-look:db|1"]]);
+    await act(async () => open?.("agent:automation-look:db|1"));
+    expect(useUiStore.getState().screen).toEqual({ kind: "automations" });
+    expect(useUiStore.getState().automations).toMatchObject({ selected: "db", run: 1 });
+  } finally {
+    await act(async () => root.unmount());
+    useShellStore.setState(saved, true);
+  }
 });

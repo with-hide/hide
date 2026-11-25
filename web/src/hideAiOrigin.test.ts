@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { automationNames, automationOpening, drawnInTree, hideAiCheckoutOf, hideAiPlace, hideAiWords, homeOpening, homeTurnLine, originLine, taskLine } from "./hideAiOrigin";
+import { automationBadge, automationNames, automationOpening, drawnInTree, hideAiCheckoutOf, hideAiPlace, hideAiWords, homeOpening, homeTurnLine, originLine, taskLine } from "./hideAiOrigin";
 import { rowAccessibleName } from "./agentRow";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createInterfaceI18n } from "./i18n/instance";
@@ -101,6 +101,14 @@ describe("an automation run's row (PRD automations B15)", () => {
     expect(taskLine(t, run.hide_ai.task, automationNames(section))).toBe("↻ 자동화: 아침 이슈 정리");
     expect(taskLine(t, run.hide_ai.task)).toBe("↻ 자동화");
     expect(automationNames(section)).toBe(automationNames(section));
+  });
+
+  // mission-104 S-4: a once automation's run wears the clock in its badge, a repeating one's the repeat arrow.
+  it("marks a run's badge with the clock when the core says its automation runs once, and nothing on another row", () => {
+    expect(automationBadge(run)).toBe("repeat");
+    expect(automationBadge({ hide_ai: { ...run.hide_ai, once: true } })).toBe("once");
+    expect(automationBadge({ hide_ai: { task: MEMORY } })).toBeNull();
+    expect(automationBadge({})).toBeNull();
   });
 
   it("opens the run whose terminal is the row's pane, and nothing for another row", () => {

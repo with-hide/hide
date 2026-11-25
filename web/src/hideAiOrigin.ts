@@ -51,6 +51,12 @@ export function automationRun(agent: Pick<AgentRow, "hide_ai">): boolean {
   return agent.hide_ai?.task?.kind === "automation";
 }
 
+/** The glyph an automation run's badge carries: a once automation's clock, else the repeat arrow; none for any other row (mission-104 S-4). */
+export function automationBadge(agent: Pick<AgentRow, "hide_ai">): "repeat" | "once" | null {
+  if (!automationRun(agent)) return null;
+  return agent.hide_ai?.once ? "once" : "repeat";
+}
+
 /** What a started thing is called on the screen: its task line, or `Hide AI` alone while the core names no task (B10). */
 export function originLine(t: TFunction<"translation">, hideAi: HideAi, names: AutomationNames = NO_NAMES): string {
   return taskLine(t, hideAi.task, names) ?? t("hideAi.name");

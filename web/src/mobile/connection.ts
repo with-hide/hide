@@ -1050,6 +1050,15 @@ export function pressAutomation(id: string, action: AutomationAction): boolean {
   return sent;
 }
 
+/**
+ * A once automation's line of 내 차례 opened (mission-104 S-5): its ended run is looked at, so the core takes the line away, as
+ * opening that run does on the desktop. Sent once per open beside the page it opens, never queued behind a button's press; one
+ * that did not arrive leaves the line, and opening it again sends it again.
+ */
+export function seeAutomationLook(id: string, run: number): boolean {
+  return send({ type: "automation", request_id: newRequestId(), action: "look_seen", id, run });
+}
+
 function onAutomationResult(frame: Extract<ServerFrame, { type: "automation_result" }>): void {
   const pending = usePhone.getState().automationPending;
   // Only the answer to the press the tab is waiting on.

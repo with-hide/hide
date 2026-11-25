@@ -116,6 +116,7 @@
   --color-open-ask: var(--open-ask);
   --color-mission-done: var(--mission-done);
   --color-mission-working: var(--mission-working);
+  --color-automation-once: var(--automation-once);
   --color-mission-review: var(--mission-review);
   --color-mission-hold: var(--mission-hold);
   --color-mission-land: var(--mission-land);
@@ -620,6 +621,7 @@
   --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
+  --automation-once: var(--pr-merged);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
   --mission-land: #4d7c0f;
@@ -747,6 +749,7 @@
   --open-ask: var(--agent-working);
   --mission-done: var(--success);
   --mission-working: var(--agent-working);
+  --automation-once: var(--pr-merged);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
   --mission-land: #b9ff66;

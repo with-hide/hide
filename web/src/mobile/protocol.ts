@@ -225,7 +225,9 @@ export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exc
  * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
  * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
  */
-export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused" | "look_run"> & {
+  /** A once automation whose time ran (mission-104); a Mac older than it sends none, which reads as not done. */
+  done?: boolean;
   schedule: AutomationSchedule;
   records: PhoneAutomationRecord[];
   records_omitted?: number;
@@ -411,9 +413,9 @@ export type ServerFrame =
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
   /** The automations this computer's core runs, in its order; `omitted` counts the ones past the frame's caps; `zone` is the IANA zone their times are read in. */
-  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; unreadable?: boolean }
+  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; looks?: string[]; unreadable?: boolean }
   /** hided's answer to an `automation` press: whether it sent the core's event; what the core did comes back on the automation. */
-  | { type: "automation_result"; request_id?: string; action: AutomationAction | null; id?: string | null; ok: boolean; reason: string | null }
+  | { type: "automation_result"; request_id?: string; action: AutomationAction | "look_seen" | null; id?: string | null; ok: boolean; reason: string | null }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
   | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
   /** The holder watch's last screen mode; absent on older computers means false. */
@@ -489,6 +491,8 @@ export type PhoneMessage =
   | { type: "read_pr_feedback"; request_id: string; pr: string }
   /** [지금 실행], [멈춤] or [다시 켜기] on a listed automation, answered by an `automation_result`. */
   | { type: "automation"; request_id: string; action: AutomationAction; id: string }
+  /** A once automation's line of 내 차례 was opened: its ended run `run` is looked at, and the core takes the line away (mission-104). */
+  | { type: "automation"; request_id: string; action: "look_seen"; id: string; run: number }
   /** Answered by a `start_result`, like `start_agent`; the agent starts where the desktop would start it and the desktop's screen stays. */
   | { type: "delegate_pr"; request_id: string; pr: string; prompt: string; kind: StartKind; model?: string }
   | { type: "start_sheet"; open: boolean }

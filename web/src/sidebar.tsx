@@ -28,7 +28,7 @@ import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
-import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { SidebarAutomationLookRow, SidebarAutomationRow, useEveryDeviceAutomationAsks, useEveryDeviceAutomationLooks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
@@ -506,7 +506,8 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
   // Needs You lists every device's rows, the front device's first; the rest of the list is the front device's.
   const missionAsks = useEveryDeviceMissionAsks(frontId);
   const automationAsks = useEveryDeviceAutomationAsks(frontId);
-  const asks = useMemo(() => [...missionOwnAsks(missionAsks), ...automationOwnAsks(automationAsks)], [missionAsks, automationAsks]);
+  const automationLooks = useEveryDeviceAutomationLooks(frontId);
+  const asks = useMemo(() => [...missionOwnAsks(missionAsks), ...automationOwnAsks(automationAsks, automationLooks)], [missionAsks, automationAsks, automationLooks]);
   // It reads the devices and their connections alone, so it is read again only when those move.
   const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
   // A tool's cell raises nothing: its Needs You and Done would be the operator's (PRD hide-external-control B41).
@@ -710,7 +711,9 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
         <ul aria-labelledby={`raised-group-${row.group}`}>
           {row.asks.map((own) => (own.kind === "mission"
             ? <SidebarMissionRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
-            : <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
+            : own.kind === "automation"
+              ? <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
+              : <SidebarAutomationLookRow key={ownAskKey(own)} look={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
           ))}
           {row.agents.map((listed) => (
             <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addCall, draftOf, editCall, refusalField, refusalKey, shownOwnFolder } from "./automationDraft";
+import { addCall, datePlus, draftOf, editCall, refusalField, refusalKey, shownOwnFolder } from "./automationDraft";
 import type { Automation } from "./snapshot";
 
 // PRD automations B4, B5, B7, B26: what the form opens on and what a press
@@ -8,7 +8,7 @@ import type { Automation } from "./snapshot";
 function automation(fields: Partial<Automation> = {}): Automation {
   return {
     id: "a1", name: "아침 이슈 정리", task: "새 이슈 정리", schedule: { kind: "weekly", days: ["mon", "wed"], time: "10:00" }, reads_as: { kind: "weekly", days: ["mon", "wed"], time: "10:00" },
-    next_run_at_unix_ms: null, agent: { kind: "codex", model: "gpt-5", effort: "high" }, folder: { path: "/home/u/hide/automations/a1", default: true, worktree: false }, running: false, unseen: 0, records: [], ...fields,
+    next_run_at_unix_ms: null, agent: { kind: "codex", model: "gpt-5", effort: "high" }, folder: { path: "/home/u/hide/automations/a1", default: true, worktree: false }, running: false, done: false, unseen: 0, records: [], ...fields,
   };
 }
 
@@ -69,5 +69,33 @@ describe("the automation form's values", () => {
     expect(shownOwnFolder("C:/Users/u/hide/automations", "C:/Users/u/hide/automations/…")).toBe("~/hide/automations/…");
     expect(shownOwnFolder("/Users/u/hide/automations", "/elsewhere/x-…")).toBe("/elsewhere/x-…");
     expect(shownOwnFolder(undefined, "/Users/u/hide/automations/x-…")).toBe("/Users/u/hide/automations/x-…");
+  });
+});
+
+// mission-104 S-2, S-3: the form sends a once time as its date and time only,
+// the quick picks count calendar days, and an edit with a new date is the
+// one change a done once automation needs to run again.
+describe("a once automation in the form", () => {
+  it("sends its date and time, and opens a done one on them with an edit only when the date moved", () => {
+    const draft = { ...draftOf(null, undefined), name: "n", task: "t" };
+    expect(addCall({ ...draft, schedule: { ...draft.schedule, kind: "once", date: "2026-12-02", time: "09:00" } }, false, false)).toMatchObject({ schedule: { kind: "once", date: "2026-12-02", time: "09:00" } });
+    const done = automation({ schedule: { kind: "once", date: "2026-11-20", time: "09:00" }, done: true });
+    const opened = draftOf(done, undefined);
+    expect(opened.schedule).toMatchObject({ kind: "once", date: "2026-11-20", time: "09:00" });
+    expect(editCall(done, opened, false)).toBeNull();
+    expect(editCall(done, { ...opened, schedule: { ...opened.schedule, date: "2026-12-01" } }, false)).toEqual({ call: "edit", id: "a1", schedule: { kind: "once", date: "2026-12-01", time: "09:00" } });
+  });
+
+  it("counts the quick picks by the calendar, across a month's and a year's end", () => {
+    expect(datePlus("2026-11-28", 7)).toBe("2026-12-05");
+    expect(datePlus("2026-12-31", 1)).toBe("2027-01-01");
+    expect(datePlus("2028-02-28", 1)).toBe("2028-02-29");
+  });
+
+  it("puts the core's refusals of a once time under the schedule", () => {
+    for (const code of ["schedule_once_past", "schedule_once_too_far", "schedule_date_invalid"]) {
+      expect(refusalField(code)).toBe("schedule");
+      expect(refusalKey(code)).toBe(`automationScreen.refusal.${code}`);
+    }
   });
 });
