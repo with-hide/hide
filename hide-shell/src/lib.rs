@@ -228,6 +228,9 @@ struct Lexer {
     next_is_file: bool,
     /// Whether that file is written, not only read.
     next_is_write: bool,
+    /// Whether that word follows `>&` or `<&`: a descriptor (`2>&1`, `<&-`)
+    /// names no file, any other word does (`>& out` writes `out`).
+    next_is_descriptor: bool,
     targets: Vec<(usize, String)>,
     writes: Vec<(usize, String)>,
     /// The word after `<<` names the heredoc's end; `true` strips leading tabs.
@@ -285,6 +288,7 @@ impl Lexer {
             drop_next: false,
             next_is_file: false,
             next_is_write: false,
+            next_is_descriptor: false,
             targets: Vec::new(),
             writes: Vec::new(),
             heredoc_next: None,
@@ -458,7 +462,8 @@ impl Lexer {
         } else if self.drop_next {
             self.drop_next = false;
             let writes = std::mem::take(&mut self.next_is_write);
-            if std::mem::take(&mut self.next_is_file) {
+            let descriptor = std::mem::take(&mut self.next_is_descriptor) && is_descriptor(&word);
+            if std::mem::take(&mut self.next_is_file) && !descriptor {
                 if writes {
                     self.writes.push((self.commands.len(), word.clone()));
                 }
@@ -474,6 +479,7 @@ impl Lexer {
         self.drop_next = false;
         self.next_is_file = false;
         self.next_is_write = false;
+        self.next_is_descriptor = false;
         self.heredoc_next = None;
         let mut conditional = self.is_conditional();
         if !self.words.is_empty() {
@@ -830,16 +836,21 @@ impl Lexer {
             }
             return;
         }
-        // `>&2` duplicates a descriptor and names no file.
-        let duplicate = self.peek(0) == Some('&');
+        // `>&2` duplicates a descriptor and names no file, but `>& out` (and
+        // zsh's `>&! out`, `>&| out`) writes `out` with both streams.
+        let descriptor = self.peek(0) == Some('&');
         let writes = c == '>' || self.peek(0) == Some('>');
         if matches!(self.peek(0), Some('>' | '&' | '|')) || (c == '<' && self.peek(0) == Some('>'))
         {
             self.at += 1;
         }
+        if descriptor && c == '>' && matches!(self.peek(0), Some('!' | '|')) {
+            self.at += 1;
+        }
         self.drop_next = true;
-        self.next_is_file = !duplicate;
-        self.next_is_write = !duplicate && writes;
+        self.next_is_file = true;
+        self.next_is_write = writes;
+        self.next_is_descriptor = descriptor;
     }
 
     /// After a newline, skips the body of each heredoc the line opened,
@@ -971,6 +982,13 @@ pub fn is_prefix(word: &str, compound: bool) -> bool {
             ))
 }
 
+/// What `>&` or `<&` takes without naming a file: a descriptor (`2>&1`),
+/// one moved (`3>&4-`) or `-`, which closes it.
+fn is_descriptor(word: &str) -> bool {
+    let number = word.strip_suffix('-').unwrap_or(word);
+    word == "-" || (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,6 +1112,36 @@ mod tests {
                 .writes
                 .is_empty()
         );
+    }
+
+    /// bash, zsh and sh write the file `>&` names when it is no descriptor.
+    #[test]
+    fn a_file_after_a_descriptor_redirection_is_written() {
+        for (line, written) in [
+            ("echo x >& out", "out"),
+            ("echo x 1>& out", "out"),
+            ("echo x >&out", "out"),
+            ("echo x >&! out", "out"),
+            ("echo x >&| out", "out"),
+            ("echo x >& \"$HOME/.zshenv\"", "$HOME/.zshenv"),
+        ] {
+            assert_eq!(
+                shell_line(line, Syntax::Posix).writes,
+                [(0, written.to_owned())],
+                "{line}"
+            );
+        }
+        for line in [
+            "echo x 2>&1",
+            "echo x >&2",
+            "echo x 3>&4-",
+            "echo x 2>&-",
+            "cat <&3",
+        ] {
+            let read = shell_line(line, Syntax::Posix);
+            assert!(read.writes.is_empty(), "{line}");
+            assert!(read.targets.is_empty(), "{line}");
+        }
     }
 
     fn words(line: &str, syntax: Syntax) -> Vec<Vec<String>> {
