@@ -24,13 +24,14 @@ describe("the remote screen's preload", () => {
 
     const heard: unknown[] = [];
     world.api?.onViewer((viewer) => heard.push(viewer));
-    expect(heard).toEqual([{ language: "ko", name: "Windows PC" }]);
+    expect(heard).toEqual([{ language: "ko", name: "Windows PC", display: null }]);
 
-    tell({ language: "en", name: "Office PC" });
+    const display = { agent_logo_mode: "shown", pane_turn_row_mode: "two_lines" };
+    tell({ language: "en", name: "Office PC", display });
     tell({ language: "en", name: 7 });
     expect(heard).toEqual([
-      { language: "ko", name: "Windows PC" },
-      { language: "en", name: "Office PC" },
+      { language: "ko", name: "Windows PC", display: null },
+      { language: "en", name: "Office PC", display },
     ]);
   });
 });

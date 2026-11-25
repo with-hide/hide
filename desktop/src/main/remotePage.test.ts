@@ -45,7 +45,11 @@ describe("another machine's screen", () => {
 
   it("takes from the shell a machine id, its key and a place, or none", () => {
     expect(parseShow(null)).toBeNull();
-    expect(parseShow({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 } })).toEqual({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 }, name: null });
+    expect(parseShow({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 } })).toEqual({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 }, name: null, display: null });
+    // The window's View menu choices go with it when both are modes Hide names; anything else is none.
+    const display = (value: unknown) => parseShow({ device: "host-a", key: KEY, rect: { x: 0, y: 0, width: 1, height: 1 }, display: value })?.display;
+    expect(display({ agent_logo_mode: "shown", pane_turn_row_mode: "off" })).toEqual({ agent_logo_mode: "shown", pane_turn_row_mode: "off" });
+    expect([display({ agent_logo_mode: "shown" }), display({ agent_logo_mode: "toString", pane_turn_row_mode: "off" }), display({ agent_logo_mode: "shown", pane_turn_row_mode: "three_lines" }), display("shown")]).toEqual([null, null, null, null]);
     // The name the window calls the machine by goes with it when it is one short line.
     const named = (name: unknown) => parseShow({ device: "host-a", key: KEY, rect: { x: 0, y: 0, width: 1, height: 1 }, name })?.name;
     expect(named("build-box")).toBe("build-box");

@@ -10,9 +10,11 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
-type Viewer = { language: string; name: string | null };
+type Viewer = { language: string; name: string | null; display: unknown };
 
-// What the showing window calls this machine and its language, heard from
+// What the showing window calls this machine, its language and its display
+// choices (the page reads those, as it reads a value of a build it may not
+// know), heard from
 // the start: the main process says it once the page loaded and again only
 // when it changes, which may be before the page first listens, so the last
 // one is kept for a listener that comes later.
@@ -20,9 +22,9 @@ let viewer: Viewer | null = null;
 let viewerListener: ((viewer: Viewer) => void) | null = null;
 ipcRenderer.on(REMOTE_VIEWER_CHANNEL, (_event: IpcRendererEvent, told: unknown) => {
   if (typeof told !== "object" || told === null) return;
-  const { language, name } = told as Record<string, unknown>;
+  const { language, name, display } = told as Record<string, unknown>;
   if (typeof language !== "string" || (name !== null && typeof name !== "string")) return;
-  viewer = { language, name };
+  viewer = { language, name, display: display ?? null };
   viewerListener?.(viewer);
 });
 
