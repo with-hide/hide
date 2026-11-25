@@ -471,7 +471,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   const facts = new Map<string, SessionFacts>();
   for (const named of every) {
     if (named.mark === null) {
-      facts.set(pane(named.name), { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+      facts.set(pane(named.name), { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
       continue;
     }
     const card = job(named.name, named.name, {
@@ -481,7 +481,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
       ...named.extra,
     });
     const parent = every.find((one) => one.name === named.parent);
-    facts.set(pane(named.name), { listed: true, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
+    facts.set(pane(named.name), { listed: true, name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
   }
   const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
   const text = [

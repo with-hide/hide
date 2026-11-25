@@ -1,8 +1,8 @@
 import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, missionMentions, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -11,6 +11,8 @@ import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
 import { Elapsed, formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
+import { MissionChipOf } from "../mission-chip";
+import { useShellStore } from "../../store";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -76,18 +78,39 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 }
 
 /**
- * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip, pressed to open it; streaming while `live`; a stopped
- * answer keeps what it said and says it stopped (B7).
+ * A mission a Desk answer names (`@mission(<id> <title>)`): its title and
+ * the app's mission chip, its mark and done count, which opens its map. The
+ * title is the mission's own while the app holds it; one the app does not
+ * hold keeps the answer's title and has no chip.
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+function DeskMissionMention({ mention, onOpen }: { mention: DeskMissionMention; onOpen?: (missionId: string) => void }) {
+  const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
+  return (
+    <span className="inline-flex max-w-full min-w-0 items-center gap-xxs align-middle" data-desk-mission-mention={mention.id}>
+      <span className="truncate font-semibold text-foreground">{title}</span>
+      {onOpen ? <MissionChipOf id={mention.id} onOpen={onOpen} /> : null}
+    </span>
+  );
+}
+
+/**
+ * Desk's answer as plain Markdown (D-75), where a session it names is that
+ * session's chip and a mission its title and mission chip, each pressed to
+ * open it; streaming while `live`; a stopped answer keeps what it said and
+ * says it stopped (B7).
+ */
+export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention, onMission }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
-  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => ({
-    token: markedMention(mention),
-    node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
-  })), [mentions, onMention, bridge]);
+  const missions = useMemo(() => missionMentions(text), [text]);
+  const chips = useMemo<MarkdownChip[]>(() => [
+    ...mentions.map((mention) => ({
+      token: markedMention(mention),
+      node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
+    })),
+    ...missions.map((mission) => ({ token: mission.token, node: bridge(<DeskMissionMention mention={mission} onOpen={onMission} />) })),
+  ], [mentions, missions, onMention, onMission, bridge]);
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
       <MarkdownText text={text} size="chat" chips={chips} />
@@ -427,7 +450,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} onMission={actions.onMission} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
@@ -436,7 +459,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
-      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
+      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live onMission={actions.onMission} /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
       {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );

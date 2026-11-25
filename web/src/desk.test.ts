@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, missionMentions, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -71,6 +71,16 @@ describe("a thread's lines (B25, B26)", () => {
   it("keeps a letter apart from the operator's own words by its origin", () => {
     const lines = threadLines([text("user_message_chunk", "내 말"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "편지" }, _meta: { hide: { origin: "letter" } } }]);
     expect(lines.map((line) => line.kind === "user" && line.origin)).toEqual(["operator", "letter"]);
+  });
+});
+
+describe("the missions a Desk answer names", () => {
+  it("reads each `@mission(<id> <title>)` once, in order, and leaves a token without a title as text", () => {
+    const text = "@mission(mission-63 안드로이드 앱 출시) 지휘 세션이 기다려요. @mission(mission-58 그랩마켓 실습 레포) 잠듦, 다시 @mission(mission-63 안드로이드 앱 출시) and @mission(mission-9)";
+    expect(missionMentions(text)).toEqual([
+      { token: "@mission(mission-63 안드로이드 앱 출시)", id: "mission-63", title: "안드로이드 앱 출시" },
+      { token: "@mission(mission-58 그랩마켓 실습 레포)", id: "mission-58", title: "그랩마켓 실습 레포" },
+    ]);
   });
 });
 
@@ -175,13 +185,13 @@ describe("a chip's session (D-86, B50)", () => {
   const rows = new Map([row("w1:p1", "agent-journey", { lineage_parent_pane_id: "w1:p0" }), row("w1:p0", "agent-14586", { mark: "turn", agent_kind: "claude" })].map((one) => [one.pane_id, one]));
   const cards = [job("named", "working", { pane_id: "w1:p1", title: "agent-journey" })];
 
-  it("reads a listed session's mark, card, time and parent from its row", () => {
-    const facts = sessionFacts(rows, cards, { name: "agent-journey", mark: null, agent_kind: null, pane_id: "w1:p1" });
-    expect(facts).toEqual({ listed: true, mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
+  it("reads a listed session's name, mark, card, time and parent from its row", () => {
+    const facts = sessionFacts(rows, cards, { name: "agent-47656", mark: null, agent_kind: null, pane_id: "w1:p1" });
+    expect(facts).toEqual({ listed: true, name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
   });
 
   it("reads a session the sidebar no longer lists as gone, with no mark and no card", () => {
-    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
   });
 
   it("finds a session named only by its name, and leaves one no row carries to its own values", () => {

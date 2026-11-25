@@ -56,12 +56,14 @@ export function cardOfSession(cards: readonly DeskJob[], session: DeskSessionRef
 
 /**
  * What Hide knows of a session a chip names, from its sidebar row and its
- * card (D-86): whether the sidebar still lists it, its row's mark and agent,
- * its card (the facts its hover card shows and the thread a press opens),
- * the time its row shows and its parent.
+ * card (D-86): whether the sidebar still lists it, its row's name, mark and
+ * agent, its card (the facts its hover card shows and the thread a press
+ * opens), the time its row shows and its parent.
  */
 export type SessionFacts = {
   listed: boolean;
+  /** The name its sidebar row shows, which a chip draws in place of the name the words wrote (an agent's reply may name it by an id). */
+  name: string | null;
   mark: RowMark | null;
   agent_kind: string | null;
   card: DeskJob | null;
@@ -83,10 +85,11 @@ function rowSession(row: AgentRow): DeskSessionRef {
  */
 export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef): SessionFacts | null {
   const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
-  if (!row) return session.pane_id ? { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
+  if (!row) return session.pane_id ? { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
   const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
   return {
     listed: true,
+    name: row.identity_label,
     mark: row.mark,
     agent_kind: row.agent_kind,
     card: cardOfSession(cards, { ...session, pane_id: row.pane_id }),
@@ -373,6 +376,19 @@ export function mentionParts(text: string, mentions: readonly DeskMention[], tok
   }
   if (plain) parts.push(plain);
   return parts;
+}
+
+/** A mission a Desk answer names as `@mission(<id> <title>)`: its token in the text, its id and the title the answer wrote. */
+export type DeskMissionMention = { token: string; id: string; title: string };
+
+/** The missions an answer names, each token once, in order; a token with no title is no mention and stays text. */
+export function missionMentions(text: string): DeskMissionMention[] {
+  const found: DeskMissionMention[] = [];
+  for (const match of text.matchAll(/@mission\((\S+)\s+([^)]+?)\s*\)/g)) {
+    const token = match[0];
+    if (!found.some((one) => one.token === token)) found.push({ token, id: match[1]!, title: match[2]! });
+  }
+  return found;
 }
 
 /** A mention as a Desk message's text holds it. */

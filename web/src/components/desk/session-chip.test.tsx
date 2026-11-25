@@ -41,12 +41,25 @@ it("draws every session a reply names as a chip, the seventeenth on too, and dim
   const mentions: DeskMention[] = Array.from({ length: 20 }, (_, index) => ({ kind: "session", id: `w1:p${index + 1}`, name: `job-${index + 1}`, mark: "going", agent_kind: "claude" }));
   const text = mentions.map((mention) => `@session(${mention.id} ${mention.name})`).join(" ");
   const facts = (session: DeskSessionRef): SessionFacts | null =>
-    session.pane_id === "w1:p20" ? { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null } : { listed: true, mark: "going", agent_kind: "claude", card: null, since: null, parent: null };
+    session.pane_id === "w1:p20" ? { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null } : { listed: true, name: null, mark: "going", agent_kind: "claude", card: null, since: null, parent: null };
   const host = await render(<SessionChipProvider source={{ facts, onOpen: () => undefined }}><DeskReply text={text} mentions={mentions} /></SessionChipProvider>);
   const chips = [...host.querySelectorAll("[data-desk-session-chip]")].map((chip) => chip.getAttribute("data-desk-session-chip"));
   expect(chips).toEqual(mentions.map((mention) => mention.name));
   expect(host.textContent).not.toContain("@session(");
   expect([...host.querySelectorAll('[data-desk-session-gone="true"]')].map((chip) => chip.textContent)).toEqual(["job-20"]);
+});
+
+it("names a session by its sidebar row while the sidebar lists it, whatever id the reply wrote, and by the reply's words once it is gone", async () => {
+  const mentions: DeskMention[] = [
+    { kind: "session", id: "w1:p1", name: "agent-47656", mark: null, agent_kind: null },
+    { kind: "session", id: "w1:p2", name: "auto-ol4484-r10-o4", mark: null, agent_kind: null },
+  ];
+  const text = mentions.map((mention) => `@session(${mention.id} ${mention.name})`).join(" and ");
+  const facts = (session: DeskSessionRef): SessionFacts | null =>
+    session.pane_id === "w1:p1" ? { listed: true, name: "OneDrive 충돌 분석", mark: "turn", agent_kind: "codex", card: null, since: null, parent: null } : { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null };
+  const host = await render(<SessionChipProvider source={{ facts, onOpen: () => undefined }}><DeskReply text={text} mentions={mentions} /></SessionChipProvider>);
+  expect([...host.querySelectorAll("[data-desk-session-chip]")].map((chip) => chip.textContent)).toEqual(["OneDrive 충돌 분석", "auto-ol4484-r10-o4"]);
+  expect(host.textContent).not.toContain("agent-47656");
 });
 
 it("shows a session's card with its place, line, plan, pull request, outputs and parent, and opens its thread (D-86)", async () => {

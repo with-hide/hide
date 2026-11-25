@@ -131,6 +131,7 @@ struct Agent {
 
 #[derive(Deserialize)]
 struct Mission {
+    id: String,
     title: String,
     role: String,
 }
@@ -278,7 +279,10 @@ fn agent_text(agent: &Agent) -> String {
         text.push_str(&format!("  \"{label}\""));
     }
     if let Some(mission) = &agent.mission {
-        text.push_str(&format!("  mission \"{}\" {}", mission.title, mission.role));
+        text.push_str(&format!(
+            "  mission {} \"{}\" {}",
+            mission.id, mission.title, mission.role
+        ));
     }
     if let Some(observer) = &agent.watched_by {
         text.push_str(&format!("  (watched by {observer})"));

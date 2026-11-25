@@ -976,9 +976,10 @@ impl Runtime {
         card
     }
 
-    /// What a card reads from its session's sidebar row: its mark, its ask,
-    /// its line, its pull requests and its 결과물 (B24), the facts the row
-    /// itself shows.
+    /// What a card reads from its session's sidebar row: its name, its mark,
+    /// its ask, its line, its pull requests and its 결과물 (B24), the facts
+    /// the row itself shows. Its name is the row's, never the spawn's
+    /// `--name`, so a card and a chip call a session what the sidebar does.
     fn desk_card_from_row(
         &self,
         card: &mut crate::model::DeskJobSnapshot,
@@ -986,6 +987,7 @@ impl Runtime {
         index: &CardIndex<'_>,
     ) {
         use crate::model::{AgentStatusCode, DeskAskKind};
+        card.title.clone_from(&row.identity_label);
         card.mark = Some(row.mark);
         card.mark_read = row.state.mark_tone.read;
         card.read = !row.unread;

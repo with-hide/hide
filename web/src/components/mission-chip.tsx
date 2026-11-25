@@ -2,7 +2,7 @@ import { useContext } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { chipWords, conductedBy, missionTone, missionTurn, TURN_WORDS, type CellTone, type ConductorOwner } from "../missions";
 import { heldBy, useDelayWords, type MissionDelay } from "./mission-hold";
-import type { MissionTurn } from "../snapshot";
+import type { Mission, MissionTurn } from "../snapshot";
 import { cn } from "../lib/utils";
 import { MissionChipFace, TONE_TEXT } from "./mission-tone";
 import { InToolCell } from "./tool-mark";
@@ -23,10 +23,19 @@ import { Hint } from "./ui/tooltip";
  * conducts nothing draws nothing, so no other row moves.
  */
 export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: (missionId: string) => void }) {
+  const mission = useShellStore((s) => conductedBy(s.rest, agent));
+  return mission ? <HeldMissionChip mission={mission} onOpen={onOpen} /> : null;
+}
+
+/** The chip of the mission `id` as the store holds it now (a Desk answer's `@mission`), nothing for a mission it does not hold. */
+export function MissionChipOf({ id, onOpen }: { id: string; onOpen: (missionId: string) => void }) {
+  const mission = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === id) ?? null);
+  return mission ? <HeldMissionChip mission={mission} onOpen={onOpen} /> : null;
+}
+
+function HeldMissionChip({ mission, onOpen }: { mission: Mission; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   const inCell = useContext(InToolCell);
-  const mission = useShellStore((s) => conductedBy(s.rest, agent));
-  if (!mission) return null;
   const { key, counts } = chipWords(mission);
   const tone = missionTone(mission);
   return <MissionChipView id={mission.id} title={mission.title} words={t(key)} counts={counts} tone={inCell && tone === "hold" ? "waiting" : tone} turn={missionTurn(mission)} delay={heldBy(mission)} status={mission.status} onOpen={onOpen} />;
