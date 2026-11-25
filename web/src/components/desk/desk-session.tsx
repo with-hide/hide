@@ -169,44 +169,10 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   );
 }
 
-/** What a waiting session asks, as its sidebar row or its card names it (B14, B34). */
-export type SessionQuestion = { kind: "question" | "plan_approval" | "decision" | "approval"; text: string };
-
-/** The question a session waits on (B14): the agent's own ask from its sidebar row, else the card's line. */
-export function sessionQuestion(job: DeskJob, row: AgentRow | null): SessionQuestion | null {
-  if (job.state !== "asking") return null;
-  const turn = row?.user_turn;
-  if (turn?.content) return { kind: turn.kind, text: turn.content.text };
-  const kind = job.ask === "approval" ? "approval" : job.ask === "decision" ? "decision" : job.ask === "plan_review" ? "plan_approval" : "question";
-  return job.question ? { kind, text: job.question } : null;
-}
-
-const QUESTION_WORD = { question: "desk.ask.question", plan_approval: "desk.ask.plan_review", decision: "desk.ask.decision", approval: "desk.ask.approval" } as const;
-
 /**
- * The question card while what the agent asks on its screen has not been
- * read (PRD desk-2-ui B14): the kind of ask and what it asks, from its
- * sidebar row or its card, and `직접 쓰기`, which gives the keyboard to the
- * input box below.
- */
-export function SessionQuestionCard({ question, onWrite }: { question: SessionQuestion; onWrite: () => void }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <section className="flex min-w-0 flex-col gap-sm rounded-lg border border-warning bg-warning/10 p-md" aria-label={t(QUESTION_WORD[question.kind])} data-desk-question={question.kind}>
-      <p className="flex min-w-0 items-baseline gap-xs text-body text-foreground">
-        <span className="shrink-0 text-caption text-warning">{t(QUESTION_WORD[question.kind])}</span>
-        <span className="min-w-0 whitespace-pre-wrap break-keep font-semibold [overflow-wrap:anywhere]">{question.text}</span>
-      </p>
-      <div className="flex justify-end">
-        <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
-      </div>
-    </section>
-  );
-}
-
-/**
- * The question card at the conversation's end (PRD desk-2-ui D-11, B14,
- * B34): the phone's own ask card (`AskCardView`), its choices answered
+ * What the agent's own screen asks, at the conversation's end, answered in
+ * place (PRD desk-2-ui D-11, B14, B34; Doop B4): the phone's own ask card
+ * (`AskCardView`), its choices answered
  * through the phone's path, which types the keys the agent's screen takes;
  * one the computer cannot answer goes to the terminal. `직접 쓰기` under it
  * gives the keyboard to the input box below, for an answer of the

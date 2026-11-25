@@ -6,7 +6,7 @@ import type { DeskOutput } from "../../desk";
 import { TooltipProvider } from "../ui/tooltip";
 import { OutputShelf } from "./output-shelf";
 
-const output = (id: string, kind: DeskOutput["kind"], seen: boolean): DeskOutput => ({ id, kind, label: id, thumb: null, seen, pr_state: kind === "pr" ? "open" : null, device_id: "mac", checkout: "/repo", path: kind === "page" || kind === "pr" ? null : `/repo/${id}`, url: kind === "page" ? "http://127.0.0.1:4399" : null });
+const output = (id: string, kind: DeskOutput["kind"], seen: boolean): DeskOutput => ({ id, kind, label: id, thumb: null, seen, pr_state: kind === "pr" ? "pending" : null, device_id: "mac", checkout: "/repo", path: kind === "page" || kind === "pr" ? null : `/repo/${id}`, url: kind === "page" ? "http://127.0.0.1:4399" : null });
 
 let mounted: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
@@ -29,7 +29,8 @@ async function render(outputs: DeskOutput[], opened: string[]) {
 it("groups a session's outputs by kind, the groups with one not seen first and ending with the look eye (Doop B4, shelf 나)", async () => {
   const host = await render([output("store-shot-1.png", "image", false), output("store-shot-2.png", "image", true), output("page", "page", true), output("android-release.md", "doc", false), output("2537", "pr", true), output("2536", "pr", true)], []);
   const groups = Array.from(host.querySelectorAll<HTMLElement>("[data-desk-shelf-group]"));
-  expect(groups.map((group) => [group.dataset.deskShelfGroup, group.textContent])).toEqual([["image", "Images2"], ["doc", "Files1"], ["page", "Views1"], ["pr", "PRs2"]]);
+  // A file or a View alone of its kind shows itself; a kind with more shows its count.
+  expect(groups.map((group) => [group.dataset.deskShelfGroup, group.textContent])).toEqual([["image", "Images2"], ["doc", "android-release.md"], ["page", "page"], ["pr", "PRs2"]]);
   expect(groups.map((group) => group.querySelector('[data-mark="look"]') !== null)).toEqual([true, true, false, false]);
   // The image group shows two of its pictures.
   expect(groups[0]!.querySelector("[data-desk-shelf-thumbs]")?.getAttribute("data-desk-shelf-thumbs")).toBe("2");

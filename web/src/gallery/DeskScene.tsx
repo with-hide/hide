@@ -16,6 +16,7 @@ import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
 import { SessionHead } from "../components/desk/desk-session";
+import { OutputShelf } from "../components/desk/output-shelf";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
@@ -144,6 +145,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, se
   const asks = useMemo(() => (job.state === "asking" && job.question ? [{ id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 }] : []), [job]);
   return <>
     <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
+    <OutputShelf outputs={job.outputs} selected={selectedOutput} onOpen={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}

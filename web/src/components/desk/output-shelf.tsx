@@ -67,11 +67,13 @@ function GroupLead({ group }: { group: Group }) {
  * The shelf under the session panel's head (Doop B4, shelf 나): one line of
  * the session's outputs grouped by kind, `이미지 n · 보기 n · 파일 n · PR n`,
  * a group with an output not looked at yet ending with the look eye the
- * sidebar uses, which goes once that output is opened. A group of one opens
+ * sidebar uses, which goes once that output is opened. An image, a View or
+ * a file alone of its kind shows itself instead of its count, its name and
+ * an image's picture (operator decision 2026-11-25). A group of one opens
  * its output in the tab panel; a larger group opens to its list under the
- * line, pictures as thumbnails and the rest as rows, whose press opens one
- * there. The output shown in the tab panel is ringed. A session with no
- * output has no shelf.
+ * line, pictures larger with their names and the rest as rows, whose press
+ * opens one there. The output shown in the tab panel is ringed. A session
+ * with no output has no shelf.
  */
 export function OutputShelf({ outputs, selected = null, onOpen }: { outputs: readonly DeskOutput[]; selected?: string | null; onOpen: (output: DeskOutput) => void }) {
   const { t } = useInterfaceTranslation();
@@ -91,7 +93,7 @@ export function OutputShelf({ outputs, selected = null, onOpen }: { outputs: rea
               key={group.kind}
               variant="outline"
               size="sm"
-              className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-foreground", (opened || (one && selected === one.id)) && "ring-1 ring-ring")}
+              className={cn("h-(--size-control-sm) max-w-full gap-xs px-sm text-caption font-normal text-foreground", (opened || (one && selected === one.id)) && "ring-1 ring-ring")}
               aria-expanded={one ? undefined : opened}
               aria-pressed={one ? selected === one.id : undefined}
               data-desk-shelf-group={group.kind}
@@ -99,8 +101,14 @@ export function OutputShelf({ outputs, selected = null, onOpen }: { outputs: rea
               onClick={() => (one ? onOpen(one) : setOpen(opened ? null : group.kind))}
             >
               <GroupLead group={group} />
-              <span>{t(WORD[group.kind])}</span>
-              <span className="text-muted-foreground tabular-nums">{group.outputs.length}</span>
+              {one && group.kind !== "pr" ? (
+                <span className="min-w-0 max-w-(--size-pr-popover) truncate" title={one.label} data-desk-shelf-one={one.id}>{one.label}</span>
+              ) : (
+                <>
+                  <span>{t(WORD[group.kind])}</span>
+                  <span className="text-muted-foreground tabular-nums">{group.outputs.length}</span>
+                </>
+              )}
               {group.unseen ? <UnseenMark /> : null}
               {one ? null : <Chevron aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />}
             </Button>
@@ -109,7 +117,7 @@ export function OutputShelf({ outputs, selected = null, onOpen }: { outputs: rea
       </div>
       {shown ? (
         <div className="max-h-(--size-overview-graph-root-height) min-w-0 overflow-y-auto px-md pb-sm" data-desk-shelf-list={shown.kind}>
-          <DeskOutputs outputs={shown.outputs} selected={selected} onOpen={onOpen} />
+          <DeskOutputs outputs={shown.outputs} selected={selected} wide onOpen={onOpen} />
         </div>
       ) : null}
     </section>

@@ -21,6 +21,7 @@ import { OutputMark } from "./components/desk/desk-job-card";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
 import { SessionAskCard, SessionHead, SessionSleepingFoot } from "./components/desk/desk-session";
+import { OutputShelf } from "./components/desk/output-shelf";
 import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
@@ -562,6 +563,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
       startedByDesk={ownJob}
       answer={answer}
       head={
+        <>
         <SessionHead
           paneId={paneId}
           title={title}
@@ -581,6 +583,8 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
           onTerminal={() => actions.deskTerminal()}
           onClose={() => actions.deskCloseSession()}
         />
+        {job ? <OutputShelf outputs={job.outputs} selected={front?.kind === "output" ? front.output.id : null} onOpen={(output) => actions.deskOpen({ kind: "output", output })} /> : null}
+        </>
       }
       ask={job?.state === "asking" ? <DeskSessionAsk paneId={paneId} deviceId={row?.device_id ?? null} job={job} row={row} actions={actions} onWrite={write} /> : null}
       asks={row?.open_asks?.items}
