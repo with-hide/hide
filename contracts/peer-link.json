@@ -170,6 +170,7 @@
       "name"
     ],
     "work_fields": [
+      "agent",
       "branch",
       "mark",
       "name",
@@ -556,6 +557,7 @@
       "version"
     ],
     "pane_fields": [
+      "agent",
       "branch",
       "cols",
       "folder",

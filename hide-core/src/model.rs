@@ -5142,6 +5142,12 @@ pub struct UiStateSnapshot {
     /// Absence is the default collapsed state.
     #[serde(default)]
     pub expanded_inactive_project_device_ids: Vec<String>,
+    /// Heads of another machine's work the operator folded, oldest first
+    /// (`guest_work_fold_toggle`, at most `guest_panes::MAX_FOLDS`).
+    /// Absence is the default open state, so an older store needs no
+    /// migration.
+    #[serde(default)]
+    pub folded_guest_work: Vec<crate::guest_panes::GuestWorkFold>,
     #[serde(default)]
     pub project_base_branches: BTreeMap<String, String>,
     /// Private choices keyed by machine plus canonical main-worktree root.
@@ -6207,6 +6213,7 @@ impl Default for UiStateSnapshot {
             expanded_checkout_ids: Vec::new(),
             expanded_inactive_checkout_project_paths: Vec::new(),
             expanded_inactive_project_device_ids: Vec::new(),
+            folded_guest_work: Vec::new(),
             project_base_branches: BTreeMap::new(),
             project_settings: BTreeMap::new(),
             project_settings_writes: BTreeMap::new(),

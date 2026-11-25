@@ -3941,8 +3941,9 @@ export type GuestPanes = {
    * `name`: what the guest's core shows the pane by (its agent's label, else its tab's name), once it told one.
    * `branch`: the branch the guest's core says the pane stands on, once it told one.
    * `mark`: the mark the guest's core draws the pane's row with, while it is connected and has told one.
+   * `agent`: the agent kind the guest's core says runs in the pane (`claude`, `codex`, ...), once it told one; absent for a plain terminal or an earlier build.
    */
-  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null; branch?: string | null; mark?: string | null }[];
+  panes: { id: string; pane: string; since_unix_ms: number; folder?: string | null; name?: string | null; branch?: string | null; mark?: string | null; agent?: string | null }[];
 };
 
 /**
@@ -4051,6 +4052,8 @@ export type SnapshotRest = {
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
     expanded_checkout_ids?: string[];
+    /** Heads of another machine's work the operator folded, by its device id and the folder of the place it stands in (`""` outside every project); absence is open. */
+    folded_guest_work?: { device_id: string; folder: string }[];
     session_collapsed_checkout_ids?: string[];
     /** Agents whose children the sidebar tree opened; absence is folded. */
     expanded_agent_pane_ids?: string[];
