@@ -159,6 +159,7 @@ impl Runtime {
                 root,
                 channel,
                 OpenRequestFields {
+                    follow: false,
                     workspace_id: file.workspace_id.clone(),
                     checkout_id: file.checkout_id.clone(),
                     path: file.path.clone(),

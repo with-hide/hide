@@ -1805,6 +1805,51 @@ mod row_tests {
         );
     }
 
+    /// mission-104 O-4: a once automation's run calls the operator by its
+    /// end, on the automation's own line, so a View its agent opened does
+    /// not bring its row to Needs You too; its own question still does.
+    #[test]
+    fn a_once_automation_runs_view_does_not_call_while_its_question_does() {
+        let mut agent = row();
+        agent.hide_ai = Some(crate::model::HideAiSnapshot {
+            task: None,
+            home: Some(crate::coordination::TaskHome::Automations),
+            workspace_id: None,
+            turn: None,
+            once: false,
+        });
+        assert_eq!(
+            super::super::axes::ownership_of(&agent),
+            Ownership::HideAi {
+                operator_turn: false,
+                look_calls: true
+            }
+        );
+        agent.hide_ai.as_mut().unwrap().once = true;
+        let ownership = super::super::axes::ownership_of(&agent);
+        assert_eq!(
+            ownership,
+            Ownership::HideAi {
+                operator_turn: false,
+                look_calls: false
+            }
+        );
+        let group = |demand| {
+            agent_group_for(
+                demand,
+                AgentActivity::Stopped,
+                true,
+                true,
+                false,
+                ownership,
+                false,
+                true,
+            )
+        };
+        assert_eq!(group(AgentDemand::None), AgentGroup::Seen);
+        assert_eq!(group(AgentDemand::Question), AgentGroup::NeedsYou);
+    }
+
     // A root whose own AI question was read, with a raised descendant, asks
     // the descendant's ask, not its read question; a native question holds
     // until answered.

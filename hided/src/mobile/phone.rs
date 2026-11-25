@@ -321,10 +321,14 @@ fn prs_frame(prs: &PhonePrs) -> Value {
 /// The automations the phone lists (PRD automations B34, B35): the core's
 /// section trimmed to the list and each one's records, republished when it
 /// changes.
-fn automations_frame(automations: &PhoneAutomations) -> Value {
+/// The phone's automations frame: the list, the ones stopped for a person
+/// (`asks`) and the once automations whose run ended and waits to be opened
+/// (`looks`, mission-104 O-4), each one line of the phone's Needs You as on
+/// the desktop. An older bundle ignores `looks`.
+pub(super) fn automations_frame(automations: &PhoneAutomations) -> Value {
     json!({
         "type": "automations", "items": automations.items, "omitted": automations.omitted,
-        "zone": automations.zone, "asks": automations.asks,
+        "zone": automations.zone, "asks": automations.asks, "looks": automations.looks,
         "unreadable": automations.unreadable,
     })
 }
@@ -1857,11 +1861,13 @@ async fn dispatch_action(
 /// What a phone's `automation` press asks, once it names a listed
 /// automation: the one `automation_run`, `automation_pause` or
 /// `automation_resume` event the desktop's buttons send (PRD automations
-/// B34). A run while one goes is refused here as the desktop's button is off
-/// (B19); the core refuses it too.
+/// B34), or `automation_look_seen` with the `run` a once automation's line
+/// names, when the phone opens that line (mission-104 review m6). A run
+/// while one goes is refused here as the desktop's button is off (B19); the
+/// core refuses it too.
 fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8>, &'static str> {
     let action = match message.get("action").and_then(Value::as_str) {
-        Some(action @ ("run" | "pause" | "resume")) => action,
+        Some(action @ ("run" | "pause" | "resume" | "look_seen")) => action,
         _ => return Err("invalid_request"),
     };
     let id = message.get("id").and_then(Value::as_str);
@@ -1871,9 +1877,17 @@ fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8
     if action == "run" && automation.running {
         return Err("running");
     }
+    let mut payload = json!({"id": automation.id});
+    if action == "look_seen" {
+        let run = message
+            .get("run")
+            .and_then(Value::as_u64)
+            .ok_or("invalid_request")?;
+        payload["run"] = json!(run);
+    }
     Ok(json!({
         "schema_version": hide_core::SCHEMA_VERSION, "kind": format!("automation_{action}"),
-        "payload": {"id": automation.id},
+        "payload": payload,
     })
     .to_string()
     .into_bytes())
@@ -3838,6 +3852,7 @@ mod tests {
     fn listed_automations(running: bool) -> PhoneAutomations {
         PhoneAutomations {
             asks: Vec::new(),
+            looks: Vec::new(),
             unreadable: false,
             items: vec![hide_core::agent_state::phone::PhoneAutomation {
                 id: "auto-1".into(),
@@ -3847,6 +3862,8 @@ mod tests {
                 next_run_at_unix_ms: Some(1),
                 paused: None,
                 running,
+                done: false,
+                look_run: None,
                 unseen: 0,
                 recent_spend: None,
                 records: Vec::new(),
@@ -3855,6 +3872,40 @@ mod tests {
             omitted: 0,
             zone: None,
         }
+    }
+
+    /// A once automation whose run ended reaches the phone as it reaches the
+    /// desktop: its line in `looks`, and the item says it is done and which
+    /// run waits, so the phone's Needs You counts what the desktop's does
+    /// (mission-104 O-4).
+    #[test]
+    fn the_automations_frame_carries_a_once_automations_line_and_its_done_state() {
+        let mut listed = listed_automations(false);
+        let once = &mut listed.items[0];
+        once.schedule =
+            serde_json::from_value(json!({"kind": "once", "date": "2026-12-02", "time": "09:00"}))
+                .unwrap();
+        once.next_run_at_unix_ms = None;
+        once.done = true;
+        once.look_run = Some(3);
+        listed.looks = vec!["auto-1".into()];
+        let frame = automations_frame(&listed);
+        assert_eq!(frame["looks"], json!(["auto-1"]));
+        assert_eq!(frame["asks"], json!([]));
+        let item = &frame["items"][0];
+        assert_eq!(
+            (&item["schedule"], &item["done"], &item["look_run"]),
+            (
+                &json!({"kind": "once", "date": "2026-12-02", "time": "09:00"}),
+                &json!(true),
+                &json!(3)
+            )
+        );
+        // A repeating automation's frame says it has no such line.
+        let repeating = automations_frame(&listed_automations(false));
+        assert_eq!(repeating["looks"], json!([]));
+        assert_eq!(repeating["items"][0]["done"], json!(false));
+        assert_eq!(repeating["items"][0].get("look_run"), None);
     }
 
     /// A phone's [지금 실행], [멈춤] and [다시 켜기] are the desktop's own
@@ -3876,6 +3927,19 @@ mod tests {
         assert_eq!(
             automation_event(&press("remove", "auto-1", "r"), &listed),
             Err("invalid_request")
+        );
+        // Opening a once automation's line names the run it waits for.
+        let mut look = press("look_seen", "auto-1", "r");
+        assert_eq!(automation_event(&look, &listed), Err("invalid_request"));
+        look["run"] = json!(3);
+        let event: Value =
+            serde_json::from_slice(&automation_event(&look, &listed).unwrap()).unwrap();
+        assert_eq!(
+            (&event["kind"], &event["payload"]),
+            (
+                &json!("automation_look_seen"),
+                &json!({"id": "auto-1", "run": 3})
+            )
         );
         assert_eq!(
             automation_event(&press("run", "auto-9", "r"), &listed),

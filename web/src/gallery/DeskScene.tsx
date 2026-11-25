@@ -10,7 +10,7 @@ import { DiamondIcon, FileTextIcon, ImageIcon, MapIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { createActions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { DeskAgentBar, DeskComposer } from "../components/desk/desk-composer";
+import { DeskAgentBar, DeskComposer, DeskPermissionMenu } from "../components/desk/desk-composer";
 import { sampleShot } from "../components/sample-shot";
 import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatActions } from "../components/desk/desk-chat";
 import { DeskPaneReturn } from "../components/desk/desk-entry";
@@ -25,8 +25,9 @@ import { SessionCard, SessionChip, SessionChipProvider } from "../components/des
 import { ThreadView } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
+import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, DESK_PERMISSION_LEVELS, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermissions, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -37,7 +38,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_UNREADABLE_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -52,6 +53,8 @@ export const DESK_SCENES = [
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
   { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
+  { state: "permissions", label: "권한 단계: 알아서 ⌄ 메뉴를 연 모습 (피드백 1, A)" },
+  { state: "permissions-mixed", label: "권한 단계: 설정에서 줄마다 정함 (피드백 1, A)" },
   { state: "mention", label: "@ 메뉴: 부모만, 물어보는 자식은 펼침 (B18, B48)" },
   { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
@@ -109,16 +112,18 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
 
 /** The chat column's head, as a scene sets it. */
 function ChatHead() {
-  return <DeskChatHead onNewConversation={noop} />;
+  return <DeskChatHead onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
-function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [] }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[] }) {
+function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [], permissions = DESK_PERMISSION_LEVELS.auto }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | "permissions" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[]; permissions?: DeskPermissions }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
   return (
     <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} tray={sceneTray(files)} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop}>
-      <DeskAgentBar agents={agents} selection={selection} open={menuOpen} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
+      <DeskPermissionMenu permissions={permissions} open={menuOpen === "permissions" ? true : undefined} onLevel={noop} onPerRow={noop} />
+      <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
+      <DeskAgentBar agents={agents} selection={selection} open={menuOpen === "agent" ? "agent" : null} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
   );
 }
@@ -155,7 +160,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, ou
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   const question = sessionQuestion(job, null);
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
@@ -199,9 +204,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean; queued?: DeskQueuedMessage[] } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} queued={options.queued ?? []} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -215,7 +220,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "s2":
-      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { thinking: true, selectedJob: "gallery" })} />;
+      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { working: "sessions", selectedJob: "gallery" })} />;
       break;
     case "s2b":
       body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} />;
@@ -229,7 +234,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const thread = galleryThread();
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
-        { kind: "reply", mentions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
+        { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
         { kind: "job", id: 3, job_id: "gallery" },
       ];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}
@@ -255,6 +260,12 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     case "agent-preparing":
       body = <Room chat={chat([], <ChatComposer agents={AGENTS_PREPARING} selection={CLAUDE} menuOpen="agent" />)} />;
+      break;
+    case "permissions":
+      body = <Room chat={chat(switchedItems(now), <ChatComposer selection={CLAUDE} menuOpen="permissions" />)} />;
+      break;
+    case "permissions-mixed":
+      body = <Room chat={chat(switchedItems(now), <ChatComposer selection={CLAUDE} permissions={{ ...DESK_PERMISSION_LEVELS.auto, edit: "ask" }} />)} />;
       break;
     case "mention":
     case "mention-open":
@@ -395,6 +406,10 @@ function CardStates() {
         <DeskChat items={cardSceneItems()} jobs={{}} agents={AGENTS} {...CHAT_ACTIONS} />
         <h3 className="pt-sm text-micro text-muted-foreground">거절… 을 누르면 (한 줄은 Desk에게, 비우면 그냥 거절)</h3>
         <DeskApprovalCard item={{ ...IRREVERSIBLE_CARD, id: 56 }} onAnswer={noop} defaultRefusal="대신 끝날 때까지 기다렸다가 보관해줘" />
+        <h3 className="pt-sm text-micro text-muted-foreground">긴 명령은 두 줄로 접힘 · 늘 묻는 일엔 이 대화에서 계속 허용이 없음 (피드백 1, A)</h3>
+        <DeskApprovalCard item={LONG_UNREADABLE_CARD} level="auto" onAnswer={noop} />
+        <h3 className="pt-sm text-micro text-muted-foreground">고칠 땐 묻기에서 셸 명령 카드</h3>
+        <DeskApprovalCard item={{ ...LONG_UNREADABLE_CARD, id: 58, command: "pnpm --dir web test desk-chat", asks: [{ kind: "row", value: "shell" }], subject: null }} level="ask_changes" onAnswer={noop} />
       </div>
     </div>
   );

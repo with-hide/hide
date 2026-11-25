@@ -13,7 +13,33 @@ pub struct Group {
     pub id: String,
     pub name: String,
     pub layout: Layout,
+    /// The group Hide keeps for one of its own surfaces, found by this and
+    /// never by its name, so the operator's group of the same name or a
+    /// rename leaves it the same group; absent on the operator's own groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<GroupRole>,
 }
+
+/// What a reserved group is kept for.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupRole {
+    /// The group Desk files the sessions it starts in (PRD desk-2-ui B20).
+    Desk,
+}
+
+impl GroupRole {
+    /// The name the group is made with.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Desk => "Desk",
+        }
+    }
+}
+
+/// The name Desk's group was made with before it was a reserved group: a
+/// saved group of that name is read as Desk's (`repair_agent_groups`).
+const DESK_GROUP_BEFORE_ROLES: &str = "◆ Desk";
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Groups {
@@ -66,6 +92,7 @@ impl WorkspaceView {
             groups: std::iter::once(crate::model::AgentGroupSnapshot {
                 id: None,
                 name: None,
+                role: None,
                 tabs: self
                     .agent_layout
                     .tree
@@ -81,6 +108,7 @@ impl WorkspaceView {
                         id: Some(g.id.clone()),
                         name: Some(g.name.clone()),
                         tabs: g.layout.tree.displays().map(|t| t.id.clone()).collect(),
+                        role: g.role,
                     }),
             )
             .collect(),
@@ -230,7 +258,14 @@ impl WorkspaceView {
                 .sum::<usize>()
     }
 
-    fn group_name(&self, name: &str, excluding: Option<&str>) -> Result<String, GroupError> {
+    /// A valid name, unique among the groups of the same role: the
+    /// operator's own groups never clash with a reserved group's name.
+    fn group_name(
+        &self,
+        name: &str,
+        excluding: Option<&str>,
+        role: Option<GroupRole>,
+    ) -> Result<String, GroupError> {
         if name
             .chars()
             .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
@@ -245,7 +280,7 @@ impl WorkspaceView {
             .agent_groups
             .items
             .iter()
-            .any(|g| Some(g.id.as_str()) != excluding && g.name == name)
+            .any(|g| Some(g.id.as_str()) != excluding && g.role == role && g.name == name)
         {
             return Err(GroupError::DuplicateName);
         }
@@ -253,7 +288,32 @@ impl WorkspaceView {
     }
 
     pub fn create_agent_group(&mut self, name: &str) -> Result<String, GroupError> {
-        let name = self.group_name(name, None)?;
+        let name = self.group_name(name, None, None)?;
+        self.push_agent_group(name, None)
+    }
+
+    /// The reserved group of `role`, by its role whatever it is named now.
+    pub fn reserved_agent_group(&self, role: GroupRole) -> Option<&Group> {
+        self.agent_groups
+            .items
+            .iter()
+            .find(|g| g.role == Some(role))
+    }
+
+    /// The reserved group of `role`, made under its role's name when
+    /// missing; making it selects it, as making any group does.
+    pub fn ensure_reserved_agent_group(&mut self, role: GroupRole) -> Result<String, GroupError> {
+        if let Some(group) = self.reserved_agent_group(role) {
+            return Ok(group.id.clone());
+        }
+        self.push_agent_group(role.name().to_owned(), Some(role))
+    }
+
+    fn push_agent_group(
+        &mut self,
+        name: String,
+        role: Option<GroupRole>,
+    ) -> Result<String, GroupError> {
         if self.agent_groups.items.len() >= GROUP_LIMIT {
             return Err(GroupError::GroupLimit);
         }
@@ -263,6 +323,7 @@ impl WorkspaceView {
             id: id.clone(),
             name,
             layout: Layout::default(),
+            role,
         });
         self.agent_groups.selected = Some(id.clone());
         self.agent_groups.initialized = true;
@@ -271,7 +332,14 @@ impl WorkspaceView {
     }
 
     pub fn rename_agent_group(&mut self, id: &str, name: &str) -> Result<(), GroupError> {
-        let name = self.group_name(name, Some(id))?;
+        let role = self
+            .agent_groups
+            .items
+            .iter()
+            .find(|g| g.id == id)
+            .ok_or(GroupError::MissingGroup)?
+            .role;
+        let name = self.group_name(name, Some(id), role)?;
         let group = self
             .agent_groups
             .items
@@ -440,8 +508,22 @@ impl WorkspaceView {
 
     pub fn repair_agent_groups(&mut self) -> Vec<String> {
         let mut notes = self.agent_layout.repair();
+        // Desk's group from before reserved groups becomes the reserved one,
+        // so it is not made a second time.
+        if self.reserved_agent_group(GroupRole::Desk).is_none()
+            && let Some(group) = self
+                .agent_groups
+                .items
+                .iter_mut()
+                .find(|g| g.role.is_none() && g.name == DESK_GROUP_BEFORE_ROLES)
+        {
+            group.role = Some(GroupRole::Desk);
+            group.name = GroupRole::Desk.name().to_owned();
+            notes.push("Desk's group became its reserved group".into());
+        }
         let mut ids = BTreeSet::new();
         let mut names = BTreeSet::new();
+        let mut roles = BTreeSet::new();
         let mut tabs: BTreeSet<String> = self
             .agent_layout
             .tree
@@ -449,7 +531,17 @@ impl WorkspaceView {
             .map(|t| t.id.clone())
             .collect();
         self.agent_groups.items.retain_mut(|g| {
-            if g.id.is_empty() || !ids.insert(g.id.clone()) || !names.insert(g.name.clone()) {
+            // A second group of one role is the operator's own.
+            if let Some(role) = g.role
+                && !roles.insert(role.name())
+            {
+                g.role = None;
+                notes.push("a second reserved Agent group became an ordinary one".into());
+            }
+            if g.id.is_empty()
+                || !ids.insert(g.id.clone())
+                || !names.insert((g.role.map(GroupRole::name), g.name.clone()))
+            {
                 notes.push("duplicate or empty Agent group identity".into());
                 return false;
             }
@@ -507,6 +599,96 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&view.agent_groups).unwrap()).unwrap();
         reconcile(&mut view, &[("child-tab".into(), true)]);
         assert_eq!(view.selected_agent_layout().active(), None);
+    }
+
+    #[test]
+    fn desk_s_group_is_found_by_its_role_whatever_the_operator_names_theirs_or_it() {
+        let mut view = WorkspaceView::new("local", "/desk-checkout");
+        // The operator's own `Desk` group is no clash and not Desk's.
+        let own = view.create_agent_group("Desk").unwrap();
+        let desk = view.ensure_reserved_agent_group(GroupRole::Desk).unwrap();
+        assert_ne!(own, desk);
+        let names = |view: &WorkspaceView| -> Vec<(Option<GroupRole>, String)> {
+            view.agent_groups
+                .items
+                .iter()
+                .map(|g| (g.role, g.name.clone()))
+                .collect()
+        };
+        assert_eq!(
+            names(&view),
+            [
+                (None, "Desk".into()),
+                (Some(GroupRole::Desk), "Desk".into())
+            ]
+        );
+        // A rename keeps it Desk's, and a second ask makes no other group.
+        view.rename_agent_group(&desk, "내 Desk").unwrap();
+        assert_eq!(
+            view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(),
+            desk
+        );
+        assert_eq!(view.agent_groups.items.len(), 2);
+        // Saved and read back, it is still the reserved group.
+        view.agent_groups =
+            serde_json::from_value(serde_json::to_value(&view.agent_groups).unwrap()).unwrap();
+        assert!(view.repair_agent_groups().is_empty());
+        assert_eq!(
+            view.reserved_agent_group(GroupRole::Desk)
+                .map(|g| g.id.clone()),
+            Some(desk)
+        );
+    }
+
+    #[test]
+    fn a_saved_desk_group_from_before_roles_is_read_as_desk_s_reserved_group() {
+        let mut view = WorkspaceView::new("local", "/desk-checkout");
+        let old = view.create_agent_group(DESK_GROUP_BEFORE_ROLES).unwrap();
+        let mut saved = serde_json::to_value(&view.agent_groups).unwrap();
+        assert!(
+            saved["items"][0].get("role").is_none(),
+            "an ordinary group saves no role"
+        );
+        saved["items"][0].as_object_mut().unwrap().remove("role");
+        view.agent_groups = serde_json::from_value(saved).unwrap();
+        let notes = view.repair_agent_groups();
+        assert_eq!(notes, ["Desk's group became its reserved group"]);
+        let desk = view.reserved_agent_group(GroupRole::Desk).unwrap();
+        assert_eq!(
+            (desk.id.as_str(), desk.name.as_str()),
+            (old.as_str(), "Desk")
+        );
+        assert_eq!(
+            view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(),
+            old
+        );
+        assert_eq!(view.agent_groups.items.len(), 1);
+    }
+
+    #[test]
+    fn a_second_saved_group_of_desk_s_role_becomes_the_operator_s_own() {
+        let mut view = WorkspaceView::new("local", "/desk-checkout");
+        let desk = view.ensure_reserved_agent_group(GroupRole::Desk).unwrap();
+        let other = view.create_agent_group("내 Desk").unwrap();
+        let mut saved = serde_json::to_value(&view.agent_groups).unwrap();
+        saved["items"][1]["role"] = saved["items"][0]["role"].clone();
+        view.agent_groups = serde_json::from_value(saved).unwrap();
+        let notes = view.repair_agent_groups();
+        assert_eq!(
+            notes,
+            ["a second reserved Agent group became an ordinary one"]
+        );
+        assert_eq!(
+            view.agent_groups
+                .items
+                .iter()
+                .map(|g| (g.id.as_str(), g.role))
+                .collect::<Vec<_>>(),
+            [
+                (desk.as_str(), Some(GroupRole::Desk)),
+                (other.as_str(), None)
+            ]
+        );
     }
 
     #[test]

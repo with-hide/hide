@@ -8,9 +8,9 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskMissionMention, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskPermissions, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskMissionMention, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -56,12 +56,14 @@ export function cardOfSession(cards: readonly DeskJob[], session: DeskSessionRef
 
 /**
  * What Hide knows of a session a chip names, from its sidebar row and its
- * card (D-86): whether the sidebar still lists it, its row's mark and agent,
- * its card (the facts its hover card shows and the thread a press opens),
- * the time its row shows and its parent.
+ * card (D-86): whether the sidebar still lists it, its row's name, mark and
+ * agent, its card (the facts its hover card shows and the thread a press
+ * opens), the time its row shows and its parent.
  */
 export type SessionFacts = {
   listed: boolean;
+  /** The name its sidebar row shows, which a chip draws in place of the name the words wrote (an agent's reply may name it by an id). */
+  name: string | null;
   mark: RowMark | null;
   agent_kind: string | null;
   card: DeskJob | null;
@@ -83,10 +85,11 @@ function rowSession(row: AgentRow): DeskSessionRef {
  */
 export function sessionFacts(rows: ReadonlyMap<string, AgentRow>, cards: readonly DeskJob[], session: DeskSessionRef): SessionFacts | null {
   const row = session.pane_id ? rows.get(session.pane_id) : [...rows.values()].find((one) => one.identity_label === session.name);
-  if (!row) return session.pane_id ? { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
+  if (!row) return session.pane_id ? { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null } : null;
   const parent = row.lineage_parent_pane_id ? rows.get(row.lineage_parent_pane_id) : undefined;
   return {
     listed: true,
+    name: row.identity_label,
     mark: row.mark,
     agent_kind: row.agent_kind,
     card: cardOfSession(cards, { ...session, pane_id: row.pane_id }),
@@ -375,6 +378,57 @@ export function mentionParts(text: string, mentions: readonly DeskMention[], tok
   return parts;
 }
 
+/**
+ * What the working line says an agent does now (feedback 1 c3): a short word
+ * from a closed set, Desk's steps by the names `DeskSteps` counts them, and a
+ * session's by its newest line.
+ */
+export type WorkingPhase = "thinking" | "answering" | "editing" | DeskStepKind;
+
+/**
+ * Whether Desk's conversation keeps its foot in view after a scroll from `before` to `now` (scrollTop): reaching
+ * the foot holds it, and only a move up away from it lets go. A scroll the browser makes itself while the
+ * content grows (scroll anchoring moves it down) arrives before the resize that pins the foot, so a far foot
+ * alone never lets go.
+ */
+export function holdsFoot(held: boolean, before: number, now: number, distance: number, near: number): boolean {
+  if (distance < near) return true;
+  return now < before ? false : held;
+}
+
+/** Desk's turn as the working line says it: the step its newest call does, else answering once it has written, else thinking. */
+export function deskPhase(step: DeskStepKind | null | undefined, text: string | null): WorkingPhase {
+  return step ?? (text ? "answering" : "thinking");
+}
+
+/** A session's running turn as the working line says it, from its newest line: its words, else its newest call or Hide part. */
+export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
+  if (!turn) return "thinking";
+  if (turn.answer.length > 0) return "answering";
+  const last = turn.work.at(-1);
+  if (last?.kind === "tool") {
+    switch (last.toolKind) {
+      case "read":
+      case "search":
+      case "fetch":
+        return "files";
+      case "edit":
+      case "delete":
+      case "move":
+        return "editing";
+      case "execute":
+        return "other";
+      default:
+        return "thinking";
+    }
+  }
+  if (last?.kind === "hide") return last.part.kind === "letter" ? "letters" : last.part.kind === "spawn" ? "starts" : "sessions";
+  return "thinking";
+}
+
+/** A mission mention as a Desk answer's text holds it. */
+export const markedMission = (mission: DeskMissionMention) => `@mission(${mission.id} ${mission.title})`;
+
 /** A mention as a Desk message's text holds it. */
 export const markedMention = (mention: DeskMention) => `@${mention.kind}(${mention.id} ${mention.name})`;
 
@@ -389,6 +443,28 @@ export function agentPickable(agent: DeskAgent): boolean {
 /** The agents a row of Settings › Labs › Desk › 권한 cannot hold (`always_runs`), named on that row; one that cannot be chosen is left out. */
 export function agentsRunningUnasked(agents: readonly DeskAgent[], row: DeskPermissionRow): string[] {
   return agents.filter((agent) => agentPickable(agent) && agent.always_runs.includes(row)).map((agent) => agent.label);
+}
+
+/**
+ * The three levels under Desk's box (feedback 1, frame A), each a setting of
+ * the core's permission table: `다 묻기` runs only reading, `고칠 땐 묻기` also
+ * `hide` commands, `알아서` (the table's default) every row. What cannot be
+ * undone asks whatever the level, since the core never reads it from the table.
+ */
+export const DESK_PERMISSION_LEVELS = {
+  ask_all: { hide: "ask", read: "run", shell: "ask", edit: "ask" },
+  ask_changes: { hide: "run", read: "run", shell: "ask", edit: "ask" },
+  auto: { hide: "run", read: "run", shell: "run", edit: "run" },
+} as const satisfies Record<string, DeskPermissions>;
+
+export type DeskPermissionLevel = keyof typeof DESK_PERMISSION_LEVELS;
+
+export const DESK_PERMISSION_LEVEL_ORDER: readonly DeskPermissionLevel[] = ["ask_all", "ask_changes", "auto"];
+
+/** The level a table is, or null for a mix no level matches (`줄마다 정함`), set row by row in Settings. */
+export function deskPermissionLevel(permissions: DeskPermissions): DeskPermissionLevel | null {
+  const rows = Object.keys(permissions) as DeskPermissionRow[];
+  return DESK_PERMISSION_LEVEL_ORDER.find((level) => rows.every((row) => DESK_PERMISSION_LEVELS[level][row] === permissions[row])) ?? null;
 }
 
 /** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */

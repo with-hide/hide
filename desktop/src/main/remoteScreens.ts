@@ -13,6 +13,7 @@ import path from "node:path";
 import { clipboard, ipcMain, protocol, session, WebContentsView, type BrowserWindow, type Input, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from "electron";
 import WebSocket from "ws";
 import type { RemoteScreenState } from "../../../web/src/host";
+import { sameDisplayPreferences, type DisplayPreferences } from "../../../web/src/displayPreferences";
 import type { InterfaceLanguage } from "../../../web/src/i18n/locale";
 import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
@@ -53,6 +54,8 @@ type Screen = {
   shownAt: number;
   /** What this window calls the machine, as the shell last said. */
   name: string | null;
+  /** This window's View menu choices, as the shell last said, which the page draws with. */
+  display: DisplayPreferences | null;
 };
 
 export type RemoteScreensDeps = {
@@ -145,8 +148,9 @@ export class RemoteScreens {
     }
     const screen = kept ?? this.create(window, request.device, request.key);
     if (!screen) return;
-    if (screen.name !== request.name) {
+    if (screen.name !== request.name || !sameDisplayPreferences(screen.display, request.display)) {
       screen.name = request.name;
+      screen.display = request.display;
       this.tellViewer(screen);
     }
     screen.view.setBounds(toBounds(request.rect, window.webContents.getZoomFactor()));
@@ -245,10 +249,10 @@ export class RemoteScreens {
     for (const screen of this.screens.values()) this.tellViewer(screen);
   }
 
-  /** Tells a loaded page what this window calls its machine and the language it is in. */
+  /** Tells a loaded page what this window calls its machine, the language it is in and its display choices. */
   private tellViewer(screen: Screen): void {
     if (screen.state !== "shown" || screen.view.webContents.isDestroyed()) return;
-    screen.view.webContents.send(REMOTE_VIEWER_CHANNEL, { language: this.deps.language(), name: screen.name });
+    screen.view.webContents.send(REMOTE_VIEWER_CHANNEL, { language: this.deps.language(), name: screen.name, display: screen.display });
   }
 
   /** An app-menu command while a screen shows goes to that screen (B20); true when one took it. */
@@ -284,7 +288,7 @@ export class RemoteScreens {
     // The window's own color until the page paints, so a screen never flashes white.
     view.setBackgroundColor(this.deps.background);
     view.setVisible(false);
-    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0, name: null };
+    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0, name: null, display: null };
     this.guard(screen);
     window.contentView.addChildView(view);
     this.screens.set(device, screen);

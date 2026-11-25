@@ -103,6 +103,27 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().screen).toEqual({ kind: "main" });
   });
 
+  it("leaves the room on its head's 나가기 ✕ (feedback 1 D2)", async () => {
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    await press("[data-desk-leave]");
+    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+  });
+
+  it("lands at the conversation's foot when Desk opens again, though the browser nudges the view as the replies fill in", async () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized.push(callback); } observe() {} unobserve() {} disconnect() {} });
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "what runs now?", at_ms: 0, mentions: [] }]));
+    const box = document.body.querySelector<HTMLElement>("[data-desk-chat-scroll]")!;
+    // The replies' text fills in after Desk's layout pass: the content grows, and scroll anchoring moves the view down 1 px first.
+    Object.defineProperty(box, "scrollHeight", { configurable: true, value: 3072 });
+    Object.defineProperty(box, "clientHeight", { configurable: true, value: 600 });
+    await act(async () => { box.scrollTop = 1; box.dispatchEvent(new Event("scroll")); });
+    await act(async () => { for (const callback of resized) callback(); });
+    expect(box.scrollTop).toBe(3072);
+  });
+
   it("keeps a sent message in the box until the conversation shows it, so a refused one stays", async () => {
     useUiStore.setState({ deskDraft: { text: "ask @session(w1:p2 fixer)", mentions: [fixer] } });
     await render(desk([]));
@@ -237,7 +258,7 @@ describe("Desk's room", () => {
     expect(notice()).not.toContain("·");
   });
 
-  const reply = (id: number, words: string): DeskItem => ({ kind: "reply", id, agent: "claude", text: words, at_ms: 0, state: "stopped", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [] });
+  const reply = (id: number, words: string): DeskItem => ({ kind: "reply", id, agent: "claude", text: words, at_ms: 0, state: "stopped", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [], missions: [] });
   const user = (id: number): DeskItem => ({ kind: "user", id, text: "실패해 보세요", at_ms: 0, mentions: [] });
 
   it("says a failed turn's reason once, in plain words and the failed colour, and drops an older 다시 시도 once a newer turn ran", async () => {
@@ -405,6 +426,24 @@ describe("Desk's room", () => {
     expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
   });
 
+  it("keeps one working line from the send to the turn's end, saying its step, and drops it while an approval waits (feedback 1 c3)", async () => {
+    await render(desk([]));
+    const line = () => document.body.querySelector("[data-working-line]")?.getAttribute("data-working-line") ?? null;
+    expect(line()).toBeNull();
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: 1 } }));
+    expect(line()).toBe("thinking");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: null } }));
+    expect(line()).toBe("answering");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: "files" } }));
+    expect(line()).toBe("files");
+    expect(document.body.querySelector("[data-working-line]")?.textContent).toContain("Reading files");
+    await show({ ...desk([]), approvals_waiting: 1 });
+    expect(line()).toBeNull();
+    await show(desk([]));
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: null } }));
+    expect(line()).toBeNull();
+  });
+
   it("opens the checkout a project chip names", async () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");
@@ -498,14 +537,51 @@ describe("Desk's room", () => {
       expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("~/repo");
     });
 
-    it("asks about a working session's archive with three answers and no 'always', and says what it ends", async () => {
+    it("asks about a working session's archive with no answer that keeps allowing it, says what it ends, and that it asks at every level", async () => {
       await render(desk([archive]));
       expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Asking because this can't be undone");
       expect(document.body.querySelector("[data-desk-approval-why='end_working_session']")?.textContent).toBe("Archives a session that is working·project panel results");
-      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
-      await press("[data-desk-approval-answer='conversation']");
+      expect(answers()).toEqual(["Reject…", "Allow once"]);
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks even when Desk works on its own");
       await press("[data-desk-approval-answer='once']");
-      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "conversation" }, { id: 7, answer: "once" }]);
+      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "once" }]);
+    });
+
+    it("keeps allowing a row's card for the conversation and says the level it asks under", async () => {
+      const shell: DeskItem = { ...archive, id: 11, command: "pnpm --dir web test", asks: [{ kind: "row", value: "shell" }], subject: null };
+      const changes = { ...desk([shell]), settings: { ...desk([]).settings, permissions: { hide: "run" as const, read: "run" as const, shell: "ask" as const, edit: "ask" as const } } };
+      await render(changes);
+      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks because you chose Ask before changes");
+      await press("[data-desk-approval-answer='conversation']");
+      expect(sent("desk_approval")).toEqual([{ id: 11, answer: "conversation" }]);
+      // A table set row by row in Settings is said as that.
+      await show({ ...changes, settings: { ...changes.settings, permissions: { ...changes.settings.permissions, hide: "ask" as const, edit: "run" as const } } });
+      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks as you set this row");
+    });
+
+    it("sets the whole table from one of three levels under the box in one event, and reads a mix as set per row", async () => {
+      const open = async () => {
+        const trigger = document.body.querySelector<HTMLElement>("[data-desk-bar='permissions']")!;
+        await act(async () => { trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })); });
+      };
+      const levels = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-level-choice]")].map((item) => [item.dataset.deskPermissionLevelChoice, item.getAttribute("data-state")]);
+      await render(desk([]));
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("On its own");
+      await open();
+      expect(levels()).toEqual([["ask_all", "unchecked"], ["ask_changes", "unchecked"], ["auto", "checked"]]);
+      await press("[data-desk-permission-level-choice='ask_changes']");
+      expect(sent("desk_settings_set")).toEqual([{ permissions: { hide: "run", read: "run", shell: "ask", edit: "ask" } }]);
+
+      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "ask", read: "run", shell: "ask", edit: "ask" } } });
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Ask for everything");
+      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "run", read: "ask", shell: "run", edit: "run" } } });
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Set per row");
+      await open();
+      expect(levels().every(([, state]) => state === "unchecked")).toBe(true);
+      await press("[data-desk-permission-per-row]");
+      expect(useUiStore.getState().settingsTab).toBe("labs");
+      expect(sent("desk_settings_set")).toHaveLength(1);
     });
 
     it("sends a refusal's line to Desk on Enter, never mid-composition, and refuses plainly when the line is empty", async () => {
@@ -528,10 +604,10 @@ describe("Desk's room", () => {
       await press("[data-desk-approval-answer='reject_send']");
       expect(sent("desk_approval").slice(1)).toEqual([{ id: 7, answer: "reject" }, { id: 7, answer: "reject" }]);
 
-      // Escape takes the line back to the three answers.
+      // Escape takes the line back to the card's answers.
       await key("Escape");
       expect(refusal()).toBeNull();
-      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
+      expect(answers()).toEqual(["Reject…", "Allow once"]);
     });
 
     it("folds an answered card to how it was answered", async () => {

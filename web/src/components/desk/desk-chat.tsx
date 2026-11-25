@@ -1,8 +1,8 @@
-import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskPermissionLevel, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, markedMission, mentionParts, namedMention } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { DeskAttachment } from "../../snapshot";
@@ -11,8 +11,10 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
-import { Elapsed, formatElapsed } from "../elapsed";
+import { formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
+import { MissionChipOf } from "../mission-chip";
+import { useShellStore } from "../../store";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -22,6 +24,7 @@ import { agentProductName } from "../../agentAdapters";
 import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { SentAttachments } from "./desk-composer";
+import { WorkingLine } from "./working-line";
 
 /**
  * Words with their mentions drawn as chips (B18, B26): a session and a
@@ -85,34 +88,44 @@ export function DeskQueuedBubble({ message, held = false, onRemove, onMention }:
 }
 
 /**
- * Desk's answer as plain Markdown (D-75), where a session it names is that
- * session's chip, pressed to open it; streaming while `live`; a stopped
- * answer keeps what it said and says it stopped (B7).
+ * A mission a Desk answer names (`@mission(<id> <title>)`): its title and
+ * the app's mission chip, its mark and done count, which opens its map. The
+ * title is the mission's own while the app holds it; one the app does not
+ * hold keeps the answer's title and has no chip.
  */
-export function DeskReply({ text, stopped = false, live = false, mentions = [], onMention }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; onMention?: (mention: DeskMention) => void }) {
+function DeskMissionMention({ mention, onOpen }: { mention: DeskMissionMention; onOpen?: (missionId: string) => void }) {
+  const title = useShellStore((s) => s.rest?.missions?.items.find((one) => one.id === mention.id)?.title) ?? mention.title;
+  return (
+    <span className="inline-flex max-w-full min-w-0 items-center gap-xxs align-middle" data-desk-mission-mention={mention.id}>
+      <span className="truncate font-semibold text-foreground">{title}</span>
+      {onOpen ? <MissionChipOf id={mention.id} onOpen={onOpen} /> : null}
+    </span>
+  );
+}
+
+/**
+ * Desk's answer as plain Markdown (D-75), where a session it names is that
+ * session's chip and a mission its title and mission chip, each pressed to
+ * open it; the core reads both from the finished answer, so a `live` one
+ * streams its text alone; a stopped answer keeps what it said and says it
+ * stopped (B7).
+ */
+export function DeskReply({ text, stopped = false, live = false, mentions = [], missions = [], onMention, onMission }: { text: string; stopped?: boolean; live?: boolean; mentions?: readonly DeskMention[]; missions?: readonly DeskMissionMention[]; onMention?: (mention: DeskMention) => void; onMission?: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
   // Each chip is drawn in a root of its own inside the Markdown, so the screen's chip source is bridged to it.
   const bridge = useSessionChipBridge();
-  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => ({
-    token: markedMention(mention),
-    node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
-  })), [mentions, onMention, bridge]);
+  const chips = useMemo<MarkdownChip[]>(() => [
+    ...mentions.map((mention) => ({
+      token: markedMention(mention),
+      node: bridge(<SessionChip session={{ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null, pane_id: mention.id }} onPress={onMention ? () => onMention(mention) : undefined} />),
+    })),
+    ...missions.map((mission) => ({ token: markedMission(mission), node: bridge(<DeskMissionMention mention={mission} onOpen={onMission} />) })),
+  ], [mentions, missions, onMention, onMission, bridge]);
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
       <MarkdownText text={text} size="chat" chips={chips} />
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
-  );
-}
-
-/** `생각 중 · 3초` from the moment a message is sent until the answer starts (B7): words alone, since a ring is always a session's state (D-75). */
-export function DeskThinking({ startedAt = null }: { startedAt?: number | null }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <p role="status" className="text-caption text-muted-foreground" data-desk-item="thinking">
-      <span className="animate-pulse">{t("desk.thinking")}</span>
-      {startedAt !== null ? <> · <Elapsed since={startedAt} /></> : null}
-    </p>
   );
 }
 
@@ -251,6 +264,55 @@ const IRREVERSIBLE_WHY: Record<DeskIrreversible, MessageKey> = {
   unreadable: "desk.approval.why.unreadable",
 };
 
+/** The line under a card that says the level it asks under: what cannot be undone asks at every level, a row asks because of the level chosen. */
+const ALWAYS_NOTE: Record<DeskPermissionLevel | "mixed", MessageKey> = {
+  ask_all: "desk.approval.note.always.ask_all",
+  ask_changes: "desk.approval.note.always.ask_changes",
+  auto: "desk.approval.note.always.auto",
+  mixed: "desk.approval.note.always.mixed",
+};
+const ROW_NOTE: Record<DeskPermissionLevel | "mixed", MessageKey | null> = {
+  ask_all: "desk.approval.note.row.ask_all",
+  ask_changes: "desk.approval.note.row.ask_changes",
+  // A card asked before the level became 알아서 waits as it was asked.
+  auto: null,
+  mixed: "desk.approval.note.row.mixed",
+};
+
+/**
+ * The command on a card, folded to two lines when it is longer, with `전체
+ * 보기` that shows it whole and `접기` that folds it again.
+ */
+function ApprovalCommand({ command }: { command: string }) {
+  const { t } = useInterfaceTranslation();
+  const block = useRef<HTMLSpanElement>(null);
+  const [whole, setWhole] = useState(false);
+  const [long, setLong] = useState(false);
+  useLayoutEffect(() => {
+    const element = block.current;
+    if (!element || whole) return;
+    const measure = () => setLong(element.scrollHeight > element.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [command, whole]);
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-xxs">
+      {/* The clamp sits inside the padding, so a folded block ends on its second line. */}
+      <pre className="w-full min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground" data-desk-approval-command={whole ? "whole" : long ? "folded" : "short"}>
+        <span ref={block} className={whole ? "block" : "line-clamp-2"}>{command}</span>
+      </pre>
+      {long || whole ? (
+        <Button variant="text" size="inline" className="text-micro text-muted-foreground" aria-expanded={whole} data-desk-approval-command-toggle="true" onClick={() => setWhole(!whole)}>
+          {t(whole ? "desk.approval.collapse" : "desk.approval.expand")}
+          {whole ? <ChevronUpIcon aria-hidden="true" /> : <ChevronDownIcon aria-hidden="true" />}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 const ANSWERED: Record<Exclude<DeskApproval["state"], "waiting">, MessageKey> = {
   allowed: "desk.approval.allowed",
   allowed_conversation: "desk.approval.allowedConversation",
@@ -262,14 +324,15 @@ const ANSWERED: Record<Exclude<DeskApproval["state"], "waiting">, MessageKey> = 
  * Hide asking before Desk's agent does something (D-52, D-82, D-83, D-75):
  * the one `!` card without an agent mark, since it is Desk's own. It comes
  * for a row of Settings › Labs › Desk › 권한 set to 묻기, or for an irreversible
- * kind, which says so in its title and names what it is about. The command
- * whole on one grey block, the folder, Desk's reason and three grey answers,
- * none the default: `거절…` opens one line whose words go to Desk, `이 대화에서
- * 계속 허용` stops asking this kind until the conversation ends, `한 번 허용`
- * runs this call. Once answered it folds to one dim line: how it was answered
- * and the command's start.
+ * kind, which says so in its title and names what it is about. The command on
+ * one grey block, folded to two lines when longer, the folder, Desk's reason,
+ * the level it asks under at the foot's start, and grey answers, none the
+ * default: `거절…` opens one line whose words go to Desk, `이 대화에서 계속
+ * 허용` stops asking that row until the conversation ends and is not offered
+ * on a card that always asks, `한 번 허용` runs this call. Once answered it
+ * folds to one dim line: how it was answered and the command's start.
  */
-export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: DeskApproval; onAnswer: (answer: DeskApprovalAnswer, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
+export function DeskApprovalCard({ item, level = "auto", onAnswer, defaultRefusal }: { item: DeskApproval; /** The level under Desk's box, null for a table set row by row. */ level?: DeskPermissionLevel | null; onAnswer: (answer: DeskApprovalAnswer, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
   const { t } = useInterfaceTranslation();
   const [refusing, setRefusing] = useState(defaultRefusal !== undefined);
   const [line, setLine] = useState(defaultRefusal ?? "");
@@ -286,6 +349,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
     );
   }
   const irreversible = approvalIrreversible(item);
+  const note = irreversible.length > 0 ? ALWAYS_NOTE[level ?? "mixed"] : ROW_NOTE[level ?? "mixed"];
   const refuse = () => onAnswer("reject", line.trim() || undefined);
   return (
     <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(cardLabel(item))} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
@@ -296,7 +360,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
       </p>
       {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
       <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
-      <pre className="min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground" data-desk-approval-command="true">{item.command}</pre>
+      <ApprovalCommand command={item.command} />
       {irreversible.map(({ kind, subject }) => (
         <p key={kind} className="flex min-w-0 items-baseline gap-xs text-caption text-subtle-foreground" data-desk-approval-why={kind}>
           <span className="shrink-0">{t(IRREVERSIBLE_WHY[kind])}</span>
@@ -333,8 +397,14 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-end gap-xs pt-xxs">
+          {note ? (
+            <span className="mr-auto flex min-w-0 items-center gap-xxs text-micro text-muted-foreground" data-desk-approval-level={level ?? "mixed"}>
+              <ShieldIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+              {t(note)}
+            </span>
+          ) : null}
           <Button variant="secondary" size="sm" data-desk-approval-answer="reject" onClick={() => setRefusing(true)}>{t("desk.approval.reject")}</Button>
-          <Button variant="secondary" size="sm" data-desk-approval-answer="conversation" onClick={() => onAnswer("conversation")}>{t("desk.approval.allowConversation")}</Button>
+          {irreversible.length === 0 ? <Button variant="secondary" size="sm" data-desk-approval-answer="conversation" onClick={() => onAnswer("conversation")}>{t("desk.approval.allowConversation")}</Button> : null}
           <Button variant="secondary" size="sm" data-desk-approval-answer="once" onClick={() => onAnswer("once")}>{t("desk.approval.allow")}</Button>
         </div>
       )}
@@ -409,11 +479,13 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * Desk's conversation (D-17, D-39, D-75, B7-B16): the operator's words as
  * bubbles, Desk's answers as plain Markdown at the conversation's size, the
  * lines that change nothing, the approval card, the notices, and a card for
- * each job Desk started. `live` is the answer still arriving; `thinking`
- * shows until it starts.
+ * each job Desk started. `live` is the answer still arriving; `working`,
+ * when given, is the working line at the foot until the turn ends.
  */
-export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, level = "auto", queued = [], held = false, live = null, working = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
+  /** The level under Desk's box, which a waiting card says it asks under; null for a table set row by row. */
+  level?: DeskPermissionLevel | null;
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
@@ -423,9 +495,8 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
   held?: boolean;
   /** The answer streaming now, after the last item. */
   live?: string | null;
-  thinking?: boolean;
-  /** When the turn started (`desk_live.started_at_ms`), for `생각 중 · 3초`. */
-  startedAt?: number | null;
+  /** The turn under way, which the working line says (feedback 1 c3): what it does now and when it started; none once it ends or while it waits on the operator. */
+  working?: { phase: WorkingPhase; since: number | null } | null;
   selectedJob?: string | null;
   selectedOutput?: string | null;
 } & DeskChatActions) {
@@ -437,16 +508,17 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
       {items.map((item, index) => (
         <li key={item.id} className="flex min-w-0 flex-col">
           {item.kind === "user" ? <DeskUserMessage text={item.text} mentions={item.mentions} attachments={item.attachments} onMention={actions.onMention} />
-            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
+            : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} missions={item.missions} onMention={actions.onMention} onMission={actions.onMission} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
-            : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
+            : item.kind === "approval" ? <DeskApprovalCard item={item} level={level} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
             : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
-      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
+      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : null}
+      {working ? <li data-desk-item="working"><WorkingLine phase={working.phase} since={working.since} /></li> : null}
       {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );

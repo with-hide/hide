@@ -2942,6 +2942,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
 
+    /** A level under Desk's box: the whole permission table in one event, the other settings untouched. */
+    deskPermissions(permissions: DeskPermissions) {
+      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: { permissions } });
+    },
+
     /** `취소` on a waiting card (B21). */
     deskJobCancel(id: string) {
       dispatch({ schema_version: 2, kind: "desk_job_cancel", payload: { id } });
@@ -4556,8 +4561,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** "reload" reads the disk contents; "keep_editing" accepts the disk
-     * timestamp so the next save overwrites. */
-    resolveConflict(tabId: string, action: "reload" | "keep_editing") {
+     * timestamp so the next save overwrites; "follow" reads the disk contents
+     * after the file changed there, only while the tab holds no edit, save or
+     * conflict of its own, which the core decides. */
+    resolveConflict(tabId: string, action: "reload" | "keep_editing" | "follow") {
       dispatch({ schema_version: 2, kind: "file_conflict", payload: { tab_id: tabId, action } });
     },
 

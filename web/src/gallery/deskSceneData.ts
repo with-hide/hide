@@ -158,7 +158,7 @@ const chip = (session: DeskSessionRef): DeskSessionChip => ({ ...session, pane_i
 export function handoffItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 1, text: "@project(~/projects/herdr-ide herdr-ide) mention 버튼 정리하고 PR까지, 갤러리 캡처 라이트·다크 비교, release 노트 초안도 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", mentions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄울게요.\n\n띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄울게요.\n\n띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 3, job_id: "mention" },
     { kind: "job", id: 4, job_id: "gallery" },
     { kind: "job", id: 5, job_id: "release" },
@@ -173,14 +173,14 @@ export function statusItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 11, text: "지금 작업들 잘 되고 있어?", at_ms: at(now, 8), mentions: [] },
     {
-      kind: "reply", mentions: [chip(SESSIONS.recordNow), chip(SESSIONS.gallery)], agent: "claude", id: 12, at_ms: at(now, 8), state: "done", thought_ms: 5_000, steps: { ...NO_STEPS, sessions: 9 },
+      kind: "reply", missions: [], mentions: [chip(SESSIONS.recordNow), chip(SESSIONS.gallery)], agent: "claude", id: 12, at_ms: at(now, 8), state: "done", thought_ms: 5_000, steps: { ...NO_STEPS, sessions: 9 },
       text: "9개 중 **2개가 답을 기다리고**, 하나는 꼬일 수 있어요.\n\n- **꼬일 수 있어요** · @session(w1:record-now record-now)와 @session(w1:gallery 갤러리 캡처 비교)가 둘 다 `scripts/capture-gallery.mjs`를 고쳐요. 맞춰 줄까요?\n- **미션 판단** · Desk 1차가 1b를 공용 부품 머지 전에 시작할지 물어요.\n- **잘 돌고 있어요** · mention 버튼 정리(6/14), reel 자막 수정(mini) 외 4개. PR 1905는 초록이라 머지만 남았어요.",
     },
     { kind: "job", id: 13, job_id: "gallery" },
     { kind: "user", id: 14, text: "응 맞춰줘", at_ms: at(now, 4), mentions: [] },
     letter(15, SESSIONS.recordNow, "fyi", "다크 출력은 dark/로 맞춰요", true),
     letter(16, SESSIONS.gallery, "fyi", "record-now가 같은 파일을 고쳐요, 먼저 받아서 하세요", false),
-    { kind: "reply", mentions: [], agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 17, text: "양쪽에 알렸어요. 갤러리 캡처 비교는 아직 질문에 답을 기다리고 있어요.", at_ms: at(now, 4), state: "done", thought_ms: null, steps: NO_STEPS },
   ];
 }
 
@@ -188,10 +188,10 @@ export function statusItems(now: number): DeskItem[] {
 export function switchedItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 21, text: "오늘 끝난 거 정리해줘", at_ms: at(now, 30), mentions: [] },
-    { kind: "reply", mentions: [], agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 22, text: "세 개 끝났어요: release 노트, 갤러리 비교, reel 자막. 갤러리 비교는 다크 캡처가 남았어요.", at_ms: at(now, 29), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "switch", id: 23, from: "claude", to: "codex", carried: "all" },
     { kind: "user", id: 24, text: "그럼 다크 캡처는 이어서 맡겨줘", at_ms: at(now, 20), mentions: [] },
-    { kind: "reply", mentions: [], agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "codex", id: 25, text: "갤러리 비교 스레드에 다크 모드 캡처를 이어서 하라고 전했어요.", at_ms: at(now, 19), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "model", id: 26, model: "gpt-mini", effort: "medium" },
   ];
 }
@@ -208,7 +208,7 @@ export function mentionItems(now: number): DeskItem[] {
 export function missionItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 41, text: "Desk 1차를 미션으로 돌려줘", at_ms: at(now, 25), mentions: [] },
-    { kind: "reply", mentions: [], agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 42, text: "Conductor 스레드를 띄워 미션으로 돌려요. 노드 여섯 개, PR 모드예요.", at_ms: at(now, 25), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 43, job_id: "conductor" },
   ];
 }
@@ -217,6 +217,14 @@ export function missionItems(now: number): DeskItem[] {
 export const IRREVERSIBLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
   kind: "approval", id: 55, card: "command", command: "hide agent archive agent-18285", folder: "~/projects/herdr-ide", reason: null, state: "waiting",
   asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "프로젝트 패널 결과 구현", refusal: null,
+};
+
+/** A card for a long line Hide cannot read, which folds to two lines and asks at every level. */
+export const LONG_UNREADABLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
+  kind: "approval", id: 57, card: "command",
+  command: "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id,.name,.pane,.runtime,.connection,(.parent//\"-\"),(.project//\"-\")] | @tsv'; echo ---; hide mission list | head -40; python3 scripts/merge-order.py --branch desk/feedback",
+  folder: "~/.hide/state/desk/work", reason: null, state: "waiting",
+  asks: [{ kind: "irreversible", value: "unreadable" }], subject: null, refusal: null,
 };
 
 /** The lines of the card scene that change no state, and Desk's own approval card asked and answered. */
@@ -237,7 +245,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed", asks: [{ kind: "row", value: "edit" }], subject: null, refusal: null },
     { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
     { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { ...IRREVERSIBLE_CARD, id: 91, state: "allowed_conversation" },
+    { kind: "approval", id: 91, card: "command", command: "pnpm --dir web test desk-chat", folder: "~/projects/herdr-ide", reason: null, state: "allowed_conversation", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
     { ...IRREVERSIBLE_CARD, id: 92, command: "hide agent archive agent-18301", state: "rejected", refusal: "대신 끝날 때까지 기다렸다가 보관해줘" },
     { kind: "user", id: 93, text: "대신 끝날 때까지 기다렸다가 보관해줘", at_ms: at(now, 2), mentions: [] },
     { kind: "model", id: 65, model: "sonnet", effort: "low" },
@@ -251,7 +259,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "notice", id: 73, notice: "no_ask_mode", agent: "grok", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
     { kind: "notice", id: 94, notice: "turn_failed", agent: "opencode", detail: "Rate limit reached for bai/deepseek-v4.1-flash" },
-    { kind: "reply", mentions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], missions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
     { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];
 }
@@ -471,7 +479,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   const facts = new Map<string, SessionFacts>();
   for (const named of every) {
     if (named.mark === null) {
-      facts.set(pane(named.name), { listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+      facts.set(pane(named.name), { listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
       continue;
     }
     const card = job(named.name, named.name, {
@@ -481,7 +489,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
       ...named.extra,
     });
     const parent = every.find((one) => one.name === named.parent);
-    facts.set(pane(named.name), { listed: true, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
+    facts.set(pane(named.name), { listed: true, name: named.name, mark: named.mark, agent_kind: named.kind, card: { ...card, mark: named.mark }, since: at(now, named.minutes ?? 1), parent: parent ? ref(parent) : null });
   }
   const token = (named: Named) => `@session(${pane(named.name)} ${named.name})`;
   const text = [
@@ -490,7 +498,7 @@ export function chipsScene(now: number): { items: DeskItem[]; facts: ReadonlyMap
   ].join("\n");
   const items: DeskItem[] = [
     { kind: "user", id: 1, text: "지금 돌고 있는 세션 프로젝트별로 정리해줘", at_ms: at(now, 1), mentions: [] },
-    { kind: "reply", agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
+    { kind: "reply", missions: [], agent: "claude", id: 2, text, at_ms: at(now, 1), state: "done", thought_ms: 6_000, steps: { ...NO_STEPS, sessions: every.length }, mentions: every.map((named) => ({ pane_id: pane(named.name), name: named.name, agent_kind: named.mark === null ? null : named.kind, mark: named.mark })) },
   ];
   return { items, facts, open: pane("agent-journey") };
 }

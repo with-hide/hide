@@ -3410,6 +3410,8 @@ export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };
 /** A session a conversation line names, drawn as a chip with its row's mark now (`null` once it has no row or the line is past the newest 64). */
 export type DeskSessionChip = { pane_id: string; name: string; agent_kind: string | null; mark: RowMark | null };
+/** A mission a reply names as `@mission(<id> <title>)`, read by the core: its id and the title the reply wrote. */
+export type DeskMissionMention = { id: string; title: string };
 
 export type DeskAgent = {
   id: DeskAgentId;
@@ -3436,7 +3438,7 @@ export type DeskItem =
   /** `attachments` are the files sent with it, each staged at `path` on the core's machine; absent when none. */
   | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] }
   /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
-  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[]; missions: DeskMissionMention[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   /**
@@ -3664,7 +3666,10 @@ export type DeskJobsSection = {
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
-export type DeskLive = { text: string | null; started_at_ms: number | null };
+/** One of `DeskSteps`' kinds, by its count's name there. */
+export type DeskStepKind = keyof DeskSteps;
+/** The turn under way: its reply so far, when it started, and what its newest tool call does while the agent has written nothing since. */
+export type DeskLive = { text: string | null; started_at_ms: number | null; step?: DeskStepKind | null };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
