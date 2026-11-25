@@ -134,6 +134,46 @@ impl OriginHolds {
     }
 }
 
+/// Which connection opened the core's one session thread
+/// (`session_thread_open`). The panel closes the thread when it unmounts, but
+/// a window that reloads, crashes or loses its socket says nothing, and the
+/// thread's file looks would then outlive every screen that showed it; so the
+/// connection that opened it closes it when it ends, unless another window
+/// opened or closed the thread since.
+#[derive(Default)]
+pub struct ThreadOpener {
+    opener: Mutex<Option<u64>>,
+}
+
+impl ThreadOpener {
+    /// `opener` opened the thread (`Some`) or someone closed it (`None`);
+    /// `dispatch` hands that event to the core while the opener is still
+    /// locked, so the opener kept and the order the core hears agree. A
+    /// refused dispatch keeps the opener it had.
+    pub fn set(
+        &self,
+        opener: Option<u64>,
+        dispatch: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut held = self.opener.lock().expect("thread opener");
+        dispatch()?;
+        *held = opener;
+        Ok(())
+    }
+
+    /// A closed connection that opened the thread closes it, calling `close`
+    /// under the lock. Returns whether it did.
+    pub fn release(&self, connection: u64, close: impl FnOnce()) -> bool {
+        let mut held = self.opener.lock().expect("thread opener");
+        if *held != Some(connection) {
+            return false;
+        }
+        *held = None;
+        close();
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +184,29 @@ mod tests {
             device_id: "device-a".into(),
             task_key: key.into(),
         }
+    }
+
+    #[test]
+    fn a_session_thread_closes_with_the_connection_that_opened_it_and_no_other() {
+        let opener = ThreadOpener::default();
+        let mut closed = 0;
+        opener.set(Some(1), || Ok(())).unwrap();
+        assert!(!opener.release(2, || closed += 1), "another window leaving");
+        assert!(opener.release(1, || closed += 1), "its window leaving");
+        assert!(!opener.release(1, || closed += 1), "closed once");
+        assert_eq!(closed, 1);
+
+        // A reload: the new window opens before the old one is seen leaving.
+        opener.set(Some(3), || Ok(())).unwrap();
+        opener.set(Some(4), || Ok(())).unwrap();
+        assert!(!opener.release(3, || closed += 1));
+        // Closed by its panel: nobody closes it again.
+        opener.set(None, || Ok(())).unwrap();
+        assert!(!opener.release(4, || closed += 1));
+        // A refused open keeps no opener.
+        assert!(opener.set(Some(5), || Err("full".into())).is_err());
+        assert!(!opener.release(5, || closed += 1));
+        assert_eq!(closed, 1);
     }
 
     #[test]

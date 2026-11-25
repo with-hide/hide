@@ -141,6 +141,9 @@ pub struct AppState {
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
+    /// Which connection opened the core's session thread; it closes the
+    /// thread when it ends without saying so.
+    pub thread_opener: Arc<crate::demand::ThreadOpener>,
     /// What Settings > About reads about this daemon, sent once after
     /// a handshake. No token, no environment beyond the paths it names.
     pub daemon_info: Arc<Value>,
@@ -3064,6 +3067,18 @@ fn handle_client_text(
             }
             return Ok(ClientAction::Replies(Vec::new()));
         }
+        // The core holds one session thread; the connection that opened it
+        // closes it when it ends without a close (a reload, a crash, a lost
+        // socket), so its file looks do not outlive the screen.
+        Some(kind @ ("session_thread_open" | "session_thread_close")) => {
+            let opener = (kind == "session_thread_open").then_some(connection);
+            let bytes =
+                serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
+            state
+                .thread_opener
+                .set(opener, || state.core.dispatch(bytes))?;
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some("open_external") => {
             // This token-authenticated socket can be reached through an SSH
             // tunnel. The browser cannot prove it is on the daemon's host,
@@ -5495,6 +5510,20 @@ pub(crate) fn renderers_drawn(state: &AppState, attached: bool) {
     dispatch_ui_attached(&state.core, attached);
 }
 
+/// Closes the session thread a connection opened and left without closing.
+fn close_session_thread(core: &CoreHandle, connection: u64) {
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "session_thread_close",
+        "payload": {},
+    });
+    let failed = core.dispatch(event.to_string().into_bytes()).err();
+    eprintln!(
+        "{}",
+        json!({"component": "hided", "kind": "session_thread.closed_with_connection", "connection": connection, "failed": failed})
+    );
+}
+
 /// Tells the core whether any window draws its snapshot.
 fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
     let event = json!({
@@ -5597,6 +5626,9 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
     });
+    state
+        .thread_opener
+        .release(connection, || close_session_thread(&state.core, connection));
     let remaining = state
         .clients
         .fetch_sub(1, Ordering::SeqCst)

@@ -74,11 +74,13 @@ pub fn read(
     answer.map(|(activity, _)| activity)
 }
 
-/// Where plain looks found their sessions, newest last; past `FOUND_CAP` the
-/// oldest is dropped (engineering rule 15). Paths stay on this machine: only
-/// a look's time and size cross the boundary.
-static FOUND: Mutex<Vec<((PathBuf, SessionActivityRequest), Found)>> = Mutex::new(Vec::new());
+/// Where plain looks found their sessions, the one used last at the end; past
+/// `FOUND_CAP` the one used longest ago is dropped (engineering rule 15).
+/// Paths stay on this machine: only a look's time and size cross the boundary.
+static FOUND: Mutex<Held> = Mutex::new(Vec::new());
 const FOUND_CAP: usize = 64;
+
+type Held = Vec<((PathBuf, SessionActivityRequest), Found)>;
 
 #[derive(Clone)]
 struct Found {
@@ -107,15 +109,31 @@ impl Found {
 }
 
 fn found(key: &(PathBuf, SessionActivityRequest)) -> Option<Found> {
-    let held = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
-    held.iter()
-        .find(|(held, _)| held == key)
-        .map(|(_, found)| found.clone())
+    touch(
+        &mut FOUND.lock().unwrap_or_else(PoisonError::into_inner),
+        key,
+    )
 }
 
 /// Keeps `found` for `key`, or forgets it after a look that failed.
 fn remember(key: (PathBuf, SessionActivityRequest), found: Option<Found>) {
-    let mut held = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    keep(
+        &mut FOUND.lock().unwrap_or_else(PoisonError::into_inner),
+        key,
+        found,
+    );
+}
+
+/// `key`'s entry, moved to the end as the one used last.
+fn touch(held: &mut Held, key: &(PathBuf, SessionActivityRequest)) -> Option<Found> {
+    let at = held.iter().position(|(held, _)| held == key)?;
+    let entry = held.remove(at);
+    let found = entry.1.clone();
+    held.push(entry);
+    Some(found)
+}
+
+fn keep(held: &mut Held, key: (PathBuf, SessionActivityRequest), found: Option<Found>) {
     held.retain(|(held, _)| *held != key);
     if let Some(found) = found {
         if held.len() >= FOUND_CAP {
@@ -486,6 +504,50 @@ mod tests {
                 crate::SESSION_DISCOVERY_LIMIT
             ))
         );
+    }
+
+    #[test]
+    fn the_found_sessions_drop_the_one_used_longest_ago_at_the_cap() {
+        let key = |n: usize| {
+            (
+                PathBuf::from("/home"),
+                SessionActivityRequest {
+                    account: Default::default(),
+                    agent: Agent::Claude,
+                    reference_kind: "id".into(),
+                    reference_value: format!("session-{n}"),
+                    cwd: None,
+                    exact_route: false,
+                    expected_id: None,
+                },
+            )
+        };
+        let at = |n: usize| Found {
+            path: PathBuf::from(format!("/sessions/{n}.jsonl")),
+            incarnation: String::new(),
+            bytes: 0,
+            modified_at_unix_ms: 0,
+        };
+        let mut held = Held::new();
+        for n in 0..FOUND_CAP {
+            keep(&mut held, key(n), Some(at(n)));
+        }
+        // The first session found is looked at again before the cap is passed.
+        assert!(touch(&mut held, &key(0)).is_some());
+        keep(&mut held, key(FOUND_CAP), Some(at(FOUND_CAP)));
+        assert_eq!(held.len(), FOUND_CAP);
+        assert_eq!(
+            touch(&mut held, &key(0)).map(|found| found.path),
+            Some(at(0).path),
+            "found first, used a moment ago"
+        );
+        assert!(touch(&mut held, &key(1)).is_none(), "used longest ago");
+        keep(&mut held, key(2), None);
+        assert!(
+            touch(&mut held, &key(2)).is_none(),
+            "forgotten after a failed look"
+        );
+        assert_eq!(held.len(), FOUND_CAP - 1);
     }
 
     #[test]

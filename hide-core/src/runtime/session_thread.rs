@@ -450,7 +450,15 @@ impl Runtime {
                 Call::SessionActivity { request },
                 ACTIVITY_TIMEOUT,
             )
-            .map_err(|error| (ReadFailure::of(&error), error.to_string()))
+            .map_err(|error| {
+                // No answer in time is not a lost node: the look waits like a
+                // refusal and the thread stays lit. Only an unlinked node dims.
+                let failure = match error {
+                    crate::node_access::LinkError::Unknown(_) => ReadFailure::Refused,
+                    _ => ReadFailure::of(&error),
+                };
+                (failure, error.to_string())
+            })
         };
         let Some(context) = self.worker_context.clone() else {
             return self.ingest_thread_activity(generation, check()) || changed;
@@ -874,7 +882,7 @@ impl Runtime {
                 open.next_check_ms = now + REFUSED_LOOK_WAIT_MS;
                 if open.look_failure.as_deref() != Some(reason.as_str()) {
                     crate::diagnostic!(serde_json::json!({
-                        "kind": "session_thread.look_refused", "generation": generation,
+                        "kind": "session_thread.look_failed", "generation": generation,
                         "error": reason,
                     }));
                     open.look_failure = Some(reason);
@@ -1503,7 +1511,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_look_dims_an_unreachable_node_and_logs_a_refusal_once_per_reason() {
+    fn a_failed_look_dims_only_an_unlinked_node_and_logs_any_other_failure_once_per_reason() {
         let node = Arc::new(ScriptedNode::default());
         let mut runtime = runtime(&node);
         observe(&mut runtime, "idle", 1, "t1", true);
@@ -1534,13 +1542,23 @@ mod tests {
             open_thread(&mut runtime).next_check_ms = 0;
             node.look(refused("session_route_owner_changed"));
             runtime.tick_session_thread(1_000_000);
+            // No answer in time (this machine's node still at its file work).
+            open_thread(&mut runtime).next_check_ms = 0;
+            node.look(Err(LinkError::Unknown(
+                "This machine's node did not answer within 5000 ms".to_owned(),
+            )));
+            runtime.tick_session_thread(1_000_000);
+            assert!(open_thread(&mut runtime).retry_at_ms.is_none());
         });
         let refusals: Vec<_> = logged
             .iter()
-            .filter(|record| record["kind"] == "session_thread.look_refused")
+            .filter(|record| record["kind"] == "session_thread.look_failed")
             .collect();
-        assert_eq!(refusals.len(), 2, "{logged:?}");
-        assert!(thread(&runtime).connected, "a refusal is no lost node");
+        assert_eq!(refusals.len(), 3, "{logged:?}");
+        assert!(
+            thread(&runtime).connected,
+            "a refusal or a late answer is no lost node"
+        );
 
         // A node that cannot be asked dims the thread, and a read asks again 5 s later.
         open_thread(&mut runtime).next_check_ms = 0;
