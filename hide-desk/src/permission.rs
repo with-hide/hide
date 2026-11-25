@@ -1448,6 +1448,47 @@ fn expansion_assigns(
     }
 }
 
+/// The shell options `set` may change and still leave the rest of the line
+/// read as Hide reads it: stop on an error, an unset name or a failed pipe,
+/// print each command, leave globs and files alone.
+const SET_LETTERS: &str = "euxvfC";
+const SET_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "verbose", "pipefail", "noglob", "noclobber"];
+
+/// `set`: zsh's `set -A NAME values` and `set +A NAME values` set an array;
+/// any other option than [`SET_LETTERS`] and [`SET_NAMES`] may change how the
+/// words after it are read (bash's `set -k` makes a `NAME=value` among a
+/// command's arguments its environment), so Hide cannot read the line.
+/// Words after `--` or `-` are the positional parameters.
+fn set(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let Some(letters) = word.strip_prefix('-').or_else(|| word.strip_prefix('+')) else {
+            return;
+        };
+        if letters.is_empty() || letters == "-" {
+            return;
+        }
+        for letter in letters.chars() {
+            match letter {
+                'A' => {
+                    // The words after the name are its values.
+                    if let Some(target) = words.next() {
+                        assign(target, folders, place, depth, line);
+                    }
+                    return;
+                }
+                'o' => match words.next() {
+                    Some(option) if SET_NAMES.contains(&option.as_str()) => {}
+                    Some(_) => line.rewrites_what_runs(),
+                    None => return,
+                },
+                letter if SET_LETTERS.contains(letter) => {}
+                _ => line.rewrites_what_runs(),
+            }
+        }
+    }
+}
+
 /// The variables a command of [`ASSIGNING`] sets: `printf` only the one
 /// after `-v`, the others every word that names one. A name made to stand
 /// for another variable (`declare -n`, `typeset -n`, `local -n`) may stand
@@ -1739,16 +1780,11 @@ fn run_program(
         assigns(name, args, folders, place, depth, line);
     }
     if name == "set" {
-        // zsh's `set -A NAME values` and `set +A NAME values` set an array.
-        let mut words = args.iter();
-        while let Some(word) = words.next() {
-            if (word.starts_with('-') || word.starts_with('+'))
-                && word.contains('A')
-                && let Some(target) = words.next()
-            {
-                assign(target, folders, place, depth, line);
-            }
-        }
+        set(args, folders, place, depth, line);
+    }
+    if name == "shopt" && args.iter().any(|word| matches!(word.as_str(), "-s" | "-u" | "-o")) {
+        // An option of bash's may change how the words after it are read.
+        line.rewrites_what_runs();
     }
     match name {
         // It runs in this shell, so where it leaves the shell is not

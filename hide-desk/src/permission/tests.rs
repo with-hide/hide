@@ -749,6 +749,39 @@ fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
 }
 
 #[test]
+fn a_shell_option_other_than_the_known_harmless_ones_makes_the_line_unreadable() {
+    // bash(1) `set -k`: every `NAME=value` among a command's arguments
+    // becomes its environment, so `git diff` would run an external diff.
+    for line in [
+        "set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "set -ek; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "set -a; cat x",
+        "set -e -o pipefail -o keyword; cat x",
+        "shopt -s expand_aliases; cat x",
+        // zsh's own option words are not commands Hide knows.
+        "setopt KEYWORD_ARGS; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "emulate ksh; cat x",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
+        assert_eq!(reading(line).row, Row::Shell, "{line}");
+    }
+    for line in [
+        "set -euo pipefail; cat x",
+        "set -x; cat x",
+        "set +e; cat x",
+        "set -o errexit -o nounset; cat x",
+        "set -- -k a; cat x",
+        "set -A items -k a; cat x",
+        "shopt; cat x",
+        "shopt -q extglob; cat x",
+    ] {
+        assert_eq!(reading(line).row, Row::Read, "{line}");
+        assert!(asks(line).is_empty(), "{line}: {:?}", asks(line));
+    }
+}
+
+#[test]
 fn an_expansion_that_may_assign_asks_unless_its_name_reads_exactly_since_unreadable_is_the_safe_side()
  {
     // An assignment inside an expansion, in any word, redirection or
