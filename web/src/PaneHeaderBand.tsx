@@ -27,16 +27,11 @@ import { TreeChipFace } from "./components/tree-chip";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
 import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
-import type { PaneTurnRowMode } from "./generated/hided-ws";
+import { usePaneTurnRowMode } from "./drawnDisplay";
 import { Button } from "./components/ui/button";
 import { RowOverlayButton } from "./components/ui/row-button";
 import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
 import { HumanTurnCopy } from "./components/human-turn-copy";
-
-/** The View menu's turn row mode; absent reads as one line. */
-export function usePaneTurnRowMode(): PaneTurnRowMode {
-  return useShellStore((state) => state.rest?.ui_state?.pane_turn_row_mode) ?? "one_line";
-}
 
 /**
  * Marks the pane Fork agent made (PRD fork-operator-root B8, B9): a quiet icon after

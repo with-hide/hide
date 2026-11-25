@@ -13,6 +13,7 @@ import { overlayRects, intersects } from "./browserViews";
 import { DeviceRail } from "./components/device-rail";
 import { Button } from "./components/ui/button";
 import { screenState, screenStateKey, type ScreenState } from "./computers";
+import { ownDisplayPreferences, sameDisplayPreferences, type DisplayPreferences } from "./displayPreferences";
 import { railShown } from "./devices";
 import { hostBridge, type BrowserRect, type RemoteScreenState } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -39,6 +40,13 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   const key = peer?.key ?? null;
   // What this window calls the machine, which its page names itself by.
   const name = peer?.name ?? null;
+  // This window's View menu choices, which that computer's screen draws with while this window shows it.
+  const logoMode = useShellStore((s) => ownDisplayPreferences(s.rest?.ui_state).agent_logo_mode);
+  const turnRowMode = useShellStore((s) => ownDisplayPreferences(s.rest?.ui_state).pane_turn_row_mode);
+  const display = useRef<DisplayPreferences>({ agent_logo_mode: logoMode, pane_turn_row_mode: turnRowMode });
+  display.current = { agent_logo_mode: logoMode, pane_turn_row_mode: turnRowMode };
+  // The last show sent, so a changed choice reaches the open screen without closing it.
+  const shown = useRef<{ device: string; key: string; rect: BrowserRect; name: string | null; display: DisplayPreferences } | null>(null);
   const rail = useShellStore((s) => railShown(s.rest));
   const bridge = hostBridge()?.remoteScreens ?? null;
   const stage = useRef<HTMLDivElement>(null);
@@ -75,6 +83,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   useEffect(() => {
     if (!bridge) return undefined;
     if (!showing || device === null || key === null) {
+      shown.current = null;
       bridge.show(null);
       return undefined;
     }
@@ -90,7 +99,8 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       const placed = covered ? "covered" : JSON.stringify(rect);
       if (placed === last) return;
       last = placed;
-      bridge.show(covered ? null : { device, key, rect, name });
+      shown.current = covered ? null : { device, key, rect, name, display: display.current };
+      bridge.show(shown.current);
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(place);
@@ -106,9 +116,18 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       resized.disconnect();
       layers.disconnect();
       window.removeEventListener("resize", schedule);
+      shown.current = null;
       bridge.show(null);
     };
   }, [bridge, showing, device, key, name, attempt]);
+
+  // A choice changed in this window's View menu reaches the screen it shows at once.
+  useEffect(() => {
+    const next = { agent_logo_mode: logoMode, pane_turn_row_mode: turnRowMode };
+    if (!bridge || !shown.current || sameDisplayPreferences(shown.current.display, next)) return;
+    shown.current = { ...shown.current, display: next };
+    bridge.show(shown.current);
+  }, [bridge, logoMode, turnRowMode]);
 
   const why = state !== "ready" ? state : failed ? failedState(loaded?.reason) : null;
   return (

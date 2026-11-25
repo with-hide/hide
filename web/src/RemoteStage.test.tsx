@@ -50,3 +50,34 @@ it("says which computer must update on a paired machine's screen and leaves the 
     vi.unstubAllGlobals();
   }
 });
+
+// The screen draws with this window's View menu choices (UI_BEHAVIOR.md,
+// Device rail, Another computer's screen; operator decision 2026-11-25): the
+// show carries them, and a choice changed while the screen shows reaches it
+// at once, without closing the screen (which would close its connection).
+it("carries this window's display choices with the show, and a changed choice to the open screen without closing it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const shows: unknown[] = [];
+  const choose = (agent_logo_mode: "shown" | "hidden") => act(async () => useShellStore.setState({ rest: { navigator: { devices: [], peers: [peer({ connected: true })] }, ui_state: { agent_logo_mode } } } as never));
+  try {
+    window.hideHost = { kind: "electron", platform: "darwin", onWindowChrome: () => () => undefined, remoteScreens: { show: (view: unknown) => shows.push(view), onState: () => () => undefined } } as never;
+    await choose("hidden");
+    await act(async () => useUiStore.setState({ remoteScreen: "mini" }));
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root.render(<TooltipProvider><RemoteStage actions={createActions(() => true)} /></TooltipProvider>));
+    const displays = () => shows.map((view) => (view as { display?: unknown } | null)?.display ?? null);
+    expect(displays()).toEqual([{ agent_logo_mode: "hidden", pane_turn_row_mode: "one_line" }]);
+
+    await choose("shown");
+    expect(displays()).toEqual([{ agent_logo_mode: "hidden", pane_turn_row_mode: "one_line" }, { agent_logo_mode: "shown", pane_turn_row_mode: "one_line" }]);
+    await act(async () => root.unmount());
+  } finally {
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    delete (window as { hideHost?: unknown }).hideHost;
+    vi.unstubAllGlobals();
+  }
+});

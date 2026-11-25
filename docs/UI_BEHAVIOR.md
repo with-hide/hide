@@ -981,10 +981,11 @@ Hidden is the default and draws the screens as before.
 Shown draws the agent's 16-pixel logo after the status mark and before the title in the sidebar's agent rows (a sleeping row after its moon), in 태스크 rows and child rows, and in the Agent tabs; a row's second and branch lines indent past it in the 태스크 list, and a kind with no logo draws the neutral `>_`.
 A row Hide AI started wears the owl as a badge on the logo, and a profile agent's row its profile badge, which stays after the status mark while hidden.
 Search, overlays, Overview, a Project's conversation list, the graph, Task boards and the phone never follow the mode, and the pane header, the usage chips and the Usage pages draw their logos in both modes.
+Another computer's screen shown in this window draws with this window's mode, not that computer's ([Device rail](#device-rail), Another computer's screen).
 While hidden, holding the Agents key (⌥, or Alt) draws the same logos for as long as the number keycaps show: the peek is the existing hold state, with its 0.15 second delay, its end on any other key, on a window that loses focus and while a layer is open, and it adds no key listener.
 Shown, the same hold shows only the keycaps.
 Changing the mode or peeking never changes a row's height, the scroll position or the selection.
-Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `hide-core/src/runtime/events.rs`.
+Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/drawnDisplay.ts` (whose choice a screen draws: its core's, or the showing window's), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
 ### Pane turn row mode
 
@@ -1001,7 +1002,8 @@ It shapes the second row of every agent pane ([Agent panes and the Agents explor
 
 The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two_lines` or `off`, `one_line` when never chosen), changed only by `pane_turn_row_mode_set`; `ui_state_update` never changes it, an unknown stored value opens one line with the `ui_state.pane_turn_row_mode_unknown` diagnostic, and it survives a restart.
 The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
-Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `hide-core/src/runtime/events.rs`.
+Another computer's screen shown in this window draws with this window's mode, not that computer's ([Device rail](#device-rail), Another computer's screen).
+Web owners: `web/src/components/view-menu.tsx`, `web/src/drawnDisplay.ts` and `web/src/PaneHeaderBand.tsx`; core owner: `hide-core/src/runtime/events.rs`.
 
 ### Subagents
 
@@ -2546,6 +2548,8 @@ How the two connect (direct, Tailscale, relay) is said in the device's Settings 
 A screen that cannot show says why, in the place it would stand and in its tile's hint, each in its own words: `연결 안 됨` with `다시 닿으면 자동으로 열려요`, `멈춤`, `상대가 멈춤`, `이 컴퓨터 업데이트 필요` or `그 컴퓨터 업데이트 필요`, `허가 없음`, and `확인하는 중` while the pairing settles; the tile is dimmed with its `×` meanwhile, and the screen opens on its own once it can, asking again every 5 s while its computer reads as reachable.
 Which computer must update is said the same once either side asked the other to update; the place only says it and offers nothing to press, because the corner notice on that computer's own window carries the press (`지금 업데이트` or `업데이트 요청`), and no strip over the screen speaks of updates (operator review 2026-11-22).
 That computer's screen names it as this window does: its title is the name this computer knows it by rather than its own `이 Mac`, and while its own operator chose no interface language it speaks this window's (`hideRemote.onViewer`).
+It draws with this window's View menu choices too, the agent logos of its rows and tabs and the request and progress line of its panes, over the ones its own window chose, and draws no View menu of its own, so the rail's View menu changes what both screens draw, at once; nothing is written to that computer's core, whose own window keeps its own choices, and holding ⌥ peeks at the logos there as here (`web/src/drawnDisplay.ts`; operator decision 2026-11-25).
+A desktop app too old to send them leaves the screen on its own choices and its own View menu.
 While the other computer's screen drops for a moment, it shows its own `다시 연결하는 중` and sends no keys.
 Its connection lives only while its tile shows: another tile closes it, and coming back opens it at once, drawn from where it was.
 Anything this window draws over the screen's place (a menu, Settings, a dialog) moves the screen aside until it closes, since the screen is a view of its own over the window.

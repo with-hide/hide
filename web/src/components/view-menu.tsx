@@ -2,13 +2,13 @@
 // whether list rows and tabs draw the agent's logo, with a line that names the
 // key which shows them for as long as it is held, then how agent panes draw
 // their turn row. The core owns both choices; each check always reads what the
-// core confirmed.
+// core confirmed. On another computer's screen these choices are the showing
+// window's (`displayPreferences.ts`), so that screen draws no View menu of its own.
 
 import { EyeIcon } from "lucide-react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import type { AgentLogoMode, PaneTurnRowMode } from "../generated/hided-ws";
-import { usePaneTurnRowMode } from "../PaneHeaderBand";
 import { useInterfaceTranslation } from "../i18n/client";
 import { agentPeekKey } from "../shortcutLabels";
 import { useShellStore } from "../store";
@@ -32,7 +32,7 @@ export function ViewMenu({ actions, place = "footer" }: { actions: Actions; plac
   const choose = (next: AgentLogoMode) => {
     if (next !== mode) actions.setAgentLogoMode(next);
   };
-  const turnRow = usePaneTurnRowMode();
+  const turnRow: PaneTurnRowMode = useShellStore((s) => s.rest?.ui_state?.pane_turn_row_mode) ?? "one_line";
   const chooseTurnRow = (next: PaneTurnRowMode) => {
     if (next !== turnRow) actions.setPaneTurnRowMode(next);
   };
