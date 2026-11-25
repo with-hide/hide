@@ -57,14 +57,17 @@ export function missionOfPane(rest: SnapshotRest | null | undefined, agents: Age
 
 /**
  * The open mission a pane's session works a node of, with that node: the
- * node whose worker runs in this pane on this machine (`MissionNode.pane_id`,
- * `machine`); none while the record cannot be read.
+ * node whose worker is this session, in this pane on this machine
+ * (`MissionNode.pane_id`, `machine`, read as the core reads it: no machine
+ * is the mission's own), and, when the node names its worker, this agent
+ * (`agent_id`), so a later session in the same pane is no worker of it;
+ * none while the record cannot be read.
  */
-export function missionWorkedIn(rest: SnapshotRest | null | undefined, row: Pick<AgentRow, "pane_id" | "device_id">): { mission: Mission; node: MissionNode } | null {
+export function missionWorkedIn(rest: SnapshotRest | null | undefined, row: Pick<AgentRow, "id" | "pane_id" | "device_id">): { mission: Mission; node: MissionNode } | null {
   if (rest?.missions?.failed) return null;
   for (const mission of rest?.missions?.items ?? []) {
     if (!missionOpen(mission)) continue;
-    const node = mission.nodes.find((one) => one.pane_id === row.pane_id && (one.machine === null || one.machine === row.device_id));
+    const node = mission.nodes.find((one) => one.pane_id === row.pane_id && (one.machine ?? mission.device_id) === row.device_id && (one.agent_id === null || one.agent_id === row.id));
     if (node) return { mission, node };
   }
   return null;

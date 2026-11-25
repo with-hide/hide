@@ -11,7 +11,7 @@ import { useShellStore } from "../../store";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
 import type { AskLine } from "../open-asks";
-import { ThreadView, type ThreadPartActions } from "./thread-view";
+import { NO_MENTIONS, ThreadView, type ThreadPartActions } from "./thread-view";
 
 /** The refusals a thread's input words itself; any other is an attachment's, worded as a terminal attachment's is. */
 const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "uncertain", "unavailable", "device_unreachable", "too_long", "control_characters", "attachment_failed", "input_refused"]);
@@ -25,7 +25,7 @@ const INPUT_WORDS = new Set(["pane_changed", "pane_gone", "closed", "asleep", "u
  * the outputs shelf under it), the agent's choice card, the questions Hide
  * found and what stands in the box's place while it sleeps are the caller's.
  */
-export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = [], startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, foot = null, onTerminal, ...parts }: {
+export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, mentions = NO_MENTIONS, startedByDesk = false, focused = false, answer = 0, head = null, ask = null, asks, foot = null, onTerminal, ...parts }: {
   /** The session's card; a session that is no job of Desk's opens before its card arrives, by its pane (D-87). */
   job: DeskJob | null;
   /** The pane whose thread this is; its card's when not given. */

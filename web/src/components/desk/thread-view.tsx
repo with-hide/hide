@@ -359,14 +359,23 @@ const LIT_MS = 2_000;
  * names stay the same, so a message's Markdown is drawn again only when its
  * words change.
  */
+/** The defaults a caller without mentions or questions gets, one array each, so nothing reads them as changed. */
+export const NO_MENTIONS: readonly DeskMention[] = [];
+const NO_ASKS: readonly AskLine[] = [];
+
 function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions["onSession"], onCopy: CopyText): Words {
   const latest = useRef({ onSession, onCopy });
   latest.current = { onSession, onCopy };
   const bridge = useSessionChipBridge();
-  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => {
+  // The chips follow what the mentions say, not the array they arrive in: a caller's new array with the same
+  // sessions keeps every message's view as it is (a new chip set rebuilds each one, losing a selection in it).
+  const said = mentions.map((mention) => JSON.stringify([namedMention(mention), mention.mark ?? null, mention.agent_kind ?? null])).join("\n");
+  const latestMentions = useRef(mentions);
+  latestMentions.current = mentions;
+  const chips = useMemo<MarkdownChip[]>(() => latestMentions.current.map((mention) => {
     const session: DeskSessionRef = { name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null };
     return { token: namedMention(mention), node: bridge(<SessionChip session={session} onPress={() => latest.current.onSession(session)} />) };
-  }), [mentions, bridge]);
+  }), [said, bridge]);
   const copy = useCallback<CopyText>((text, what) => latest.current.onCopy(text, what), []);
   return useMemo(() => ({ chips, copy }), [chips, copy]);
 }
@@ -381,7 +390,7 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * line. A session asleep with no card any more (its sleep closed its pane,
  * B43) keeps its record above the foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, composer, ask = null, asks = [], foot = null, onTerminal, onReachTop, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, foot = null, onTerminal, onReachTop, ...actions }: {
   job: DeskJob | null;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */

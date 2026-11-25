@@ -233,8 +233,8 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
   expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"] [data-desk-thread-bubble]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
 });
 
-/** Lets the lazily loaded Markdown language parse each message, and the parts drawn in roots of their own mount. */
-const laidOut = () => act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+/** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
+const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-markdown-code-copy]")).not.toBeNull()));
 
 it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
   const copied: [string, string][] = [];
@@ -242,7 +242,7 @@ it("draws the agent's words as Markdown and copies a message's original words an
   const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
   const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  await laidOut();
+  await codeCopyDrawn(container);
   const message = container.querySelector('[data-desk-thread-line="agent"]')!;
   expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
   await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
@@ -250,6 +250,23 @@ it("draws the agent's words as Markdown and copies a message's original words an
   expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
   // A copy that took says so on the button that made it.
   expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
+});
+
+it("keeps every message's view while the operator types and while the last message streams, so a selection in one stays", async () => {
+  // Mounted as Desk mounts it: no mentions passed.
+  const { container, type } = await mount();
+  const answer = (id: string, text: string) => ({ sessionUpdate: "agent_message_chunk", messageId: id, content: { type: "text", text } });
+  const turns = (last: string) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중") }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const views = () => Array.from(container.querySelectorAll('[data-desk-thread-line="agent"] .cm-editor'));
+  const [first, second] = views();
+  expect([first, second].every(Boolean)).toBe(true);
+  await type("다");
+  expect(views()).toEqual([first, second]);
+  // A streamed chunk redraws only the message it grows.
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중, 더 썼어요") }) }));
+  expect(views()[0]).toBe(first);
+  expect(container.textContent).toContain("쓰는 중, 더 썼어요");
 });
 
 it("shows the questions Hide found above the box and goes to the answer each was asked in, lit for 2 s (Doop B4)", async () => {
@@ -264,7 +281,6 @@ it("shows the questions Hide found above the box and goes to the answer each was
   const { container } = await mount(job, null, { asks });
   const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("본인 확인은 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
   await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
-  await laidOut();
   // One line above the box says the newest question and how many more there are.
   const line = container.querySelector("[data-desk-thread-asks]")!;
   expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
