@@ -107,6 +107,12 @@ pub struct RowState {
     /// What a Needs You row asks the operator (PRD B2): its own demand, else
     /// its lead raised descendant; absent outside Needs You.
     pub ask: Option<Ask>,
+    /// Every ask a Needs You row stands for, each as a key that stays the
+    /// same for as long as that ask stands, whatever the row's read or group
+    /// does meanwhile (`ask_keys`): the row is announced only for an ask it
+    /// has not stood with (`push::Transitions`). Empty outside Needs You.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ask_keys: Vec<String>,
     /// Where the row stands among its siblings in a tree (PRD B11): asking or
     /// raised (itself or below it), working, finished unread, then the rest.
     pub tree_rank: u8,
@@ -125,6 +131,64 @@ pub struct Ask {
     /// place of `what`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<crate::model::AskSubject>,
+    /// Which ask this is (`RowState::ask_keys`), published there.
+    #[serde(skip)]
+    pub key: String,
+}
+
+/// The key of a person's turn: its declaration, whoever raised it.
+fn human_key(id: &str) -> String {
+    format!("human:{id}")
+}
+
+/// The key of a raised descendant's ask: the person's turn it declares, or
+/// the descendant that asks, what it asks and since when.
+fn raised_key(lead: &super::escalation::RaisedAsk) -> String {
+    if let Some(crate::model::AskSubject::HumanTurn { id, .. }) = &lead.subject {
+        return human_key(id);
+    }
+    let since = lead
+        .since_unix_ms
+        .map_or_else(|| "-".to_owned(), |since| since.to_string());
+    format!("raised:{}:{:?}@{since}", lead.raised_pane_id, lead.verb)
+}
+
+/// The key of the row's own ask: a question the core laid on it by the id
+/// it laid it under (a mission's decision, a plan to review, a question
+/// still waiting), which the agent's turns in between do not move;
+/// otherwise the agent's own demand by the moment the agent last changed
+/// state, the turn the phone's reply is checked against (`with_ask` in
+/// hided).
+fn own_key(agent: &SidebarAgentSnapshot, what: &str) -> String {
+    if let Some(lead) = &agent.laid_lead {
+        return format!("laid:{lead}");
+    }
+    match (agent.changed_at_unix_ms, agent.state_change_seq) {
+        (Some(at), _) => format!("own:{what}@{at}"),
+        (None, Some(seq)) => format!("own:{what}#{seq}"),
+        (None, None) => format!("own:{what}"),
+    }
+}
+
+/// The keys of every ask a Needs You row stands for: the one it leads with
+/// (or, with none it words, such as an unread block, its own demand), every
+/// question the core laid on it, every descendant's raise and the person's
+/// turn declared on it, each counted behind the lead or leading.
+fn ask_keys(agent: &SidebarAgentSnapshot, ask: Option<&Ask>) -> Vec<String> {
+    let lead = ask.map_or_else(
+        || own_key(agent, demand_of(agent).name()),
+        |ask| ask.key.clone(),
+    );
+    let mut keys = std::collections::BTreeSet::from([lead]);
+    keys.extend(agent.laid_asks.iter().map(|id| format!("laid:{id}")));
+    keys.extend(agent.raised.iter().map(raised_key));
+    keys.extend(
+        agent
+            .declared_human_turn
+            .iter()
+            .map(|declared| human_key(&declared.id)),
+    );
+    keys.into_iter().collect()
 }
 
 /// The verb of the row's own demand. A native unanswered question also holds
@@ -251,6 +315,7 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
             what: first_line_cut(&declared.place),
             more: total - 1,
             subject: Some(declared.subject()),
+            key: human_key(&declared.id),
         });
     }
     // A block is not asked of the operator in a verb: its row draws the
@@ -269,6 +334,7 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
             what: agent.detail.clone(),
             more: total - 1,
             subject: agent.ask_subject.clone(),
+            key: own_key(agent, demand_of(agent).name()),
         });
     }
     agent.raised.first().map(|lead| Ask {
@@ -276,6 +342,7 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
         what: lead.what.clone(),
         more: total - 1,
         subject: lead.subject.clone(),
+        key: raised_key(lead),
     })
 }
 
@@ -299,6 +366,7 @@ fn tool_ask(agent: &SidebarAgentSnapshot) -> Option<Ask> {
             what: first_line_cut(&declared.place),
             more,
             subject: Some(declared.subject()),
+            key: human_key(&declared.id),
         });
     }
     raised.first().map(|lead| Ask {
@@ -306,6 +374,7 @@ fn tool_ask(agent: &SidebarAgentSnapshot) -> Option<Ask> {
         what: lead.what.clone(),
         more,
         subject: lead.subject.clone(),
+        key: raised_key(lead),
     })
 }
 
@@ -316,6 +385,12 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
     let asking = matches!(demand, "error" | "question" | "approval");
     let needs_you = group == "needs_you";
     let attention = needs_you || agent.unread;
+    let ask = ask_of(agent, needs_you);
+    let standing_asks = if needs_you {
+        ask_keys(agent, ask.as_ref())
+    } else {
+        Vec::new()
+    };
     // A raised root waits on its children too, but the raise is the news.
     let waiting = agent.wait.is_some() && agent.raised.is_empty();
     // The mark's colour is the mark's own; a chip, a search hit and a
@@ -527,7 +602,8 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         } else {
             agent.changed_at_unix_ms
         },
-        ask: ask_of(agent, needs_you),
+        ask,
+        ask_keys: standing_asks,
         tree_rank: if asking
             || agent.escalation.is_some()
             || !agent.raised.is_empty()
@@ -1246,6 +1322,7 @@ pub(crate) fn verb_of(
 /// in hided; the status transition and descendant raise live with agent state.
 pub mod push {
     use super::super::tally::phone::{AgentKey, PhoneAgent, Projection};
+    use super::human_key;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
     /// What a root agent's notification says, or would say.
@@ -1429,28 +1506,108 @@ pub mod push {
     /// Follows root agents across projections and says which entered Needs You
     /// or Done, and which the desktop made Seen. The first projection it sees
     /// only seeds it: nothing that was already waiting is announced.
+    ///
+    /// A root is announced in Needs You once per ask: it remembers every ask
+    /// each root has stood in Needs You with (`Known`, by
+    /// `RowState::ask_keys`) and every person's turn declared on it or raised
+    /// to it, and a root that comes back to Needs You with only asks it
+    /// already stood with says nothing, whatever took it away meanwhile: a
+    /// read that turned unread again, a View or a finished turn in between, a
+    /// device that was gone past `VANISHED_TTL` or a list that came back after
+    /// a reconnect.
     #[derive(Default)]
     pub struct Transitions {
-        last: Option<BTreeMap<AgentKey, Seen>>,
+        last: Option<BTreeMap<AgentKey, Effective>>,
         /// Agents that left the list, with their state and when: a device that
         /// reconnects, or a list that was briefly empty, brings them back in the
         /// state they had, which is no transition (and no second notice).
-        vanished: BTreeMap<AgentKey, (Seen, std::time::Instant)>,
-    }
-
-    /// What a root was last seen as: its state and the person's turns
-    /// declared on it or raised to it (PRD ask-human), so a new declaration
-    /// is announced once even while the state stays Needs You.
-    #[derive(Clone)]
-    struct Seen {
-        state: Effective,
-        declared: BTreeSet<String>,
+        vanished: BTreeMap<AgentKey, (Effective, std::time::Instant)>,
+        known: Known,
     }
 
     /// How long a vanished agent's state is kept for its return.
     pub const VANISHED_TTL: Duration = Duration::from_secs(10 * 60);
 
+    /// The asks one root keeps known at once; past it the one it stood with
+    /// first is forgotten.
+    pub const KNOWN_ASKS: usize = 32;
+
+    /// The roots whose asks are kept at once; past it the root that stood
+    /// longest ago is forgotten, as one never seen.
+    pub const KNOWN_ROOTS: usize = 1024;
+
+    /// The asks each root has stood in Needs You with, and the persons'
+    /// turns declared on it, by key. Kept past a read, a vanish and a reset:
+    /// an ask once said or once waiting when the ledger seeded is never said
+    /// again.
+    #[derive(Default)]
+    struct Known {
+        roots: BTreeMap<AgentKey, KnownRoot>,
+        /// Counts the passes that touched a root, so the cap drops the one
+        /// touched longest ago.
+        tick: u64,
+    }
+
+    struct KnownRoot {
+        touched: u64,
+        asks: std::collections::VecDeque<String>,
+    }
+
+    impl Known {
+        fn has(&self, key: &AgentKey, ask: &str) -> bool {
+            self.roots
+                .get(key)
+                .is_some_and(|root| root.asks.iter().any(|known| known == ask))
+        }
+
+        /// Records what `agent` stands with now: every person's turn on it,
+        /// and in Needs You every ask it stands for.
+        fn stand(&mut self, key: &AgentKey, agent: &PhoneAgent, state: Effective) {
+            self.tick += 1;
+            let tick = self.tick;
+            let asks = agent
+                .human_turns
+                .keys()
+                .map(|id| human_key(id))
+                .chain(
+                    agent
+                        .ask_keys
+                        .iter()
+                        .filter(|_| state == Effective::NeedsYou)
+                        .cloned(),
+                )
+                .collect::<Vec<_>>();
+            if asks.is_empty() && !self.roots.contains_key(key) {
+                return;
+            }
+            let root = self.roots.entry(key.clone()).or_insert_with(|| KnownRoot {
+                touched: tick,
+                asks: std::collections::VecDeque::new(),
+            });
+            root.touched = tick;
+            for ask in asks {
+                if !root.asks.contains(&ask) {
+                    if root.asks.len() == KNOWN_ASKS {
+                        root.asks.pop_front();
+                    }
+                    root.asks.push_back(ask);
+                }
+            }
+            if self.roots.len() > KNOWN_ROOTS
+                && let Some(oldest) = self
+                    .roots
+                    .iter()
+                    .min_by_key(|(_, root)| root.touched)
+                    .map(|(key, _)| key.clone())
+            {
+                self.roots.remove(&oldest);
+            }
+        }
+    }
+
     impl Transitions {
+        /// Starts over from the next projection, which seeds it again. What
+        /// it knows was asked stays known.
         pub fn reset(&mut self) {
             self.last = None;
             self.vanished.clear();
@@ -1468,7 +1625,7 @@ pub mod push {
             self.last
                 .as_ref()
                 .and_then(|last| last.get(key))
-                .is_some_and(|seen| seen.state == Effective::NeedsYou)
+                .is_some_and(|state| *state == Effective::NeedsYou)
         }
 
         /// Whether `key` was in the last projection observed: a root absent
@@ -1483,7 +1640,7 @@ pub mod push {
         pub fn waiting(&self) -> impl Iterator<Item = &AgentKey> {
             self.last.iter().flat_map(|last| {
                 last.iter()
-                    .filter(|(_, seen)| seen.state == Effective::NeedsYou)
+                    .filter(|(_, state)| **state == Effective::NeedsYou)
                     .map(|(key, _)| key)
             })
         }
@@ -1498,19 +1655,15 @@ pub mod push {
             at: std::time::Instant,
         ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
             let now = effective(projection);
-            let states: BTreeMap<AgentKey, Seen> = now
+            let states: BTreeMap<AgentKey, Effective> = now
                 .iter()
-                .map(|(key, (state, agent))| {
-                    (
-                        key.clone(),
-                        Seen {
-                            state: *state,
-                            declared: agent.human_turns.keys().cloned().collect(),
-                        },
-                    )
-                })
+                .map(|(key, (state, _))| (key.clone(), *state))
                 .collect();
             let Some(last) = self.last.replace(states) else {
+                // What waits when the ledger seeds was never news to it.
+                for (key, (state, agent)) in &now {
+                    self.known.stand(key, agent, *state);
+                }
                 return (Vec::new(), BTreeSet::new());
             };
             let mut notices = Vec::new();
@@ -1518,37 +1671,40 @@ pub mod push {
             for (key, (state, agent)) in &now {
                 let before = last
                     .get(key)
-                    .cloned()
+                    .copied()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
-                    .unwrap_or(Seen {
-                        state: Effective::Other,
-                        declared: BTreeSet::new(),
-                    });
-                // Each declaration not seen before is a notice of its own,
+                    .unwrap_or(Effective::Other);
+                // Each declaration not known before is a notice of its own,
                 // in its own words, also on a row already in Needs You (B17).
                 let declared_now: Vec<_> = agent
                     .human_turns
                     .iter()
-                    .filter(|(id, _)| !before.declared.contains(*id))
+                    .filter(|(id, _)| !self.known.has(key, &human_key(id)))
                     .map(|(_, subject)| subject)
                     .collect();
-                if before.state == *state
-                    && (declared_now.is_empty() || *state != Effective::NeedsYou)
-                {
+                // Asks the root already stood in Needs You with are no news
+                // when it comes back to them; a row that names none is judged
+                // by its move alone.
+                let ask_new = agent.ask_keys.is_empty()
+                    || agent.ask_keys.iter().any(|ask| !self.known.has(key, ask));
+                self.known.stand(key, agent, *state);
+                if before == *state && (declared_now.is_empty() || *state != Effective::NeedsYou) {
                     continue;
                 }
                 // The row stays in Needs You, or the View's notice already
                 // carried the finished turn: nothing new to say.
                 let absorbed = matches!(
-                    (before.state, *state),
+                    (before, *state),
                     (Effective::NeedsYou, Effective::Look) | (Effective::Look, Effective::Done)
                 );
                 let announced = state.announced().filter(|_| !absorbed);
                 if let Some(announced) = announced {
                     let look = *state == Effective::Look;
-                    // The row's own notice when it moved, then every new
-                    // declaration it does not already say.
-                    let entered = (before.state != *state).then(|| agent.subject.clone());
+                    // The row's own notice when it moved, unless it came
+                    // back to Needs You with an ask already said, then every
+                    // new declaration it does not already say.
+                    let entered = (before != *state && (*state != Effective::NeedsYou || ask_new))
+                        .then(|| agent.subject.clone());
                     let declarations = declared_now
                         .iter()
                         .filter(|subject| {
@@ -1564,9 +1720,9 @@ pub mod push {
                         notices.push(notice_of(key, agent, announced, look, subject));
                     }
                 } else if (*state == Effective::Seen
-                    && matches!(before.state, Effective::NeedsYou | Effective::Done))
-                    || (before.state == Effective::Look && *state != Effective::NeedsYou)
-                    || (before.state == Effective::Done
+                    && matches!(before, Effective::NeedsYou | Effective::Done))
+                    || (before == Effective::Look && *state != Effective::NeedsYou)
+                    || (before == Effective::Done
                         && agent.wait.as_deref() == Some("children")
                         && !agent.unread)
                 {
@@ -1581,7 +1737,7 @@ pub mod push {
             }
             for (key, before) in &last {
                 if !now.contains_key(key) {
-                    self.vanished.insert(key.clone(), (before.clone(), at));
+                    self.vanished.insert(key.clone(), (*before, at));
                 }
             }
             // An agent gone for good: its notification is closed on the next push.
@@ -1589,7 +1745,7 @@ pub mod push {
                 let expired = at.duration_since(*since) >= VANISHED_TTL;
                 if expired
                     && matches!(
-                        before.state,
+                        before,
                         Effective::NeedsYou | Effective::Look | Effective::Done
                     )
                 {
