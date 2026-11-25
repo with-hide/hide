@@ -368,7 +368,7 @@ test("the in-app camera decodes a QR inside its frame and releases its video tra
       return stream;
     };
   }, matrix);
-  await page.goto(`${relay.origin}/?add=1`);
+  await page.goto(`${relay.origin}/?add=computer`);
   await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
   await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   await expect(page.locator("video")).toHaveCount(0);

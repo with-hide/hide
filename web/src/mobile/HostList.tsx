@@ -59,16 +59,16 @@ export function HostList({ t, active, machines = [], activeRoom: named, card = f
     {hosts.map((host) => {
       const state = host.room === activeRoom ? active : presence[host.room];
       const seen = state?.lastSeen ?? host.lastSeen;
-      if (host.credential === null) return <div key={host.room} className={cn("flex min-w-0 flex-col gap-xs py-sm", rowBox)} data-phone-host-revoked={host.room}>
-        {withMenu(host, <div className="flex min-w-0 items-center gap-md opacity-(--opacity-dimmed)">
+      if (host.credential === null) return <div key={host.room} className="min-w-0" data-phone-host-revoked={host.room}>{withMenu(host, <div className={cn("flex min-w-0 flex-col gap-xs py-sm", rowBox)}>
+        <div className="flex min-w-0 items-center gap-md opacity-(--opacity-dimmed)">
           <DeviceTile icon={LaptopIcon} />
           <TwoLines name={host.name} dot="off" word={t("mobile.relay.revoked")} />
-        </div>)}
+        </div>
         <span className="flex min-w-0 flex-col items-start pl-[calc(var(--size-control-lg)+var(--spacing-md))]">
           <span className="whitespace-normal break-keep text-body text-muted-foreground opacity-(--opacity-dimmed)">{t("mobile.relay.revokedReason")}</span>
           <Button variant="text" className="min-h-(--size-touch-target) px-none text-body" onClick={() => window.location.assign(ADD_COMPUTER_LINK)}>{t("mobile.relay.reconnect")}</Button>
         </span>
-      </div>;
+      </div>)}</div>;
       const viewing = host.room === activeRoom && state?.online === true;
       // A computer whose phone protocol differs says both versions in its state's place (the warning dot says it needs updating).
       const mismatch = state?.protocolMismatch !== undefined ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
@@ -79,7 +79,7 @@ export function HostList({ t, active, machines = [], activeRoom: named, card = f
         {withMenu(host, <Button variant="ghost" className={cn("h-auto min-h-(--size-touch-target) w-full min-w-0 justify-start gap-md py-sm text-left font-normal text-foreground", rowBox, viewing && "ring-2 ring-inset ring-primary")}
           data-phone-host="true" data-phone-host-viewing={viewing ? "true" : undefined} onClick={() => choose(host)}>
           <DeviceTile icon={LaptopIcon} />
-          <TwoLines name={host.name} dot={mismatch ? "warning" : state?.online ? "on" : "off"} word={mismatch ? <><span className="sr-only">{t("mobile.relay.updateTitle")} · </span>{word}</> : word}
+          <TwoLines name={host.name} dot={mismatch ? "warning" : state?.online ? "on" : "off"} word={word} hint={mismatch ? t("mobile.relay.updateTitle") : undefined}
             counts={!mismatch && state?.online && state.needs !== undefined ? <Counts t={t} needs={state.needs} working={state.working ?? 0} /> : null} />
         </Button>)}
         {host.room === activeRoom ? <ReachedDevices t={t} devices={machines} /> : null}
@@ -111,14 +111,18 @@ export function DeviceTile({ icon: Icon, compact = false }: { icon: LucideIcon; 
   </span>;
 }
 
-/** A device row's two lines: its name on one line (with `mark` after it), then its state's dot and word and, at the right, its counts. */
-function TwoLines({ name, mark, dot, word, counts, compact = false }: { name: string; mark?: ReactNode; dot: "on" | "off" | "warning"; word: ReactNode; counts?: ReactNode; compact?: boolean }) {
+/**
+ * A device row's two lines: its name on one line (with `mark` after it), then its state's dot and word and, at the right, its counts.
+ * `hint` is what the dot's colour says, read to assistive technology before the word.
+ */
+function TwoLines({ name, mark, dot, word, hint, counts, compact = false }: { name: string; mark?: ReactNode; dot: "on" | "off" | "warning"; word: ReactNode; hint?: string; counts?: ReactNode; compact?: boolean }) {
   return <span className="flex min-w-0 flex-1 flex-col gap-xxs">
     <span className="flex min-w-0 items-center gap-xs">
       <span className={cn("min-w-0 truncate font-medium", compact ? "text-body" : "text-subhead")}>{name}</span>{mark}
     </span>
     <span className="flex min-w-0 items-center gap-xs text-body text-muted-foreground">
       <span aria-hidden="true" className={cn("size-(--size-status-mark) shrink-0 rounded-full", dot === "on" ? "bg-success" : dot === "warning" ? "bg-warning" : "bg-muted-foreground")} />
+      {hint ? <span className="sr-only">{hint} · </span> : null}
       <span className="min-w-0 truncate">{word}</span>
       {counts}
     </span>

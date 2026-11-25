@@ -655,6 +655,9 @@ mod tests {
             }
             row
         };
+        let remote: Vec<Value> = ["mini", "ubuntu", "imac", "box", "unlisted"]
+            .map(|id| json!({"target_id": id, "state": "unreachable"}))
+            .into();
         let rest = json!({
             "navigator": {"agents": [], "devices": [
                 device("local", json!({})),
@@ -663,7 +666,7 @@ mod tests {
                 device("imac", json!({"peer_key": "a".repeat(64)})),
                 device("box", json!({"dials_in": true})),
             ]},
-            "status": {"remote": ["mini", "ubuntu", "imac", "box", "unlisted"].map(|id| json!({"target_id": id, "state": "unreachable"}))},
+            "status": {"remote": remote},
         });
         let links: Vec<_> = project(&rest, "local")
             .devices

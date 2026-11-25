@@ -1384,9 +1384,7 @@ pub mod phone {
             .flatten()
         {
             let target = str_of(status, "target_id");
-            let registered = devices
-                .iter()
-                .find(|device| str_of(device, "id") == target);
+            let registered = devices.iter().find(|device| str_of(device, "id") == target);
             let label = registered
                 .map(|device| str_of(device, "label"))
                 .filter(|label| !label.is_empty())
