@@ -757,6 +757,12 @@ fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_ha
         "set -ek; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "builtin set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        // The same options given to a shell it starts (bash(1) OPTIONS).
+        "bash -k -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "bash -kc \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "sh -o keyword -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "bash -O expand_aliases -c 'cat x'",
+        "bash --rcfile /fixture/rc -c 'cat x'",
         "set -a; cat x",
         "set -e -o pipefail -o keyword; cat x",
         "set -f; cat x",
@@ -789,6 +795,11 @@ fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_ha
         "shopt; cat x",
         "shopt -q extglob; cat x",
         "shopt -p; cat x",
+        "bash -c 'cat x'",
+        "bash -ec 'cat x'",
+        "bash -euo pipefail -c 'cat x'",
+        "bash -lc 'cat x'",
+        "bash --login -c 'cat x'",
         "hash; cat x",
     ] {
         assert_eq!(reading(line).row, Row::Read, "{line}");

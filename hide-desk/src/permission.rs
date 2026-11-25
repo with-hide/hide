@@ -1495,17 +1495,34 @@ fn shell_state(
     }
 }
 
-/// The options `set` may change and still leave the rest of the line read
-/// as Hide reads it: stop on an error, an unset name or a failed pipe, and
-/// print each command.
+/// The options `set`, or a shell started with them, may turn on and still
+/// leave the rest of the line read as Hide reads it: stop on an error, an
+/// unset name or a failed pipe, and print each command.
 const SET_LETTERS: &str = "euxv";
 const SET_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "verbose", "pipefail"];
 
-/// `set`: zsh's `set -A NAME values` and `set +A NAME values` set an array;
-/// any other option than [`SET_LETTERS`] and [`SET_NAMES`] may change how the
-/// words after it are read (bash's `set -k` makes a `NAME=value` among a
+/// One option letter of `set` or of a shell's start, `o` taking the name
+/// after it: any other than [`SET_LETTERS`] and [`SET_NAMES`] may change how
+/// the words after it are read (bash's `-k` makes a `NAME=value` among a
 /// command's arguments its environment), so Hide cannot read the line.
-/// Words after `--` or `-` are the positional parameters.
+fn option(letter: char, words: &mut std::slice::Iter<'_, String>, line: &mut Line) {
+    match letter {
+        'o' => {
+            if words
+                .next()
+                .is_some_and(|name| !SET_NAMES.contains(&name.as_str()))
+            {
+                line.rewrites_what_runs();
+            }
+        }
+        letter if SET_LETTERS.contains(letter) => {}
+        _ => line.rewrites_what_runs(),
+    }
+}
+
+/// `set`: zsh's `set -A NAME values` and `set +A NAME values` set an array,
+/// every other letter is an [`option`]. Words after `--` or `-` are the
+/// positional parameters.
 fn set(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
     let mut words = args.iter();
     while let Some(word) = words.next() {
@@ -1524,13 +1541,7 @@ fn set(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line
                     }
                     return;
                 }
-                'o' => match words.next() {
-                    Some(option) if SET_NAMES.contains(&option.as_str()) => {}
-                    Some(_) => line.rewrites_what_runs(),
-                    None => return,
-                },
-                letter if SET_LETTERS.contains(letter) => {}
-                _ => line.rewrites_what_runs(),
+                letter => option(letter, &mut words, line),
             }
         }
     }
@@ -1807,15 +1818,32 @@ fn run_program(
     }
     if SHELLS.contains(&name) {
         let mut runs_script = false;
-        let mut at = 0;
-        while let Some(word) = args.get(at) {
-            if !word.starts_with('-') || word == "--" {
-                break;
+        let mut words = args.iter();
+        while let Some(word) = words.as_slice().first() {
+            let letters = match word.as_str() {
+                "--" | "-" | "+" => break,
+                // Read the operator's own start-up files, or none.
+                "--login" | "--noprofile" | "--norc" => "",
+                long if long.starts_with("--") => {
+                    line.rewrites_what_runs();
+                    ""
+                }
+                short => match short.strip_prefix('-').or_else(|| short.strip_prefix('+')) {
+                    Some(letters) => letters,
+                    None => break,
+                },
+            };
+            words.next();
+            for letter in letters.chars() {
+                match letter {
+                    'c' => runs_script = true,
+                    // A login shell, which reads the operator's own profile.
+                    'l' => {}
+                    letter => option(letter, &mut words, line),
+                }
             }
-            runs_script |= !word.starts_with("--") && word.contains('c');
-            at += 1;
         }
-        match args.get(at).filter(|_| runs_script) {
+        match words.next().filter(|_| runs_script) {
             Some(script) => read_line(script, folders, place, depth + 1, line),
             // A script from a file or from the shell's input (a pipe, a
             // heredoc), which Hide does not read.
