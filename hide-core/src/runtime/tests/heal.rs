@@ -142,6 +142,7 @@ fn cut_on_device(runtime: &Runtime, device: &str, pane: &str, session: &str) {
         waiting: None,
         account: None,
         refused: None,
+        asked: None,
     };
     let scoped = crate::address::scoped_pane_id(device, pane);
     facts.record(&scoped, &working, 1).unwrap();

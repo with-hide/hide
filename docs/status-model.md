@@ -528,6 +528,7 @@ The sections are named for whose move is next: Needs You (`내 차례`) and Unre
 
 A blocked pane, or one whose native question or plan waits for the operator, stays in Needs You whether or not it has been read, and so does a person's turn ([A person's turn an agent declares](#a-persons-turn-an-agent-declares)).
 So does a mission's own Needs You item, one no Conductor's or worker's row carries (a merge due, a safety net, a raise the mission holds itself, `runtime/missions.rs::publish_mission_asks`): opening the mission reads nothing, and it leaves only when resolved or put away (operator decision 2026-11-23).
+So do an automation's own lines: one stopped for a person (`automation_asks`), until it is turned on again, and a once automation whose run ended (`automation_looks`, mission-104 O-4), whatever its result, until the run is opened in the automation screen or the line is opened on the phone; a repeating automation's run reaches Needs You only on its row, when its agent asks, is blocked or opened a View, and a once automation's run's row does not for a View, since its end does.
 The prompt is still waiting, so it leaves the group when answered rather than when looked at.
 A View to look at holds the row there only while the row is unread; read, the row stands where its own axes put it and keeps the View's chip (A View to look at).
 
@@ -553,6 +554,7 @@ Every row draws one of nine marks, decided once in the core (`RowMark::of` in `a
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
 `turn` and `look` are the operator's turn in two shapes: every count takes them as one, and only the badge's glyph is drawn apart.
 An automation run's row draws either with the repeat arrow in the badge in place of the `!` or the eye (`StatusMark` `automation`), so a run Hide started on schedule reads as the automation's at a glance; the mark is the same, only the glyph changes (operator decision 2026-11-21).
+A once automation's run's row (`hide_ai.once`) and its automation's own line for a run that ended (`automation_looks`) draw a clock in that place instead (mission-104 O-4).
 Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |

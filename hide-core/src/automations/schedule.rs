@@ -1,14 +1,18 @@
 //! When an automation runs (PRD automations D-06, B6, B7): one of the form's
 //! choices (every day, weekdays, chosen days of the week, every N minutes,
-//! every N hours from a time) or a five-field cron line, read in the zone of
-//! the machine that runs it.
+//! every N hours from a time), a five-field cron line, or one date and time
+//! (mission-104 O-1), read in the zone of the machine that runs it.
 //!
-//! Every choice compiles to the same cron form and one walk finds its next
-//! time, so a choice and the cron line it equals answer alike. The shortest
-//! period is five minutes (D-16): a cron line that would run two times
-//! closer than that is refused. The calendar comes from `jiff`, which the core already uses
-//! for zones: a time a spring-forward skips runs at the time the clock jumps
-//! to, and a time a fall-back repeats runs once, at its first instant.
+//! Every repeating choice compiles to the same cron form and one walk finds
+//! its next time, so a choice and the cron line it equals answer alike. The
+//! shortest period is five minutes (D-16): a cron line that would run two
+//! times closer than that is refused. One time has no period: it runs once,
+//! at its wall time, and has no next time after that. A call may name it
+//! from now (`once in 7d 09:00`, [`Asked`]); the core reads that into the
+//! date and time it names when it takes the call, and keeps only those. The
+//! calendar comes from `jiff`, which the core already uses for zones: a time
+//! a spring-forward skips runs at the time the clock jumps to, and a time a
+//! fall-back repeats runs once, at its first instant.
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -28,6 +32,13 @@ const SHORTEST_PERIOD_MINUTES: u8 = 5;
 /// The periods the form offers in minutes (D-06): each divides the hour,
 /// so every hour runs alike.
 pub const EVERY_MINUTES: [u8; 4] = [5, 10, 15, 30];
+
+/// How far ahead one time may be (mission-104 O-1): a time later than this
+/// many days from now is refused, so a slip of the year or a count read as
+/// minutes instead of days never waits unseen for years.
+pub const ONCE_HORIZON_DAYS: u32 = 366;
+
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// A day of the week, as the form and the CLI name it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -96,6 +107,57 @@ impl<'de> Deserialize<'de> for Clock {
     }
 }
 
+/// A wall date, `YYYY-MM-DD`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Day(Date);
+
+impl Day {
+    pub fn parse(text: &str) -> Result<Self, &'static str> {
+        const INVALID: &str = "schedule_date_invalid";
+        let field = |value: Option<&str>, len: usize| {
+            value
+                .filter(|value| value.len() == len && value.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|value| value.parse::<i16>().ok())
+                .ok_or(INVALID)
+        };
+        let mut parts = text.split('-');
+        let (year, month, day) = (
+            field(parts.next(), 4)?,
+            field(parts.next(), 2)?,
+            field(parts.next(), 2)?,
+        );
+        if parts.next().is_some() {
+            return Err(INVALID);
+        }
+        let month = i8::try_from(month).map_err(|_| INVALID)?;
+        let day = i8::try_from(day).map_err(|_| INVALID)?;
+        Date::new(year, month, day).map(Self).map_err(|_| INVALID)
+    }
+
+    pub fn date(self) -> Date {
+        self.0
+    }
+}
+
+impl Serialize for Day {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let date = self.0;
+        serializer.serialize_str(&format!(
+            "{:04}-{:02}-{:02}",
+            date.year(),
+            date.month(),
+            date.day()
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for Day {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
 /// What the operator chose (B6): kept as chosen, so the form opens on it
 /// again, and read through [`Schedule::compile`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -125,6 +187,99 @@ pub enum Schedule {
     Cron {
         expr: String,
     },
+    /// One time (mission-104 O-1): runs at that wall date and time, then
+    /// never again. Always the date itself: a time a call names from now is
+    /// read into it when the core takes the call ([`Asked::resolve`]).
+    Once {
+        date: Day,
+        time: Clock,
+    },
+}
+
+/// A schedule as a call names it (mission-104 O-1): any schedule, or one
+/// time named from now, which the core reads into the date and time it
+/// names when it makes, edits or previews ([`Asked::resolve`]). Only the
+/// schedule that comes out is kept or shown.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Asked {
+    Schedule(Schedule),
+    FromNow(FromNow),
+}
+
+/// One time named from now, read in the zone of the machine that runs it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FromNow {
+    /// The date `days` after today, at `time` (`once in 7d 09:00`).
+    OnceInDays { days: u32, time: Clock },
+    /// Now and `minutes` more, to the minute (`once in 3h`, `once in 30m`).
+    OnceInMinutes { minutes: u32 },
+}
+
+impl From<Schedule> for Asked {
+    fn from(schedule: Schedule) -> Self {
+        Self::Schedule(schedule)
+    }
+}
+
+impl Asked {
+    /// The schedule a make, an edit or a preview at `now` keeps: read in
+    /// `zone` ([`Asked::resolve`]) and then checked ([`Schedule::validate`]).
+    pub fn checked(self, now: u64, zone: &TimeZone) -> Result<Schedule, &'static str> {
+        let schedule = self.resolve(now, zone)?;
+        schedule.validate(now, zone)?;
+        Ok(schedule)
+    }
+
+    /// The schedule this names at `now` in `zone`: a time named from now
+    /// becomes the date and time it falls on, to the minute. Only a count
+    /// too large to be a time is refused here; whether the time is past or
+    /// too far is [`Schedule::validate`]'s.
+    pub fn resolve(self, now: u64, zone: &TimeZone) -> Result<Schedule, &'static str> {
+        const TOO_FAR: &str = "schedule_once_too_far";
+        let from_now = match self {
+            Self::Schedule(schedule) => return Ok(schedule),
+            Self::FromNow(from_now) => from_now,
+        };
+        let zoned = |unix_ms: u64| {
+            i64::try_from(unix_ms)
+                .ok()
+                .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+                .map(|at| at.to_zoned(zone.clone()))
+                .ok_or(TOO_FAR)
+        };
+        let (date, time) = match from_now {
+            FromNow::OnceInDays { days, time } => {
+                // One past the horizon still reads, so the refusal is the
+                // horizon's, said once by `validate`.
+                if days > ONCE_HORIZON_DAYS + 1 {
+                    return Err(TOO_FAR);
+                }
+                let today = zoned(now)?.date();
+                let date = today
+                    .checked_add(jiff::Span::new().days(i64::from(days)))
+                    .map_err(|_| TOO_FAR)?;
+                (date, time)
+            }
+            FromNow::OnceInMinutes { minutes } => {
+                let at = u64::from(minutes)
+                    .checked_mul(60_000)
+                    .and_then(|span| now.checked_add(span))
+                    .ok_or(TOO_FAR)?;
+                let at = zoned(at)?;
+                let clock = Clock {
+                    hour: u8::try_from(at.hour()).map_err(|_| TOO_FAR)?,
+                    minute: u8::try_from(at.minute()).map_err(|_| TOO_FAR)?,
+                };
+                (at.date(), clock)
+            }
+        };
+        Ok(Schedule::Once {
+            date: Day(date),
+            time,
+        })
+    }
 }
 
 /// The fields of a cron line, each the set of values it allows.
@@ -198,6 +353,8 @@ impl Schedule {
                 cron
             }
             Self::Cron { expr } => parse_cron(expr)?,
+            // One time has no cron form: its own arm answers it.
+            Self::Once { .. } => return Err("schedule_once_not_repeating"),
         };
         if too_often(&cron) {
             return Err("schedule_too_often");
@@ -205,9 +362,20 @@ impl Schedule {
         Ok(cron)
     }
 
-    /// Refuses a schedule that cannot run, with why (B7, B10): the same
-    /// check the form, the CLI and a stored automation's load make.
-    pub fn validate(&self, zone: &TimeZone) -> Result<(), &'static str> {
+    /// Refuses a schedule that cannot run, made or edited at `now`, with
+    /// why (B7, B10): the check the form, the CLI and a preview make. One
+    /// time must be after `now` and within [`ONCE_HORIZON_DAYS`].
+    pub fn validate(&self, now: u64, zone: &TimeZone) -> Result<(), &'static str> {
+        if self.is_once() {
+            let at = self.once_at(zone).ok_or("schedule_date_invalid")?;
+            if at <= now {
+                return Err("schedule_once_past");
+            }
+            if at > now.saturating_add(u64::from(ONCE_HORIZON_DAYS) * DAY_MS) {
+                return Err("schedule_once_too_far");
+            }
+            return Ok(());
+        }
         let cron = self.compile()?;
         // A line that names no real day never runs.
         next_of(&cron, 0, zone).ok_or("schedule_never")?;
@@ -215,9 +383,30 @@ impl Schedule {
     }
 
     /// The first time after `after_unix_ms` the schedule runs, in `zone`;
-    /// `None` for a schedule that cannot run.
+    /// `None` for a schedule that cannot run, or one time already past.
     pub fn next_after(&self, after_unix_ms: u64, zone: &TimeZone) -> Option<u64> {
+        if self.is_once() {
+            return self.once_at(zone).filter(|at| *at > after_unix_ms);
+        }
         next_of(&self.compile().ok()?, after_unix_ms, zone)
+    }
+
+    /// Whether it runs once (mission-104 O-1).
+    pub fn is_once(&self) -> bool {
+        matches!(self, Self::Once { .. })
+    }
+
+    /// One time's instant in `zone`, past or not; none for a repeating
+    /// schedule.
+    pub fn once_at(&self, zone: &TimeZone) -> Option<u64> {
+        let Self::Once { date, time } = self else {
+            return None;
+        };
+        let local = date.date().at(time.hour as i8, time.minute as i8, 0, 0);
+        // A skipped time runs where the clock jumps to; a repeated one at its
+        // first instant, as a repeating schedule's does.
+        let at = zone.to_ambiguous_zoned(local).compatible().ok()?;
+        u64::try_from(at.timestamp().as_millisecond()).ok()
     }
 
     /// The choice the schedule reads as (B6): a cron line equal to a choice
@@ -572,15 +761,19 @@ mod tests {
                 "schedule_hours_out_of_range",
             ),
         ] {
-            assert_eq!(schedule.validate(&zone), Err(reason), "{schedule:?}");
+            assert_eq!(schedule.validate(0, &zone), Err(reason), "{schedule:?}");
         }
         assert_eq!(Clock::parse("9:00"), Err("schedule_time_invalid"));
         assert_eq!(Clock::parse("24:00"), Err("schedule_time_invalid"));
-        assert!(cron("0 */2 * * *").validate(&zone).is_ok());
-        assert!(cron("*/5 * * * *").validate(&zone).is_ok());
-        assert!(cron("0,58 9 * * *").validate(&zone).is_ok());
+        assert!(cron("0 */2 * * *").validate(0, &zone).is_ok());
+        assert!(cron("*/5 * * * *").validate(0, &zone).is_ok());
+        assert!(cron("0,58 9 * * *").validate(0, &zone).is_ok());
         for minutes in EVERY_MINUTES {
-            assert!(Schedule::EveryMinutes { minutes }.validate(&zone).is_ok());
+            assert!(
+                Schedule::EveryMinutes { minutes }
+                    .validate(0, &zone)
+                    .is_ok()
+            );
         }
     }
 
@@ -662,6 +855,101 @@ mod tests {
             .unwrap();
         let second = one_thirty.next_after(first, &zone).unwrap();
         assert_eq!(second - first, 25 * 3_600_000);
+    }
+
+    fn once(date: &str, time_of_day: &str) -> Schedule {
+        Schedule::Once {
+            date: Day::parse(date).unwrap(),
+            time: time(time_of_day),
+        }
+    }
+
+    fn asked(value: serde_json::Value) -> Asked {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// mission-104 O-1: each form a call names is read at `now` into the
+    /// date and time it falls on in the machine's zone, which is all that is
+    /// kept: the date given, a date some days from today at a time, and now
+    /// and some minutes more, to the minute.
+    #[test]
+    fn a_once_time_named_from_now_is_read_into_its_date_and_time() {
+        let zone = seoul();
+        let now = at(&zone, "2026-11-25T22:47:31");
+        let read = |value| asked(value).resolve(now, &zone);
+        assert_eq!(
+            read(serde_json::json!({"kind": "once", "date": "2026-12-02", "time": "09:00"})),
+            Ok(once("2026-12-02", "09:00"))
+        );
+        assert_eq!(
+            read(serde_json::json!({"kind": "once_in_days", "days": 7, "time": "09:00"})),
+            Ok(once("2026-12-02", "09:00"))
+        );
+        // Three hours on crosses midnight in the machine's zone.
+        assert_eq!(
+            read(serde_json::json!({"kind": "once_in_minutes", "minutes": 180})),
+            Ok(once("2026-11-26", "01:47"))
+        );
+        assert_eq!(
+            read(serde_json::json!({"kind": "once_in_minutes", "minutes": 30})),
+            Ok(once("2026-11-25", "23:17"))
+        );
+        assert_eq!(
+            read(serde_json::json!({"kind": "daily", "time": "09:00"})),
+            Ok(Schedule::Daily {
+                time: time("09:00")
+            }),
+            "a repeating schedule is itself"
+        );
+        assert_eq!(
+            read(serde_json::json!({"kind": "once_in_days", "days": u32::MAX, "time": "09:00"})),
+            Err("schedule_once_too_far")
+        );
+        // Past the calendar's last year.
+        assert_eq!(
+            read(serde_json::json!({"kind": "once_in_minutes", "minutes": u32::MAX})),
+            Err("schedule_once_too_far")
+        );
+    }
+
+    /// mission-104 O-1, O-2: one time runs at its wall time, has no next time
+    /// after it, and is refused once past or more than a year ahead; the
+    /// five-minute rule does not apply to it.
+    #[test]
+    fn one_time_runs_once_and_is_refused_past_or_too_far() {
+        let zone = seoul();
+        let schedule = once("2026-12-02", "09:00");
+        let nine = at(&zone, "2026-12-02T09:00");
+        assert_eq!(schedule.next_after(nine - 1, &zone), Some(nine));
+        assert_eq!(schedule.next_after(nine, &zone), None, "never again");
+        assert_eq!(schedule.once_at(&zone), Some(nine));
+        assert_eq!(schedule.validate(nine - 60_000, &zone), Ok(()));
+        assert_eq!(
+            schedule.validate(nine, &zone),
+            Err("schedule_once_past"),
+            "a time that is now is past"
+        );
+        let a_day = 24 * 3_600_000;
+        let horizon = u64::from(ONCE_HORIZON_DAYS) * a_day;
+        assert_eq!(schedule.validate(nine - horizon, &zone), Ok(()));
+        assert_eq!(
+            schedule.validate(nine - horizon - 60_000, &zone),
+            Err("schedule_once_too_far")
+        );
+        assert_eq!(schedule.meaning().reads_as, schedule);
+        assert_eq!(Day::parse("2026-02-30"), Err("schedule_date_invalid"));
+        assert_eq!(Day::parse("2026-2-03"), Err("schedule_date_invalid"));
+        assert_eq!(
+            serde_json::to_value(&schedule).unwrap(),
+            serde_json::json!({"kind": "once", "date": "2026-12-02", "time": "09:00"})
+        );
+        assert!(
+            serde_json::from_value::<Schedule>(
+                serde_json::json!({"kind": "once_in_days", "days": 7, "time": "09:00"})
+            )
+            .is_err(),
+            "a time named from now is never a kept schedule"
+        );
     }
 
     #[test]

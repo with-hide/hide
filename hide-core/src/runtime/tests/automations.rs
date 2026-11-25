@@ -590,6 +590,16 @@ impl Harness {
     /// A core over the state in `state`, as a restarted daemon reads it,
     /// and an engine holding `machine`'s panes.
     fn on(state: &tempfile::TempDir, machine: Arc<Mutex<Machine>>) -> Self {
+        Self::on_in(state, machine, None)
+    }
+
+    /// The same core started in `zone`, which it keeps: the machine's own
+    /// zone is not read a minute later, as it is with none named.
+    fn on_in(
+        state: &tempfile::TempDir,
+        machine: Arc<Mutex<Machine>>,
+        zone: Option<jiff::tz::TimeZone>,
+    ) -> Self {
         let (runtime, _, _, ledger_path) = crate::runtime::delivery::tests::fixture(state.path());
         let engine = {
             let machine = Arc::clone(&machine);
@@ -655,7 +665,11 @@ impl Harness {
             guard.snapshot.navigator.workspaces = vec![repo];
             let (store, stored, _) =
                 crate::runtime::automations::restore(state.path().join("automations.json"));
-            guard.install_automations_store(store, stored, jiff::tz::TimeZone::UTC);
+            let held = zone.is_some();
+            guard.install_automations_store(store, stored, zone.unwrap_or(jiff::tz::TimeZone::UTC));
+            if held {
+                guard.hold_automation_zone();
+            }
             guard.set_automation_start(scripted_start(
                 Arc::downgrade(&runtime),
                 Arc::clone(&starts),
@@ -1406,7 +1420,9 @@ fn a_run_stopped_before_its_row_is_read_opens_its_conversation_again() {
 /// end once, with what started it; a stop asked again counts nothing.
 #[test]
 fn an_automation_made_and_its_run_ended_are_each_counted_once() {
-    use crate::product_analytics::{AutomationOutcome, AutomationStart, AutomationTrigger, Event};
+    use crate::product_analytics::{
+        AutomationOutcome, AutomationSchedule, AutomationStart, AutomationTrigger, Event,
+    };
     let state = tempfile::tempdir().unwrap();
     let mut harness = Harness::new(&state);
     let statistics = Arc::new(RecordedStatistics::default());
@@ -1437,14 +1453,24 @@ fn an_automation_made_and_its_run_ended_are_each_counted_once() {
     assert_eq!(
         automations(),
         [Event::AutomationCreated {
-            start: AutomationStart::Briefing
+            start: AutomationStart::Briefing,
+            schedule: AutomationSchedule::Repeat,
+        }]
+    );
+    harness.once_in("Webhooks", 30);
+    assert_eq!(
+        automations(),
+        [Event::AutomationCreated {
+            start: AutomationStart::Own,
+            schedule: AutomationSchedule::Once,
         }]
     );
     let id = harness.run_now();
     assert_eq!(
         automations(),
         [Event::AutomationCreated {
-            start: AutomationStart::Own
+            start: AutomationStart::Own,
+            schedule: AutomationSchedule::Repeat,
         }]
     );
     harness.tick(1);
@@ -2795,4 +2821,640 @@ fn a_run_shown_in_the_automation_screen_stays_attached_until_the_window_looks_aw
         .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": false}))
         .unwrap();
     assert_eq!(terminals.releases(), [pane]);
+}
+
+/// The wall date and time `unix_ms` falls on in UTC, the tests' zone, as a
+/// once schedule keeps it.
+fn once_at(unix_ms: u64) -> Value {
+    let at = jiff::Timestamp::from_millisecond(unix_ms as i64)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    json!({
+        "kind": "once",
+        "date": at.strftime("%Y-%m-%d").to_string(),
+        "time": at.strftime("%H:%M").to_string(),
+    })
+}
+
+/// The automations with a once run to open, as the scope names them.
+fn looks(runtime: &mut Runtime) -> Vec<String> {
+    runtime.snapshot_delta_payload(0);
+    runtime
+        .snapshot
+        .navigator
+        .agent_scope
+        .automation_looks
+        .clone()
+}
+
+impl Harness {
+    /// A once automation in the repository's folder, its time `minutes`
+    /// from now as a call names it: its id and the time it was kept as.
+    fn once_in(&self, name: &str, minutes: u32) -> (String, u64) {
+        let added = self
+            .call(json!({
+                "call": "add", "name": name, "task": "Check the webhook failures",
+                "schedule": {"kind": "once_in_minutes", "minutes": minutes},
+                "agent": {"kind": "claude"}, "folder": REPO,
+            }))
+            .unwrap();
+        (
+            added["id"].as_str().unwrap().to_owned(),
+            added["next_run_at_unix_ms"].as_u64().expect("a next time"),
+        )
+    }
+
+    fn item(&self, id: &str) -> Value {
+        show(&mut self.runtime.lock().unwrap(), id)
+    }
+
+    fn looks(&self) -> Vec<String> {
+        looks(&mut self.runtime.lock().unwrap())
+    }
+
+    fn phone(&self) -> crate::agent_state::phone::PhoneAutomations {
+        let mut runtime = self.runtime.lock().unwrap();
+        runtime.snapshot_delta_payload(0);
+        let scope = runtime.snapshot.navigator.agent_scope.clone();
+        crate::agent_state::phone::PhoneAutomations::project(
+            runtime.snapshot.automations.as_deref(),
+            &scope.automation_asks,
+            &scope.automation_looks,
+        )
+    }
+}
+
+/// mission-104 O-1, O-3, O-4 (the wire the screens draw): a once time named
+/// from now is kept as the date and time it falls on, and reads back as
+/// that; its run, once ended, leaves the automation done with no next time
+/// and stands in Needs You on the automation's own line, on the desktop's
+/// scope and the phone's alike, until a window shows the run.
+#[test]
+fn a_once_automation_is_kept_as_its_date_and_its_end_waits_in_needs_you_until_opened() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let before = unix_milliseconds();
+    let (id, due) = harness.once_in("Webhooks", 1);
+    // Now and a minute more, to the minute.
+    assert!(
+        due > before && due <= before + MINUTE_MS,
+        "{due} from {before}"
+    );
+    assert_eq!(due % MINUTE_MS, 0);
+    let item = harness.item(&id);
+    assert_eq!(item["schedule"], once_at(due));
+    assert_eq!(item["reads_as"], once_at(due));
+    assert_eq!(item["next_run_at_unix_ms"], due);
+    assert_eq!(item["done"], false);
+    assert_eq!(item.get("look_run"), None);
+
+    harness.tick(61);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    let item = harness.item(&id);
+    assert_eq!(
+        (
+            &item["done"],
+            &item["running"],
+            &item["next_run_at_unix_ms"]
+        ),
+        (&json!(false), &json!(true), &Value::Null),
+        "its run goes: not done yet"
+    );
+    assert_eq!(item["records"][0]["trigger"], "scheduled");
+    assert!(harness.looks().is_empty());
+
+    harness.show(&pane_of(&intent(&id, 1, 1)), answered);
+    harness.tick(1);
+    let item = harness.item(&id);
+    assert_eq!(
+        (
+            &item["done"],
+            &item["running"],
+            &item["look_run"],
+            &item["next_run_at_unix_ms"],
+            &item["records"][0]["state"],
+        ),
+        (
+            &json!(true),
+            &json!(false),
+            &json!(1),
+            &Value::Null,
+            &json!("succeeded")
+        )
+    );
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+    let phone = harness.phone();
+    assert_eq!(
+        phone.looks,
+        std::slice::from_ref(&id),
+        "the phone's 내 차례 counts it too"
+    );
+    let listed = phone.find(&id).unwrap();
+    assert_eq!((listed.done, listed.look_run), (true, Some(1)));
+    assert_eq!(
+        serde_json::to_value(&listed.schedule).unwrap(),
+        once_at(due),
+        "the phone words the date itself"
+    );
+
+    // The line outlasts the run's terminal, which closes on the usual rule.
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.tick(1);
+    assert!(harness.closed().contains(&pane), "{:?}", harness.closed());
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+
+    // Opened in the automation screen, it is put away, and the word is
+    // announced though nothing else on the screen moved; the automation
+    // stays done and never runs again on schedule.
+    let viewing = serde_json::from_value(json!(
+        {"call": "run_viewing", "id": id, "run": 1, "on": true}
+    ))
+    .unwrap();
+    let (answer, changed) = harness.runtime.lock().unwrap().automation_call(viewing);
+    answer.unwrap();
+    assert!(changed, "the screen's word is announced to every window");
+    assert!(harness.looks().is_empty());
+    let item = harness.item(&id);
+    assert_eq!((&item["done"], item.get("look_run")), (&json!(true), None));
+    assert!(harness.phone().looks.is_empty());
+    harness.tick(2 * 24 * 60 * 60);
+    assert_eq!(harness.asked().len(), 1, "one time, one run");
+}
+
+/// mission-104 review O2: the screen's word that it shows a run holds for a
+/// while after the window went, so a once run that ends in front of an
+/// attached window is seen there and raises nothing, while one that ends
+/// after the window went stands in Needs You.
+#[test]
+fn a_once_run_that_ends_after_the_window_went_still_stands_in_needs_you() {
+    for attached in [true, false] {
+        let state = tempfile::tempdir().unwrap();
+        let mut harness = Harness::new(&state);
+        let (id, _) = harness.once_in("Webhooks", 1);
+        harness.tick(61);
+        harness
+            .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+            .unwrap();
+        harness.runtime.lock().unwrap().ui_attached = attached;
+        harness.show(&pane_of(&intent(&id, 1, 1)), answered);
+        harness.tick(1);
+        assert_eq!(harness.item(&id)["done"], true);
+        let expected: &[String] = if attached {
+            &[]
+        } else {
+            std::slice::from_ref(&id)
+        };
+        assert_eq!(harness.looks(), expected, "attached: {attached}");
+    }
+}
+
+/// mission-104 O-3, O-4: a once run that fails for a reason a person fixes
+/// ends failed and stands in Needs You with that reason, and the automation
+/// is done rather than stopped, since it has no time left to stop. A manual
+/// run of it leaves it done; an edit to a new time sets it going again.
+#[test]
+fn a_failed_once_run_stands_in_needs_you_and_the_automation_is_done_not_stopped() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let (id, _) = harness.once_in("Certificates", 1);
+    harness.answer(&intent(&id, 1, 1), &[Answer::Refused("agent_hook_off")]);
+    harness.tick(61);
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&id),
+        (json!("failed"), json!(1), json!("automation_agent_missing"))
+    );
+    let item = harness.item(&id);
+    assert_eq!(
+        (item.get("paused"), &item["done"], &item["look_run"]),
+        (None, &json!(true), &json!(1))
+    );
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+    assert!(
+        needs_you(&mut harness.runtime.lock().unwrap()).0.is_empty(),
+        "no stop line: the once line says it"
+    );
+
+    assert_eq!(
+        harness.call(json!({"call": "pause", "id": id})),
+        Err("automation_done".to_owned())
+    );
+    assert_eq!(
+        harness.call(json!({"call": "run", "id": id})).unwrap()["run"],
+        2
+    );
+    harness.tick(1);
+    let item = harness.item(&id);
+    assert_eq!(
+        (&item["done"], &item["running"]),
+        (&json!(true), &json!(true))
+    );
+    harness.show(&pane_of(&intent(&id, 2, 1)), answered);
+    harness.tick(1);
+    let item = harness.item(&id);
+    assert_eq!(
+        (&item["done"], &item["look_run"]),
+        (&json!(true), &json!(2))
+    );
+    // The desktop's detail opened without the run leaves the line.
+    harness.call(json!({"call": "seen", "id": id})).unwrap();
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+    // Opened on the phone (mission-104 review m6): a word for an older run
+    // leaves the newer run's line; the word for it takes the line away.
+    harness
+        .call(json!({"call": "look_seen", "id": id, "run": 1}))
+        .unwrap();
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+    let seen = serde_json::from_value(json!({"call": "look_seen", "id": id, "run": 2})).unwrap();
+    let (answer, changed) = harness.runtime.lock().unwrap().automation_call(seen);
+    answer.unwrap();
+    assert!(changed);
+    assert!(harness.looks().is_empty());
+    assert!(harness.phone().looks.is_empty());
+
+    let edited = harness
+        .call(json!({
+            "call": "edit", "id": id,
+            "schedule": {"kind": "once_in_days", "days": 1, "time": "09:00"},
+        }))
+        .unwrap();
+    let next = edited["next_run_at_unix_ms"].as_u64().expect("a new time");
+    let item = harness.item(&id);
+    // The harness reads the machine's own zone after its first minute, so
+    // the time is read as kept, not against UTC.
+    assert_eq!(
+        (
+            &item["done"],
+            &item["schedule"]["kind"],
+            &item["schedule"]["time"]
+        ),
+        (&json!(false), &json!("once"), &json!("09:00"))
+    );
+    assert_eq!(item["next_run_at_unix_ms"], next);
+}
+
+/// mission-104 review m1: a manual run of a once automation still waiting
+/// that fails for a reason a person fixes stops it for that person, and
+/// that one line is all Needs You gets: its run's end adds no second.
+#[test]
+fn a_waiting_once_stopped_by_its_manual_runs_failure_has_one_line() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let (id, _) = harness.once_in("Certificates", 60);
+    harness.answer(&intent(&id, 1, 1), &[Answer::Refused("agent_hook_off")]);
+    assert_eq!(
+        harness.call(json!({"call": "run", "id": id})).unwrap()["run"],
+        1
+    );
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(harness.run(&id).0, "failed");
+    let item = harness.item(&id);
+    assert_eq!(item["paused"]["reason"], "agent_missing");
+    assert_eq!(item.get("look_run"), None);
+    assert_eq!(
+        needs_you(&mut harness.runtime.lock().unwrap()).0,
+        std::slice::from_ref(&id)
+    );
+    assert!(harness.looks().is_empty(), "one line, not two");
+}
+
+/// mission-104 review m2: a done once automation another machine's core
+/// made, given a new time by an edit here, is this machine's from then on,
+/// so the next start does not read it as moved and stop it.
+#[test]
+fn an_edit_that_gives_a_done_once_automation_a_time_takes_it_to_this_machine() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let book: crate::automations::Stored = serde_json::from_value(json!({
+        "schema_version": 1,
+        "automations": [stored_automation(
+            "moved",
+            json!({"kind": "once", "date": "2026-01-01", "time": "09:00"}),
+            json!({"machine": "elsewhere", "next_run_number": 1, "records": [
+                {"kind": "run", "number": 1, "trigger": "scheduled", "started_at_unix_ms": 1,
+                 "ended_at_unix_ms": 2, "state": "succeeded", "attempt": 1}]}),
+        )],
+    }))
+    .unwrap();
+    let (store, _, _) =
+        crate::runtime::automations::restore(state.path().join("automations-moved.json"));
+    runtime.install_automations_store(store, book, jiff::tz::TimeZone::UTC);
+    call(
+        &mut runtime,
+        json!({"call": "edit", "id": "moved",
+               "schedule": {"kind": "once_in_days", "days": 1, "time": "09:00"}}),
+    )
+    .unwrap();
+    let moved = runtime
+        .automation_book()
+        .into_iter()
+        .find(|automation| automation.id == "moved")
+        .unwrap();
+    assert!(moved.next_due_unix_ms.is_some());
+    assert_eq!(moved.machine, crate::node::TEST_NODE);
+}
+
+/// mission-104 review S1: a once automation keeps its wall date and time,
+/// so a core that starts in another zone than the one it was made in runs
+/// it there, once: moved west, at that zone's wall time and never also at
+/// the instant it was stored with; moved east past it, once as missed. One
+/// paused across the move keeps no time until it is resumed, which reads it
+/// in the zone the core started in.
+#[test]
+fn a_once_automation_runs_once_at_its_wall_time_in_the_zone_the_core_starts_in() {
+    use crate::automations::Schedule;
+    for zone_name in ["America/New_York", "Asia/Seoul"] {
+        let zone = jiff::tz::TimeZone::get(zone_name).unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let machine: Arc<Mutex<Machine>> = Arc::default();
+        let before = Harness::on(&state, Arc::clone(&machine));
+        // A wall time two hours from now, made where the core reads UTC.
+        let wall =
+            jiff::Timestamp::from_millisecond((unix_milliseconds() + 120 * MINUTE_MS) as i64)
+                .unwrap()
+                .to_zoned(jiff::tz::TimeZone::UTC);
+        let once = json!({
+            "kind": "once",
+            "date": wall.strftime("%Y-%m-%d").to_string(),
+            "time": wall.strftime("%H:%M").to_string(),
+        });
+        let made = |name: &str| {
+            before
+                .call(json!({
+                    "call": "add", "name": name, "task": "Check the webhook failures",
+                    "schedule": once.clone(), "agent": {"kind": "claude"}, "folder": REPO,
+                }))
+                .unwrap()
+        };
+        let first = made("Webhooks");
+        let id = first["id"].as_str().unwrap().to_owned();
+        let stored = first["next_run_at_unix_ms"].as_u64().unwrap();
+        let paused = made("Certificates")["id"].as_str().unwrap().to_owned();
+        before.call(json!({"call": "pause", "id": paused})).unwrap();
+        before.stop();
+
+        let mut after = Harness::on_in(&state, machine, Some(zone.clone()));
+        let schedule: Schedule = serde_json::from_value(once.clone()).unwrap();
+        let there = schedule.once_at(&zone).unwrap();
+        let runs = |harness: &Harness| {
+            let prefix = format!("automation-{id}-");
+            harness
+                .asked()
+                .iter()
+                .filter(|intent| intent.starts_with(&prefix))
+                .count()
+        };
+        assert_eq!(after.item(&paused)["next_run_at_unix_ms"], Value::Null);
+        if there > stored {
+            // West: its time is that zone's wall time, later than stored.
+            assert_eq!(after.item(&id)["next_run_at_unix_ms"], there);
+            after.tick((stored - after.clock) / 1000 + 60);
+            assert_eq!(runs(&after), 0, "{zone_name}: not at the stored instant");
+            after.tick((there - after.clock) / 1000 + 1);
+        } else {
+            // East: that wall time is past, so it runs once, as missed.
+            after.tick(1);
+        }
+        assert_eq!(runs(&after), 1, "{zone_name}");
+        after.show(&pane_of(&intent(&id, 1, 1)), answered);
+        after.tick(1);
+        // Well past both instants.
+        after.tick(2 * 24 * 3600);
+        let item = after.item(&id);
+        assert_eq!(runs(&after), 1, "{zone_name}: one time, one run");
+        assert_eq!(
+            (&item["done"], &item["next_run_at_unix_ms"]),
+            (&json!(true), &Value::Null),
+            "{zone_name}"
+        );
+        assert_eq!(after.item(&paused)["next_run_at_unix_ms"], Value::Null);
+
+        // Resumed, the paused one reads its wall time in this zone, or runs
+        // now when that is past.
+        let resumed = after.call(json!({"call": "resume", "id": paused})).unwrap();
+        let next = resumed["next_run_at_unix_ms"].as_u64().unwrap();
+        if there > unix_milliseconds() {
+            assert_eq!(next, there, "{zone_name}");
+        } else {
+            assert!(next <= unix_milliseconds(), "{zone_name}");
+        }
+    }
+}
+
+/// mission-104 O-2 (D-15): a once time that passed while the core was off
+/// runs once when the core is back, as a missed run, and never again.
+#[test]
+fn a_once_time_that_passed_while_the_core_was_off_runs_once_when_it_is_back() {
+    let state = tempfile::tempdir().unwrap();
+    let machine: Arc<Mutex<Machine>> = Arc::default();
+    let before = Harness::on(&state, Arc::clone(&machine));
+    let (id, due) = before.once_in("Webhooks", 1);
+    before.stop();
+
+    let mut after = Harness::on(&state, machine);
+    after.tick(60 * 60);
+    assert_eq!(after.asked(), [intent(&id, 1, 1)]);
+    let records = after.records(&id);
+    assert_eq!(
+        (&records[0]["kind"], &records[0]["trigger"]),
+        (&json!("run"), &json!("missed"))
+    );
+    assert_eq!(
+        records[1],
+        json!({
+            "kind": "missed", "first_unix_ms": due, "last_unix_ms": due, "count": 1,
+            "reason": "core_off",
+        })
+    );
+    after.show(&pane_of(&intent(&id, 1, 1)), answered);
+    after.tick(1);
+    assert_eq!(after.item(&id)["done"], true);
+    assert_eq!(after.looks(), std::slice::from_ref(&id));
+    after.tick(3 * 24 * 60 * 60);
+    assert_eq!(after.asked().len(), 1);
+}
+
+/// mission-104 O-3: a once time is never skipped at the usage limit, which
+/// would leave nobody told: it starts as a manual run does, and a turn the
+/// provider refuses for the limit ends the run failed, standing in Needs
+/// You, rather than turning it into a skipped line.
+#[test]
+fn a_once_time_at_the_usage_limit_starts_and_a_refusal_for_it_ends_the_run_failed() {
+    use crate::agent_hooks::facts::TurnRefused;
+    use hide_node_link::panes::{HookRefusal, RefusalKind};
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let (id, due) = harness.once_in("Webhooks", 1);
+    harness
+        .runtime
+        .lock()
+        .unwrap()
+        .ingest_usage(vec![usage("claude", Some(100.0), due + DAY_MS)]);
+    harness.tick(61);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)], "not skipped");
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, |row| {
+        row.activity = "stopped".into();
+        row.group = "seen".into();
+        row.refused = Some(TurnRefused {
+            refusal: HookRefusal {
+                kind: RefusalKind::Limit,
+                line: "You've hit your limit · resets 4pm".into(),
+            },
+            at_unix_ms: 1,
+        });
+    });
+    harness.tick(1);
+    let records = harness.records(&id);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        run_row(&records[0]),
+        (json!("failed"), json!(1), json!("usage_limit"))
+    );
+    assert_eq!(harness.item(&id)["done"], true);
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+}
+
+/// mission-104 O-3: a once automation paused past its time runs once as
+/// soon as it is resumed, rather than ending unrun; once its time came it
+/// cannot be paused.
+#[test]
+fn a_once_automation_paused_past_its_time_runs_once_when_resumed() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    // Paused by the operator before its time, which has passed since.
+    let book: crate::automations::Stored = serde_json::from_value(json!({
+        "schema_version": 1,
+        "automations": [stored_automation(
+            "webhooks",
+            json!({"kind": "once", "date": "2026-01-01", "time": "09:00"}),
+            json!({"paused": {"reason": "operator", "at_unix_ms": 1}}),
+        )],
+    }))
+    .unwrap();
+    let (store, _, _) =
+        crate::runtime::automations::restore(state.path().join("automations-paused.json"));
+    runtime.install_automations_store(store, book, jiff::tz::TimeZone::UTC);
+    let id = "webhooks".to_owned();
+    runtime.tick_automations(unix_milliseconds());
+    assert!(records(&mut runtime, &id).is_empty(), "paused: nothing ran");
+
+    let before = unix_milliseconds();
+    let resumed = call(&mut runtime, json!({"call": "resume", "id": id})).unwrap();
+    let now = resumed["next_run_at_unix_ms"]
+        .as_u64()
+        .expect("it runs now");
+    assert!(now >= before, "the moment it was resumed");
+    assert!(runtime.tick_automations(now + 1_000));
+    let records = records(&mut runtime, &id);
+    assert_eq!(
+        (&records[0]["kind"], &records[0]["trigger"]),
+        (&json!("run"), &json!("scheduled"))
+    );
+    assert_eq!(
+        call(&mut runtime, json!({"call": "pause", "id": id})),
+        Err("automation_done".to_owned()),
+        "its time came: nothing left to pause"
+    );
+}
+
+/// The book of one automation as the core keeps it, in `/srv/notes`.
+fn stored_automation(id: &str, schedule: Value, extra: Value) -> Value {
+    let mut automation = json!({
+        "id": id, "name": format!("automation {id}"), "task": "Look",
+        "schedule": schedule, "agent": {"kind": "claude"},
+        "folder": {"path": "/srv/notes"}, "machine": crate::node::TEST_NODE,
+        "created_at_unix_ms": 1,
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        automation[key] = value.clone();
+    }
+    automation
+}
+
+/// mission-104 O-5, engineering 15: a create at the cap drops a done once
+/// automation, one the operator already opened before one that waits in
+/// Needs You, then the one done first, never one in use (its conversation
+/// opened again), and is refused when no done one is free to go.
+#[test]
+fn at_the_cap_a_create_drops_a_done_once_automation_and_is_refused_only_when_none_is() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let ended = |at: u64| {
+        json!([{"kind": "run", "number": 1, "trigger": "scheduled", "started_at_unix_ms": at,
+                "ended_at_unix_ms": at, "state": "succeeded", "attempt": 1}])
+    };
+    let once = json!({"kind": "once", "date": "2026-01-01", "time": "09:00"});
+    let mut automations: Vec<Value> = (0..crate::automations::AUTOMATION_CAP - 3)
+        .map(|index| {
+            stored_automation(
+                &format!("d{index}"),
+                json!({"kind": "daily", "time": "09:00"}),
+                json!({}),
+            )
+        })
+        .collect();
+    // Done before all, but its conversation is open again: in use.
+    automations.push(stored_automation(
+        "in_use",
+        once.clone(),
+        json!({"records": [{"kind": "run", "number": 1, "trigger": "scheduled",
+                            "started_at_unix_ms": 5, "ended_at_unix_ms": 5, "state": "succeeded",
+                            "attempt": 1, "opened": {"number": 1, "agent_id": "agent-open"}}],
+               "next_run_number": 1}),
+    ));
+    // Done first of the rest, but still waiting in Needs You.
+    automations.push(stored_automation(
+        "waiting",
+        once.clone(),
+        json!({"records": ended(10), "next_run_number": 1, "look_run": 1}),
+    ));
+    automations.push(stored_automation(
+        "opened",
+        once,
+        json!({"records": ended(20), "next_run_number": 1}),
+    ));
+    let book: crate::automations::Stored = serde_json::from_value(json!({
+        "schema_version": 1, "automations": automations,
+    }))
+    .unwrap();
+    let (store, _, _) =
+        crate::runtime::automations::restore(state.path().join("automations-full.json"));
+    runtime.install_automations_store(store, book, jiff::tz::TimeZone::UTC);
+    let ids = |runtime: &Runtime| -> Vec<String> {
+        runtime
+            .automation_book()
+            .into_iter()
+            .map(|automation| automation.id)
+            .collect()
+    };
+    assert_eq!(ids(&runtime).len(), crate::automations::AUTOMATION_CAP);
+
+    add_with(&mut runtime, json!({"name": "New one"}));
+    let kept = ids(&runtime);
+    assert_eq!(kept.len(), crate::automations::AUTOMATION_CAP);
+    assert!(
+        !kept.contains(&"opened".to_owned()),
+        "the opened one went first"
+    );
+    assert!(kept.contains(&"waiting".to_owned()));
+    assert!(kept.contains(&"in_use".to_owned()), "in use, never dropped");
+
+    add_with(&mut runtime, json!({"name": "Another"}));
+    assert!(!ids(&runtime).contains(&"waiting".to_owned()));
+    assert!(ids(&runtime).contains(&"in_use".to_owned()));
+
+    let draft = json!({
+        "call": "add", "name": "Too many", "task": "Look",
+        "schedule": {"kind": "daily", "time": "09:00"}, "agent": {"kind": "claude"},
+    });
+    assert_eq!(
+        call(&mut runtime, draft),
+        Err("automation_cap".to_owned()),
+        "the one done one left is in use"
+    );
+    assert!(ids(&runtime).contains(&"in_use".to_owned()));
 }

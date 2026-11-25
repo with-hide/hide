@@ -37,9 +37,11 @@ pub enum Event {
     Active {
         surface: ActiveSurface,
     },
-    /// An automation was made, with the example its form started from.
+    /// An automation was made, with the example its form started from and
+    /// whether it runs once or repeats (mission-104).
     AutomationCreated {
         start: AutomationStart,
+        schedule: AutomationSchedule,
     },
     /// A run of an automation ended, once per run.
     AutomationRunEnded {
@@ -76,6 +78,13 @@ pub enum AutomationStart {
     Briefing,
     Ci,
     Own,
+}
+
+/// Whether an automation runs at one time or repeats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationSchedule {
+    Once,
+    Repeat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -503,15 +512,24 @@ impl Event {
                     ActiveSurface::Phone => "phone",
                 },
             )],
-            Self::AutomationCreated { start } => vec![(
-                "start",
-                match start {
-                    AutomationStart::Report => "report",
-                    AutomationStart::Briefing => "briefing",
-                    AutomationStart::Ci => "ci",
-                    AutomationStart::Own => "own",
-                },
-            )],
+            Self::AutomationCreated { start, schedule } => vec![
+                (
+                    "start",
+                    match start {
+                        AutomationStart::Report => "report",
+                        AutomationStart::Briefing => "briefing",
+                        AutomationStart::Ci => "ci",
+                        AutomationStart::Own => "own",
+                    },
+                ),
+                (
+                    "schedule",
+                    match schedule {
+                        AutomationSchedule::Once => "once",
+                        AutomationSchedule::Repeat => "repeat",
+                    },
+                ),
+            ],
             Self::AutomationRunEnded { outcome, trigger } => vec![
                 (
                     "outcome",

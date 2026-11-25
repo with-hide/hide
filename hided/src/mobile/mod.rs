@@ -65,19 +65,24 @@ fn projection_failed(stage: &str, message: &str) {
     );
 }
 
-/// The automations the core counts as the operator's turn, oldest pause
-/// first (`navigator.agent_scope.automation_asks`, PRD automations D-12); the
-/// core leaves the field out while there are none.
-fn automation_asks(rest: &Value) -> Vec<String> {
-    rest.pointer("/navigator/agent_scope/automation_asks")
-        .and_then(Value::as_array)
-        .map(|asks| {
-            asks.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+/// The automations the core counts as the operator's turn: those stopped
+/// for a person, oldest pause first (`navigator.agent_scope.automation_asks`,
+/// PRD automations D-12), and the once ones whose run waits to be opened
+/// (`automation_looks`, mission-104 O-4); the core leaves a field out while
+/// it names none.
+fn automation_asks(rest: &Value) -> (Vec<String>, Vec<String>) {
+    let ids = |field: &str| {
+        rest.pointer(&format!("/navigator/agent_scope/{field}"))
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (ids("automation_asks"), ids("automation_looks"))
 }
 
 /// How often the checklist is read again while Settings › Devices is open.
@@ -2851,7 +2856,7 @@ impl Mobile {
         // The core's automations section as last sent and its asks as last
         // read from `rest`: the list is projected again only when either moves.
         let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
-        let mut asks: Vec<String> = Vec::new();
+        let mut asks: (Vec<String>, Vec<String>) = Default::default();
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2862,7 +2867,7 @@ impl Mobile {
                 cursor = 0;
                 rest = Value::Null;
                 automations = None;
-                asks.clear();
+                asks = Default::default();
                 self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
@@ -2933,7 +2938,11 @@ impl Mobile {
                 moved
             };
             if section_moved || asks_moved {
-                self.publish_automations(PhoneAutomations::project(automations.as_deref(), &asks));
+                self.publish_automations(PhoneAutomations::project(
+                    automations.as_deref(),
+                    &asks.0,
+                    &asks.1,
+                ));
             }
             match rest_moved {
                 Err(error) => {
@@ -3389,6 +3398,91 @@ mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
+
+    /// The automations and missions the core counts as the operator's turn
+    /// reach the phone's frames through the rest the phone loop keeps: a
+    /// stopped automation as `asks`, a once one whose run ended as `looks`, a
+    /// mission as the missions frame's `asks`; a count elsewhere in the scope
+    /// moves nothing (mission-104).
+    #[test]
+    fn the_cores_needs_you_lines_reach_the_phones_frames_through_the_rest() {
+        use hide_core::automations::{
+            AgentChoice, AutomationSnapshot, AutomationsSnapshot, Folder,
+        };
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
+            "schema_version": 2, "node_id": "test-node", "app_state_path": ""
+        }))
+        .unwrap();
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        snapshot.navigator.agent_scope.automation_asks = vec!["stopped".into()];
+        snapshot.navigator.agent_scope.automation_looks = vec!["once".into()];
+        snapshot.navigator.agent_scope.mission_asks = vec!["m1".into()];
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
+        let mut kept = Value::Null;
+        assert!(projection::update_inputs(&mut kept, &first, 0).unwrap());
+        // The missions section as the core writes one waiting mission.
+        kept["missions"] = json!({"items": [{
+            "id": "m1", "title": "Ship", "device_id": "test-node", "status": "running",
+            "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude",
+                          "present": true, "takes_answers": true},
+            "created_at_unix_ms": 1,
+        }]});
+        let missions = PhoneMissions::project(&kept, "test-node", &project(&kept, "test-node"));
+        assert_eq!(missions.asks, ["m1"]);
+        let (asks, looks) = automation_asks(&kept);
+        assert_eq!(
+            (asks.as_slice(), looks.as_slice()),
+            (&["stopped".to_owned()][..], &["once".to_owned()][..])
+        );
+
+        let item = |id: &str| AutomationSnapshot {
+            id: id.into(),
+            name: id.into(),
+            task: "Look".into(),
+            schedule: serde_json::from_value(json!({"kind": "daily", "time": "09:00"})).unwrap(),
+            reads_as: serde_json::from_value(json!({"kind": "daily", "time": "09:00"})).unwrap(),
+            next_run_at_unix_ms: None,
+            agent: AgentChoice {
+                kind: "claude".into(),
+                profile: None,
+                model: None,
+                effort: None,
+            },
+            folder: Folder {
+                path: "/srv/notes".into(),
+                default: true,
+                worktree: false,
+            },
+            paused: None,
+            running: false,
+            done: id == "once",
+            look_run: (id == "once").then_some(1),
+            unseen: 0,
+            recent_spend: None,
+            records: Vec::new(),
+        };
+        let section = AutomationsSnapshot {
+            items: vec![item("stopped"), item("once"), item("other")],
+            ..AutomationsSnapshot::default()
+        };
+        let frame =
+            phone::automations_frame(&PhoneAutomations::project(Some(&section), &asks, &looks));
+        assert_eq!(
+            (&frame["asks"], &frame["looks"]),
+            (&json!(["stopped"]), &json!(["once"]))
+        );
+
+        snapshot.navigator.agent_scope.overview_needs_you = 7;
+        let counted = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
+        assert!(
+            !projection::update_inputs(&mut kept, &counted, 1).unwrap(),
+            "a count moves no phone input"
+        );
+        snapshot.navigator.agent_scope.automation_looks.clear();
+        let opened = hide_core::RestSections::capture(&snapshot, Some(&counted), 3);
+        assert!(projection::update_inputs(&mut kept, &opened, 2).unwrap());
+        assert_eq!(automation_asks(&kept).1, Vec::<String>::new());
+    }
 
     #[test]
     fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {

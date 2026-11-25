@@ -113,6 +113,7 @@ fn row(owner: Owner, doing: Doing) -> SidebarAgentSnapshot {
                 home: Some(crate::coordination::TaskHome::Suggestions),
                 workspace_id: None,
                 turn: None,
+                once: false,
             });
         }
         Owner::Tool(owns) => agent.tool = Some(tool(owns)),

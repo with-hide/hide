@@ -1321,6 +1321,7 @@ fn a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do() {
             home: Some(TaskHome::Suggestions),
             workspace_id: Some("p".into()),
             turn,
+            once: false,
         });
         act(&mut agents[1]);
         let workspaces = vec![workspace(

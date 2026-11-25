@@ -459,7 +459,12 @@ use crate::error::HostError;
 /// the pane's node (`PromptFile`, `PromptFileRemove`), which the start line
 /// reads, so the text never crosses the pane's shell; a node on 103 does not
 /// know the calls, so it is refused at Hello and upgraded with its core.
-pub const PROTOCOL_VERSION: u32 = 104;
+/// 105: a hook's report of a permission request carries what it asks to run
+/// (`panes::HookStatusReport::asked`), which the core shows on the approval
+/// card of an agent whose session records a call only once it is allowed
+/// (Codex); a core on 104 refuses a report with a field it does not know, so a
+/// helper upgrades with its core.
+pub const PROTOCOL_VERSION: u32 = 105;
 
 /// The longest text a prompt file holds ([`Call::PromptFile`]): a start's
 /// first input, `hide-core`'s 64 KiB with room to spare.
