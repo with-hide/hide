@@ -821,6 +821,8 @@ const SCENE_CASES = [
   { label: "Devices · rail hidden", query: "content=reference&devices=two&rail=hidden" },
   { label: "Devices · not connected", query: "content=reference&devices=two&front=offline" },
   { label: "Devices · long names · narrow (240)", query: "content=long&devices=two&width=240" },
+  { label: "Another machine's work · in its projects and outside them", query: "content=reference&guests=on&lang=ko&logos=shown" },
+  { label: "Another machine's work · narrow (240)", query: "content=reference&guests=on&lang=ko&width=240" },
 ] as const;
 
 function Scenes() {
