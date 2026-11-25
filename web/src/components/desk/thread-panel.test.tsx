@@ -31,6 +31,7 @@ let mounted: ReturnType<typeof createRoot>[] = [];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   saved = useShellStore.getState();
+  useShellStore.setState({ connection: "live" });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });

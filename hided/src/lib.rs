@@ -745,7 +745,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         request_view_demand: Arc::new(demand::ObservationDemand::default()),
         window_focus_demand: Arc::new(demand::ObservationDemand::default()),
         origin_holds: Arc::new(demand::OriginHolds::default()),
-        thread_opener: Arc::new(demand::ThreadOpener::default()),
+        thread_holds: Arc::new(demand::ThreadHolds::default()),
         daemon_info: Arc::new(serde_json::json!({
             "version": VERSION,
             "schema_version": SCHEMA_VERSION,

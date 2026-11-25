@@ -5,6 +5,7 @@ import type { DeskJob, DeskMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
+import { useSessionThread } from "../../sessionThread";
 import { useShellStore } from "../../store";
 import { Input } from "../ui/input";
 import { threadInputHeld, threadLaunchModel, threadScreen } from "../../threadView";
@@ -48,13 +49,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, condu
   onTerminal: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const latest = useRef(actions);
-  latest.current = actions;
-  useEffect(() => {
-    if (!paneId) return;
-    latest.current.openThread(paneId);
-    return () => latest.current.closeThread();
-  }, [paneId]);
+  useSessionThread(actions, paneId);
 
   // The core holds one thread; until it holds this pane's, this one is still being read.
   const thread = useShellStore((s) => (paneId && s.sessionThread?.pane_id === paneId ? s.sessionThread : null));
