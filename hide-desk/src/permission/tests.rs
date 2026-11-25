@@ -76,6 +76,19 @@ fn a_line_that_runs_anything_but_hide_or_touches_a_file_is_the_agent_s_to_ask() 
         "hide ps >&$x",
         "hide ps &>! /dev/null",
         "hide ps &>| out.txt",
+        // The file can be Desk's own `hide`, which the line would overwrite.
+        "hide ps >>& hide",
+        "hide ps >>&| hide",
+        "hide ps &>>| hide",
+        "hide ps >>| hide",
+        "hide ps >! hide",
+        &format!("hide ps &>| {HIDE}"),
+        &format!("hide ps >>& {HIDE}"),
+        "hide ps 2>&1-",
+        // A redirection with no word after it, which the shell refuses.
+        "hide ps >",
+        "hide ps >> &",
+        "hide ps > ; hide inbox",
         "hide request send a --body-file - < notes.md",
         // A substitution, a backquote, a heredoc that substitutes.
         "hide request send a --body \"$(cat notes.md)\"",

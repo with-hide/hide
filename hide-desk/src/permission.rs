@@ -186,25 +186,19 @@ const SAFE_TARGETS: &[&str] = &["/dev/null", "/dev/stdout", "/dev/stderr", "$nul
 /// program (`hide ps | head` included), a variable set before a command, a
 /// function, a command or process substitution, a backquote, a heredoc
 /// that substitutes and a redirection to or from a file make it a line the
-/// agent's own card asks. On Windows the line must read so in both a POSIX
-/// shell's syntax and PowerShell's ([`SHELLS`]), since Hide does not know
-/// which of the two runs it.
+/// agent's own card asks, as does a redirection with no word after it,
+/// which covers a redirection spelling this reading does not know. On Windows the line must read so in both a POSIX
+/// shell's syntax and PowerShell's ([`Syntax::ON_THIS_SYSTEM`]), since Hide
+/// does not know which of the two runs it.
 pub fn hide_line(line: &str, place: &Place<'_>) -> bool {
-    hide_line_in(line, place, SHELLS)
+    hide_line_in(line, place, Syntax::ON_THIS_SYSTEM)
 }
-
-/// The syntaxes a line Desk's agent runs may be read in on this system:
-/// Codex runs PowerShell on Windows, Claude Code Git Bash.
-const SHELLS: &[Syntax] = if cfg!(windows) {
-    &[Syntax::Posix, Syntax::PowerShell]
-} else {
-    &[Syntax::Posix]
-};
 
 fn hide_line_in(line: &str, place: &Place<'_>, syntaxes: &[Syntax]) -> bool {
     syntaxes.iter().all(|syntax| {
         let read = hide_shell::shell_line(line, *syntax);
         !read.commands.is_empty()
+            && !read.missing_target
             && !read.functions
             && read.substitutions.is_empty()
             && read.backquoted.is_empty()
