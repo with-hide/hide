@@ -189,9 +189,20 @@ pub fn capture_within(mut command: Command, within: Duration) -> Result<Captured
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let program = Path::new(command.get_program())
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let started = Instant::now();
     OwnedChild::spawn(&mut command)?
-        .capture_until(Instant::now() + within, READ_CAP)
-        .map_err(|error| anyhow::anyhow!("private command capture: {error}"))
+        .capture_until(started + within, READ_CAP)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "private command capture of {program}: {error} after {:?}",
+                started.elapsed()
+            )
+        })
 }
 
 pub fn successful(command: Command) -> Result<Vec<u8>> {
