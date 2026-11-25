@@ -34,6 +34,8 @@ pub struct Relay {
 #[derive(Default)]
 struct Shared {
     connections: Mutex<Vec<Arc<Carried>>>,
+    /// Every copy thread, joined when the relay drops.
+    copies: Mutex<Vec<std::thread::JoinHandle<()>>>,
     stopping: AtomicBool,
 }
 
@@ -79,15 +81,22 @@ impl Relay {
 
 impl Drop for Relay {
     fn drop(&mut self) {
+        // The accept ends first, woken by a connection of its own, so no
+        // connection is added after the ones closed below.
         self.shared.stopping.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(accepting) = self.accepting.take() {
+            let _ = accepting.join();
+        }
+        // A closed socket ends the copy reading it and fails the one
+        // writing to it.
         for carried in lock(&self.shared.connections).iter() {
             let _ = carried.client.shutdown(Shutdown::Both);
             let _ = carried.server.shutdown(Shutdown::Both);
         }
-        // Wakes the accept with a connection of its own.
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(accepting) = self.accepting.take() {
-            let _ = accepting.join();
+        let copies = std::mem::take(&mut *lock(&self.shared.copies));
+        for copy in copies {
+            let _ = copy.join();
         }
     }
 }
@@ -121,11 +130,12 @@ fn accept(listener: &TcpListener, target: u16, shared: &Arc<Shared>) {
         lock(&shared.connections).push(Arc::clone(&carried));
         for (reading, to_server) in [(client_reading, true), (server_reading, false)] {
             let carried = Arc::clone(&carried);
-            let spawned = std::thread::Builder::new()
+            match std::thread::Builder::new()
                 .name("relay-copy".into())
-                .spawn(move || copy(reading, &carried, to_server));
-            if spawned.is_err() {
-                eprintln!("relay: a copy thread did not start");
+                .spawn(move || copy(reading, &carried, to_server))
+            {
+                Ok(copy) => lock(&shared.copies).push(copy),
+                Err(_) => eprintln!("relay: a copy thread did not start"),
             }
         }
     }
