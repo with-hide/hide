@@ -324,30 +324,32 @@ fn a_loaded_session_s_replay_arrives_before_the_next_prompt_s_mark() {
     .unwrap();
     assert!(opened.resumed);
 
-    let mark = arrivals.next();
+    // As Desk's worker does: the mark read just before the prompt, and
+    // every message read only after it, the replay still waiting.
+    let mut turn = session::TurnReader::new(opened.prelude.clone());
+    let from = arrivals.next();
     session::prompt(&connection, "s1", "델타넷째", 9).unwrap();
-    let (mut replayed, mut owned) = (Vec::new(), Vec::new());
+    turn.start(9, from);
+    let (mut replayed, mut reply) = (0, Vec::new());
     loop {
         let (number, incoming) = received.recv_timeout(WAIT).expect("the agent sent nothing");
         match incoming {
             Incoming::Notification { params, .. } => {
-                if let session::Update::Text { text, .. } = session::read_update(&params) {
-                    if number < mark {
-                        replayed.push(text);
-                    } else {
-                        owned.push(text);
-                    }
+                let update = session::read_update(&params);
+                if matches!(update, session::Update::Text { .. }) && number < from {
+                    replayed += 1;
                 }
+                reply.extend(turn.read(number, &update).map(|(_, text)| text));
             }
             Incoming::Reply { tag, .. } => {
-                assert_eq!(tag, 9);
+                assert_eq!(turn.end(tag), Some(Vec::new()));
                 break;
             }
             other => panic!("unexpected: {other:?}"),
         }
     }
-    assert_eq!(replayed, ["응답: 알파첫째", "응답: 브라보둘째"]);
-    assert_eq!(owned, ["응답: 델타넷째"]);
+    assert_eq!(replayed, 2, "the load replayed both earlier answers");
+    assert_eq!(reply, ["응답: 델타넷째"]);
     host.end().unwrap();
 }
 

@@ -125,10 +125,13 @@ pub(super) enum Report {
         adapter: AdapterId,
         choices: Choices,
     },
-    /// The process ended: `unexpected` when nobody asked it to.
+    /// The process ended: `unexpected` when nobody asked it to. `turn` is
+    /// the turn it ended under, which ends with it; a turn started since,
+    /// whose message the worker has yet to send, is not this process's.
     Ended {
         unexpected: bool,
         detail: Option<String>,
+        turn: Option<u64>,
     },
 }
 
@@ -155,10 +158,21 @@ fn reason(error: &CallError) -> Option<String> {
     (!line.is_empty()).then(|| line.chars().take(MAX_REASON_CHARS).collect())
 }
 
-/// Whether the agent refused the call until the operator signs in (ACP's
-/// `auth_required`).
-fn signs_in(error: &CallError) -> bool {
-    matches!(error, CallError::Rejected(rejected) if rejected.code == session::AUTH_REQUIRED)
+/// Whether the agent refused the call until the operator signs in: ACP's
+/// `auth_required`, or any refusal from an agent that said it is signed out
+/// ([`session::sign_in_status`]), whatever code it carries.
+fn signs_in(error: &CallError, signed_out: bool) -> bool {
+    matches!(error, CallError::Rejected(rejected)
+        if rejected.code == session::AUTH_REQUIRED || signed_out)
+}
+
+/// An open the agent refused, as Desk reads it: one from an agent that
+/// said it is signed out is a sign-in refusal (B6), whatever it answered.
+fn open_refusal(error: OpenError, signed_out: bool) -> OpenError {
+    match error {
+        OpenError::Failed(_) if signed_out => OpenError::Login,
+        other => other,
+    }
 }
 
 pub(super) struct Handle {
@@ -235,21 +249,13 @@ struct Running {
     /// The tool calls the session announced, by id.
     announced: HashMap<String, Value>,
     announced_order: Vec<String>,
-    turn: Option<u64>,
-    /// The first arrival the running turn owns: what came before its
-    /// prompt went out, such as a `session/load`'s replay of the
-    /// conversation still waiting in the channel, is no turn's.
-    turn_from: u64,
-    /// The tool calls announced in the turn running now, in order.
-    turn_calls: Vec<String>,
+    /// The running turn, its reply and its tool calls; it owns only what
+    /// arrived after its prompt went out, so a `session/load`'s replay still
+    /// waiting in the channel is no turn's.
+    turn: session::TurnReader,
     /// The work placement this session was last told; none for a session
     /// resumed from an earlier run.
     placement: Option<hide_desk::Placement>,
-    /// The startup text the adapter said it writes on its own, until it
-    /// arrives; it may land inside the first turn and is not its reply.
-    prelude: Option<String>,
-    /// Where the running turn's reply text blocks begin.
-    reply: session::ReplyBlocks,
 }
 
 impl Worker {
@@ -271,7 +277,7 @@ impl Worker {
             Order::Send(send) => self.send(send),
             Order::Cancel => {
                 if let Some(running) = &self.running
-                    && running.turn.is_some()
+                    && running.turn.running().is_some()
                 {
                     let _ = session::cancel(running.host.connection(), &running.session_id);
                 }
@@ -456,18 +462,14 @@ impl Worker {
             hide_desk::next_message(changed, &send.text)
         };
         running.placement = Some(send.placement);
-        running.turn_from = self.arrivals.next();
+        let from = self.arrivals.next();
         match session::prompt(
             running.host.connection(),
             &running.session_id,
             &text,
             send.tag,
         ) {
-            Ok(()) => {
-                running.turn = Some(send.tag);
-                running.turn_calls.clear();
-                running.reply = session::ReplyBlocks::default();
-            }
+            Ok(()) => running.turn.start(send.tag, from),
             Err(error) => {
                 self.turn_failed(send.adapter, &error);
                 self.report(Report::TurnEnded {
@@ -570,12 +572,10 @@ impl Worker {
             &pi_ready,
         ) {
             Ok(opened) => opened,
-            // An agent that said it is signed out refused the open for its
-            // sign-in, whichever error it answered with.
-            Err(OpenError::Failed(_)) if self.signed_out.load(Ordering::SeqCst) => {
-                return Err(close(&self.platform, host, OpenError::Login));
+            Err(error) => {
+                let error = open_refusal(error, self.signed_out.load(Ordering::SeqCst));
+                return Err(close(&self.platform, host, error));
             }
-            Err(error) => return Err(close(&self.platform, host, error)),
         };
         let mut choices = opened.choices.clone();
         for (choice, wanted) in [
@@ -603,12 +603,8 @@ impl Worker {
                 credential,
                 announced: HashMap::new(),
                 announced_order: Vec::new(),
-                turn: None,
-                turn_from: 0,
-                turn_calls: Vec::new(),
+                turn: session::TurnReader::new(opened.prelude),
                 placement: None,
-                prelude: opened.prelude,
-                reply: session::ReplyBlocks::default(),
             },
             opened.resume_failed,
             choices,
@@ -681,42 +677,16 @@ impl Worker {
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
                 let update = session::read_update(&params);
-                // What arrived before the turn's prompt went out, such as
-                // the conversation a `session/load` replayed after `다시
-                // 시작`, is already in the conversation: no turn's reply or
-                // steps.
-                let owned = number >= running.turn_from;
-                // Pi's adapter writes startup lines on its own after the
-                // session opens, announced in its session answer.
-                let prelude = matches!(&update, Update::Text { text, .. } if running.prelude.as_deref() == Some(text.as_str()));
-                let piece = if prelude || !owned {
-                    None
-                } else {
-                    running.reply.piece(&update)
-                };
+                let text = running.turn.read(number, &update);
+                let adapter = running.adapter;
                 match update {
-                    Update::Text { .. } if prelude => running.prelude = None,
-                    Update::Text { .. } | Update::Break => {
-                        if let (Some(tag), Some(text)) = (running.turn, piece) {
-                            self.report(Report::Text { tag, text });
-                        }
-                    }
-                    Update::Tool { id, call } => {
-                        if owned
-                            && running.turn.is_some()
-                            && running.turn_calls.len() < MAX_ANNOUNCED
-                            && !running.turn_calls.contains(&id)
-                        {
-                            running.turn_calls.push(id.clone());
-                        }
-                        running.remember(id, call);
-                    }
-                    Update::Choices(choices) => {
-                        let adapter = running.adapter;
-                        self.report(Report::Choices { adapter, choices });
-                    }
+                    Update::Tool { id, call } => running.remember(id, call),
+                    Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
                     Update::Mode(mode) => self.mode_moved(&mode),
-                    Update::Other => {}
+                    Update::Text { .. } | Update::Break | Update::Other => {}
+                }
+                if let Some((tag, text)) = text {
+                    self.report(Report::Text { tag, text });
                 }
             }
             Incoming::Notification { .. } => {}
@@ -733,10 +703,10 @@ impl Worker {
             }
             Incoming::Reply { tag, result } => {
                 let adapter = running.adapter;
-                let current = running.turn == Some(tag);
-                if current {
-                    running.turn = None;
-                    let steps = std::mem::take(&mut running.turn_calls)
+                let calls = running.turn.end(tag);
+                let current = calls.is_some();
+                if let Some(calls) = calls {
+                    let steps = calls
                         .iter()
                         .filter_map(|id| running.announced.get(id))
                         .map(hide_desk::permission::step)
@@ -757,8 +727,7 @@ impl Worker {
                         _ => TurnOutcome::Done,
                     },
                     Err(error)
-                        if current
-                            && (signs_in(&error) || self.signed_out.load(Ordering::SeqCst)) =>
+                        if current && signs_in(&error, self.signed_out.load(Ordering::SeqCst)) =>
                     {
                         self.turn_failed(adapter, &error);
                         self.sign_in_needed(adapter, tag);
@@ -769,8 +738,12 @@ impl Worker {
                         TurnOutcome::Failed(reason(&error))
                     }
                 };
-                self.report(Report::TurnEnded { tag, outcome });
+                // The cap is measured before the turn's end is told, so a
+                // process it ends is stopped by the time the runtime would
+                // send the next queued message, which then waits for
+                // `다시 시작` rather than start another process.
                 self.check_cap();
+                self.report(Report::TurnEnded { tag, outcome });
             }
             Incoming::Closed { why } => {
                 let tail = running.host.stderr_tail();
@@ -928,6 +901,7 @@ impl Worker {
             turn,
             ..
         } = running;
+        let turn = turn.running();
         self.platform.revoke(&credential);
         let ended = host.end();
         if let Err(error) = &ended {
@@ -937,13 +911,11 @@ impl Worker {
                 "error": error.to_string(),
             }));
         }
-        if let Some(tag) = turn {
-            self.report(Report::TurnEnded {
-                tag,
-                outcome: TurnOutcome::Cancelled,
-            });
-        }
-        self.report(Report::Ended { unexpected, detail });
+        self.report(Report::Ended {
+            unexpected,
+            detail,
+            turn,
+        });
     }
 }
 
@@ -1077,6 +1049,38 @@ mod tests {
         ] {
             assert_eq!(reason(&nothing_to_act_on), None);
         }
+    }
+
+    /// letter-47232: a refusal is for the sign-in when it is ACP's
+    /// `auth_required`, or any refusal of an agent that said it is signed
+    /// out; an open it refused so reads as the sign-in line, not a stop.
+    #[test]
+    fn a_refusal_after_the_agent_said_it_is_signed_out_is_a_sign_in_refusal() {
+        let rejected = |code: i64| {
+            CallError::Rejected(hide_desk::rpc::RpcError {
+                code,
+                message: "Internal error".into(),
+            })
+        };
+        assert!(signs_in(&rejected(session::AUTH_REQUIRED), false));
+        assert!(!signs_in(&rejected(-32603), false));
+        assert!(signs_in(&rejected(-32603), true));
+        assert!(!signs_in(&CallError::Closed("eof".into()), true));
+        assert_eq!(
+            open_refusal(
+                OpenError::Failed("session/new: rejected -32603".into()),
+                true
+            ),
+            OpenError::Login
+        );
+        assert_eq!(
+            open_refusal(OpenError::Failed("x".into()), false),
+            OpenError::Failed("x".into())
+        );
+        assert_eq!(
+            open_refusal(OpenError::AskModeUnconfirmed("m".into()), true),
+            OpenError::AskModeUnconfirmed("m".into())
+        );
     }
 
     #[test]

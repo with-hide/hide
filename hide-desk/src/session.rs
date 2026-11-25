@@ -373,6 +373,81 @@ impl ReplyBlocks {
     }
 }
 
+/// Tool calls a turn keeps for the steps its reply is folded into; past
+/// this the rest are not counted.
+pub const MAX_TURN_CALLS: usize = 256;
+
+/// The turn an owner follows on a session: which one runs, what its reply
+/// gains from each update, and the tool calls it made. A turn owns only the
+/// arrivals numbered from its prompt on ([`Arrivals`]): what came before,
+/// such as the conversation a `session/load` replayed, is no turn's.
+#[derive(Debug, Default)]
+pub struct TurnReader {
+    tag: Option<u64>,
+    from: u64,
+    calls: Vec<String>,
+    /// The startup text the adapter said it writes on its own (Pi's), until
+    /// it arrives: it may land inside the first turn and is not its reply.
+    prelude: Option<String>,
+    reply: ReplyBlocks,
+}
+
+impl TurnReader {
+    pub fn new(prelude: Option<String>) -> Self {
+        Self {
+            prelude,
+            ..Self::default()
+        }
+    }
+
+    /// The running turn's tag.
+    pub fn running(&self) -> Option<u64> {
+        self.tag
+    }
+
+    /// A prompt for `tag` went out; `from`, read from [`Arrivals::next`]
+    /// just before it, is the first arrival it owns.
+    pub fn start(&mut self, tag: u64, from: u64) {
+        self.tag = Some(tag);
+        self.from = from;
+        self.calls.clear();
+        self.reply = ReplyBlocks::default();
+    }
+
+    /// What `update`, numbered `number`, adds to the running turn: its tag
+    /// and the reply text it gains. A tool call it made is kept for
+    /// [`TurnReader::end`].
+    pub fn read(&mut self, number: u64, update: &Update) -> Option<(u64, String)> {
+        if let Update::Text { text, .. } = update
+            && self.prelude.as_deref() == Some(text.as_str())
+        {
+            self.prelude = None;
+            return None;
+        }
+        if number < self.from {
+            return None;
+        }
+        let piece = self.reply.piece(update);
+        if let Update::Tool { id, .. } = update {
+            if self.tag.is_some() && self.calls.len() < MAX_TURN_CALLS && !self.calls.contains(id) {
+                self.calls.push(id.clone());
+            }
+            return None;
+        }
+        Some((self.tag?, piece?))
+    }
+
+    /// The turn `tag` answered: the tool calls it made, when it was the
+    /// running one; it runs no more.
+    pub fn end(&mut self, tag: u64) -> Option<Vec<String>> {
+        if self.tag != Some(tag) {
+            return None;
+        }
+        self.tag = None;
+        Some(std::mem::take(&mut self.calls))
+    }
+}
+
 /// Merges a tool call update into what was announced for its id, so a
 /// permission request reads the latest of each field.
 pub fn merge_tool(announced: &mut Value, update: &Value) {
@@ -414,6 +489,42 @@ mod tests {
             ("sonnet".to_owned(), "Sonnet 5.5".to_owned())
         );
         assert_eq!(read.effort.unwrap().config_id, "effort");
+    }
+
+    fn numbered(updates: &[(u64, Value)]) -> (TurnReader, Vec<String>) {
+        let mut turn = TurnReader::new(Some("pi v1 started".into()));
+        turn.start(7, 3);
+        let text = updates
+            .iter()
+            .filter_map(|(number, update)| {
+                turn.read(*number, &read_update(&json!({"update": update})))
+            })
+            .map(|(tag, text)| {
+                assert_eq!(tag, 7);
+                text
+            })
+            .collect();
+        (turn, text)
+    }
+
+    /// letter-47179: what arrived before the turn's prompt went out, the
+    /// conversation a `session/load` replayed, is no part of its reply or
+    /// steps, however late its owner reads it.
+    #[test]
+    fn a_turn_owns_only_what_arrived_after_its_prompt() {
+        let tool = |id: &str| json!({"sessionUpdate": "tool_call", "toolCallId": id});
+        let (mut turn, text) = numbered(&[
+            (0, said("응답: 알파첫째")),
+            (1, tool("old")),
+            (2, said("응답: 브라보둘째")),
+            (3, said("pi v1 started")),
+            (4, said("응답: 델타넷째")),
+            (5, tool("new")),
+        ]);
+        assert_eq!(text, ["응답: 델타넷째"]);
+        assert_eq!(turn.end(7), Some(vec!["new".to_owned()]));
+        assert_eq!(turn.running(), None);
+        assert_eq!(turn.end(7), None);
     }
 
     #[test]

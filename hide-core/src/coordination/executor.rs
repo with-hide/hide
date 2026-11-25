@@ -40,6 +40,11 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
 
+/// A start's answer when another start holds this machine's start line:
+/// nothing was started, and the same start asked again goes through once
+/// the line is free.
+pub(crate) const SPAWN_BUSY: &str = "spawn_busy";
+
 /// Waits until no start holds this machine's start line, each holding it
 /// for the seconds a start takes. False for a line a panicked start
 /// poisoned, which refuses every start, so a caller does not wait on it.
@@ -1517,7 +1522,7 @@ fn spawn(
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
     // creates something runs under it.
-    let single = SPAWN.try_lock().map_err(|_| "spawn_busy")?;
+    let single = SPAWN.try_lock().map_err(|_| SPAWN_BUSY)?;
     let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
         // A device's path names no project of the caller's machine.
         own_registration(

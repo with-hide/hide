@@ -438,30 +438,24 @@ pub fn classify(action: &Action, place: &Place<'_>) -> Reading {
 }
 
 /// The folder that holds every one of `paths`: the deepest folder they all
-/// lie below. None when a path cannot be named or there is none.
+/// lie below, by the wire's own path rules, so a drive's root is `C:/` and
+/// paths on two drives share none. None when a path cannot be named or
+/// they share no folder.
 fn holding_folder(paths: impl Iterator<Item = Option<String>>) -> Option<String> {
-    let mut holding: Option<Vec<String>> = None;
+    use hide_platform::path::{wire_parent, wire_relative};
+    let mut holding: Option<String> = None;
     for path in paths {
         let path = normalize(&path?);
-        let (parent, _) = path.rsplit_once('/')?;
-        let names: Vec<String> = parent.split('/').map(str::to_owned).collect();
-        holding = Some(match holding {
-            None => names,
-            Some(held) => held
-                .into_iter()
-                .zip(names)
-                .take_while(|(held, name)| held == name)
-                .map(|(held, _)| held)
-                .collect(),
-        });
+        let mut held = match holding {
+            Some(held) => held,
+            None => wire_parent(&path)?.to_owned(),
+        };
+        while wire_relative(&held, &path).is_err() {
+            held = wire_parent(&held)?.to_owned();
+        }
+        holding = Some(held);
     }
-    let names = holding?;
-    match names.join("/") {
-        // Below the root, whose name is empty.
-        joined if joined.is_empty() && !names.is_empty() => Some("/".to_owned()),
-        joined if joined.is_empty() => None,
-        joined => Some(joined),
-    }
+    holding
 }
 
 /// What a shell line runs, as far as Hide reads it.

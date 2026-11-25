@@ -444,6 +444,11 @@ pub struct DeskConversationSnapshot {
     /// Messages the operator sent while a reply was being written, in the
     /// order they go: none is in `items` until its turn starts.
     pub queued: Vec<DeskQueuedMessage>,
+    /// How many messages may wait; a send past it is refused
+    /// `desk_queued_full` and its words stay in the composer.
+    pub queued_max: usize,
+    /// The line is full: the screen says so, and ✕ on one frees a place.
+    pub queued_full: bool,
 }
 
 /// A message waiting for the turn before it to end (desk.md: "while a reply
