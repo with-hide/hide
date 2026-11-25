@@ -7,10 +7,14 @@
 //! on a worker outside the lock; the answer comes back under a short lock.
 //! The newest page is read once and kept; what the session writes after it
 //! is read forward from where that page ended, again when the engine reports the
-//! agent's state moved and, while it works, when a once-a-second look at the
-//! session's file size and time says it wrote. A forward read that fills
-//! becomes a kept page and the next one starts where it ended, so a working
-//! session re-sends only its live page.
+//! agent's state moved and, while a screen is attached, whenever a
+//! once-a-second look at the session's file says it wrote, whatever state
+//! the agent is in. The
+//! state change alone reads too early: an agent writes the end of its turn
+//! after it reports the turn ended (Claude Code appends its last answer once
+//! its Stop hook ran), so only the file says when that end is there. A
+//! forward read that fills becomes a kept page and the next one starts where
+//! it ended, so a working session re-sends only its live page.
 //!
 //! Input goes only to the pane the thread was opened for, while it still
 //! runs that session, through the one write a phone's reply takes too
@@ -43,6 +47,8 @@ const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 const UNREACHABLE_RETRY_MS: u64 = 5_000;
 const BUSY_RETRY_MS: u64 = 500;
 const ACTIVITY_EVERY_MS: u64 = 1_000;
+/// How long a look the node refused waits before the next one.
+const REFUSED_LOOK_WAIT_MS: u64 = 5_000;
 
 /// The session a pane's agent reports, as its thread is read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +134,8 @@ struct OpenThread {
     reading_older: bool,
     checking: bool,
     activity: Option<SessionActivity>,
+    /// Why the last look failed, logged once until the reason changes.
+    look_failure: Option<String>,
     next_check_ms: u64,
     retry_at_ms: Option<u64>,
     inputting: bool,
@@ -239,6 +247,7 @@ impl Runtime {
                 reading_older: false,
                 checking: false,
                 activity: None,
+                look_failure: None,
                 next_check_ms: 0,
                 retry_at_ms: None,
                 inputting: false,
@@ -394,8 +403,12 @@ impl Runtime {
         changed
     }
 
-    /// Retries a read that could not reach the node and, while the agent
-    /// works, looks once a second at whether its session file moved.
+    /// Retries a read that could not reach the node and, while a screen is
+    /// attached and the thread is drawn for the pane it was opened for,
+    /// looks once a second at whether its session file moved, in every agent
+    /// state: the file, not the state, says a turn's last lines were written.
+    /// With no screen attached the thread rests; a screen attaching takes one
+    /// look at once (`session_thread_screen_attached`).
     pub(super) fn tick_session_thread(&mut self, now_unix_ms: u64) -> bool {
         let Some(open) = self.session_thread.open.as_mut() else {
             return false;
@@ -411,8 +424,8 @@ impl Runtime {
         let ready = self.snapshot.session_thread.as_ref().is_some_and(|thread| {
             thread.state == ThreadState::Ready && thread.pane == ThreadPane::Same
         });
-        if !ready
-            || open.status != "working"
+        if !self.ui_attached
+            || !ready
             || open.checking
             || open.reading
             || open.retry_at_ms.is_some()
@@ -428,13 +441,24 @@ impl Runtime {
         let (generation, device) = (open.generation, open.device.clone());
         let link = self.linked_node(&device).map(|(_, link)| link);
         let request = reference.activity();
-        let check = move || -> Option<SessionActivity> {
+        // `ACTIVITY_TIMEOUT` bounds this caller's wait, not the node's file
+        // work, which keeps its call's place until it ends.
+        let check = move || -> Result<SessionActivity, (ReadFailure, String)> {
+            let link = link.map_err(|_| (ReadFailure::Unreachable, "node_unlinked".to_owned()))?;
             crate::node_access::call_as(
-                link.ok()?.as_ref(),
+                link.as_ref(),
                 Call::SessionActivity { request },
                 ACTIVITY_TIMEOUT,
             )
-            .ok()
+            .map_err(|error| {
+                // No answer in time is not a lost node: the look waits like a
+                // refusal and the thread stays lit. Only an unlinked node dims.
+                let failure = match error {
+                    crate::node_access::LinkError::Unknown(_) => ReadFailure::Refused,
+                    _ => ReadFailure::of(&error),
+                };
+                (failure, error.to_string())
+            })
         };
         let Some(context) = self.worker_context.clone() else {
             return self.ingest_thread_activity(generation, check()) || changed;
@@ -453,6 +477,15 @@ impl Runtime {
             open.checking = false;
         }
         changed
+    }
+
+    /// A screen attached after none was: the open thread looks at its file
+    /// on the next tick rather than a second later, so what was written
+    /// while it rested shows at once.
+    pub(super) fn session_thread_screen_attached(&mut self) {
+        if let Some(open) = self.session_thread.open.as_mut() {
+            open.next_check_ms = 0;
+        }
     }
 
     pub(super) fn send_session_thread_input(&mut self, payload: ThreadInputPayload) -> bool {
@@ -627,6 +660,18 @@ impl Runtime {
             });
         if spawned.is_err() {
             crate::diagnostic!(serde_json::json!({"kind": "session_thread.worker_failed"}));
+            // No answer will come: the next move or look may read again.
+            if let Some(open) = self
+                .session_thread
+                .open
+                .as_mut()
+                .filter(|open| open.generation == generation)
+            {
+                match kind {
+                    ReadKind::Live => open.reading = false,
+                    ReadKind::Older => open.reading_older = false,
+                }
+            }
         }
     }
 
@@ -797,10 +842,14 @@ impl Runtime {
             })
     }
 
+    /// A look's answer. A failed look takes a read's path: a node that
+    /// cannot be asked dims the thread and is asked again by a read 5 s
+    /// later, a busy one is looked at again after 500 ms, and a refusal is
+    /// logged once per reason and looked at again 5 s later.
     fn ingest_thread_activity(
         &mut self,
         generation: u64,
-        activity: Option<SessionActivity>,
+        answer: Result<SessionActivity, (ReadFailure, String)>,
     ) -> bool {
         let Some(open) = self
             .session_thread
@@ -811,14 +860,36 @@ impl Runtime {
             return false;
         };
         open.checking = false;
-        let Some(activity) = activity else {
-            return false;
-        };
-        if open.activity.as_ref() == Some(&activity) {
-            return false;
+        let now = unix_milliseconds();
+        match answer {
+            Ok(activity) => {
+                open.look_failure = None;
+                if open.activity.as_ref() == Some(&activity) {
+                    return false;
+                }
+                open.activity = Some(activity);
+                self.read_session_thread()
+            }
+            Err((ReadFailure::Unreachable, _)) => {
+                open.retry_at_ms = Some(now + UNREACHABLE_RETRY_MS);
+                self.set_session_thread(|thread| thread.connected = false)
+            }
+            Err((ReadFailure::Busy, _)) => {
+                open.next_check_ms = now + BUSY_RETRY_MS;
+                false
+            }
+            Err((_, reason)) => {
+                open.next_check_ms = now + REFUSED_LOOK_WAIT_MS;
+                if open.look_failure.as_deref() != Some(reason.as_str()) {
+                    crate::diagnostic!(serde_json::json!({
+                        "kind": "session_thread.look_failed", "generation": generation,
+                        "error": reason,
+                    }));
+                    open.look_failure = Some(reason);
+                }
+                false
+            }
         }
-        open.activity = Some(activity);
-        self.read_session_thread()
     }
 
     fn ingest_thread_input(
@@ -1091,17 +1162,31 @@ mod tests {
     const SESSION: &str = "0b9a7a52-2f4e-4c1e-9f7a-3c1d2b4e5f60";
     const INPUT: &str = "4f1c2b3a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 
-    /// A node that answers each thread read with the next scripted answer
-    /// and records what it was asked.
+    /// A node that answers each thread read, and each look at the session's
+    /// file, with the next scripted answer, and records the reads it was asked.
     #[derive(Default)]
     struct ScriptedNode {
         answers: Mutex<VecDeque<Result<Value, LinkError>>>,
         asked: Mutex<Vec<ThreadRead>>,
+        activities: Mutex<VecDeque<Result<Value, LinkError>>>,
     }
 
     impl ScriptedNode {
         fn answer(&self, answer: Result<Value, LinkError>) {
             self.answers.lock().unwrap().push_back(answer);
+        }
+
+        /// What the next look at the session's file finds.
+        fn activity(&self, bytes: u64) {
+            self.look(Ok(json!({"modified_at_unix_ms": bytes, "bytes": bytes})));
+        }
+
+        fn look(&self, answer: Result<Value, LinkError>) {
+            self.activities.lock().unwrap().push_back(answer);
+        }
+
+        fn looks_left(&self) -> usize {
+            self.activities.lock().unwrap().len()
         }
 
         fn asked(&self) -> Vec<ThreadRead> {
@@ -1111,8 +1196,13 @@ mod tests {
 
     impl NodeLink for ScriptedNode {
         fn call(&self, call: Call, _: Duration) -> Result<LinkAnswer, LinkError> {
-            let Call::SessionThread { request } = call else {
-                panic!("a thread asks its node for pages only");
+            let request = match call {
+                Call::SessionThread { request } => request,
+                Call::SessionActivity { .. } => {
+                    let answer = self.activities.lock().unwrap().pop_front();
+                    return answer.expect("a scripted look").map(LinkAnswer::Parsed);
+                }
+                _ => panic!("a thread asks its node for pages and file activity only"),
             };
             self.asked.lock().unwrap().push(request.read);
             let answer = self
@@ -1305,6 +1395,188 @@ mod tests {
         // An engine read in which nothing about the agent moved reads nothing.
         observe(&mut runtime, "working", 2, "t1", true);
         assert!(node.asked().is_empty());
+    }
+
+    fn section(runtime: &Runtime) -> Arc<SessionThreadSnapshot> {
+        Arc::clone(runtime.snapshot.session_thread.as_ref().unwrap())
+    }
+
+    #[test]
+    fn an_answer_written_after_the_turn_ended_shows_on_the_next_look_at_the_file() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("처음")])));
+        open(&mut runtime);
+        assert_eq!(node.asked(), vec![ThreadRead::Newest]);
+        let from = |position| ThreadRead::From(serde_json::from_value(cursor(position)).unwrap());
+        let now = 1_000_000;
+
+        // The first look knows no earlier one, so it reads; the record ends
+        // where the page did and the section is not replaced.
+        let before = section(&runtime);
+        node.activity(100);
+        node.answer(Ok(page(100, 100, false, vec![])));
+        runtime.tick_session_thread(now);
+        assert_eq!(node.asked(), vec![from(100)]);
+        assert!(Arc::ptr_eq(&before, &section(&runtime)));
+
+        // A turn starts and ends. The agent reports the end before it writes
+        // its answer, so the read on that state change finds only the prompt.
+        node.answer(Ok(page(100, 200, false, vec![said("질문")])));
+        observe(&mut runtime, "working", 2, "t1", true);
+        node.answer(Ok(page(100, 200, false, vec![said("질문")])));
+        observe(&mut runtime, "idle", 3, "t1", true);
+        assert_eq!(node.asked(), vec![from(100), from(100)]);
+        assert_eq!(
+            thread(&runtime).tail.expect("the live page").updates.len(),
+            1
+        );
+
+        // The look after the turn sees the file the prompt moved; the next
+        // one finds it where it was and reads nothing, leaving the section.
+        node.activity(200);
+        node.answer(Ok(page(100, 200, false, vec![said("질문")])));
+        runtime.tick_session_thread(now + ACTIVITY_EVERY_MS);
+        assert_eq!(node.asked(), vec![from(100)]);
+        let before = section(&runtime);
+        node.activity(200);
+        runtime.tick_session_thread(now + 2 * ACTIVITY_EVERY_MS);
+        assert!(node.asked().is_empty());
+        assert!(Arc::ptr_eq(&before, &section(&runtime)));
+
+        // The answer lands with no state change after it: the next look sees
+        // the file moved and the open thread reads it. Looks keep their second.
+        runtime.tick_session_thread(now + 2 * ACTIVITY_EVERY_MS + 1);
+        node.activity(300);
+        node.answer(Ok(page(100, 300, false, vec![said("질문"), said("답")])));
+        runtime.tick_session_thread(now + 3 * ACTIVITY_EVERY_MS);
+        assert_eq!(node.asked(), vec![from(100)]);
+        let tail = thread(&runtime).tail.expect("the live page");
+        assert_eq!(tail.updates[1]["content"]["text"], "답");
+        assert_eq!(node.looks_left(), 0, "each scripted look was taken");
+    }
+
+    #[test]
+    fn an_open_thread_rests_without_a_screen_and_looks_once_one_attaches() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("처음")])));
+        open(&mut runtime);
+        node.asked();
+        let screen = |runtime: &mut Runtime, attached| {
+            runtime.apply_event(super::events::Event::UiAttached(
+                super::events::UiAttachedPayload { attached },
+            ));
+        };
+        let now = 1_000_000;
+        node.activity(100);
+        node.answer(Ok(page(100, 100, false, vec![])));
+        runtime.tick_session_thread(now);
+        node.asked();
+
+        // The last screen goes: no look, however much time passes.
+        screen(&mut runtime, false);
+        runtime.tick_session_thread(now + 60 * ACTIVITY_EVERY_MS);
+        assert!(node.asked().is_empty());
+
+        // A screen attaches: the next tick looks before its second is up.
+        screen(&mut runtime, true);
+        node.activity(300);
+        node.answer(Ok(page(100, 300, false, vec![said("쉬는 동안 쓴 답")])));
+        runtime.tick_session_thread(now + 60 * ACTIVITY_EVERY_MS + 1);
+        assert_eq!(node.looks_left(), 0);
+        assert_eq!(
+            thread(&runtime).tail.expect("the live page").updates[0]["content"]["text"],
+            "쉬는 동안 쓴 답"
+        );
+    }
+
+    #[test]
+    fn looks_stop_when_the_pane_runs_another_terminal_or_the_thread_closes() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("처음")])));
+        open(&mut runtime);
+        node.asked();
+        // No look is scripted: one asked for would fail the test.
+        observe(&mut runtime, "idle", 1, "t2", true);
+        assert_eq!(thread(&runtime).pane, ThreadPane::Changed);
+        runtime.tick_session_thread(1_000_000);
+        assert!(runtime.close_session_thread());
+        runtime.tick_session_thread(1_000_000 + ACTIVITY_EVERY_MS);
+        assert!(node.asked().is_empty());
+    }
+
+    #[test]
+    fn a_failed_look_dims_only_an_unlinked_node_and_logs_any_other_failure_once_per_reason() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        observe(&mut runtime, "idle", 1, "t1", true);
+        node.answer(Ok(page(0, 100, false, vec![said("처음")])));
+        open(&mut runtime);
+        node.asked();
+        fn open_thread(runtime: &mut Runtime) -> &mut OpenThread {
+            runtime.session_thread.open.as_mut().unwrap()
+        }
+        let refused = |message: &str| {
+            Err(LinkError::Refused(hide_node_link::HostError::new(
+                hide_node_link::ErrorCode::Io,
+                message,
+            )))
+        };
+
+        // A refusal is logged, waits its 5 s, and the same reason again is not logged twice.
+        let (_, logged) = crate::diagnostics::capture(|| {
+            node.look(refused("session_activity_read_changed"));
+            runtime.tick_session_thread(1_000_000);
+            assert!(
+                open_thread(&mut runtime).next_check_ms
+                    >= unix_milliseconds() + REFUSED_LOOK_WAIT_MS - 1_000
+            );
+            open_thread(&mut runtime).next_check_ms = 0;
+            node.look(refused("session_activity_read_changed"));
+            runtime.tick_session_thread(1_000_000);
+            open_thread(&mut runtime).next_check_ms = 0;
+            node.look(refused("session_route_owner_changed"));
+            runtime.tick_session_thread(1_000_000);
+            // No answer in time (this machine's node still at its file work).
+            open_thread(&mut runtime).next_check_ms = 0;
+            node.look(Err(LinkError::Unknown(
+                "This machine's node did not answer within 5000 ms".to_owned(),
+            )));
+            runtime.tick_session_thread(1_000_000);
+            assert!(open_thread(&mut runtime).retry_at_ms.is_none());
+        });
+        let refusals: Vec<_> = logged
+            .iter()
+            .filter(|record| record["kind"] == "session_thread.look_failed")
+            .collect();
+        assert_eq!(refusals.len(), 3, "{logged:?}");
+        assert!(
+            thread(&runtime).connected,
+            "a refusal or a late answer is no lost node"
+        );
+
+        // A node that cannot be asked dims the thread, and a read asks again 5 s later.
+        open_thread(&mut runtime).next_check_ms = 0;
+        node.look(Err(LinkError::NotConnected("gone".to_owned())));
+        runtime.tick_session_thread(1_000_000);
+        assert!(!thread(&runtime).connected);
+        let due = open_thread(&mut runtime)
+            .retry_at_ms
+            .expect("a read is owed");
+        assert!(due >= unix_milliseconds() + UNREACHABLE_RETRY_MS - 1_000);
+        runtime.tick_session_thread(due - 1);
+        assert!(node.asked().is_empty(), "no look while a read is owed");
+        open_thread(&mut runtime).next_check_ms = due + ACTIVITY_EVERY_MS;
+        node.answer(Ok(page(100, 100, false, vec![])));
+        runtime.tick_session_thread(due);
+        assert!(thread(&runtime).connected);
+        assert_eq!(node.asked().len(), 1, "the owed read");
+        assert_eq!(node.looks_left(), 0);
     }
 
     #[test]

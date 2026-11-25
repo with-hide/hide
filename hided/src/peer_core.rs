@@ -245,6 +245,7 @@ fn names_out(names: &[hide_core::work_names::WorkName]) -> CoreMessage {
                 mark: serde_json::to_value(told.mark)
                     .ok()
                     .and_then(|mark| mark.as_str().map(str::to_owned)),
+                agent: told.agent.clone(),
             })
             .collect(),
     }
@@ -1079,6 +1080,7 @@ impl PeerCore {
                                     name: Some(named.name),
                                     branch: None,
                                     mark: None,
+                                    agent: None,
                                 };
                                 (named.pane, told)
                             })
@@ -1701,6 +1703,7 @@ mod tests {
                     name: Some((*name).to_owned()),
                     branch: None,
                     mark: hide_core::agent_state::RowMark::Quiet,
+                    agent: Some("claude".to_owned()),
                 })
                 .collect()
         };
@@ -1738,6 +1741,7 @@ mod tests {
                     name: Some("로그인 고치기".to_owned()),
                     branch: None,
                     mark: Some("quiet".to_owned()),
+                    agent: Some("claude".to_owned()),
                 }
             )])
         );
@@ -1816,6 +1820,7 @@ mod tests {
                 name: None,
                 branch: None,
                 mark: listed(mark),
+                agent: None,
             })
             .collect();
         let CoreMessage::WorkNames { work, .. } = names_out(&told) else {
@@ -1827,6 +1832,59 @@ mod tests {
             let mark = told.mark.as_deref().expect("every pane is told a mark");
             assert!(hide_core::guest_panes::mark_is_carried(mark), "{mark}");
         }
+    }
+
+    /// B10: the kind the sender keeps (an agent definition's id, the rule
+    /// the core filters by) is the kind the receiver's `valid_work` takes;
+    /// the day the two rules drift, a told agent would make the receiving
+    /// machine refuse the sender's whole list. The protocol crate cannot
+    /// link the adapter, so the two are held equal here.
+    #[test]
+    fn the_agent_kind_a_core_tells_is_the_kind_the_link_takes() {
+        use hide_agent_adapter::definition::{builtins, id_is_valid};
+        use hide_peer::protocol::core::work_agent_is_carried;
+        let long = "a".repeat(hide_agent_adapter::definition::MAX_ID_BYTES);
+        let longer = format!("{long}a");
+        let samples = [
+            "",
+            "claude",
+            "codex",
+            "cursor-agent",
+            "qwen3",
+            "a",
+            "-claude",
+            "claude-",
+            "my_agent",
+            "Claude",
+            "claude code",
+            "a\nb",
+            "é",
+            &long,
+            &longer,
+        ];
+        for kind in samples
+            .iter()
+            .copied()
+            .chain(builtins().iter().map(|d| d.id.as_str()))
+        {
+            assert_eq!(id_is_valid(kind), work_agent_is_carried(kind), "{kind:?}");
+        }
+        let told: Vec<_> = builtins()
+            .iter()
+            .enumerate()
+            .map(|(n, definition)| hide_core::work_names::WorkName {
+                pane: format!("w1:p{n}"),
+                name: None,
+                branch: None,
+                mark: hide_core::agent_state::RowMark::Going,
+                agent: Some(definition.id.clone()),
+            })
+            .collect();
+        let CoreMessage::WorkNames { work, .. } = names_out(&told) else {
+            panic!("work names");
+        };
+        assert!(hide_peer::protocol::core::valid_work(&work), "{work:?}");
+        assert!(work.iter().all(|told| told.agent.is_some()), "{work:?}");
     }
 
     /// B10: an earlier build tells `names` alone; the machine its work runs
@@ -1863,6 +1921,7 @@ mod tests {
                     name: Some("로그인 고치기".to_owned()),
                     branch: None,
                     mark: None,
+                    agent: None,
                 }
             )])
         );
@@ -1879,6 +1938,7 @@ mod tests {
             name: None,
             branch: Some("main".to_owned()),
             mark: hide_core::agent_state::RowMark::Going,
+            agent: None,
         };
         let out = names_out(std::slice::from_ref(&terminal));
         let CoreMessage::WorkNames { names, work } = &out else {
@@ -1892,6 +1952,7 @@ mod tests {
                 name: None,
                 branch: Some("main".to_owned()),
                 mark: Some("going".to_owned()),
+                agent: None,
             }]
         );
         let mut told = std::collections::BTreeMap::new();

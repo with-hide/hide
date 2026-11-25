@@ -35,6 +35,7 @@ beforeEach(() => {
   // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
+  useShellStore.setState({ connection: "live" });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });

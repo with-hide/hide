@@ -107,6 +107,7 @@ impl State {
                 folder: None,
                 name: told.and_then(|told| told.name.clone()),
                 branch: told.and_then(|told| told.branch.clone()),
+                agent: told.and_then(|told| told.agent.clone()),
                 pane: pane.pane,
             },
         );
@@ -191,10 +192,11 @@ impl GuestTap {
     }
 
     /// Names and marks the guest's panes as its core told them, whole
-    /// (B10): a pane the list leaves out has no name, branch or mark, and a
-    /// pane the node lists later takes them as it joins. Names and branches
-    /// are kept in `panes.json`, so they stand while the guest is away; a
-    /// mark is not, and a mark alone moving writes nothing.
+    /// (B10): a pane the list leaves out has no name, branch, agent or
+    /// mark, and a pane the node lists later takes them as it joins. Names,
+    /// branches and agents are kept in `panes.json`, so they stand while
+    /// the guest is away; a mark is not, and a mark alone moving writes
+    /// nothing.
     pub fn name(&self, work: &HashMap<String, Work>) {
         let mut state = lock(&self.state);
         let marked = state.panes.keys().any(|pane| {
@@ -206,9 +208,14 @@ impl GuestTap {
             let told = work.get(pane);
             let name = told.and_then(|told| told.name.as_ref());
             let branch = told.and_then(|told| told.branch.as_ref());
-            if known.name.as_ref() != name || known.branch.as_ref() != branch {
+            let agent = told.and_then(|told| told.agent.as_ref());
+            if known.name.as_ref() != name
+                || known.branch.as_ref() != branch
+                || known.agent.as_ref() != agent
+            {
                 known.name = name.cloned();
                 known.branch = branch.cloned();
+                known.agent = agent.cloned();
                 kept = true;
             }
         }
@@ -350,6 +357,7 @@ impl GuestTap {
                         if !told {
                             known.name.clone_from(&earlier.name);
                             known.branch.clone_from(&earlier.branch);
+                            known.agent.clone_from(&earlier.agent);
                         }
                     }
                 }
@@ -358,11 +366,12 @@ impl GuestTap {
                     .filter(|pane| !state.panes.contains_key(*pane))
                     .cloned()
                     .collect();
-                // A pane that joined, or one whose name or branch moved
-                // with it.
+                // A pane that joined, or one whose name, branch or agent
+                // moved with it.
                 let joined = state.panes.iter().any(|(pane, known)| {
                     earlier.get(pane).is_none_or(|earlier| {
-                        (&earlier.name, &earlier.branch) != (&known.name, &known.branch)
+                        (&earlier.name, &earlier.branch, &earlier.agent)
+                            != (&known.name, &known.branch, &known.agent)
                     })
                 });
                 self.save(&state);
@@ -872,6 +881,7 @@ pub(crate) mod tests {
                     name: Some((*name).to_owned()),
                     branch: None,
                     mark: None,
+                    agent: None,
                 };
                 ((*pane).to_owned(), work)
             })
@@ -885,11 +895,13 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// B10: a pane's branch and mark come with its name; the branch is
-    /// kept through a restart with the guest away, the mark is not, and
-    /// the guest's core going away takes the marks and leaves the rest.
+    /// B10: a pane's branch, agent and mark come with its name; the branch
+    /// and agent are kept through a restart with the guest away, the mark
+    /// is not, and the guest's core going away takes the marks and leaves
+    /// the rest.
     #[test]
-    fn a_guests_panes_take_the_branch_and_mark_its_core_told_and_lose_the_mark_when_it_is_away() {
+    fn a_guests_panes_take_the_branch_agent_and_mark_its_core_told_and_lose_the_mark_when_it_is_away()
+     {
         let root = short_root();
         let file = root.path().join("h").join(panes::FILE);
         let endpoint = root.path().join("tap.sock");
@@ -914,6 +926,7 @@ pub(crate) mod tests {
                     name: None,
                     branch: Some("m75-relay".to_owned()),
                     mark: Some(mark.to_owned()),
+                    agent: Some("codex".to_owned()),
                 },
             )])
         };
@@ -948,6 +961,11 @@ pub(crate) mod tests {
         tap.detach();
         let (read, _drawn, _changed) = self::tap(&file);
         assert_eq!(standing(&read), away);
+        assert_eq!(
+            read.panes()[0].agent.as_deref(),
+            Some("codex"),
+            "the file keeps the agent"
+        );
     }
 
     /// B10: a pane reads by the name the guest's core told, whether the

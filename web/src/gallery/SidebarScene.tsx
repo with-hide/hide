@@ -44,6 +44,8 @@ export type SceneParams = {
   peers?: "off" | "on";
   /** The interface language, seeded as the core's `ui_state.interface_language`. */
   lang?: "en" | "ko";
+  /** `on`: a paired MacBook Pro and Windows PC run terminals on this computer, in this computer's projects' folders and outside them (B10). */
+  guests?: "off" | "on";
 };
 
 export function sceneParams(params: URLSearchParams): SceneParams {
@@ -68,10 +70,12 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   if (peers !== "off" && peers !== "on") throw new Error(`Unknown scene peers ${peers}`);
   const lang = params.get("lang") ?? "en";
   if (lang !== "en" && lang !== "ko") throw new Error(`Unknown scene lang ${lang}`);
-  return { lens, logos, peers, lang, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
+  const guests = params.get("guests") ?? "off";
+  if (guests !== "off" && guests !== "on") throw new Error(`Unknown scene guests ${guests}`);
+  return { lens, logos, peers, lang, guests, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
-export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", peers = "off", lang = "en", axis = false }: SceneParams) {
+export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", peers = "off", lang = "en", guests = "off", axis = false }: SceneParams) {
   const [folds, setFolds] = useState<SceneFolds>({ ...REFERENCE_FOLDS, frontDevice: front === "mini" ? "mini" : front === "offline" ? OFFLINE_DEVICE : "local" });
   const actions = useMemo(
     () =>
@@ -94,10 +98,10 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
     // `mission-close-refused`: the same, for a mission whose nodes are all done and whose close was refused.
     // `mission-gate`: the same, for a reached review gate (PRD mission-human-gate D-23).
     const rest = state === "mission-ask" || state === "mission-close-refused" || state === "mission-gate" ? withMissionAsk(shown, "local", Date.now(), state === "mission-ask" ? "no-conductor" : state === "mission-gate" ? "gate-nocond" : "close-refused") : shown;
-    const told = peers === "on" ? withPeerWork(rest, Date.now()) : rest;
+    const told = withGuestWork(peers === "on" ? withPeerWork(rest, Date.now()) : rest, guests === "on");
     // This computer's own window, the only one that lists another computer's rows.
     useShellStore.setState({ rest: told, agents: scene.agents, connection: "live", pairing: peers === "on" ? NOTHING_UNDER_WAY : null, ...(axis ? { focusedPaneId: "a1" } : {}) });
-  }, [scene, width, rail, axis, state, lens, logos, peers, lang]);
+  }, [scene, width, rail, axis, state, lens, logos, peers, lang, guests]);
 
   useLayoutEffect(() => {
     useUiStore.setState({ screen: axis ? { kind: "workspace" } : { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "hide" }, overviewOpen: false });
@@ -153,6 +157,48 @@ function withPeerWork(rest: SnapshotRest, now: number): SnapshotRest {
       peer_work: [
         { device_id: "mac-mini", key: mini, needs_you: miniRows.length, done: 0, rows: miniRows },
         { device_id: "windows-pc", key: pc, needs_you: 1, done: 1, rows: pcRows },
+      ],
+    },
+  } as SnapshotRest;
+}
+
+/**
+ * With `guests=on`, two paired computers' terminals on this one (B10): the
+ * MacBook Pro's in `hide`'s main checkout (an agent and a plain terminal),
+ * in a worktree that waits in 다른 체크아웃, in the folded `sasu`, in the
+ * `team-notes` folder and in two folders no project holds; the Windows PC's
+ * one terminal in `hide`'s main checkout.
+ */
+function withGuestWork(rest: SnapshotRest, on: boolean): SnapshotRest {
+  if (!on) return rest;
+  const macbook = "b".repeat(64);
+  const pc = "p".repeat(64);
+  const pane = (device: string, id: string, since: number, folder: string, told: { name?: string; branch?: string; mark?: string; agent?: string }) => ({ id: `guest:${device}:pane:${id}`, pane: id, since_unix_ms: since, folder, ...told });
+  const navigator = rest.navigator!;
+  return {
+    ...rest,
+    navigator: {
+      ...navigator,
+      peers: [
+        ...(navigator.peers ?? []),
+        { key: macbook, device_id: "macbook", name: "MacBook Pro", opens: null, opened_by: "active", connected: true, path: "direct" },
+        { key: pc, device_id: "windows-pc", name: "Windows PC", opens: null, opened_by: "active", connected: true, path: "direct" },
+      ],
+      guest_panes: [
+        {
+          device_id: "macbook",
+          key: macbook,
+          panes: [
+            pane("macbook", "w1:p1", 1, "/work/hide", { name: "결제 재시도 고치기", branch: "main", mark: "going", agent: "claude" }),
+            pane("macbook", "w1:p2", 2, "/work/hide/web", { branch: "main", mark: "quiet" }),
+            pane("macbook", "w2:p1", 3, "/work/hide.worktrees/quick/155-browser-display", { name: "주소 경계 확인", branch: "quick/155-browser-display", mark: "going", agent: "codex" }),
+            pane("macbook", "w3:p1", 4, "/work/sasu", { name: "파이프라인 점검", branch: "main", mark: "going", agent: "codex" }),
+            pane("macbook", "w4:p1", 5, "/work/team-notes", { name: "회의록 다듬기", mark: "quiet", agent: "claude" }),
+            pane("macbook", "w5:p1", 6, "/Users/example/blog", { branch: "main", mark: "quiet" }),
+            pane("macbook", "w5:p2", 7, "/Users/example/scratch", { name: "로그 모으기", mark: "going", agent: "codex" }),
+          ],
+        },
+        { device_id: "windows-pc", key: pc, panes: [pane("windows-pc", "w1:p1", 1, "/work/hide", { branch: "main", mark: "quiet" })] },
       ],
     },
   } as SnapshotRest;

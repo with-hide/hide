@@ -431,7 +431,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
             file.schema
         ));
     }
-    if !valid_id(&file.id) {
+    if !id_is_valid(&file.id) {
         return Err(format!(
             "{name}: id {:?} is not 1 to 32 lowercase letters, digits and dashes",
             file.id
@@ -519,8 +519,15 @@ pub fn required<T>(name: &str, field: &str, value: Option<T>) -> Result<T, Strin
     value.ok_or_else(|| format!("{name}: {field} is missing"))
 }
 
-fn valid_id(id: &str) -> bool {
-    (1..=32).contains(&id.len())
+/// The longest id an agent definition may have.
+pub const MAX_ID_BYTES: usize = 32;
+
+/// Whether `id` can name an agent definition: lower-case letters, digits
+/// and `-`, not starting with `-`, at most [`MAX_ID_BYTES`]. Every agent kind
+/// Hide records is one, so a reader elsewhere (the peer link) checks a kind
+/// by this rule.
+pub fn id_is_valid(id: &str) -> bool {
+    (1..=MAX_ID_BYTES).contains(&id.len())
         && id
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')

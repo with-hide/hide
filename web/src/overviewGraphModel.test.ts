@@ -122,7 +122,7 @@ describe("current sessions in the Overview graph", () => {
 
   it("keeps topology stable when status, labels, correspondence, filters or activity order refresh", () => {
     const first = project("one", [agent("b"), agent("a")]);
-    const second = project("two", [agent("c", { mark: "turn" })]);
+    const second = project("two", [agent("c", { mark: "turn", group: "needs_you" })]);
     const before = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), null, { focus: "all", includeResting: true });
     const changed = project("one", [agent("a", { identity_label: "새 상태", group: "needs_you", demand: "question", mark: "turn" }), agent("b", { group: "seen", mark: "quiet" })]);
     const after = overviewGraphModel([second, changed], metadata([party("a"), party("b"), party("c")], [letter("new", party("a"), party("c"))]), null, { focus: "all", includeResting: true });
@@ -136,7 +136,7 @@ describe("current sessions in the Overview graph", () => {
   });
 
   it("summarizes each project's graph sessions by state, including sessions the budget does not draw", () => {
-    const p = project("mixed", [agent("ask", { mark: "turn" }), agent("work", { mark: "going" }), agent("wait", { mark: "waiting" }), agent("read", { mark: "unread" }), agent("done", { mark: "done" }), agent("idle", { mark: "quiet" }), agent("sleep", { mark: "asleep" })]);
+    const p = project("mixed", [agent("ask", { mark: "turn", group: "needs_you" }), agent("work", { mark: "going" }), agent("wait", { mark: "waiting" }), agent("read", { mark: "unread" }), agent("done", { mark: "done" }), agent("idle", { mark: "quiet" }), agent("sleep", { mark: "asleep" })]);
     const graph = overviewGraphModel([p], undefined, null);
     expect(graph.summaries).toMatchObject([{ id: graphProjectId(p), sessions: 6, turn: 1, working: 2, results: 2, admitted: true }]);
     expect(overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true }).summaries[0]?.sessions).toBe(7);
@@ -210,15 +210,15 @@ describe("current sessions in the Overview graph", () => {
 // Overview focus B2-B8, B17-B18: projection uses authoritative marks, not bucket.
 describe("Overview focus", () => {
   const panes = (model: Model) => model.agents.map((row) => row.agent.pane_id);
-  it("keeps idle sessions, Seen demands, sleeping asks and unknown, with operator-first list order", () => {
-    const p = project("focus", [agent("rest", { mark: "quiet" }), agent("sleep", { mark: "asleep" }), agent("unknown", { mark: "unknown" }), agent("result", { mark: "unread" }), agent("worker", { mark: "waiting" }), agent("seen-ask", { mark: "turn", group: "seen" }), agent("sleep-ask", { mark: "turn" })]);
+  it("counts a turn by the core's group alone: a Seen demand or a read View stays on the map as idle, with operator-first list order", () => {
+    const p = project("focus", [agent("rest", { mark: "quiet" }), agent("sleep", { mark: "asleep" }), agent("unknown", { mark: "unknown" }), agent("result", { mark: "unread" }), agent("worker", { mark: "waiting" }), agent("seen-ask", { mark: "turn", group: "seen" }), agent("read-look", { mark: "look", group: "seen" }), agent("ask", { mark: "turn", group: "needs_you" }), agent("unread-look", { mark: "look", group: "needs_you" })]);
     const all = overviewGraphModel([p], undefined, null);
-    expect(panes(all)).toEqual(["seen-ask", "sleep-ask", "worker", "result", "unknown", "rest"]);
-    expect(all.counts).toEqual({ all: 6, turn: 2, working: 1, results: 1 });
-    for (const [focus, expected] of [["turn", ["seen-ask", "sleep-ask"]], ["working", ["worker"]], ["results", ["result"]]] as const) {
+    expect(panes(all)).toEqual(["ask", "unread-look", "worker", "result", "unknown", "read-look", "rest", "seen-ask"]);
+    expect(all.counts).toEqual({ all: 8, turn: 2, working: 1, results: 1 });
+    for (const [focus, expected] of [["turn", ["ask", "unread-look"]], ["working", ["worker"]], ["results", ["result"]]] as const) {
       expect(panes(overviewGraphModel([p], undefined, null, { focus, includeResting: false }))).toEqual(expected);
     }
-    expect(panes(overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true })).slice(-2)).toEqual(["rest", "sleep"]);
+    expect(panes(overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true })).slice(-2)).toEqual(["seen-ask", "sleep"]);
   });
   it("retains resting ancestors as context without increasing matching counts", () => {
     const p = project("family", [agent("root", { mark: "asleep" }), agent("middle", { mark: "quiet", lineage_parent_pane_id: "root" }), agent("child", { mark: "going", lineage_parent_pane_id: "middle" })]);

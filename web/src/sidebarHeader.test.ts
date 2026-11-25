@@ -51,6 +51,17 @@ describe("the device title in the window's top row (PRD sidebar-titlebar-refresh
   });
 });
 
+describe("the sidebar's Overview and Missions rows", () => {
+  const rows = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SidebarHeader, { searchChord: "⌘K", onSearch: () => undefined, overview: { selected: false, chord: "⇧⌘O", onOpen: () => undefined }, missions: { selected: false, chord: null, onOpen: () => undefined } })));
+
+  it("draw no number, since the one 내 차례 count stands on the device rail, a project's chip and the 태스크 list's band", () => {
+    expect(texts(rows, "data-sidebar-overview")).toEqual(["Overview⇧⌘O"]);
+    expect(texts(rows, "data-sidebar-missions")).toEqual(["Missions"]);
+    expect(rows).not.toContain("data-overview-count");
+    expect(rows).not.toContain("data-missions-count");
+  });
+});
+
 describe("the sidebar's Add project row (B51)", () => {
   const withAdd = (chord: string | null) =>
     renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SidebarHeader, { searchChord: "⌘K", onSearch: () => undefined, addProject: { chord, onOpen: () => undefined } })));

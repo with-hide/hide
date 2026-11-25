@@ -141,7 +141,7 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     // No Conductor holds it, so its raise stands behind the safety net, which the item reads.
     expect(item?.textContent).toContain("No Conductor conducts this mission · 1 stuck");
     expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Resume command", "Take a look"]);
-    expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you 1");
+    expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you");
   } finally { await act(async () => root.unmount()); }
 });
 
@@ -169,15 +169,20 @@ it("lists only the chosen project's missions waiting on the operator, on an empt
     const root = createRoot(container);
     await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={createActions(() => true)} /></TooltipProvider>));
     const listed = [...container.querySelectorAll<HTMLElement>("[data-graph-mission-ask]")].map((item) => item.dataset.graphMissionAsk);
+    if (drawn) {
+      // The operator's My turn filter carries no number; the other filters keep theirs.
+      expect(container.querySelector('[data-focus="turn"]')?.textContent).not.toMatch(/\d/);
+      expect(container.querySelector('[data-focus="all"]')?.textContent).toMatch(/\d/);
+    }
     const count = container.querySelector(drawn ? '[data-graph-projects] .og-waiting h3 span' : "[data-graph-mission-asks] h3 span")?.textContent ?? null;
     await act(async () => root.unmount());
     container.remove();
     return { listed, count };
   };
   for (const drawn of [false, true]) {
-    expect(await shown(drawn, null), `whole map, drawn ${drawn}`).toEqual({ listed: ["mission-a", "mission-b"], count: "2" });
-    expect(await shown(drawn, "alpha"), `project A, drawn ${drawn}`).toEqual({ listed: ["mission-a"], count: "1" });
-    expect(await shown(drawn, "beta"), `project B, drawn ${drawn}`).toEqual({ listed: ["mission-b"], count: "1" });
+    expect(await shown(drawn, null), `whole map, drawn ${drawn}`).toEqual({ listed: ["mission-a", "mission-b"], count: null });
+    expect(await shown(drawn, "alpha"), `project A, drawn ${drawn}`).toEqual({ listed: ["mission-a"], count: null });
+    expect(await shown(drawn, "beta"), `project B, drawn ${drawn}`).toEqual({ listed: ["mission-b"], count: null });
   }
 });
 

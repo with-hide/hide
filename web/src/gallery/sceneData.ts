@@ -45,6 +45,8 @@ export type SceneFolds = {
   asleepOpen: string[];
   /** The device the core has in front (`focus_device`); a rail tile changes it. */
   frontDevice: string;
+  /** Heads of another machine's work folded (`guest_work_fold_toggle`), by machine and the place's folder. */
+  guestFolds?: { device_id: string; folder: string }[];
 };
 
 /** The folds `Screen / Projects Sidebar` draws: main's agents open, a1 unfolded, sasu folded. */
@@ -481,6 +483,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       left_sidebar_visible: true,
       collapsed_workspace_ids: folds.collapsedWorkspaces,
       session_collapsed_checkout_ids: folds.collapsedCheckouts,
+      folded_guest_work: folds.guestFolds ?? [],
       workspace_registrations: world?.registrations ?? workspaces.map((row) => registrationOf(row, "local")),
     },
     ...(world ? { status: { remote: world.remote } } : {}),
@@ -631,5 +634,11 @@ export function applyEvent(folds: SceneFolds, event: { kind: string; payload: Re
   if (kind === "inactive_checkouts_toggle") return { ...folds, inactiveCheckoutsOpen: toggled(folds.inactiveCheckoutsOpen, String(payload.project_path)) };
   if (kind === "inactive_projects_toggle") return { ...folds, inactiveProjectsOpen: !folds.inactiveProjectsOpen };
   if (kind === "focus_device") return { ...folds, frontDevice: String(payload.device_id) };
+  if (kind === "guest_work_fold_toggle") {
+    const fold = { device_id: String(payload.device_id), folder: String(payload.folder) };
+    const kept = folds.guestFolds ?? [];
+    const folded = kept.some((item) => item.device_id === fold.device_id && item.folder === fold.folder);
+    return { ...folds, guestFolds: folded ? kept.filter((item) => item.device_id !== fold.device_id || item.folder !== fold.folder) : [...kept, fold] };
+  }
   return null;
 }
