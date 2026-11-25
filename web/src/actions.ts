@@ -2852,6 +2852,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_file_retry", payload: file });
     },
 
+    /** A window opened one of Desk's waiting opens in its room (`deskOpens.ts`): the core takes it off the list. */
+    deskOpenTaken(id: number) {
+      dispatch({ schema_version: 2, kind: "desk_open_taken", payload: { id } });
+    },
+
     /**
      * `파일 ⇧⌘E` beside Desk (PRD desk-2-ui D-22, B35): the Explorer of the
      * open session's checkout in the tab panel's tool column, or that column

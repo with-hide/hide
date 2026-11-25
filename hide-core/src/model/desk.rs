@@ -22,6 +22,22 @@ pub struct DeskSnapshot {
     pub approvals_waiting: usize,
     pub settings: DeskSettings,
     pub lane: DeskLane,
+    /// What Desk's agent opened with `hide file open`, oldest first, waiting
+    /// for a window showing Desk to open it in the tab panel and send
+    /// `desk_open_taken`; at most 16, the oldest dropped, kept in memory
+    /// only.
+    pub opens: Vec<DeskOpenSnapshot>,
+}
+
+/// A file Desk's agent opened for the operator: its machine, its checkout's
+/// folder as the catalog names it, and its path, checked inside that
+/// checkout on its own host.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeskOpenSnapshot {
+    pub id: u64,
+    pub device_id: String,
+    pub root: String,
+    pub path: String,
 }
 
 /// The widths of Desk's two panels as the operator last dragged them (PRD

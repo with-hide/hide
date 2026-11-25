@@ -270,6 +270,10 @@ impl Runtime {
         request_id: &str,
         action: &Action,
     ) -> Result<ActionPreparation, Refusal> {
+        // Desk has no View: its file open waits for its own tab panel.
+        if Caller::parse(pane_id) == Caller::Desk {
+            return self.desk_prepare_open(device_id, expected, request_id, action);
+        }
         let preparation =
             self.prepare_view_action(device_id, pane_id, expected, request_id, action)?;
         if keeps_receipt(action)
@@ -394,6 +398,9 @@ impl Runtime {
         action: Action,
         material: Result<Option<ActionMaterial>, Refusal>,
     ) -> Result<ActionResult, Refusal> {
+        if Caller::parse(pane_id) == Caller::Desk {
+            return self.desk_commit_open(device_id, expected, request_id, &action, material);
+        }
         let (context, cached) =
             self.check_action_request(device_id, pane_id, expected, request_id, &action)?;
         if let Some(cached) = cached {
@@ -976,6 +983,20 @@ impl Runtime {
         }) || self.viewed_run_tab(key, tab)
     }
 
+    /// Whether the machine `device_id` is connected now: this machine's
+    /// engine, or the device's link.
+    pub(super) fn workspace_connected(&self, device_id: &str) -> bool {
+        if self.node == device_id {
+            self.snapshot.status.engine.state == "connected"
+        } else {
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .any(|remote| remote.target_id == device_id && remote.state == "connected")
+        }
+    }
+
     /// Resolves the caller to its checkout among the connected workspaces of
     /// `device_id`. A pane is found by membership; a checkout caller by the
     /// longest registered checkout path that equals or contains its cwd.
@@ -999,14 +1020,7 @@ impl Runtime {
             if workspace.device_id != device_id {
                 continue;
             }
-            let connected = if self.node == workspace.device_id {
-                self.snapshot.status.engine.state == "connected"
-            } else {
-                self.snapshot.status.remote.iter().any(|remote| {
-                    remote.target_id == workspace.device_id && remote.state == "connected"
-                })
-            };
-            if !connected {
+            if !self.workspace_connected(&workspace.device_id) {
                 continue;
             }
             for checkout in &workspace.checkouts {
@@ -1234,11 +1248,12 @@ const VIEW_NOT_IN_LANE: Refusal = Refusal {
 };
 
 /// Desk has no pane and no checkout: it acts through delivery commands
-/// alone (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide
-/// ps`), never a Workspace or View command.
-const DESK_REFUSAL: Refusal = Refusal {
+/// (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide ps`) and
+/// shows a file in its own tab panel (`desk/opens.rs`), never through a
+/// Workspace or View command.
+pub(super) const DESK_REFUSAL: Refusal = Refusal {
     reason: "desk_has_no_checkout",
-    next_action: "Use hide agent, hide request, hide inbox or hide ps",
+    next_action: "Use hide agent, hide request, hide inbox or hide ps; show the operator a file with hide file open <path>",
 };
 
 /// The refusal for a caller whose checkout membership no longer matches what
@@ -1268,7 +1283,7 @@ const ACCESS_OUTSIDE_CHECKOUT: Refusal = Refusal {
 
 /// `path` is `root` itself or a descendant of it, by whole path segments, so
 /// `/checkouts/ab` is not within `/checkouts/a`.
-fn path_within(path: &str, root: &str) -> bool {
+pub(super) fn path_within(path: &str, root: &str) -> bool {
     path.strip_prefix(root)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }

@@ -3655,7 +3655,12 @@ export type DeskSection = {
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; /** How Desk answers its agent's requests, chosen under Desk's box (D-92). */ permission: DeskPermission };
   /** The panels' widths the core keeps (PRD desk-2-ui B23); which session, panel and tab show is the window's. */
   lane: DeskLane;
+  /** What Desk's agent opened with `hide file open`, oldest first and at most 16: a window showing Desk opens each in its tab panel and sends `desk_open_taken` (`deskOpens.ts`). */
+  opens: DeskOpen[];
 };
+
+/** A file Desk's agent opened: its machine, its checkout's folder and its path, checked inside that checkout on its own host. */
+export type DeskOpen = { id: number; device_id: string; root: string; path: string };
 
 /** The `desk_jobs` section: Desk's sessions as cards, newest first and at most 64, apart so a card's change never resends the conversation. */
 export type DeskJobsSection = {
