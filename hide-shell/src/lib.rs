@@ -793,6 +793,7 @@ impl Lexer {
             if self.peek(0) == Some('>') {
                 self.at += 1;
             }
+            self.clobber();
             self.drop_next = true;
             self.next_is_file = true;
             self.next_is_write = true;
@@ -837,20 +838,44 @@ impl Lexer {
             return;
         }
         // `>&2` duplicates a descriptor and names no file, but `>& out` (and
-        // zsh's `>&! out`, `>&| out`) writes `out` with both streams.
-        let descriptor = self.peek(0) == Some('&');
+        // zsh's `>&! out`, `>&| out`) writes `out` with both streams, and
+        // zsh's `>>& out` appends both to `out`, whatever word it is.
+        let append_both = c == '>' && self.peek(0) == Some('>') && self.peek(1) == Some('&');
+        let descriptor = !append_both && self.peek(0) == Some('&');
         let writes = c == '>' || self.peek(0) == Some('>');
-        if matches!(self.peek(0), Some('>' | '&' | '|')) || (c == '<' && self.peek(0) == Some('>'))
-        {
-            self.at += 1;
-        }
-        if descriptor && c == '>' && matches!(self.peek(0), Some('!' | '|')) {
-            self.at += 1;
+        if append_both {
+            self.at += 2;
+            self.clobber();
+        } else {
+            if matches!(self.peek(0), Some('>' | '&' | '|'))
+                || (c == '<' && self.peek(0) == Some('>'))
+            {
+                self.at += 1;
+            }
+            if descriptor && c == '>' {
+                self.clobber();
+            }
         }
         self.drop_next = true;
         self.next_is_file = true;
         self.next_is_write = writes;
         self.next_is_descriptor = descriptor;
+    }
+
+    /// zsh's `!` or `|` after a redirection that writes both streams (`>&!`,
+    /// `&>|`, `>>&!`), which overrides `noclobber`. bash reads that `!` as
+    /// the file's name instead, so it is a write to `!` too, whichever shell
+    /// runs the line.
+    fn clobber(&mut self) {
+        match self.peek(0) {
+            Some('|') => self.at += 1,
+            Some('!') => {
+                self.at += 1;
+                self.writes.push((self.commands.len(), "!".to_owned()));
+                self.targets.push((self.commands.len(), "!".to_owned()));
+            }
+            _ => {}
+        }
     }
 
     /// After a newline, skips the body of each heredoc the line opened,
@@ -984,9 +1009,11 @@ pub fn is_prefix(word: &str, compound: bool) -> bool {
 
 /// What `>&` or `<&` takes without naming a file: a descriptor (`2>&1`),
 /// one moved (`3>&4-`) or `-`, which closes it.
+/// The word after `>&` or `<&` that names a descriptor, not a file: digits
+/// alone, or `-`, which closes one. bash's `>&2-` moves descriptor 2, but
+/// zsh writes a file named `2-`, so that reads as a file.
 fn is_descriptor(word: &str) -> bool {
-    let number = word.strip_suffix('-').unwrap_or(word);
-    word == "-" || (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+    word == "-" || (!word.is_empty() && word.chars().all(|c| c.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -1117,27 +1144,37 @@ mod tests {
     /// bash, zsh and sh write the file `>&` names when it is no descriptor.
     #[test]
     fn a_file_after_a_descriptor_redirection_is_written() {
+        // Each writes a file in zsh 5.9; bash refuses some, and reads the
+        // `!` of a zsh clobber form as the file's name.
         for (line, written) in [
-            ("echo x >& out", "out"),
-            ("echo x 1>& out", "out"),
-            ("echo x >&out", "out"),
-            ("echo x >&! out", "out"),
-            ("echo x >&| out", "out"),
-            ("echo x >& \"$HOME/.zshenv\"", "$HOME/.zshenv"),
+            ("echo x >& out", &["out"][..]),
+            ("echo x 1>& out", &["out"]),
+            ("echo x 3>& out", &["out"]),
+            ("echo x >&out", &["out"]),
+            ("echo x >&! out", &["!", "out"]),
+            ("echo x >&| out", &["out"]),
+            ("echo x >& \"$HOME/.zshenv\"", &["$HOME/.zshenv"]),
+            ("echo x >& $x", &["$x"]),
+            ("echo x >&$x", &["$x"]),
+            ("echo x >&2-", &["2-"]),
+            ("echo x 3>&4-", &["4-"]),
+            ("echo x >>& out", &["out"]),
+            ("echo x >>&! out", &["!", "out"]),
+            ("echo x >>&| out", &["out"]),
+            ("echo x &>| out", &["out"]),
+            ("echo x &>! out", &["!", "out"]),
+            ("echo x &>>! out", &["!", "out"]),
         ] {
-            assert_eq!(
-                shell_line(line, Syntax::Posix).writes,
-                [(0, written.to_owned())],
-                "{line}"
-            );
+            let read = shell_line(line, Syntax::Posix);
+            let names: Vec<&str> = read.writes.iter().map(|(_, file)| file.as_str()).collect();
+            assert_eq!(names, written, "{line}");
+            assert_eq!(read.commands.len(), 1, "{line}");
         }
-        for line in [
-            "echo x 2>&1",
-            "echo x >&2",
-            "echo x 3>&4-",
-            "echo x 2>&-",
-            "cat <&3",
-        ] {
+        // The `&` of `>>&` is the redirection's, not a background job's.
+        let read = shell_line("hide ps; echo x >>& tr", Syntax::Posix);
+        assert_eq!(read.commands.len(), 2);
+        assert_eq!(read.writes, [(1, "tr".to_owned())]);
+        for line in ["echo x 2>&1", "echo x >&2", "echo x 2>&-", "cat <&3"] {
             let read = shell_line(line, Syntax::Posix);
             assert!(read.writes.is_empty(), "{line}");
             assert!(read.targets.is_empty(), "{line}");

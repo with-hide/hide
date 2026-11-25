@@ -45,7 +45,8 @@ fn a_line_of_hide_commands_only_is_hide_s_to_answer() {
     // A letter's body from a heredoc that substitutes nothing, which only
     // a POSIX shell reads: PowerShell has no heredoc, so on Windows the
     // agent asks.
-    let heredoc = "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF";
+    let heredoc =
+        "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF";
     assert!(hide_line_in(heredoc, &place(), POSIX));
     assert!(!hide_line_in(heredoc, &place(), WINDOWS));
 }
@@ -67,6 +68,14 @@ fn a_line_that_runs_anything_but_hide_or_touches_a_file_is_the_agent_s_to_ask() 
         "hide ps >& out.txt",
         "hide ps; hide inbox >& ~/.zshenv",
         "hide ps &> out.txt",
+        "hide ps; hide inbox >>& tr",
+        "hide ps >>&! out.txt",
+        "hide ps 3>& out.txt",
+        "hide ps >&2-",
+        "hide ps >& $x",
+        "hide ps >&$x",
+        "hide ps &>! /dev/null",
+        "hide ps &>| out.txt",
         "hide request send a --body-file - < notes.md",
         // A substitution, a backquote, a heredoc that substitutes.
         "hide request send a --body \"$(cat notes.md)\"",
@@ -320,10 +329,15 @@ fn every_card_names_its_folder() {
 #[test]
 fn a_request_keeps_at_most_its_first_options_each_named_within_its_cap() {
     let mut options: Vec<Value> = (0..12)
-        .map(|n| json!({"optionId": format!("o{n}"), "kind": "allow_once", "name": "é".repeat(400)}))
+        .map(
+            |n| json!({"optionId": format!("o{n}"), "kind": "allow_once", "name": "é".repeat(400)}),
+        )
         .collect();
     // An id too long to send back whole is left out, not cut.
-    options.insert(1, json!({"optionId": "x".repeat(MAX_OPTION_ID_BYTES + 1), "kind": "reject_once"}));
+    options.insert(
+        1,
+        json!({"optionId": "x".repeat(MAX_OPTION_ID_BYTES + 1), "kind": "reject_once"}),
+    );
     let request = read_request(
         &json!({"toolCall": {"toolCallId": "t", "kind": "execute", "title": "ls"}, "options": options}),
         None,
@@ -331,6 +345,11 @@ fn a_request_keeps_at_most_its_first_options_each_named_within_its_cap() {
     assert_eq!(request.choices.len(), MAX_OPTIONS);
     assert_eq!(request.choices[0].id, "o0");
     assert_eq!(request.choices[1].id, "o1");
-    assert!(request.choices.iter().all(|choice| choice.name.len() <= MAX_OPTION_NAME_BYTES));
+    assert!(
+        request
+            .choices
+            .iter()
+            .all(|choice| choice.name.len() <= MAX_OPTION_NAME_BYTES)
+    );
     assert!(request.choices[0].name.chars().all(|c| c == 'é'));
 }
