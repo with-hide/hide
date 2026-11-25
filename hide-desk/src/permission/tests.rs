@@ -671,6 +671,7 @@ fn a_line_that_sets_a_variable_is_judged_by_the_command_it_runs() {
         // prints are words, not a table's element.
         ("printf '%s' 'items[0]'", Row::Read),
         ("printf -v OUT '%s' x; echo \"$OUT\"", Row::Read),
+        ("[ \"$a\" = \"$b\" ] && echo same", Row::Read),
     ] {
         assert_eq!(reading(line).row, row, "{line}");
         assert_eq!(asks(line), [], "{line}");
@@ -717,6 +718,9 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
         // A name made to stand for another variable may stand for any.
         "declare -n P=PATH; P=/fixture/bin; cat x",
         "local -n table=BASH_CMDS; cat x",
+        // zsh's `set -A` sets an array (zshbuiltins(1)).
+        "set -A path /fixture/bin; cat x",
+        "set -A commands cat /bin/rm; cat /fixture/outside/victim",
         // Arithmetic that sets one.
         "let PATH=1; cat x",
         // A program another one runs, set to one Hide cannot read or to a
@@ -738,10 +742,104 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
 #[cfg(windows)]
 #[test]
 fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
-    // PowerShell's `rm -r C:\Users\me\x` read as POSIX would delete
-    // `C:Usersmex` below the folder it runs in.
-    let line = r"cd /r/herdr-ide; rm -r C:\Users\me\x";
+    // PowerShell's `rm -r C:\work\x` read as POSIX would delete
+    // `C:workx` below the folder it runs in.
+    let line = r"cd /r/herdr-ide; rm -r C:\work\x";
     assert!(asks(line).contains(&UNREADABLE), "{:?}", asks(line));
+}
+
+#[test]
+fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_harmless() {
+    // bash(1) `set -k`: every `NAME=value` among a command's arguments
+    // becomes its environment, so `git diff` would run an external diff.
+    for line in [
+        "set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "set -ek; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "builtin set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        // The same options given to a shell it starts (bash(1) OPTIONS).
+        "bash -k -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "bash -kc \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "sh -o keyword -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
+        "bash -O expand_aliases -c 'cat x'",
+        "bash --rcfile /fixture/rc -c 'cat x'",
+        "set -a; cat x",
+        "set -e -o pipefail -o keyword; cat x",
+        "set -f; cat x",
+        "shopt -s expand_aliases; cat x",
+        "shopt -u sourcepath; cat x",
+        // zsh: setopt(1) `KEYWORD_ARGS` is `set -k`; `emulate ksh` turns
+        // on ksh's options.
+        "setopt KEYWORD_ARGS; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "unsetopt function_argzero; cat x",
+        "emulate ksh; cat x",
+        // What a name runs, and what runs on a signal or on exit.
+        "alias cat='rm -f'; cat x",
+        "unalias ls; ls",
+        "trap 'rm -rf /fixture/outside/victim' EXIT; cat x",
+        "enable -n cd; cat x",
+        "zmodload zsh/files; cat x",
+        "autoload -U compinit; cat x",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
+        assert_eq!(reading(line).row, Row::Shell, "{line}");
+    }
+    for line in [
+        "set -euo pipefail; cat x",
+        "set -x; cat x",
+        "set +e; cat x",
+        "set -o errexit -o nounset; cat x",
+        "set +o xtrace; cat x",
+        "set -- -k a; cat x",
+        "set -A items -k a; cat x",
+        "shopt; cat x",
+        "shopt -q extglob; cat x",
+        "shopt -p; cat x",
+        "bash -c 'cat x'",
+        "bash -ec 'cat x'",
+        "bash -euo pipefail -c 'cat x'",
+        "bash -lc 'cat x'",
+        "bash --login -c 'cat x'",
+        "hash; cat x",
+    ] {
+        assert_eq!(reading(line).row, Row::Read, "{line}");
+        assert!(asks(line).is_empty(), "{line}: {:?}", asks(line));
+    }
+}
+
+#[test]
+fn an_expansion_that_may_assign_asks_unless_its_name_reads_exactly_since_unreadable_is_the_safe_side()
+ {
+    // An assignment inside an expansion, in any word, redirection or
+    // here-document body (bash(1) Parameter Expansion `${NAME:=word}` and
+    // `${NAME=word}`, zshexpn(1) `${NAME::=word}`, arithmetic in both).
+    for line in [
+        ": \"${BASH_CMDS[cat]:=/bin/rm}\"; cat /fixture/outside/victim",
+        "echo \"${BASH_CMDS[cat]:=/bin/rm}\" >/dev/null; cat x",
+        ": ${PATH::=/fixture/bin}; cat x",
+        ": ${PATH=/fixture/bin}; cat x",
+        ": ${commands[cat]::=/bin/rm}; cat x",
+        "cat <<EOF\n${PATH:=/fixture/bin}\nEOF",
+        ": $((BASH_CMDS[cat] = 1)); cat x",
+        ": $[PATH<<=1]; cat x",
+        // A name Hide cannot read exactly: zsh's flags, bash's indirection,
+        // a nested expansion, an element named by an expansion.
+        ": ${(P)name::=/fixture/bin}; cat x",
+        ": ${!ref:=/fixture/bin}; cat x",
+        ": ${${PATH::=/fixture/bin}}; cat x",
+        ": ${BASH_CMDS[$key]:=/bin/rm}; cat x",
+    ] {
+        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
+        assert_eq!(reading(line).row, Row::Shell, "{line}");
+    }
+    // A name read exactly that sets a value is judged by the command.
+    for line in [
+        ": \"${OUT:=notes.md}\"; cat \"$OUT\"",
+        "echo \"${HOME:-/tmp}\" \"${PATH%%:*}\"",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+        assert_eq!(reading(line).row, Row::Read, "{line}");
+    }
 }
 
 #[test]

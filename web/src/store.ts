@@ -245,8 +245,8 @@ type Store = {
   sessionThread: import("./snapshot").SessionThreadSection | null;
   /** Its kept pages (`session_thread_history`). */
   sessionThreadHistory: import("./snapshot").SessionThreadHistorySection | null;
-  /** hided refused a thread input before the core saw it: its request and why. */
-  threadInputRefusal: { request_id: string; reason: string } | null;
+  /** hided refused a composer's send (a thread's input, a Desk message) before the core saw it: its request and why. */
+  composerRefusal: { request_id: string; reason: string } | null;
   agents: AgentRow[];
   /**
    * The keyboard-focus pane of the context on screen: the core's
@@ -317,7 +317,7 @@ type Store = {
   clearPairing: () => void;
   clearPathRefusal: () => void;
   setAttachmentRefusal: (refusal: { pane_id: string; reason: string } | null) => void;
-  setThreadInputRefusal: (refusal: { request_id: string; reason: string } | null) => void;
+  setComposerRefusal: (refusal: { request_id: string; reason: string } | null) => void;
   noteSaving: (tabId: string, saving: boolean) => void;
   noteBufferWarning: (tabId: string, warned: boolean) => void;
   noteDraftExported: (tabId: string, contents: string) => void;
@@ -431,7 +431,7 @@ export const useShellStore = create<Store>((set, get) => ({
   sessionWorkSearch: null,
   sessionThread: null,
   sessionThreadHistory: null,
-  threadInputRefusal: null,
+  composerRefusal: null,
   agents: [],
   focusedPaneId: null,
   operatorFocusSent: 0,
@@ -473,7 +473,7 @@ export const useShellStore = create<Store>((set, get) => ({
     if (get().pathRefusal) set({ pathRefusal: null });
   },
   setAttachmentRefusal: (attachmentRefusal) => set({ attachmentRefusal }),
-  setThreadInputRefusal: (threadInputRefusal) => set({ threadInputRefusal }),
+  setComposerRefusal: (composerRefusal) => set({ composerRefusal }),
   noteDraftExported: (tabId, contents) => {
     const next = new Map(get().exportedDrafts);
     next.set(tabId, contents);

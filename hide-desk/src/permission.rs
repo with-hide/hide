@@ -482,8 +482,8 @@ struct Line {
 }
 
 impl Line {
-    /// The one decision behind every way a line rewrites what runs: `hash`
-    /// and `enable` with arguments, a variable the shell, the loader or a
+    /// The one decision behind every way a line rewrites what runs: a
+    /// word that changes the shell's own state ([`SHELL_STATE`]), a variable the shell, the loader or a
     /// program reads to find or run code ([`Sets::Choice`]), an element of
     /// a table, a name made to stand for another variable, and a program
     /// variable set to a value Hide does not see. What follows may run any
@@ -1187,6 +1187,7 @@ fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, lin
         line.unreadable();
         return;
     }
+    expansion_assigns(text, folders, place, depth, line);
     if cfg!(windows) && text.contains('\\') {
         // On Windows the line may be PowerShell's, where `\` separates a
         // path's names; read as POSIX it would name another path.
@@ -1348,6 +1349,201 @@ fn read_command(
         // A loop's test runs again and again.
         Move::To(_) if looped => Move::Unknown,
         moved => moved,
+    }
+}
+
+/// The variables a line sets inside an expansion, wherever it stands (a
+/// word, a redirection, a here-document's body): `${NAME=value}` and
+/// `${NAME:=value}`, zsh's `${NAME::=value}`, and arithmetic's
+/// `$((NAME = value))` and `$[NAME = value]`, each with an element of a
+/// table too. An expansion whose name Hide cannot read (zsh's flags in
+/// `${(P)NAME::=value}`, bash's `${!NAME}`) that holds an `=` may set any
+/// variable. The raw text is read, so one inside single quotes counts too.
+fn expansion_assigns(
+    text: &str,
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let is_start = |c: char| c == '_' || c.is_ascii_alphabetic();
+    let is_inner = |c: char| c == '_' || c.is_ascii_alphanumeric();
+    // A name and an element of it at the start of `rest`, as written.
+    let target = |rest: &str| -> Option<usize> {
+        if !rest.starts_with(is_start) {
+            return None;
+        }
+        let mut end = rest.find(|c: char| !is_inner(c)).unwrap_or(rest.len());
+        if rest[end..].starts_with('[') {
+            let mut level = 0;
+            for (at, c) in rest[end..].char_indices() {
+                match c {
+                    '[' => level += 1,
+                    ']' => level -= 1,
+                    _ => {}
+                }
+                if level == 0 {
+                    end += at + 1;
+                    break;
+                }
+            }
+        }
+        Some(end)
+    };
+    for (at, _) in text.match_indices("${") {
+        let rest = &text[at + 2..];
+        match target(rest) {
+            Some(end) => {
+                let after = &rest[end..];
+                if after.starts_with('=') || after.starts_with(":=") || after.starts_with("::=") {
+                    assign(&rest[..end], folders, place, depth, line);
+                }
+            }
+            None => {
+                let body = rest.split('}').next().unwrap_or(rest);
+                if body.contains('=') {
+                    line.rewrites_what_runs();
+                }
+            }
+        }
+    }
+    for (open, close) in [("$((", "))"), ("$[", "]")] {
+        for (at, _) in text.match_indices(open) {
+            let rest = &text[at + open.len()..];
+            // `$[` closes at its last `]` before the next `$[`, so an
+            // element's own brackets stay inside.
+            let body = match close {
+                "]" => {
+                    &rest[..rest
+                        .split("$[")
+                        .next()
+                        .unwrap_or(rest)
+                        .rfind(']')
+                        .unwrap_or(rest.len())]
+                }
+                _ => &rest[..rest.find(close).unwrap_or(rest.len())],
+            };
+            let bytes = body.as_bytes();
+            for (index, _) in body.match_indices('=') {
+                let before = index.checked_sub(1).map(|i| bytes[i]);
+                // `<<=` and `>>=` assign; `<=`, `>=`, `==` and `!=` compare.
+                let shift = matches!(before, Some(b'<' | b'>'))
+                    && index.checked_sub(2).map(|i| bytes[i]) == before;
+                if bytes.get(index + 1) == Some(&b'=')
+                    || (!shift && matches!(before, Some(b'=' | b'!' | b'<' | b'>')))
+                {
+                    continue;
+                }
+                // The name before the operator (`=`, `+=`, `<<=` and the like).
+                let left = body[..index].trim_end_matches(|c: char| "+-*/%&^|<> ".contains(c));
+                let start = left
+                    .rfind(|c: char| !(is_inner(c) || matches!(c, '[' | ']' | '"' | '\'')))
+                    .map_or(0, |i| i + 1);
+                match &left[start..] {
+                    "" => line.rewrites_what_runs(),
+                    name => assign(name, folders, place, depth, line),
+                }
+            }
+        }
+    }
+}
+
+/// The shell's own words that change its state: which options it reads a
+/// line with, what a name runs (aliases, functions, builtins, modules, the
+/// table of found programs) and what it runs on a signal. Only the forms
+/// known to change nothing that decides what runs are read; any other one
+/// may change how the words after it are read or what they run, so Hide
+/// cannot read the line.
+const SHELL_STATE: &[&str] = &[
+    "shopt",
+    "setopt",
+    "unsetopt",
+    "emulate",
+    "enable",
+    "disable",
+    "hash",
+    "unhash",
+    "zmodload",
+    "autoload",
+    "alias",
+    "unalias",
+    "unfunction",
+    "trap",
+];
+
+fn shell_state(
+    name: &str,
+    args: &[String],
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let changes = match name {
+        "set" => return set(args, folders, place, depth, line),
+        // bash's `shopt` alone, `shopt NAME`, `-p` and `-q` only report.
+        "shopt" => args
+            .iter()
+            .any(|word| word.starts_with('-') && !matches!(word.as_str(), "-p" | "-q")),
+        // Alone they only report.
+        name if SHELL_STATE.contains(&name) => !args.is_empty(),
+        _ => false,
+    };
+    if changes {
+        line.other = true;
+        line.rewrites_what_runs();
+    }
+}
+
+/// The options `set`, or a shell started with them, may turn on and still
+/// leave the rest of the line read as Hide reads it: stop on an error, an
+/// unset name or a failed pipe, and print each command.
+const SET_LETTERS: &str = "euxv";
+const SET_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "verbose", "pipefail"];
+
+/// One option letter of `set` or of a shell's start, `o` taking the name
+/// after it: any other than [`SET_LETTERS`] and [`SET_NAMES`] may change how
+/// the words after it are read (bash's `-k` makes a `NAME=value` among a
+/// command's arguments its environment), so Hide cannot read the line.
+fn option(letter: char, words: &mut std::slice::Iter<'_, String>, line: &mut Line) {
+    match letter {
+        'o' => {
+            if words
+                .next()
+                .is_some_and(|name| !SET_NAMES.contains(&name.as_str()))
+            {
+                line.rewrites_what_runs();
+            }
+        }
+        letter if SET_LETTERS.contains(letter) => {}
+        _ => line.rewrites_what_runs(),
+    }
+}
+
+/// `set`: zsh's `set -A NAME values` and `set +A NAME values` set an array,
+/// every other letter is an [`option`]. Words after `--` or `-` are the
+/// positional parameters.
+fn set(args: &[String], folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let Some(letters) = word.strip_prefix('-').or_else(|| word.strip_prefix('+')) else {
+            return;
+        };
+        if letters.is_empty() || letters == "-" {
+            return;
+        }
+        for letter in letters.chars() {
+            match letter {
+                'A' => {
+                    // The words after the name are its values.
+                    if let Some(target) = words.next() {
+                        assign(target, folders, place, depth, line);
+                    }
+                    return;
+                }
+                letter => option(letter, &mut words, line),
+            }
+        }
     }
 }
 
@@ -1622,15 +1818,32 @@ fn run_program(
     }
     if SHELLS.contains(&name) {
         let mut runs_script = false;
-        let mut at = 0;
-        while let Some(word) = args.get(at) {
-            if !word.starts_with('-') || word == "--" {
-                break;
+        let mut words = args.iter();
+        while let Some(word) = words.as_slice().first() {
+            let letters = match word.as_str() {
+                "--" | "-" | "+" => break,
+                // Read the operator's own start-up files, or none.
+                "--login" | "--noprofile" | "--norc" => "",
+                long if long.starts_with("--") => {
+                    line.rewrites_what_runs();
+                    ""
+                }
+                short => match short.strip_prefix('-').or_else(|| short.strip_prefix('+')) {
+                    Some(letters) => letters,
+                    None => break,
+                },
+            };
+            words.next();
+            for letter in letters.chars() {
+                match letter {
+                    'c' => runs_script = true,
+                    // A login shell, which reads the operator's own profile.
+                    'l' => {}
+                    letter => option(letter, &mut words, line),
+                }
             }
-            runs_script |= !word.starts_with("--") && word.contains('c');
-            at += 1;
         }
-        match args.get(at).filter(|_| runs_script) {
+        match words.next().filter(|_| runs_script) {
             Some(script) => read_line(script, folders, place, depth + 1, line),
             // A script from a file or from the shell's input (a pipe, a
             // heredoc), which Hide does not read.
@@ -1641,6 +1854,7 @@ fn run_program(
     if ASSIGNING.contains(&name) {
         assigns(name, args, folders, place, depth, line);
     }
+    shell_state(name, args, folders, place, depth, line);
     match name {
         // It runs in this shell, so where it leaves the shell is not
         // followed.
@@ -1650,11 +1864,6 @@ fn run_program(
         }
         "cd" | "pushd" => cd(args, folders, place.home),
         "popd" => Move::Unknown,
-        "hash" | "enable" if !args.is_empty() => {
-            line.other = true;
-            line.rewrites_what_runs();
-            Move::Stay
-        }
         "hash" | "enable" => Move::Stay,
         "git" => {
             git(args, folders, place, line);

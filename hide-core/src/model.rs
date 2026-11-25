@@ -11945,6 +11945,7 @@ mod wire_enum_tests {
                 DeskNotice::InstallFailed,
                 DeskNotice::NoAskMode,
                 DeskNotice::TurnFailed,
+                DeskNotice::AttachmentsGone,
             ],
         );
         checked.insert("desk_notice");
