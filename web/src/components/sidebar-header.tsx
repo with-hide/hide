@@ -1,7 +1,8 @@
 import { useInterfaceTranslation } from "../i18n/client";
-import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, RepeatIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
+import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, RepeatIcon, SearchIcon, ServerIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { BotFace } from "./bot-mark";
 import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 import { Kbd } from "./ui/kbd";
 import { RowButton } from "./ui/row-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -72,8 +73,12 @@ export function SidebarHeader({
 }: {
   compact?: boolean;
   overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
-  /** Desk's row (PRD desk-2-ui D-32, B46), drawn only while Settings › Labs › Desk has it on: selected while Desk is in front, its warning mark the sessions Desk started that ask the operator. */
-  desk?: { selected: boolean; asking: number; chord: string | null; onOpen: () => void };
+  /**
+   * Desk's row (PRD desk-2-ui D-32, B46; feedback 1 D2), drawn only while Settings › Labs › Desk has it on: its warning mark the
+   * sessions Desk started that ask the operator. While Desk is in front the row is selected and marked `켜짐`, a ✕ shows on hover,
+   * and a press leaves Desk for `leaveTo`, the tab in front before it.
+   */
+  desk?: { selected: boolean; asking: number; chord: string | null; leaveTo?: string | null; onOpen: () => void };
   /** The mission screen's row (B1): selected while the screen shows, its count the missions with something in their 내 차례. */
   missions?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
   /** The automation screen's row (PRD automations B1): selected while the screen shows, its count the runs not looked at. */
@@ -109,12 +114,19 @@ export function SidebarHeader({
         </Hint>
       ) : null}
       {desk ? (
-        <Hint label={desk.asking > 0 ? `${t("desk.name")} · ${t("desk.lane.threadsCount", { count: desk.asking })}` : t("desk.name")} shortcut={desk.chord}>
-          <RowButton aria-current={desk.selected ? "page" : undefined} data-sidebar-desk="true" data-desk-sidebar-row="true" onClick={desk.onOpen}
-            className={cn("h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", desk.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
+        <Hint
+          label={desk.selected
+            ? [t("desk.leave.hint"), desk.leaveTo ? t("desk.leave.to", { place: desk.leaveTo }) : null].filter(Boolean).join(" · ")
+            : desk.asking > 0 ? `${t("desk.name")} · ${t("desk.lane.threadsCount", { count: desk.asking })}` : t("desk.name")}
+          shortcut={desk.chord}
+        >
+          <RowButton aria-current={desk.selected ? "page" : undefined} aria-label={desk.selected ? `${t("desk.name")} · ${t("desk.sidebar.on")} · ${t("desk.leave")}` : undefined} data-sidebar-desk="true" data-desk-sidebar-row="true" data-desk-sidebar-on={desk.selected ? "true" : undefined} onClick={desk.onOpen}
+            className={cn("group/desk h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", desk.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
             <DeskMark size="md" />
             <span className="min-w-0 flex-1 truncate text-left">{t("desk.name")}</span>
             {desk.asking > 0 ? <StatusMark mark="turn" data-desk-sidebar-asking={desk.asking} /> : null}
+            {desk.selected ? <Badge variant="success" data-desk-sidebar-on-mark="true">{t("desk.sidebar.on")}</Badge> : null}
+            {desk.selected ? <XIcon aria-hidden="true" className="hidden size-(--size-icon-sm) shrink-0 text-muted-foreground group-hover/desk:block group-focus-visible/desk:block" data-desk-sidebar-leave="true" /> : null}
           </RowButton>
         </Hint>
       ) : null}

@@ -72,6 +72,7 @@ import { PracticeInvite } from "./components/practice-invite";
 import { HerdrImportLine } from "./HerdrImport";
 import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
+import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
@@ -178,7 +179,14 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            desk={deskShown ? { selected: deskSelected, asking: deskAsking, chord: null, onOpen: () => actions.openDesk() } : undefined}
+            desk={deskShown ? {
+              selected: deskSelected,
+              asking: deskAsking,
+              // In front, the row says where leaving goes and the chord that also leaves.
+              chord: deskSelected ? commandLabel("recent_area_tab") || null : null,
+              leaveTo: deskSelected ? deskReturnWords(deskReturn(useShellStore.getState().rest)) : null,
+              onOpen: () => (deskSelected ? leaveDesk(actions) : actions.openDesk()),
+            } : undefined}
             missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}

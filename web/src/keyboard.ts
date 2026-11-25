@@ -138,14 +138,26 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
   return goToItem(chosen, actions);
 }
 
+/** Where leaving Desk goes: the panel used before it, which leads Recent Panels since Desk is never one of them; none when none is left. */
+export function deskReturn(rest: SnapshotRest | null): CycleItem | null {
+  return recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null) ?? null;
+}
+
+/** Where `deskReturn` goes, in words: its project and checkout, then its tab (`herdr-ide › 집중 모드 뷰 탭`); none when there is nowhere. */
+export function deskReturnWords(item: CycleItem | null): string | null {
+  if (!item) return null;
+  const place = item.detail.kind === "surface" ? item.detail.place : null;
+  return [place, item.title].filter(Boolean).join(" › ") || null;
+}
+
 /**
- * Desk switched off while its room is in front (PRD session-docs-and-assistant
- * B41): back to the panel used before it, which leads Recent Panels since Desk
- * is never one of them, or All projects when none is left.
+ * Leaving Desk (PRD session-docs-and-assistant B41, feedback 1 D2): its head's
+ * `나가기 ✕`, ⌃⇥, a press on the sidebar's Desk row while Desk is in front,
+ * and Desk switched off while its room is in front all go back to the panel
+ * used before it (`deskReturn`), or All projects when none is left.
  */
 export function leaveDesk(actions: Actions): void {
-  const rest = useShellStore.getState().rest;
-  const before = recentEntries().map((entry) => panelItem(rest, entry)).find((item) => item !== null);
+  const before = deskReturn(useShellStore.getState().rest);
   if (!before || !goToItem(before, actions)) useUiStore.getState().setScreen({ kind: "main" });
 }
 
@@ -279,6 +291,8 @@ export function installKeyboard(actions: Actions): () => void {
       case "previous_recent_panel":
       case "recent_project":
       case "previous_recent_project": {
+        // In Desk's room the recent-tab chord leaves Desk for the tab in front before it, as `나가기 ✕` does.
+        if (id.endsWith("area_tab") && !ui().cycle && ui().screen?.kind === "desk") return leaveDesk(actions);
         const backward = id.startsWith("previous");
         const rest = useShellStore.getState().rest;
         const family = id.endsWith("area_tab") ? "area" : id.endsWith("panel") ? "panels" : "projects";

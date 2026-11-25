@@ -25,7 +25,7 @@ import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
-import { leaveDesk } from "./keyboard";
+import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
 import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
 import { DeskAgentBar, DeskComposer } from "./components/desk/desk-composer";
@@ -349,7 +349,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} />} composer={composer} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
@@ -580,6 +580,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
           onOutput={(output) => actions.deskOpen({ kind: "output", output })}
           onFiles={() => actions.deskToggleExplorer()}
           onTerminal={() => actions.deskTerminal()}
+          onOwnTab={() => actions.openListedAgent(paneId)}
           onClose={() => actions.deskCloseSession()}
         />
       }

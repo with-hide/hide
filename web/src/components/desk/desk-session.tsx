@@ -1,4 +1,4 @@
-import { CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob, DeskOutput } from "../../desk";
@@ -100,7 +100,7 @@ const GAP = 4;
  * folds into `+n`: the work chip (the plan's, or the mission chip on a
  * Conductor), what it opened, and its PR; no model.
  */
-export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onOwnTab, onClose }: {
   paneId: string;
   /** The session's work name, kept by the panel when its row and card are gone. */
   title: string;
@@ -120,6 +120,8 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   onOutput: (output: DeskOutput) => void;
   onFiles: () => void;
   onTerminal: () => void;
+  /** `원래 화면에서 보기 ↗` (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
+  onOwnTab: () => void;
   onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -135,6 +137,14 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           </Hint>
         </nav>
         {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
+        {sleeping ? null : (
+          <Hint label={t("desk.room.openOwnHint")}>
+            <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-session-own-tab="true" onClick={onOwnTab}>
+              {t("desk.room.openOwn")}
+              <ArrowUpRightIcon />
+            </Button>
+          </Hint>
+        )}
         <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
           <Button variant="ghost" size="sm" aria-pressed={explorerOpen} className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground", explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}>
             <FolderIcon />

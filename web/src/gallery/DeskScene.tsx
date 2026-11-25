@@ -107,7 +107,7 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
 
 /** The chat column's head, as a scene sets it. */
 function ChatHead() {
-  return <DeskChatHead onNewConversation={noop} />;
+  return <DeskChatHead onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
@@ -142,7 +142,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, ou
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   const question = sessionQuestion(job, null);
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
       composer={{ value: text, attachments, focused, onChange: setText, onSend: noop, onAttach: noop, onRemoveAttachment: noop }}

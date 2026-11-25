@@ -228,6 +228,7 @@ const renderers: Renderers = {
     "Destructive": () => <Badge variant="destructive">refused</Badge>,
     "Outline": () => <Badge variant="outline">main</Badge>,
     "Warning": () => <Badge variant="warning">behind</Badge>,
+    "Success": () => <Badge variant="success">켜짐</Badge>,
   },
   "Kbd": {
     "Default": () => <Kbd>⌘K</Kbd>,
