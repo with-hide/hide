@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { closeCovering, installKeyboard } from "./keyboard";
+import type { AgentRow, DeskSection } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -56,7 +57,8 @@ beforeEach(() => {
   vi.stubGlobal("HTMLInputElement", class {});
   vi.stubGlobal("HTMLTextAreaElement", class {});
   vi.stubGlobal("document", { ...events, visibilityState: "visible" });
-  useShellStore.setState({ rest: null });
+  // The sessions beside Desk are listed in the sidebar's rows, which ⌘E reopening reads.
+  useShellStore.setState({ rest: null, desk: { settings: { enabled: true } } as unknown as DeskSection, agents: ["w1:p2", "w1:p3"].map((pane_id) => ({ pane_id })) as unknown as AgentRow[] });
   useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { session: "w1:p2", panel: null, closed: null, answer: 0 } });
   remove = installKeyboard(actions);
 });
@@ -123,6 +125,35 @@ describe("⌘E beside Desk", () => {
     emit("keydown", "KeyE", { metaKey: true });
     emit("keydown", "KeyE", { metaKey: true });
     expect(room().session).toBe("w1:p3");
+  });
+
+  it("gives the reopened session's input box the keyboard, as a work tab's ⌘E gives it to the pane", () => {
+    emit("keydown", "KeyE", { metaKey: true });
+    const before = room().answer;
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBe("w1:p2");
+    expect(room().answer).toBe(before + 1);
+  });
+
+  it("opens nothing when the session closed is gone, and forgets it", () => {
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().closed).toBe("w1:p2");
+    useShellStore.setState({ agents: [] });
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
+    expect(room().closed).toBeNull();
+    // Nothing is left to open, and nothing pretends to be.
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
+  });
+
+  it("does nothing after leaving Desk's room and coming back", () => {
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().closed).toBe("w1:p2");
+    useUiStore.setState({ screen: { kind: "main" } });
+    useUiStore.setState({ screen: { kind: "desk" } });
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
   });
 
   it("does nothing while no session was closed during this visit of the room", () => {

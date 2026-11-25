@@ -76,7 +76,8 @@ export function openSession(room: DeskRoomWindow, pane: string, options: { answe
 
 /** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */
 export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
-  return { ...room, session: null, panel: null, closed: room.session ?? room.closed };
+  if (!room.session) return room;
+  return { ...room, session: null, panel: null, closed: room.session };
 }
 
 /**

@@ -85,6 +85,7 @@ import {
   type PrMergeMethod,
   type LookAt,
   type SignInReply,
+  paneRowOf,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -785,15 +786,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the keyboard into their active area.
    */
   const toggleLane = () => {
-    // In Desk's room the right side is the session panel: ⌘E closes it and, pressed again, opens the session just
-    // closed (operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing).
-    if (ui().screen?.kind === "desk") {
-      const room = ui().deskRoom;
-      if (room.session) return ui().setDeskRoom(closeDeskSession);
-      if (!room.closed) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
-      const pane = room.closed;
-      return ui().setDeskRoom((now) => openDeskSession(now, pane));
-    }
     // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
     // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
     const pairView = workspaceViewOf(rest());
@@ -4016,7 +4008,31 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     showDocuments,
     closeLane,
 
-    toggleLane,
+    toggleLane() {
+      // In Desk's room the right side is the session panel, which `deskToggleSession` closes and opens.
+      if (ui().screen?.kind === "desk") return this.deskToggleSession();
+      return toggleLane();
+    },
+
+    /**
+     * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
+     * panel closes, with its tab panel, as its `✕` does, and pressed again opens the session just closed, as a
+     * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
+     * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
+     * panel: the memory is cleared and only the log says so.
+     */
+    deskToggleSession() {
+      const room = ui().deskRoom;
+      if (room.session) return ui().setDeskRoom(closeDeskSession);
+      const pane = room.closed;
+      if (!pane) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
+      const state = useShellStore.getState();
+      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane) && !paneRowOf(state.rest, pane)) {
+        ui().setDeskRoom((now) => ({ ...now, closed: null }));
+        return diagnostic(`toggle_lane: the session closed beside Desk (${pane}) is gone`);
+      }
+      this.openDeskSession(pane, { answer: true });
+    },
 
     setWorkspaceView,
 
