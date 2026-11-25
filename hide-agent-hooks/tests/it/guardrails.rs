@@ -297,6 +297,18 @@ fn risky_git_and_the_base_branch_are_refused_and_named() {
     // The checkout is on `topic`, not the base branch `main`.
     let reason = bash("git push --force origin topic").unwrap();
     assert!(reason.contains("\"Block risky Git commands\""), "{reason}");
+    // zsh runs a line whose redirection ends in a spelling bash refuses;
+    // the guard still reads its command.
+    for line in [
+        "git push --force origin topic >>| log",
+        "git push --force origin topic >",
+    ] {
+        let reason = bash(line).unwrap();
+        assert!(
+            reason.contains("\"Block risky Git commands\""),
+            "{line}: {reason}"
+        );
+    }
     let reason = bash("git push origin HEAD:main").unwrap();
     assert!(reason.contains("\"Guard the base branch\""), "{reason}");
     let reason = bash("gh pr merge 12 --squash").unwrap();

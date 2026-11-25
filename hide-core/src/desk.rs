@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::latest_file::{LatestFile, read_capped};
 use crate::model::{
-    DESK_CAP_MAX, DeskCarried, DeskChoiceSnapshot, DeskItem, DeskSelection, DeskSettings,
+    DESK_CAP_MAX, DeskCarried, DeskChoiceSnapshot, DeskItem, DeskNotice, DeskSelection,
+    DeskSettings,
 };
 
 pub use hide_desk::AdapterId;
@@ -57,11 +58,6 @@ pub struct DeskPlaces {
     pub adapters: PathBuf,
     /// Desk's own folder (`hide_kit::layout::desk_dir`).
     pub desk: PathBuf,
-    /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
-    pub codex_home: PathBuf,
-    /// The operator's own Codex sign-in, which Desk's Codex reads through a
-    /// link (`hide_desk::codex::operator_sign_in`), or why it has none.
-    pub codex_sign_in: Result<PathBuf, String>,
     /// The folder of the `hide` program the Desk agent runs.
     pub hide_dir: PathBuf,
 }
@@ -339,6 +335,16 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
         ));
     }
     let mut stored = file.stored;
+    // A notice this build no longer makes is never shown again.
+    stored.conversation.items.retain(|item| {
+        !matches!(
+            item,
+            DeskItem::Notice {
+                notice: DeskNotice::Retired,
+                ..
+            }
+        )
+    });
     stored.conversation.trim();
     stored.settings.cap = stored.settings.cap.clamp(1, DESK_CAP_MAX);
     stored.sessions.truncate(AdapterId::all().count());
@@ -551,26 +557,124 @@ mod tests {
     }
 
     #[test]
-    fn the_permission_table_comes_back_after_a_restart_and_an_older_store_runs_every_row() {
-        use hide_desk::permission::{Answer, Table};
+    fn the_permission_choice_comes_back_after_a_restart_and_a_store_from_before_reads_as_allow_all()
+    {
+        use crate::model::{DeskApprovalState, DeskCardKind, DeskOptionKind, DeskPermission};
         let mut stored = Stored::default();
-        stored.settings.permissions = Table {
-            shell: Answer::Ask,
-            edit: Answer::Ask,
-            ..Table::default()
-        };
+        stored.settings.permission = DeskPermission::Agent;
         let restored = decode(&encode(&stored).unwrap()).unwrap();
-        assert_eq!(restored.settings.permissions, stored.settings.permissions);
-        // A store written before Settings › Labs › Desk › 권한 existed.
-        let mut older: serde_json::Value =
-            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
-        older["settings"]
-            .as_object_mut()
-            .unwrap()
-            .remove("permissions")
-            .expect("the table is stored with the settings");
+        assert_eq!(restored.settings.permission, DeskPermission::Agent);
+
+        // A store #2972's build wrote: its permission table, a card it kept
+        // allowed for the conversation, and notices this build no longer
+        // makes, which go.
+        let older = serde_json::json!({
+            "schema_version": 1,
+            "selection": {"agent": "claude", "model": null, "effort": null},
+            "settings": {"enabled": true, "default_agent": "claude", "location": "desk", "cap": 8,
+                "permissions": {"hide": "ask", "read": "run", "shell": "ask", "edit": "ask"}},
+            "conversation": {"generation": 1, "dropped": 0, "next_id": 3, "items": [
+                {"kind": "approval", "id": 1, "card": "command", "command": "touch x",
+                    "folder": "/r", "reason": null, "row": "shell",
+                    "state": "allowed_conversation", "asks": [{"kind": "row", "value": "shell"}],
+                    "subject": null, "refusal": null},
+                {"kind": "notice", "id": 2, "notice": "blocked", "agent": "claude", "detail": "x"},
+                {"kind": "notice", "id": 3, "notice": "no_ask_mode", "agent": "grok", "detail": null},
+            ]},
+            "sessions": [],
+            "choices": [],
+        });
         let restored = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
-        assert_eq!(restored.settings.permissions, Table::default());
+        assert_eq!(restored.settings.permission, DeskPermission::AllowAll);
+        // A word a later Hide wrote restores as the side that asks.
+        let mut later = older.clone();
+        later["settings"]["permission"] = "ask_more".into();
+        let later = decode(&serde_json::to_vec(&later).unwrap()).unwrap();
+        assert_eq!(later.settings.permission, DeskPermission::Agent);
+        assert_eq!(
+            restored.conversation.items,
+            [DeskItem::Approval {
+                id: 1,
+                card: DeskCardKind::Command,
+                command: "touch x".into(),
+                folder: Some("/r".into()),
+                reason: None,
+                options: Vec::new(),
+                state: DeskApprovalState::Allowed,
+                chosen: None,
+                answer: None,
+                refusal: None,
+            }]
+        );
+        // What this build writes, an older one reads past: no value it
+        // does not know.
+        let written: serde_json::Value = serde_json::from_slice(
+            &encode(&Stored {
+                conversation: Conversation {
+                    items: vec![DeskItem::Approval {
+                        id: 1,
+                        card: DeskCardKind::Command,
+                        command: "touch x".into(),
+                        folder: None,
+                        reason: None,
+                        options: Vec::new(),
+                        state: DeskApprovalState::Allowed,
+                        chosen: Some(DeskOptionKind::AllowAlways),
+                        answer: Some("Yes, and don't ask again".into()),
+                        refusal: None,
+                    }],
+                    ..Conversation::default()
+                },
+                ..restored
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written["conversation"]["items"][0]["state"], "allowed");
+    }
+
+    /// The largest card a request can make, its most options each at its
+    /// longest, stores and comes back, and its options count against the
+    /// conversation's bytes.
+    #[test]
+    fn a_card_with_the_most_and_longest_options_stores_and_comes_back() {
+        use hide_desk::permission::{
+            MAX_OPTION_ID_BYTES, MAX_OPTION_NAME_BYTES, MAX_OPTIONS, read_request,
+        };
+
+        use crate::model::{DeskApprovalState, DeskCardKind};
+        let options: Vec<serde_json::Value> = (0..MAX_OPTIONS + 4)
+            .map(|n| {
+                serde_json::json!({
+                    "optionId": format!("{n:0>MAX_OPTION_ID_BYTES$}"),
+                    "kind": "allow_once",
+                    "name": "가".repeat(MAX_OPTION_NAME_BYTES),
+                })
+            })
+            .collect();
+        let request = read_request(
+            &serde_json::json!({"toolCall": {"toolCallId": "t", "kind": "execute", "title": "ls"},
+                "options": options}),
+            None,
+        );
+        assert_eq!(request.choices.len(), MAX_OPTIONS);
+        let card = DeskItem::Approval {
+            id: 1,
+            card: DeskCardKind::Command,
+            command: "ls".into(),
+            folder: None,
+            reason: None,
+            options: request.choices,
+            state: DeskApprovalState::Waiting,
+            chosen: None,
+            answer: None,
+            refusal: None,
+        };
+        assert!(card.text_bytes() > MAX_OPTIONS * MAX_OPTION_ID_BYTES);
+        let mut stored = Stored::default();
+        stored.conversation.push(card.clone());
+        let restored = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(restored.conversation.items, [card]);
     }
 
     #[test]

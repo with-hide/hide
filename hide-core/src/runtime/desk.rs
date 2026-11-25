@@ -5,14 +5,14 @@
 //! and the shell only shows the `desk` and `desk_live` sections and
 //! dispatches the `desk_*` events.
 //!
-//! A permission request Hide cannot read, or answer with a one-time
-//! allowance, does not run (D-60). Every other one is answered here from
-//! Settings › Labs › Desk › 권한, what the operator allowed for the rest of the
-//! conversation and the core's facts (`hide_desk::permission::decide`,
-//! D-82): it runs, or a card waits for `한 번 허용`, `이 대화에서 계속 허용`
-//! or `거절…` (D-83). An allowance lives here until the Desk process ends,
-//! never in the agent: `allow_always` is never chosen. A new conversation, a
-//! restart or the process's end closes a waiting card as a refusal.
+//! A permission request is answered here from the choice under Desk's box
+//! (D-92): under `다 허용` with the agent's allow-once option at once, under
+//! `에이전트대로` by a card of the agent's own options, which goes back to
+//! the agent as the one the operator pressed, but a line of `hide` commands,
+//! which Hide allows once itself. A request that offers no allow-once
+//! option is a card under either. Hide picks no other option for the
+//! operator and keeps no allowance of its own. A new conversation, a restart
+//! or the process's end closes a waiting card as a refusal.
 
 mod files;
 pub(super) mod jobs;
@@ -35,9 +35,9 @@ use crate::model::{
     DESK_CAP_MAX, DESK_QUEUED_MAX, DeskAgentSnapshot, DeskAgentState, DeskApprovalState,
     DeskAttachment, DeskCardKind, DeskChoiceSnapshot, DeskConversationSnapshot, DeskHostSnapshot,
     DeskHostState, DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice,
-    DeskQueuedMessage, DeskReplyState, DeskSnapshot,
+    DeskPermission, DeskQueuedMessage, DeskReplyState, DeskSnapshot,
 };
-use hide_desk::permission::{self, Ask, Irreversible, Row};
+use hide_desk::permission;
 use hide_desk::session::{Choice, Choices, OpenError};
 use worker::{Order, Report, TurnEnd, TurnOutcome};
 
@@ -61,12 +61,6 @@ pub(super) struct Desk {
     turn: Option<Turn>,
     next_tag: u64,
     approvals: Vec<Approval>,
-    /// The rows the operator allowed with `이 대화에서 계속 허용`, until the
-    /// Desk process ends (D-83); what cannot be undone is never kept.
-    allowed: BTreeSet<Row>,
-    /// Working sessions the operator allowed Desk to archive with
-    /// `한 번 허용`, by registration id, until the turn ends.
-    archive_grants: Vec<String>,
     /// The operator's last refusal in the turn under way, told to the agent
     /// once that turn ends: always when it carries a line (`거절…`), and a
     /// plain one only when the agent wrote nothing after it and no message
@@ -81,8 +75,8 @@ pub(super) struct Desk {
     /// What Desk's agent opened with `hide file open`, waiting for a window
     /// showing Desk to open it in the tab panel (`opens.rs`); never stored.
     opens: opens::DeskOpens,
-    /// The agent refused the last start (its sign-in, its ask mode, a
-    /// process that did not open): the queued messages wait for the
+    /// The agent refused the last start (its sign-in, a process that did
+    /// not open): the queued messages wait for the
     /// operator's next send, `다시 시작` or a session that opens, rather
     /// than meet the same refusal one after another.
     held: bool,
@@ -144,12 +138,8 @@ struct Turn {
 struct Approval {
     item: u64,
     rpc_id: Value,
-    allow: String,
-    reject: Option<String>,
-    /// What it asks, which `이 대화에서 계속 허용` keeps allowed.
-    asks: Vec<Ask>,
-    /// The working sessions it ends, which `한 번 허용` lets Desk archive.
-    sessions: Vec<String>,
+    /// The agent's options, one of which goes back to it.
+    options: Vec<permission::Choice>,
     /// What the agent asked to run and what kind of call it is, which a
     /// refusal names.
     command: String,
@@ -246,22 +236,14 @@ pub(super) struct SendPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalPayload {
     id: u64,
-    answer: ApprovalAnswer,
-    /// `거절…`'s line; absent or blank is a plain refusal.
+    /// The id of the agent's option the operator pressed; none is `거절…`
+    /// on a card that offers no rejecting option, sent to the agent as
+    /// ACP's `cancelled`, and refused on a card that offers one.
+    option: Option<String>,
+    /// `거절…`'s line, with a refusing option only; absent or blank is a
+    /// plain refusal.
     #[serde(default)]
     text: Option<String>,
-}
-
-/// The card's three answers (D-83).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ApprovalAnswer {
-    /// `한 번 허용`.
-    Once,
-    /// `이 대화에서 계속 허용`.
-    Conversation,
-    /// `거절…`.
-    Reject,
 }
 
 #[derive(Debug, Deserialize)]
@@ -284,8 +266,8 @@ pub(super) struct SettingsPayload {
     default_agent: Option<Option<AdapterId>>,
     location: Option<DeskLocation>,
     cap: Option<u8>,
-    /// Settings › Labs › Desk › 권한, whole (D-82).
-    permissions: Option<permission::Table>,
+    /// The choice under Desk's box (D-92).
+    permission: Option<DeskPermission>,
 }
 
 fn present<'de, D: serde::Deserializer<'de>>(
@@ -625,10 +607,9 @@ impl Runtime {
     }
 
     /// The turn under way ends as `outcome` says: requests the agent made
-    /// in it end with it, and so do the archives its cards allowed once.
+    /// in it end with it.
     fn desk_close_turn(&mut self, outcome: TurnOutcome) {
         self.close_approvals();
-        self.desk.archive_grants.clear();
         match outcome {
             TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
             TurnOutcome::Cancelled | TurnOutcome::Ended => {
@@ -643,7 +624,7 @@ impl Runtime {
     }
 
     /// The message of the turn under way, which the agent never took (its
-    /// sign-in, its ask mode), goes back first in line and out of the
+    /// sign-in), goes back first in line and out of the
     /// conversation, words, chips and files together, so nothing is lost to
     /// a refused start and nothing comes back to the composer; it may make the line one past its cap,
     /// since the cap only refuses what the operator sends.
@@ -815,17 +796,16 @@ impl Runtime {
                 rpc_id: approval.rpc_id,
                 outcome: cancelled.clone(),
             });
-            self.set_approval(approval.item, DeskApprovalState::Closed, None);
+            self.set_approval(approval.item, DeskApprovalState::Closed, None, None);
         }
         self.order(Order::Cancel);
         true
     }
 
-    /// The operator's answer to a card (D-83): `한 번 허용` runs this one
-    /// call, `이 대화에서 계속 허용` also stops asking the rows it asked until
-    /// the Desk process ends, and `거절…` refuses it and, with a line, stops
-    /// the turn so the line reaches Desk as the next message. What cannot be
-    /// undone always asks, so a card that asks it is never kept allowed.
+    /// The operator's answer to a card (D-92): the agent's option they
+    /// pressed goes back to the agent as it is. A refusing one may carry
+    /// `거절…`'s line, which stops the turn so the line reaches Desk as the
+    /// next message.
     fn desk_answer(&mut self, payload: ApprovalPayload) -> bool {
         let Some(index) = self
             .desk
@@ -835,75 +815,41 @@ impl Runtime {
         else {
             return refused("approval_unknown");
         };
+        let options = &self.desk.approvals[index].options;
+        let pressed = match payload.option.as_deref() {
+            Some(id) => match options.iter().find(|option| option.id == id) {
+                Some(option) => Some(option.clone()),
+                None => return refused("approval_option"),
+            },
+            None if options.iter().any(|option| option.kind.rejects()) => {
+                return refused("approval_option");
+            }
+            None => None,
+        };
+        let rejects = pressed.as_ref().is_none_or(|option| option.kind.rejects());
         // One line: the box takes no newline, and a pasted one is a space.
         let text = payload
             .text
             .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|text| !text.is_empty());
-        if text.as_ref().is_some_and(|text| {
-            text.len() > MAX_REFUSAL_BYTES || payload.answer != ApprovalAnswer::Reject
-        }) {
+        if text
+            .as_ref()
+            .is_some_and(|text| text.len() > MAX_REFUSAL_BYTES || !rejects)
+        {
             return refused("approval_text");
         }
-        if payload.answer == ApprovalAnswer::Conversation
-            && self.desk.approvals[index]
-                .asks
-                .iter()
-                .any(|ask| matches!(ask, Ask::Irreversible(_)))
-        {
-            return refused("approval_always_asks");
-        }
         let approval = self.desk.approvals.remove(index);
-        let (option, state) = match payload.answer {
-            ApprovalAnswer::Once => {
-                self.desk
-                    .archive_grants
-                    .extend(approval.sessions.iter().cloned());
-                (Some(approval.allow.clone()), DeskApprovalState::Allowed)
-            }
-            ApprovalAnswer::Conversation => {
-                self.desk
-                    .allowed
-                    .extend(approval.asks.iter().filter_map(|ask| match ask {
-                        Ask::Row(row) => Some(*row),
-                        Ask::Irreversible(_) => None,
-                    }));
-                (
-                    Some(approval.allow.clone()),
-                    DeskApprovalState::AllowedConversation,
-                )
-            }
-            ApprovalAnswer::Reject => (approval.reject.clone(), DeskApprovalState::Rejected),
-        };
         self.order(Order::Answer {
             rpc_id: approval.rpc_id,
-            outcome: outcome(option.as_deref()),
+            outcome: outcome(payload.option.as_deref()),
         });
-        self.set_approval(payload.id, state, text.clone());
-        if payload.answer == ApprovalAnswer::Conversation {
-            // A card the agent asked alongside, now allowed in full, runs.
-            let covered: Vec<usize> =
-                self.desk
-                    .approvals
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, waiting)| {
-                        waiting.asks.iter().all(
-                            |ask| matches!(ask, Ask::Row(row) if self.desk.allowed.contains(row)),
-                        )
-                    })
-                    .map(|(index, _)| index)
-                    .collect();
-            for index in covered.into_iter().rev() {
-                let waiting = self.desk.approvals.remove(index);
-                self.order(Order::Answer {
-                    rpc_id: waiting.rpc_id,
-                    outcome: outcome(Some(&waiting.allow)),
-                });
-                self.set_approval(waiting.item, DeskApprovalState::AllowedConversation, None);
-            }
-        }
-        if payload.answer == ApprovalAnswer::Reject {
+        let state = if rejects {
+            DeskApprovalState::Rejected
+        } else {
+            DeskApprovalState::Allowed
+        };
+        self.set_approval(payload.id, state, pressed, text.clone());
+        if rejects {
             // A line stops the turn so it reaches Desk as the next message;
             // a plain refusal leaves the turn to the agent, and is sent only
             // if the agent ends its turn without a word after it. The last
@@ -928,24 +874,6 @@ impl Runtime {
             }
         }
         true
-    }
-
-    /// Whether Desk may archive the working session registration `id`
-    /// without the archive's own confirmation: the operator allowed its card
-    /// once, which this uses up.
-    pub(super) fn desk_takes_archive(&mut self, id: &str) -> bool {
-        match self
-            .desk
-            .archive_grants
-            .iter()
-            .position(|grant| grant == id)
-        {
-            Some(index) => {
-                self.desk.archive_grants.remove(index);
-                true
-            }
-            None => false,
-        }
     }
 
     fn desk_new_conversation(&mut self) -> bool {
@@ -1008,7 +936,7 @@ impl Runtime {
     fn end_desk_process(&mut self) {
         self.order(Order::End);
         self.close_approvals();
-        self.forget_allowances();
+        self.forget_refusal();
         self.finish_turn(DeskReplyState::Stopped);
         self.desk.host = Host {
             state: Some(DeskHostState::Idle),
@@ -1018,16 +946,13 @@ impl Runtime {
 
     fn close_approvals(&mut self) {
         for approval in std::mem::take(&mut self.desk.approvals) {
-            self.set_approval(approval.item, DeskApprovalState::Closed, None);
+            self.set_approval(approval.item, DeskApprovalState::Closed, None, None);
         }
     }
 
-    /// The Desk process ended: what the operator allowed for the
-    /// conversation asks again, and a refusal no turn will read, plain or
-    /// with a line, is dropped (a line stays on the card that keeps it).
-    fn forget_allowances(&mut self) {
-        self.desk.allowed.clear();
-        self.desk.archive_grants.clear();
+    /// The Desk process ended: a refusal no turn will read, plain or with a
+    /// line, is dropped (a line stays on the card that keeps it).
+    fn forget_refusal(&mut self) {
         self.desk.refusal = None;
     }
 
@@ -1037,11 +962,8 @@ impl Runtime {
             && Some(agent) != selection.agent
         {
             // Only an agent the bar offers is chosen: switched on in the
-            // catalog and one Desk can hold in its ask mode (D-53, D-79).
-            if matches!(
-                self.desk_agent_state(agent),
-                DeskAgentState::Off | DeskAgentState::NoAskMode
-            ) {
+            // catalog (D-79).
+            if self.desk_agent_state(agent) == DeskAgentState::Off {
                 return refused("agent_not_offered");
             }
             if self.desk.turn.is_some() {
@@ -1125,8 +1047,8 @@ impl Runtime {
             settings.cap = cap;
         }
         // The next request is answered from it; a waiting card stays.
-        if let Some(permissions) = payload.permissions {
-            settings.permissions = permissions;
+        if let Some(permission) = payload.permission {
+            settings.permission = permission;
         }
         if self.desk.stored.selection.agent.is_none() {
             self.desk.stored.selection.agent = settings.default_agent;
@@ -1170,17 +1092,27 @@ impl Runtime {
             .map(|(_, known)| known.clone())
     }
 
-    fn set_approval(&mut self, item: u64, state: DeskApprovalState, line: Option<String>) {
+    fn set_approval(
+        &mut self,
+        item: u64,
+        state: DeskApprovalState,
+        pressed: Option<permission::Choice>,
+        line: Option<String>,
+    ) {
         for entry in &mut self.desk.stored.conversation.items {
             if let DeskItem::Approval {
                 id,
                 state: current,
+                chosen,
+                answer,
                 refusal,
                 ..
             } = entry
                 && *id == item
             {
                 *current = state;
+                *chosen = pressed.as_ref().map(|option| option.kind);
+                *answer = pressed.as_ref().map(|option| option.name.clone());
                 if line.is_some() {
                     *refusal = line.clone();
                 }
@@ -1362,11 +1294,6 @@ impl Runtime {
                         DeskNotice::LoginNeeded,
                         Some(adapter.login_command().to_owned()),
                     ),
-                    OpenError::AskModeUnconfirmed(detail) => (
-                        DeskAgentState::NoAskMode,
-                        DeskNotice::NoAskMode,
-                        Some(detail),
-                    ),
                     OpenError::Failed(detail) => {
                         crate::diagnostic!(json!({
                             "component": "desk",
@@ -1504,36 +1431,22 @@ impl Runtime {
             }
             Report::Permission {
                 rpc_id,
-                allow,
-                reject,
-                reading,
+                options,
+                card,
+                hide_line,
             } => {
-                let decision = permission::decide(
-                    &reading,
-                    &self.desk.stored.settings.permissions,
-                    &DeskFacts(self),
-                    &self.desk.allowed,
-                );
-                if decision.asks.is_empty() {
+                let allow_once = permission::allow_once(&options).map(str::to_owned);
+                let answered = match self.desk.stored.settings.permission {
+                    DeskPermission::AllowAll => true,
+                    DeskPermission::Agent => hide_line,
+                };
+                if answered && let Some(allow_once) = allow_once {
                     self.order(Order::Answer {
                         rpc_id,
-                        outcome: outcome(Some(&allow)),
+                        outcome: outcome(Some(&allow_once)),
                     });
                     return false;
                 }
-                // What the first irreversible kind is about.
-                let subject = decision.asks.iter().find_map(|ask| match ask {
-                    Ask::Irreversible(Irreversible::EndWorkingSession) => decision
-                        .sessions
-                        .first()
-                        .and_then(|agent| self.desk_session_title(agent)),
-                    Ask::Irreversible(Irreversible::DeleteOutside) => decision.outside.clone(),
-                    Ask::Irreversible(Irreversible::OverwriteOutside) => {
-                        decision.overwritten.clone()
-                    }
-                    _ => None,
-                });
-                let card = reading.card;
                 let id = self.desk.stored.conversation.next_id();
                 self.desk.stored.conversation.push(DeskItem::Approval {
                     id,
@@ -1546,31 +1459,19 @@ impl Runtime {
                     command: card.command.clone(),
                     folder: card.folder,
                     reason: card.reason,
-                    row: Some(reading.row),
+                    options: options.clone(),
                     state: DeskApprovalState::Waiting,
-                    asks: decision.asks.clone(),
-                    subject,
+                    chosen: None,
+                    answer: None,
                     refusal: None,
                 });
                 self.desk.approvals.push(Approval {
                     item: id,
                     rpc_id,
-                    allow,
-                    reject,
-                    asks: decision.asks,
-                    sessions: decision.sessions,
+                    options,
                     command: card.command,
                     kind: card.kind,
                 });
-                self.save_desk();
-            }
-            Report::Blocked(title) => {
-                let agent = self.selected_agent();
-                self.push_notice(
-                    DeskNotice::Blocked,
-                    agent,
-                    Some(title).filter(|t| !t.is_empty()),
-                );
                 self.save_desk();
             }
             Report::Choices { adapter, choices } => {
@@ -1594,7 +1495,7 @@ impl Runtime {
                     self.desk_close_turn(outcome);
                 }
                 self.close_approvals();
-                self.forget_allowances();
+                self.forget_refusal();
                 if unexpected {
                     self.desk.host = Host {
                         state: Some(DeskHostState::Stopped),
@@ -1710,7 +1611,6 @@ impl Runtime {
                         agent.signed_in
                     },
                     login_command: id.login_command(),
-                    always_runs: id.always_runs(),
                     models: known.models,
                     efforts: known.efforts,
                 }
@@ -1829,11 +1729,6 @@ impl Runtime {
         self.desk.handle = Some(jobs::DeskHandle { runtime, notifier });
     }
 
-    /// Desk's agent asks to run `line`, as its worker reports the request.
-    pub(in crate::runtime) fn desk_test_permission(&mut self, line: &str) -> bool {
-        self.desk_report(tests::permission_for(line))
-    }
-
     /// Runs Desk with a session open, so its process's commands reach the
     /// core, and `cap` places.
     pub(in crate::runtime) fn open_test_desk(&mut self, cap: u8) {
@@ -1845,34 +1740,6 @@ impl Runtime {
     /// Desk installed and on, its process not running a session.
     pub(in crate::runtime) fn close_test_desk(&mut self) {
         self.desk.host.open = false;
-    }
-}
-
-/// The core's facts a permission decision reads (D-82): whether a session
-/// works now, and whether a path lies in a project of this machine.
-struct DeskFacts<'a>(&'a Runtime);
-
-impl permission::Facts for DeskFacts<'_> {
-    fn working(&self, agent: &str) -> bool {
-        self.0.desk_session_working(agent)
-    }
-
-    fn in_project(&self, path: &str) -> bool {
-        let node = self.0.node.as_str();
-        self.0
-            .catalog_workspaces()
-            .filter(|workspace| workspace.device_id == node)
-            .flat_map(|workspace| {
-                std::iter::once(workspace.path.as_str()).chain(
-                    workspace
-                        .checkouts
-                        .iter()
-                        .map(|checkout| checkout.path.as_str()),
-                )
-            })
-            .any(|root| {
-                hide_platform::path::wire_relative(root, path).is_ok_and(|below| !below.is_root())
-            })
     }
 }
 
@@ -1901,6 +1768,7 @@ mod tests {
 
     use super::*;
     use crate::model::DeskItem;
+    use hide_desk::permission::ChoiceKind;
 
     /// A runtime whose Desk worker is a channel the test reads, with every
     /// agent switched on in the catalog and ready.
@@ -2016,35 +1884,51 @@ mod tests {
         });
     }
 
-    /// What Desk's worker reports when the agent asks to run `line`.
-    pub(super) fn permission_for(line: &str) -> Report {
+    /// claude-agent-acp 0.99.1's options for a Bash call, in its order.
+    fn claude_options() -> Vec<hide_desk::permission::Choice> {
+        serde_json::from_value(json!([
+            {"id": "allow-once", "kind": "allow_once", "name": "Yes"},
+            {"id": "allow-always", "kind": "allow_always",
+                "name": "Yes, and don't ask again for touch commands"},
+            {"id": "reject-once", "kind": "reject_once", "name": "No"},
+        ]))
+        .unwrap()
+    }
+
+    /// What Desk's worker reports when the agent asks to run `line` and
+    /// offers `options`.
+    fn permission_with(line: &str, options: Vec<hide_desk::permission::Choice>) -> Report {
         let action = hide_desk::permission::Action::Command {
             command: line.into(),
             folder: None,
             reason: None,
         };
-        let mut reading = hide_desk::permission::classify(
-            &action,
-            &hide_desk::permission::Place {
-                hide: std::path::Path::new("/app/hide"),
-                cwd: "/state/desk/work",
-                home: Some("/home/u"),
-            },
-        );
-        hide_desk::permission::follow_links(&mut reading);
+        let place = hide_desk::permission::Place {
+            hide: std::path::Path::new("/app/hide"),
+            cwd: "/state/desk/work",
+            home: Some("/home/u"),
+        };
         Report::Permission {
             rpc_id: json!(7),
-            allow: "allow-once".into(),
-            reject: Some("reject-once".into()),
-            reading,
+            options,
+            card: hide_desk::permission::card(&action, &place),
+            hide_line: hide_desk::permission::hide_line(line, &place),
         }
     }
 
     /// The agent asks to run `line`: the card it makes, or `None` when Hide
     /// answered it.
     fn request(runtime: &mut Runtime, line: &str) -> Option<u64> {
+        request_with(runtime, line, claude_options())
+    }
+
+    fn request_with(
+        runtime: &mut Runtime,
+        line: &str,
+        options: Vec<hide_desk::permission::Choice>,
+    ) -> Option<u64> {
         let before = runtime.desk.stored.conversation.items.len();
-        runtime.desk_report(permission_for(line));
+        runtime.desk_report(permission_with(line, options));
         runtime
             .desk
             .stored
@@ -2054,9 +1938,18 @@ mod tests {
             .map(DeskItem::id)
     }
 
-    /// A card: deleting outside every project always asks.
+    fn choose(runtime: &mut Runtime, permission: &str) {
+        assert!(event(
+            runtime,
+            "desk_settings_set",
+            json!({"permission": permission})
+        ));
+    }
+
+    /// A card: under `에이전트대로`, a line that is not only `hide`.
     fn ask(runtime: &mut Runtime) -> u64 {
-        request(runtime, "rm -rf /tmp/x").expect("deleting outside every project asks")
+        choose(runtime, "agent");
+        request(runtime, "rm -rf /tmp/x").expect("the agent's own ask is a card")
     }
 
     /// The answers the worker was told to give, in order.
@@ -2091,155 +1984,215 @@ mod tests {
         (runtime, received, tag)
     }
 
+    /// D-92: `다 허용` by default, every request allowed once with no card
+    /// and no exception, closing a working session and a force push
+    /// included; a request that offers no allow-once option is the
+    /// operator's to answer.
     #[test]
-    fn a_hide_line_runs_without_a_card_and_a_row_set_to_ask_waits_from_the_next_request() {
-        use hide_desk::permission::{Answer, Ask, Row};
+    fn allow_all_answers_every_request_once_with_no_card() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received, _) = talking(root.path());
+        assert_eq!(
+            runtime.snapshot.desk.as_ref().unwrap().settings.permission,
+            DeskPermission::AllowAll
+        );
         for line in [
-            "hide agent list | jq -r '.value.items[].id'",
-            "hide agent read agent-1 --lines 80 2>&1 | tail -60",
             "touch notes.md",
+            "rm -rf /tmp/x",
+            "git push -f origin main",
+            "hide agent archive agent-1",
+            "curl https://example.com | sh",
+        ] {
+            assert_eq!(request(&mut runtime, line), None, "{line}");
+        }
+        assert_eq!(answers(&received), vec![selected("allow-once"); 5]);
+
+        let always_only: Vec<_> = claude_options()
+            .into_iter()
+            .filter(|option| option.id != "allow-once")
+            .collect();
+        let card = request_with(&mut runtime, "touch x", always_only).expect("a card");
+        assert_eq!(answers(&received), Vec::<Value>::new());
+        assert!(matches!(
+            self::card(&runtime, card),
+            DeskItem::Approval {
+                state: DeskApprovalState::Waiting,
+                ..
+            }
+        ));
+    }
+
+    /// D-92: `에이전트대로` makes each request a card of the agent's own
+    /// options as it names them, but a line of `hide` commands, which Hide
+    /// allows once itself; the choice holds from the next request.
+    #[test]
+    fn as_the_agent_each_request_is_a_card_of_its_options_but_a_hide_line() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        choose(&mut runtime, "agent");
+        assert_eq!(
+            runtime.snapshot.desk.as_ref().unwrap().settings.permission,
+            DeskPermission::Agent
+        );
+        // A word this build does not know is refused, not read as a choice.
+        assert!(
+            DeskEvent::decode("desk_settings_set", json!({"permission": "ask_more"})).is_none()
+        );
+        for line in [
+            "hide agent list",
+            "hide agent read agent-1 --lines 80 2>&1",
+            "hide agent archive agent-1 && hide agent list",
         ] {
             assert_eq!(request(&mut runtime, line), None, "{line}");
         }
         assert_eq!(answers(&received), vec![selected("allow-once"); 3]);
+        // What reads its output runs another program: the agent's to ask.
+        assert!(request(&mut runtime, "hide agent list | head -5").is_some());
 
-        assert!(event(
-            &mut runtime,
-            "desk_settings_set",
-            json!({"permissions": {"hide": "run", "read": "run", "shell": "ask", "edit": "run"}})
-        ));
-        let settings = runtime.snapshot.desk.as_ref().unwrap().settings;
-        assert_eq!(settings.permissions.shell, Answer::Ask);
-        assert_eq!(settings.permissions.hide, Answer::Run);
-        let waiting = request(&mut runtime, "touch notes.md").expect("asks from the next request");
+        let waiting = request(&mut runtime, "touch notes.md").expect("the agent asked");
+        assert_eq!(answers(&received), Vec::<Value>::new());
+        assert_eq!(
+            card(&runtime, waiting),
+            DeskItem::Approval {
+                id: waiting,
+                card: DeskCardKind::Command,
+                command: "touch notes.md".into(),
+                folder: Some("/state/desk/work".into()),
+                reason: None,
+                options: claude_options(),
+                state: DeskApprovalState::Waiting,
+                chosen: None,
+                answer: None,
+                refusal: None,
+            }
+        );
+
+        // Back to `다 허용`: the card waits for its answer, and the next
+        // request runs.
+        choose(&mut runtime, "allow_all");
+        assert_eq!(request(&mut runtime, "touch other.md"), None);
         assert!(matches!(
             card(&runtime, waiting),
-            DeskItem::Approval { state: DeskApprovalState::Waiting, asks, .. }
-                if asks == [Ask::Row(Row::Shell)]
-        ));
-        assert_eq!(request(&mut runtime, "hide ps | head -c 3000"), None);
-    }
-
-    #[test]
-    fn an_irreversible_card_names_what_it_is_about() {
-        use hide_desk::permission::{Ask, Irreversible};
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, _received, _) = talking(root.path());
-        // The card names where the deletion lands, its links followed.
-        let real = hide_platform::path::to_wire_lossy(
-            &hide_platform::fs::identity::canonical(root.path()).unwrap(),
-        );
-        let written = hide_platform::path::to_wire_lossy(root.path());
-        let id = request(&mut runtime, &format!("rm -rf {written}/outside/x")).expect("asks");
-        assert!(matches!(
-            card(&runtime, id),
-            DeskItem::Approval { asks, subject: Some(subject), .. }
-                if asks == [Ask::Irreversible(Irreversible::DeleteOutside)]
-                    && subject == format!("{real}/outside/x")
-        ));
-    }
-
-    #[test]
-    fn allowing_for_the_conversation_stops_asking_that_row_until_the_desk_process_ends() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, received, _) = talking(root.path());
-        assert!(event(
-            &mut runtime,
-            "desk_settings_set",
-            json!({"permissions": {"hide": "ask", "read": "run", "shell": "ask", "edit": "run"}})
-        ));
-        let first = request(&mut runtime, "touch notes.md").expect("the shell row asks");
-        let beside = request(&mut runtime, "mkdir drafts").expect("asked alongside");
-        let other_row = request(&mut runtime, "hide agent list").expect("another row");
-        answers(&received);
-
-        assert!(event(
-            &mut runtime,
-            "desk_approval",
-            json!({"id": first, "answer": "conversation"})
-        ));
-        // The card asked alongside, now allowed in full, runs too; the
-        // `hide` line of another row still waits.
-        assert_eq!(answers(&received), vec![selected("allow-once"); 2]);
-        for id in [first, beside] {
-            assert!(matches!(
-                card(&runtime, id),
-                DeskItem::Approval {
-                    state: DeskApprovalState::AllowedConversation,
-                    ..
-                }
-            ));
-        }
-        assert!(matches!(
-            card(&runtime, other_row),
             DeskItem::Approval {
                 state: DeskApprovalState::Waiting,
                 ..
             }
         ));
-        assert_eq!(request(&mut runtime, "touch other.md"), None);
-        assert_eq!(answers(&received), [selected("allow-once")]);
-
-        assert!(event(&mut runtime, "desk_new_conversation", json!({})));
-        event(&mut runtime, "desk_send", json!({"text": "again"}));
-        opened(&mut runtime, AdapterId::CLAUDE);
-        assert!(request(&mut runtime, "touch other.md").is_some());
     }
 
+    /// The operator's press goes to the agent as that option, whatever its
+    /// kind; Hide keeps nothing of it, so the next request is a card again.
     #[test]
-    fn a_card_that_always_asks_is_never_kept_allowed() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, received, _) = talking(root.path());
-        let id = ask(&mut runtime);
-        answers(&received);
-        assert!(!event(
-            &mut runtime,
-            "desk_approval",
-            json!({"id": id, "answer": "conversation"})
-        ));
-        assert_eq!(answers(&received), Vec::<Value>::new());
-        assert!(matches!(
-            card(&runtime, id),
-            DeskItem::Approval {
-                state: DeskApprovalState::Waiting,
-                ..
-            }
-        ));
-        assert!(event(
-            &mut runtime,
-            "desk_approval",
-            json!({"id": id, "answer": "once"})
-        ));
-        assert!(request(&mut runtime, "rm -rf /tmp/y").is_some());
-    }
-
-    #[test]
-    fn allowing_once_runs_this_call_and_asks_the_next() {
+    fn the_option_the_operator_presses_goes_to_the_agent_as_it_is() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received, _) = talking(root.path());
         let id = ask(&mut runtime);
         assert_eq!(runtime.snapshot.desk.as_ref().unwrap().approvals_waiting, 1);
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "option": "allow-forever"})
+        ));
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "once"})
+            json!({"id": id, "option": "allow-always"})
         ));
-        assert_eq!(answers(&received), [selected("allow-once")]);
+        assert_eq!(answers(&received), [selected("allow-always")]);
         assert!(matches!(
             card(&runtime, id),
             DeskItem::Approval {
                 state: DeskApprovalState::Allowed,
+                chosen: Some(ChoiceKind::AllowAlways),
+                answer: Some(name),
                 ..
-            }
+            } if name == "Yes, and don't ask again for touch commands"
         ));
+        // Answered once only.
         assert!(!event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         assert!(request(&mut runtime, "rm -rf /tmp/x").is_some());
+
+        let once = request(&mut runtime, "touch y").unwrap();
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": once, "option": "allow-once"})
+        ));
+        assert!(matches!(
+            card(&runtime, once),
+            DeskItem::Approval {
+                state: DeskApprovalState::Allowed,
+                chosen: Some(ChoiceKind::AllowOnce),
+                ..
+            }
+        ));
+    }
+
+    /// An option Hide has no word for keeps the agent's own name on the
+    /// answered line, and `거절…` ends a card that offers no rejecting
+    /// option as ACP's `cancelled`, which a card offering one refuses.
+    #[test]
+    fn a_card_with_no_rejecting_option_is_ended_by_refusing_it_as_cancelled() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        choose(&mut runtime, "agent");
+        let plan: Vec<hide_desk::permission::Choice> = serde_json::from_value(json!([
+            {"id": "plan", "kind": "other", "name": "Keep planning"},
+            {"id": "go", "kind": "allow_once", "name": "Yes, start"},
+        ]))
+        .unwrap();
+        let other = request_with(&mut runtime, "rm -rf /tmp/x", plan.clone()).unwrap();
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": other, "option": "plan"})
+        ));
+        assert!(matches!(
+            card(&runtime, other),
+            DeskItem::Approval { chosen: Some(ChoiceKind::Other), answer: Some(name), .. }
+                if name == "Keep planning"
+        ));
+
+        let ended = request_with(&mut runtime, "rm -rf /tmp/x", plan).unwrap();
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": ended, "option": null})
+        ));
+        assert_eq!(
+            answers(&received),
+            [
+                selected("plan"),
+                json!({"outcome": {"outcome": "cancelled"}})
+            ]
+        );
+        assert!(matches!(
+            card(&runtime, ended),
+            DeskItem::Approval {
+                state: DeskApprovalState::Rejected,
+                chosen: None,
+                answer: None,
+                ..
+            }
+        ));
+
+        let offers = request(&mut runtime, "rm -rf /tmp/x").unwrap();
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": offers, "option": null})
+        ));
+        assert!(matches!(
+            card(&runtime, offers),
+            DeskItem::Approval {
+                state: DeskApprovalState::Waiting,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2247,21 +2200,21 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received, tag) = talking(root.path());
         let id = ask(&mut runtime);
-        // The line is one line, and only a refusal carries one.
+        // The line is one line, and only a refusing option carries one.
         assert!(!event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "once", "text": "why"})
+            json!({"id": id, "option": "allow-once", "text": "why"})
         ));
         assert!(!event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject", "text": "x".repeat(MAX_REFUSAL_BYTES + 1)})
+            json!({"id": id, "option": "reject-once", "text": "x".repeat(MAX_REFUSAL_BYTES + 1)})
         ));
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject", "text": "  끝날 때까지\n기다렸다가 지워줘 "})
+            json!({"id": id, "option": "reject-once", "text": "  끝날 때까지\n기다렸다가 지워줘 "})
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(orders.iter().any(|order| matches!(order,
@@ -2302,7 +2255,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject", "text": "   "})
+            json!({"id": id, "option": "reject-once", "text": "   "})
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(!orders.iter().any(|order| matches!(order, Order::Cancel)));
@@ -2335,7 +2288,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(!orders.iter().any(|order| matches!(order, Order::Cancel)));
@@ -2386,7 +2339,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         runtime.desk_report(Report::TurnEnded {
             tag,
@@ -2411,7 +2364,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         assert!(event(
             &mut runtime,
@@ -2436,12 +2389,12 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": first, "answer": "reject", "text": "keep tmp"})
+            json!({"id": first, "option": "reject-once", "text": "keep tmp"})
         ));
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": second, "answer": "reject"})
+            json!({"id": second, "option": "reject-once"})
         ));
         runtime.desk_report(Report::TurnEnded {
             tag,
@@ -2463,7 +2416,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         said(&mut runtime, tag, "It was refused.");
         runtime.desk_report(Report::TurnEnded {
@@ -2493,7 +2446,7 @@ mod tests {
         assert!(event(
             &mut runtime,
             "desk_approval",
-            json!({"id": id, "answer": "reject"})
+            json!({"id": id, "option": "reject-once"})
         ));
         assert!(event(&mut runtime, "desk_stop", json!({})));
         runtime.desk_report(Report::TurnEnded {
@@ -3731,7 +3684,7 @@ mod tests {
         assert!(!event(
             &mut runtime,
             "desk_approval",
-            json!({"id": card, "answer": "once"})
+            json!({"id": card, "option": "allow-once"})
         ));
         // The reply under way stopped with the process.
         runtime.desk_report(Report::TurnEnded {

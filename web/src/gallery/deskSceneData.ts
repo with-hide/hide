@@ -2,7 +2,7 @@
 // session-docs-and-assistant, Desk 1차): agents, conversations, jobs in every
 // state, threads as ACP updates and outputs. Names, counts and paths are
 // made up; nothing here is read from a machine.
-import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
+import type { AcpSessionUpdate, DeskAgent, DeskItem, DeskJob, DeskMention, DeskMission, DeskOption, DeskOutput, DeskSessionRef, DeskSteps, SessionFacts, SessionViewKind, ThreadHidePart } from "../desk";
 import type { DeskSessionChip, RowMark } from "../snapshot";
 import type { MentionProject, MentionSession } from "../components/desk/desk-mention-menu";
 import { planFixture } from "./PlanScene";
@@ -25,13 +25,13 @@ const EFFORTS = [{ id: "low", label: "low" }, { id: "medium", label: "medium" },
 
 /** The agents switched on in Settings › Agents, as Desk lists them (D-79, D-81): Grok cannot be held in its ask mode. */
 export const AGENTS: DeskAgent[] = [
-  { id: "claude", label: "Claude Code", state: "ready", detail: null, signed_in: true, always_runs: [], login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
-  { id: "codex", label: "Codex", state: "ready", detail: null, signed_in: true, always_runs: ["read"], login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
-  { id: "opencode", label: "OpenCode", state: "ready", detail: null, signed_in: true, always_runs: ["read"], login_command: "opencode auth login", models: [], efforts: [] },
-  { id: "pi", label: "Pi", state: "ready", detail: null, signed_in: true, always_runs: [], login_command: "pi /login", models: [], efforts: [] },
-  { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, always_runs: ["read"], login_command: "omp login", models: [], efforts: [] },
-  { id: "grok", label: "Grok", state: "no_ask_mode", detail: null, signed_in: true, always_runs: [], login_command: "grok login", models: [], efforts: [] },
-  { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, always_runs: ["read"], login_command: "agy", models: [], efforts: [] },
+  { id: "claude", label: "Claude Code", state: "ready", detail: null, signed_in: true, login_command: "claude /login", models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }], efforts: EFFORTS },
+  { id: "codex", label: "Codex", state: "ready", detail: null, signed_in: true, login_command: "codex login", models: [{ id: "gpt", label: "GPT-6" }, { id: "gpt-mini", label: "GPT-6 mini" }], efforts: EFFORTS },
+  { id: "opencode", label: "OpenCode", state: "ready", detail: null, signed_in: true, login_command: "opencode auth login", models: [], efforts: [] },
+  { id: "pi", label: "Pi", state: "ready", detail: null, signed_in: true, login_command: "pi /login", models: [], efforts: [] },
+  { id: "omp", label: "omp", state: "ready", detail: null, signed_in: null, login_command: "omp login", models: [], efforts: [] },
+  { id: "grok", label: "Grok", state: "ready", detail: null, signed_in: true, login_command: "grok login", models: [], efforts: [] },
+  { id: "agy", label: "Antigravity", state: "ready", detail: null, signed_in: false, login_command: "agy", models: [], efforts: [] },
 ];
 
 /** Right after Desk is turned on: every adapter not in place downloads at once (D-80). */
@@ -213,28 +213,42 @@ export function missionItems(now: number): DeskItem[] {
   ];
 }
 
-/** A card for an irreversible kind (D-83): archiving a session that is still working, as the mockup's. */
-export const IRREVERSIBLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
-  kind: "approval", id: 55, card: "command", command: "hide agent archive agent-18285", folder: "~/projects/herdr-ide", reason: null, state: "waiting",
-  asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "프로젝트 패널 결과 구현", refusal: null,
+/** Claude's own answers to a shell command (its ACP adapter's names), as a card under 에이전트대로 shows them. */
+export const CLAUDE_OPTIONS: DeskOption[] = [
+  { id: "allow-once", kind: "allow_once", name: "Yes" },
+  { id: "allow-with-updates", kind: "allow_always", name: "Yes, and don't ask again for npm run commands" },
+  { id: "reject", kind: "reject_once", name: "No" },
+];
+
+/** Claude's ways out of plan mode: several `항상 허용` answers, each shown by the agent's own name. */
+export const PLAN_EXIT_OPTIONS: DeskOption[] = [
+  { id: "exit-plan-auto", kind: "allow_always", name: "Yes, and use auto mode" },
+  { id: "exit-plan-accept-edits", kind: "allow_always", name: "Yes, auto-accept edits" },
+  { id: "exit-plan-default", kind: "allow_once", name: "Yes, manually approve edits" },
+  { id: "reject", kind: "reject_once", name: "No" },
+];
+
+/** A waiting card under 에이전트대로 (D-92, frame A2 가): a shell command with Claude's own answers. */
+export const WAITING_CARD: Extract<DeskItem, { kind: "approval" }> = {
+  kind: "approval", id: 55, card: "command", command: "npm run build", folder: "~/projects/herdr-ide/web", reason: null, state: "waiting",
+  options: CLAUDE_OPTIONS, chosen: null, refusal: null,
 };
 
-/** A card for a long line Hide cannot read, which folds to two lines and asks at every level. */
-export const LONG_UNREADABLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
+/** A long line, which folds to two lines. */
+export const LONG_CARD: Extract<DeskItem, { kind: "approval" }> = {
   kind: "approval", id: 57, card: "command",
-  command: "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id,.name,.pane,.runtime,.connection,(.parent//\"-\"),(.project//\"-\")] | @tsv'; echo ---; hide mission list | head -40; python3 scripts/merge-order.py --branch desk/feedback",
-  folder: "~/.hide/state/desk/work", reason: null, state: "waiting",
-  asks: [{ kind: "irreversible", value: "unreadable" }], subject: null, refusal: null,
+  command: "pnpm --dir web exec vitest run src/DeskScreen.test.tsx src/desk.test.ts --reporter=dot && pnpm --dir web exec eslint src/components/desk src/DeskScreen.tsx --max-warnings 0 && node scripts/check-design-contract.mjs",
+  folder: "~/projects/herdr-ide", reason: null, state: "waiting",
+  options: CLAUDE_OPTIONS, chosen: null, refusal: null,
 };
 
 /** The lines of the card scene that change no state, and Desk's own approval card asked and answered. */
 export function cardSceneItems(): DeskItem[] {
   return [
     { kind: "switch", id: 51, from: "claude", to: "codex", carried: "all" },
-    { kind: "notice", id: 52, notice: "blocked", agent: "claude", detail: null },
-    { kind: "approval", id: 53, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: "PR로 낼 일이라 새 worktree에서 하려고 해요.", state: "waiting", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { kind: "approval", id: 54, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: null, state: "allowed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    IRREVERSIBLE_CARD,
+    { kind: "approval", id: 53, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: "PR로 낼 일이라 새 worktree에서 하려고 해요.", state: "waiting", options: CLAUDE_OPTIONS, chosen: null, refusal: null },
+    { kind: "approval", id: 54, card: "command", command: "git worktree add ../desk-mention -b desk/mention-button", folder: "~/projects/herdr-ide", reason: null, state: "allowed", options: CLAUDE_OPTIONS, chosen: "allow_once", refusal: null },
+    WAITING_CARD,
   ];
 }
 
@@ -242,11 +256,11 @@ export function cardSceneItems(): DeskItem[] {
 export function stateItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 61, text: "mention 버튼 브랜치 정리하고 테스트 다시 돌려줘", at_ms: at(now, 9), mentions: [] },
-    { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed", asks: [{ kind: "row", value: "edit" }], subject: null, refusal: null },
-    { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { kind: "approval", id: 91, card: "command", command: "pnpm --dir web test desk-chat", folder: "~/projects/herdr-ide", reason: null, state: "allowed_conversation", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { ...IRREVERSIBLE_CARD, id: 92, command: "hide agent archive agent-18301", state: "rejected", refusal: "대신 끝날 때까지 기다렸다가 보관해줘" },
+    { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed", options: CLAUDE_OPTIONS, chosen: "allow_once", refusal: null },
+    { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected", options: CLAUDE_OPTIONS, chosen: "reject_once", refusal: null },
+    { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed", options: CLAUDE_OPTIONS, chosen: null, refusal: null },
+    { kind: "approval", id: 91, card: "command", command: "npm run test", folder: "~/projects/herdr-ide", reason: null, state: "allowed", options: CLAUDE_OPTIONS, chosen: "allow_always", refusal: null },
+    { ...WAITING_CARD, id: 92, command: "hide agent archive agent-18301", state: "rejected", chosen: "reject_once", refusal: "대신 끝날 때까지 기다렸다가 보관해줘" },
     { kind: "user", id: 93, text: "대신 끝날 때까지 기다렸다가 보관해줘", at_ms: at(now, 2), mentions: [] },
     { kind: "model", id: 65, model: "sonnet", effort: "low" },
     { kind: "switch", id: 66, from: "claude", to: "codex", carried: "trimmed" },
@@ -256,7 +270,6 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "notice", id: 70, notice: "login_needed", agent: "codex", detail: "codex login" },
     { kind: "notice", id: 71, notice: "host_stopped", agent: "claude", detail: null },
     { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
-    { kind: "notice", id: 73, notice: "no_ask_mode", agent: "grok", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
     { kind: "notice", id: 94, notice: "turn_failed", agent: "opencode", detail: "Rate limit reached for bai/deepseek-v4.1-flash" },
     { kind: "reply", mentions: [], missions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },

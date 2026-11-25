@@ -65,10 +65,10 @@ impl Runtime {
     /// `hide agent archive <id> [--actor <id>]`: `세션 보관` for the session
     /// registration `id` holds, asked by the agent itself, its parent, or
     /// Desk. It admits the archive the screen's event admits, so a working
-    /// session is refused `archive_confirmation_required`: only the operator
-    /// confirms stopping work, from the screen or, for Desk, on the approval
-    /// card that asked it (PRD Desk D-82). Returns the answer and whether
-    /// anything changed.
+    /// session is refused `archive_confirmation_required` unless Desk asks:
+    /// what Desk runs the operator allowed under Desk's box, by `다 허용` or
+    /// by the agent's own card, and Hide asks nothing more (PRD Desk D-92).
+    /// Returns the answer and whether anything changed.
     pub(crate) fn agent_archive_command(
         &mut self,
         device: &str,
@@ -79,15 +79,13 @@ impl Runtime {
     ) -> Result<(serde_json::Value, bool), String> {
         let actor = self.registered_agent_for(device, caller, expected, id, acting, true)?;
         let confirmed = crate::workspace_control::Caller::parse(caller)
-            == crate::workspace_control::Caller::Desk
-            && self.desk_takes_archive(id);
+            == crate::workspace_control::Caller::Desk;
         self.archive_registered(id, &actor, confirmed)
             .map(|answer| (answer, true))
     }
 
     /// The archive of the session registration `id` runs in its pane,
-    /// confirmed only when the operator allowed Desk's card for it: a
-    /// refusal comes back as the screen's error kind with its dot written
+    /// confirmed only when Desk asks it: a refusal comes back as the screen's error kind with its dot written
     /// as an underscore, which `archive_next_action` words.
     pub(super) fn archive_registered(
         &mut self,
@@ -683,38 +681,6 @@ impl Runtime {
             }
         }
         tree
-    }
-
-    /// The row of session registration `id`, as the ledger places it now.
-    fn registered_row(&self, id: &str) -> Option<&SidebarAgentSnapshot> {
-        let ledger = self.delivery_state().ok()?;
-        let record = ledger
-            .agents
-            .iter()
-            .find(|record| record.id == id && !record.ended)?;
-        let pane = record.actor.pane_id.clone();
-        self.archive_rows().find(|agent| agent.pane_id == pane)
-    }
-
-    /// Whether archiving registration `id` would stop work: an agent of the
-    /// tree its archive closes works now, the case the archive refuses
-    /// without confirmation. One the core cannot find stops nothing; the
-    /// archive refuses it on its own.
-    pub(super) fn desk_session_working(&self, id: &str) -> bool {
-        let Some(root) = self.registered_row(id) else {
-            return false;
-        };
-        let session = self.archive_session_of(root).unwrap_or_default();
-        let rows = self.archive_rows().cloned().collect::<Vec<_>>();
-        self.archive_tree(root, &session, &rows)
-            .iter()
-            .any(|(agent, _, _)| agent.state.subtree == "working")
-    }
-
-    /// The title a card names registration `id` by.
-    pub(super) fn desk_session_title(&self, id: &str) -> Option<String> {
-        self.registered_row(id)
-            .map(|agent| agent.identity_label.clone())
     }
 
     /// Every agent row on this machine and each connected device.

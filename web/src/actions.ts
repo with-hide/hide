@@ -66,10 +66,9 @@ import {
   type ChangeRequestRef,
   type Checkout,
   type DeskAgentId,
-  type DeskApprovalAnswer,
   type DeskLocation,
   type DeskMention,
-  type DeskPermissions,
+  type DeskPermission,
   type EditorDocumentSnapshot,
   type EditorTabSnapshot,
   type ForkPlacement,
@@ -2917,9 +2916,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_stop", payload: {} });
     },
 
-    /** `한 번 허용`, `이 대화에서 계속 허용` or `거절…` on an approval card (D-83); a refusal's line goes to Desk, a blank one is a plain refusal. */
-    deskApproval(id: number, answer: DeskApprovalAnswer, text?: string) {
-      dispatch({ schema_version: 2, kind: "desk_approval", payload: text ? { id, answer, text } : { id, answer } });
+    /** One of the agent's own options on an approval card (D-92), by its id, or null for `거절…` on a card that offers no rejecting option; a refusal's line goes to Desk with it, a blank one is a plain refusal. */
+    deskApproval(id: number, option: string | null, text?: string) {
+      dispatch({ schema_version: 2, kind: "desk_approval", payload: text ? { id, option, text } : { id, option } });
     },
 
     /** `＋ 새 대화` (B10). */
@@ -2942,14 +2941,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_install", payload: { agent } });
     },
 
-    /** Settings › Labs › Desk (B4, B19, B21). */
-    deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions }) {
-      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
+    /** Settings › Labs › Desk (B4, B19, B21): its own fields, never the permission under Desk's box. */
+    deskSettings({ enabled, default_agent, location, cap }: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number }) {
+      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: { enabled, default_agent, location, cap } });
     },
 
-    /** A level under Desk's box: the whole permission table in one event, the other settings untouched. */
-    deskPermissions(permissions: DeskPermissions) {
-      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: { permissions } });
+    /** `다 허용` or `에이전트대로` under Desk's box (D-92), the other settings untouched. */
+    deskPermission(permission: DeskPermission) {
+      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: { permission } });
     },
 
     /** `취소` on a waiting card (B21). */

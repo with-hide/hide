@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, deskPermissionLevel, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -320,7 +320,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     onRetry: (job) => actions.deskJobRequeue(job.id),
     onOutput: room.output,
     onMission: room.mission,
-    onApproval: (id, answer, text) => actions.deskApproval(id, answer, text),
+    onApproval: (id, option, text) => actions.deskApproval(id, option, text),
     onQueuedRemove: (id) => actions.deskQueuedRemove(id),
     onNoticeAction,
     onCopy: (text, what) => actions.copyText(text, what),
@@ -380,7 +380,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       onSend={() => send()}
       onStop={() => actions.deskStop()}
     >
-      <DeskPermissionMenu permissions={desk.settings.permissions} onLevel={(permissions) => actions.deskPermissions(permissions)} onPerRow={() => actions.openSettings("labs")} />
+      <DeskPermissionMenu permission={desk.settings.permission} agent={desk.agents.find((agent) => agent.id === desk.selection.agent)?.label ?? null} onPermission={(permission) => actions.deskPermission(permission)} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
       <DeskAgentBar agents={desk.agents} selection={desk.selection} onAgent={(id) => actions.deskSelect(id, null, null)} onModel={(model) => actions.deskSelect(null, model, null)} onEffort={(effort) => actions.deskSelect(null, null, effort)} onAgentSettings={() => actions.openSettings("agents")} />
     </DeskComposer>
@@ -396,7 +396,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} level={deskPermissionLevel(desk.settings.permissions)} queued={queued} held={queuedHeld} live={liveText} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}

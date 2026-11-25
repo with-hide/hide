@@ -32,6 +32,15 @@ pub enum Syntax {
 }
 
 impl Syntax {
+    /// The syntaxes a command line an agent runs on this system may be
+    /// written in: a POSIX shell's everywhere (Git Bash on Windows), and
+    /// PowerShell's too on Windows, where Codex runs its commands in it.
+    pub const ON_THIS_SYSTEM: &'static [Self] = if cfg!(windows) {
+        &[Self::Posix, Self::PowerShell]
+    } else {
+        &[Self::Posix]
+    };
+
     /// The syntax of the shell a program name names (`pwsh`, `powershell.exe`,
     /// `/bin/zsh`, `-bash` as a login shell's), in any case. cmd.exe reads
     /// neither syntax, so it has none.
@@ -170,6 +179,13 @@ pub struct ShellLine {
     pub bodies: Vec<bool>,
     /// The line defines a function, which a later word may call.
     pub functions: bool,
+    /// A redirection has no word after it: the line's end, a list separator
+    /// or another operator stands where its file should be (`echo x >`,
+    /// `cmd >> ; hide ps`, `> >& f`). The commands are read as before, for a
+    /// reader that looks for what a shell might run; a reader that must not
+    /// pass a redirection spelling it does not know (Desk's `hide` line)
+    /// treats the line as one it cannot read.
+    pub missing_target: bool,
 }
 
 impl ShellLine {
@@ -187,6 +203,7 @@ impl ShellLine {
             scopes: Vec::new(),
             bodies: Vec::new(),
             functions: false,
+            missing_target: false,
         }
     }
 }
@@ -228,6 +245,9 @@ struct Lexer {
     next_is_file: bool,
     /// Whether that file is written, not only read.
     next_is_write: bool,
+    /// Whether that word follows `>&` or `<&`: a descriptor (`2>&1`, `<&-`)
+    /// names no file, any other word does (`>& out` writes `out`).
+    next_is_descriptor: bool,
     targets: Vec<(usize, String)>,
     writes: Vec<(usize, String)>,
     /// The word after `<<` names the heredoc's end; `true` strips leading tabs.
@@ -240,6 +260,8 @@ struct Lexer {
     /// A quote, backtick or `$(` that the text ended inside. A shell reads such
     /// a line as a syntax error and runs none of it, so nothing in it is a launch.
     unclosed: bool,
+    /// A redirection with no word after it ([`ShellLine::missing_target`]).
+    missing_target: bool,
     substitutions: Vec<(bool, String)>,
     /// The current command's substitutions, which take its state when it ends.
     pending_substitutions: Vec<String>,
@@ -285,12 +307,14 @@ impl Lexer {
             drop_next: false,
             next_is_file: false,
             next_is_write: false,
+            next_is_descriptor: false,
             targets: Vec::new(),
             writes: Vec::new(),
             heredoc_next: None,
             heredocs: Vec::new(),
             word_quoted: false,
             unclosed: false,
+            missing_target: false,
             substitutions: Vec::new(),
             pending_substitutions: Vec::new(),
             backquoted: Vec::new(),
@@ -443,6 +467,7 @@ impl Lexer {
             scopes: self.scopes,
             bodies: self.bodies,
             functions: self.functions,
+            missing_target: self.missing_target,
         }
     }
 
@@ -458,7 +483,8 @@ impl Lexer {
         } else if self.drop_next {
             self.drop_next = false;
             let writes = std::mem::take(&mut self.next_is_write);
-            if std::mem::take(&mut self.next_is_file) {
+            let descriptor = std::mem::take(&mut self.next_is_descriptor) && is_descriptor(&word);
+            if std::mem::take(&mut self.next_is_file) && !descriptor {
                 if writes {
                     self.writes.push((self.commands.len(), word.clone()));
                 }
@@ -471,9 +497,11 @@ impl Lexer {
 
     fn end_command(&mut self) {
         self.end_word();
+        self.refuse_missing_word();
         self.drop_next = false;
         self.next_is_file = false;
         self.next_is_write = false;
+        self.next_is_descriptor = false;
         self.heredoc_next = None;
         let mut conditional = self.is_conditional();
         if !self.words.is_empty() {
@@ -783,10 +811,12 @@ impl Lexer {
         if self.peek(1) == Some('>') {
             // `&>` and `&>>` send both streams to the next word.
             self.end_word();
+            self.refuse_missing_word();
             self.at += 2;
             if self.peek(0) == Some('>') {
                 self.at += 1;
             }
+            self.clobber();
             self.drop_next = true;
             self.next_is_file = true;
             self.next_is_write = true;
@@ -812,6 +842,7 @@ impl Lexer {
         } else {
             self.end_word();
         }
+        self.refuse_missing_word();
         self.at += 1;
         if c == '<' && self.peek(0) == Some('<') {
             self.at += 1;
@@ -830,16 +861,54 @@ impl Lexer {
             }
             return;
         }
-        // `>&2` duplicates a descriptor and names no file.
-        let duplicate = self.peek(0) == Some('&');
+        // `>&2` duplicates a descriptor and names no file, but `>& out` (and
+        // zsh's `>&! out`, `>&| out`) writes `out` with both streams, and
+        // zsh's `>>& out` appends both to `out`, whatever word it is.
+        let append_both = c == '>' && self.peek(0) == Some('>') && self.peek(1) == Some('&');
+        let descriptor = !append_both && self.peek(0) == Some('&');
         let writes = c == '>' || self.peek(0) == Some('>');
-        if matches!(self.peek(0), Some('>' | '&' | '|')) || (c == '<' && self.peek(0) == Some('>'))
-        {
-            self.at += 1;
+        if append_both {
+            self.at += 2;
+            self.clobber();
+        } else {
+            let first = self.peek(0);
+            if matches!(first, Some('>' | '&' | '|')) || (c == '<' && first == Some('>')) {
+                self.at += 1;
+            }
+            // zsh's `>!`, `>>|`, `>>!`, `>&|` and `>&!`; `>|` already ends
+            // with its `|`.
+            if c == '>' && first != Some('|') {
+                self.clobber();
+            }
         }
         self.drop_next = true;
-        self.next_is_file = !duplicate;
-        self.next_is_write = !duplicate && writes;
+        self.next_is_file = true;
+        self.next_is_write = writes;
+        self.next_is_descriptor = descriptor;
+    }
+
+    /// A redirection whose word never came: a list separator, the line's
+    /// end or another operator stands where it should be.
+    fn refuse_missing_word(&mut self) {
+        if self.drop_next || self.heredoc_next.is_some() {
+            self.missing_target = true;
+        }
+    }
+
+    /// zsh's `!` or `|` after a redirection that writes (`>!`, `>>|`,
+    /// `>&!`, `&>|`, `>>&!`), which overrides `noclobber`. bash reads that
+    /// `!` as the file's name instead, so it is a write to `!` too,
+    /// whichever shell runs the line.
+    fn clobber(&mut self) {
+        match self.peek(0) {
+            Some('|') => self.at += 1,
+            Some('!') => {
+                self.at += 1;
+                self.writes.push((self.commands.len(), "!".to_owned()));
+                self.targets.push((self.commands.len(), "!".to_owned()));
+            }
+            _ => {}
+        }
     }
 
     /// After a newline, skips the body of each heredoc the line opened,
@@ -971,6 +1040,13 @@ pub fn is_prefix(word: &str, compound: bool) -> bool {
             ))
 }
 
+/// The word after `>&` or `<&` that names a descriptor, not a file: digits
+/// alone, or `-`, which closes one. bash's `>&2-` moves descriptor 2, but
+/// zsh writes a file named `2-`, so that reads as a file.
+fn is_descriptor(word: &str) -> bool {
+    word == "-" || (!word.is_empty() && word.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,6 +1170,94 @@ mod tests {
                 .writes
                 .is_empty()
         );
+    }
+
+    /// bash, zsh and sh write the file `>&` names when it is no descriptor.
+    #[test]
+    fn a_file_after_a_descriptor_redirection_is_written() {
+        // Each writes a file in zsh 5.9; bash refuses some, and reads the
+        // `!` of a zsh clobber form as the file's name.
+        for (line, written) in [
+            ("echo x >& out", &["out"][..]),
+            ("echo x 1>& out", &["out"]),
+            ("echo x 3>& out", &["out"]),
+            ("echo x >&out", &["out"]),
+            ("echo x >&! out", &["!", "out"]),
+            ("echo x >&| out", &["out"]),
+            ("echo x >& \"$HOME/.zshenv\"", &["$HOME/.zshenv"]),
+            ("echo x >& $x", &["$x"]),
+            ("echo x >&$x", &["$x"]),
+            ("echo x >&2-", &["2-"]),
+            ("echo x 3>&4-", &["4-"]),
+            ("echo x >>& out", &["out"]),
+            ("echo x >>&! out", &["!", "out"]),
+            ("echo x >>&| out", &["out"]),
+            ("echo x &>| out", &["out"]),
+            ("echo x &>! out", &["!", "out"]),
+            ("echo x &>>! out", &["!", "out"]),
+            ("echo x &>>| out", &["out"]),
+            ("echo x >>| out", &["out"]),
+            ("echo x >>! out", &["!", "out"]),
+            ("echo x >! out", &["!", "out"]),
+            ("echo x >| out", &["out"]),
+            ("echo x 2>&1-", &["1-"]),
+        ] {
+            let read = shell_line(line, Syntax::Posix);
+            let names: Vec<&str> = read.writes.iter().map(|(_, file)| file.as_str()).collect();
+            assert_eq!(names, written, "{line}");
+            assert_eq!(read.commands.len(), 1, "{line}");
+        }
+        // The `&` of `>>&` is the redirection's, not a background job's.
+        let read = shell_line("hide ps; echo x >>& tr", Syntax::Posix);
+        assert_eq!(read.commands.len(), 2);
+        assert_eq!(read.writes, [(1, "tr".to_owned())]);
+        for line in [
+            "echo x 2>&1",
+            "echo x >&2",
+            "echo x 2>&-",
+            "echo x >&-",
+            "cat <&3",
+        ] {
+            let read = shell_line(line, Syntax::Posix);
+            assert!(read.writes.is_empty(), "{line}");
+            assert!(read.targets.is_empty(), "{line}");
+        }
+    }
+
+    /// A redirection with no word after it, which every POSIX shell refuses,
+    /// is marked, and its commands are read as before for the hooks.
+    #[test]
+    fn a_redirection_with_no_word_after_it_is_marked_and_its_commands_kept() {
+        for line in [
+            "echo x >",
+            "echo x >> &",
+            "echo x 2>",
+            "cat <",
+            "cat <<<",
+            "cat <<",
+            "echo x &>",
+            "echo x > ; hide ps",
+            "echo x >> && hide ps",
+            "echo x > | hide ps",
+            "echo x > 2>&1",
+            "echo x > >& out",
+            "hide ps; echo x >&",
+        ] {
+            assert!(shell_line(line, Syntax::Posix).missing_target, "{line}");
+        }
+        let read = shell_line("git push --force > ; hide ps", Syntax::Posix);
+        assert_eq!(
+            read.commands,
+            [vec!["git", "push", "--force"], vec!["hide", "ps"]]
+        );
+        for line in [
+            "echo x > out",
+            "echo x 2>&1",
+            "cat <<'EOF'\nhi\nEOF",
+            "cat <<< hi",
+        ] {
+            assert!(!shell_line(line, Syntax::Posix).missing_target, "{line}");
+        }
     }
 
     fn words(line: &str, syntax: Syntax) -> Vec<Vec<String>> {

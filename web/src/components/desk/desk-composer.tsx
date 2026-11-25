@@ -1,8 +1,8 @@
 import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
 import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
-import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermissionLevel, DeskPermissions, DeskSelection } from "../../desk";
-import { agentPickable, DESK_PERMISSION_LEVEL_ORDER, DESK_PERMISSION_LEVELS, deskAgentWord, deskPermissionLevel } from "../../desk";
+import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermission, DeskSelection } from "../../desk";
+import { agentPickable, deskAgentWord } from "../../desk";
 import { dragHasFiles, traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -260,18 +260,16 @@ const AGENT_WORD: Record<DeskAgentWord, MessageKey> = {
   install_failed: "desk.agentState.install_failed",
   node_missing: "desk.agentState.node_missing",
   cli_missing: "desk.agentState.cli_missing",
-  no_ask_mode: "desk.agentState.no_ask_mode",
   off: "desk.agentState.off",
 };
 
 /** Why an agent the bar lists cannot be picked, on hover. */
 const UNPICKABLE_HINT: Partial<Record<DeskAgentWord, MessageKey>> = {
-  no_ask_mode: "desk.agentState.noAskModeHint",
   off: "desk.agentState.offHint",
 };
 
 /** A word that asks the operator to act is in the warning color; one that is passing or settled is quiet. */
-const QUIET_WORDS: ReadonlySet<DeskAgentWord> = new Set(["signed_in", "checking", "preparing", "no_ask_mode", "off"]);
+const QUIET_WORDS: ReadonlySet<DeskAgentWord> = new Set(["signed_in", "checking", "preparing", "off"]);
 
 /** The word beside an agent: its sign-in or its state, with the spinner while its adapter downloads. */
 function AgentWord({ word, ...data }: { word: DeskAgentWord } & Record<`data-${string}`, string>) {
@@ -305,8 +303,8 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = fa
  * Under Desk's composer (D-66, B4, B5): the agent, its model and its effort,
  * each a menu. The agent menu lists the agents switched on in Settings ›
  * Agents (D-79), each with the sign-in Settings reads or its state (D-81);
- * one that cannot ask before acting is listed dim with its reason and cannot
- * be picked; switching keeps the conversation (B9). Before an agent is chosen
+ * one switched off since it was chosen is listed dim with its reason and
+ * cannot be picked; switching keeps the conversation (B9). Before an agent is chosen
  * only the agent menu shows; before its first session the model and effort
  * read as the agent's default. `open` opens one menu, for review.
  */
@@ -373,62 +371,47 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
   );
 }
 
-const LEVEL_NAME: Record<DeskPermissionLevel, MessageKey> = {
-  ask_all: "desk.level.ask_all",
-  ask_changes: "desk.level.ask_changes",
-  auto: "desk.level.auto",
-};
+const PERMISSIONS: readonly DeskPermission[] = ["allow_all", "agent"];
 
-const LEVEL_DETAIL: Record<DeskPermissionLevel, MessageKey> = {
-  ask_all: "desk.level.ask_allDetail",
-  ask_changes: "desk.level.ask_changesDetail",
-  auto: "desk.level.autoDetail",
+const PERMISSION_NAME: Record<DeskPermission, MessageKey> = {
+  allow_all: "desk.permission.allow_all",
+  agent: "desk.permission.agent",
 };
-
-/** What the level reads as: its name, or `줄마다 정함` for a table no level matches. */
-export function permissionLevelName(level: DeskPermissionLevel | null): MessageKey {
-  return level === null ? "desk.level.mixed" : LEVEL_NAME[level];
-}
 
 /**
- * Under Desk's composer, before the agent (feedback 1, frame A): how much Desk
- * does without asking, as one of three levels of the core's permission table.
- * A choice sends the whole table in one event; a table set row by row in
- * Settings reads `줄마다 정함` with no level marked, and `줄마다 정하기…` opens
- * that table. The same for every agent, since the core answers the agent's
- * requests. What cannot be undone asks at every level.
+ * Under Desk's composer, before the agent (D-92, feedback 1 frame A2): how
+ * Desk answers what its agent asks to run, the same for every agent. `다
+ * 허용`, the default, runs every request without asking; `에이전트대로` asks
+ * as the operator set the agent up, as in the terminal, naming the agent
+ * chosen beside it. A choice sends one event; the core holds it.
  */
-export function DeskPermissionMenu({ permissions, open, onLevel, onPerRow }: {
-  permissions: DeskPermissions;
+export function DeskPermissionMenu({ permission, agent, open, onPermission }: {
+  permission: DeskPermission;
+  /** The chosen agent's name, which `에이전트대로`'s line names; null before one is chosen. */
+  agent: string | null;
   /** Opens the menu, for review. */
   open?: boolean;
-  onLevel: (permissions: DeskPermissions) => void;
-  /** Opens Settings › Labs, where Desk's table is. */
-  onPerRow: () => void;
+  onPermission: (permission: DeskPermission) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const level = deskPermissionLevel(permissions);
   return (
-    <BarMenu name={t("desk.level.name")} value={<><ShieldIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t(permissionLevelName(level))}</>} open={open} highlight={open} wide data-desk-bar="permissions" data-desk-permission-level={level ?? "mixed"}>
-      <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.level.heading")}</DropdownMenuLabel>
-      <DropdownMenuRadioGroup value={level ?? ""} onValueChange={(value) => value !== level && onLevel({ ...DESK_PERMISSION_LEVELS[value as DeskPermissionLevel] })}>
-        {DESK_PERMISSION_LEVEL_ORDER.map((one) => (
-          <DropdownMenuRadioItem key={one} value={one} className="items-start" data-desk-permission-level-choice={one}>
+    <BarMenu name={t("desk.permission.name")} value={<><ShieldIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t(PERMISSION_NAME[permission])}</>} open={open} highlight={open} wide data-desk-bar="permissions" data-desk-permission={permission}>
+      <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.permission.heading")}</DropdownMenuLabel>
+      <DropdownMenuRadioGroup value={permission} onValueChange={(value) => value !== permission && onPermission(value as DeskPermission)}>
+        {PERMISSIONS.map((one) => (
+          <DropdownMenuRadioItem key={one} value={one} className="items-start" data-desk-permission-choice={one}>
             <span className="flex min-w-0 flex-col gap-xxs">
               <span className="flex items-center gap-xs text-foreground">
-                {t(LEVEL_NAME[one])}
-                {one === "auto" ? <Badge variant="secondary">{t("desk.level.default")}</Badge> : null}
+                {t(PERMISSION_NAME[one])}
+                {one === "allow_all" ? <Badge variant="secondary">{t("desk.permission.default")}</Badge> : null}
               </span>
-              <span className="whitespace-normal break-keep text-caption text-muted-foreground">{t(LEVEL_DETAIL[one])}</span>
+              <span className="whitespace-normal break-keep text-caption text-muted-foreground">
+                {one === "allow_all" ? t("desk.permission.allow_allDetail") : t("desk.permission.agentDetail", { agent: agent ?? t("desk.bar.agent") })}
+              </span>
             </span>
           </DropdownMenuRadioItem>
         ))}
       </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onSelect={onPerRow} className="justify-between gap-sm" data-desk-permission-per-row="true">
-        <span>{t("desk.level.perRow")}</span>
-        <span className="text-caption text-muted-foreground">{t("desk.level.settings")}</span>
-      </DropdownMenuItem>
     </BarMenu>
   );
 }

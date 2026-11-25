@@ -379,7 +379,7 @@ pub struct DeskAgentSnapshot {
     pub id: AdapterId,
     /// The catalog's name for it (`Claude Code`, `omp`).
     pub label: &'static str,
-    /// Whether Desk can start it: its adapter, its own CLI, its ask mode.
+    /// Whether Desk can start it: its adapter and its own CLI.
     pub state: DeskAgentState,
     /// What the state names: the Node version found, the install's last
     /// line, the CLI that is missing.
@@ -392,9 +392,6 @@ pub struct DeskAgentSnapshot {
     /// The command that signs the agent in, shown with a `login_needed`
     /// notice.
     pub login_command: &'static str,
-    /// The rows of Settings › Labs › Desk › 권한 the agent runs without asking
-    /// (`AdapterId::always_runs`), shown on those rows.
-    pub always_runs: &'static [hide_desk::permission::Row],
     /// The models and efforts the agent's last session offered; empty until
     /// one has opened.
     pub models: Vec<DeskChoiceSnapshot>,
@@ -422,8 +419,6 @@ pub enum DeskAgentState {
     NodeMissing,
     /// The agent's own CLI is not on the account's `PATH`.
     CliMissing,
-    /// Desk cannot hold it in an ask mode, so it is not used (D-53).
-    NoAskMode,
     /// Switched off in Settings › Agents while it is still the one chosen:
     /// listed so the bar can name it, and not sent to.
     Off,
@@ -578,21 +573,22 @@ pub enum DeskItem {
         /// changes; none where Hide cannot name one.
         folder: Option<String>,
         reason: Option<String>,
-        /// The row of Settings › Labs › Desk › 권한 the request reads as,
-        /// whose name is the card's kind (`hide 명령` for a `hide` line);
-        /// none on a card kept from before it was sent.
+        /// The agent's own options, as it names them, in its order (D-92):
+        /// what goes back to the agent is the one the operator pressed. None
+        /// on a card kept from before they were sent.
         #[serde(default)]
-        row: Option<DeskRow>,
+        options: Vec<DeskOption>,
         state: DeskApprovalState,
-        /// Why it asks, irreversible kinds first (D-82): what
-        /// `이 대화에서 계속 허용` keeps allowed. Empty on a card kept from
-        /// before the table.
+        /// The kind of the option the operator pressed; none while it waits,
+        /// once closed, when `거절…` ended a card that offered no rejecting
+        /// option, and on a card kept from before it was sent.
         #[serde(default)]
-        asks: Vec<DeskAsk>,
-        /// What the first irreversible kind is about: the working session's
-        /// title, or the path outside every project.
-        #[serde(default)]
-        subject: Option<String>,
+        chosen: Option<DeskOptionKind>,
+        /// The agent's own name for the option pressed, which the answered
+        /// line shows for an option Hide has no word for; none where
+        /// `chosen` is none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<String>,
         /// The line the operator sent Desk with `거절…` (D-83).
         #[serde(default)]
         refusal: Option<String>,
@@ -654,12 +650,17 @@ impl DeskItem {
                 command,
                 folder,
                 reason,
-                subject,
+                options,
+                answer,
                 refusal,
                 ..
             } => {
                 command.len()
-                    + [folder, reason, subject, refusal]
+                    + options
+                        .iter()
+                        .map(|option| option.id.len() + option.name.len())
+                        .sum::<usize>()
+                    + [folder, reason, answer, refusal]
                         .into_iter()
                         .map(|text| text.as_ref().map_or(0, String::len))
                         .sum::<usize>()
@@ -751,26 +752,55 @@ pub enum DeskReplyState {
 pub enum DeskCardKind {
     Command,
     Edit,
-    /// A file read or search, asked when the operator set reads to ask.
+    /// A file read or search.
     Read,
     Other,
 }
 
-/// Why a card asks (`hide_desk::permission::Ask`).
-pub type DeskAsk = hide_desk::permission::Ask;
+/// One option the agent's request offers (`hide_desk::permission::Choice`).
+pub type DeskOption = hide_desk::permission::Choice;
 
-/// A row of Settings › Labs › Desk › 권한 (`hide_desk::permission::Row`).
-pub type DeskRow = hide_desk::permission::Row;
+/// The kind of an option (`hide_desk::permission::ChoiceKind`).
+pub type DeskOptionKind = hide_desk::permission::ChoiceKind;
+
+/// How Desk answers what its agent asks, chosen under Desk's box and the
+/// same for every agent (D-92).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeskPermission {
+    /// `에이전트대로`: every request is a card of the agent's own options,
+    /// but a line of `hide` commands, which Hide allows once itself.
+    Agent,
+    /// `다 허용`: every request is answered with the agent's allow-once
+    /// option, with no card.
+    #[default]
+    AllowAll,
+}
+
+/// The stored choice: a word this build cannot read, written by a later
+/// Hide, restores as `에이전트대로`, the side that asks, never as `다 허용`.
+fn stored_permission<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DeskPermission, D::Error> {
+    let word = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(word).unwrap_or_else(|_| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk",
+            "kind": "desk.permission_unknown",
+        }));
+        DeskPermission::Agent
+    }))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskApprovalState {
     Waiting,
-    /// `한 번 허용`.
+    /// One of the agent's allowing options; `chosen` says which kind. A
+    /// store from before D-92 says `allowed_conversation` for a card it
+    /// allowed for the rest of its conversation.
+    #[serde(alias = "allowed_conversation")]
     Allowed,
-    /// `이 대화에서 계속 허용`: the same kinds run without a card until the
-    /// Desk process ends (D-83).
-    AllowedConversation,
     Rejected,
     /// A new conversation, a restart or the process's end closed it
     /// unanswered, which the agent read as a refusal (D-52).
@@ -780,8 +810,6 @@ pub enum DeskApprovalState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeskNotice {
-    /// A call Hide could not read was refused (D-60).
-    Blocked,
     /// The agent's adapter is being installed.
     Preparing,
     /// The process ended; `다시 시작` starts it again.
@@ -790,14 +818,17 @@ pub enum DeskNotice {
     ResumeFailed,
     LoginNeeded,
     InstallFailed,
-    /// The agent could not be put in its ask mode, so it was not used.
-    NoAskMode,
     /// The turn failed; the detail is the agent's own one-line reason, when
     /// it gave one.
     TurnFailed,
     /// A file the message named was gone, so the agent was not asked and the
     /// message went back to the operator's input (PRD desk-2-ui B41).
     AttachmentsGone,
+    /// A notice this build no longer makes or does not know, read from a
+    /// store written by another (`blocked` and `no_ask_mode` before D-92):
+    /// reading the store drops it, so it is never sent.
+    #[serde(other)]
+    Retired,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -824,10 +855,10 @@ pub struct DeskSettings {
     pub location: DeskLocation,
     /// Sessions Desk runs at once; more wait in its queue.
     pub cap: u8,
-    /// Settings › Labs › Desk › 권한 (D-82): every row 바로 in a store written
-    /// before it existed.
-    #[serde(default)]
-    pub permissions: hide_desk::permission::Table,
+    /// The choice under Desk's box (D-92): `다 허용` in a store written
+    /// before it existed, whatever its earlier permission table said.
+    #[serde(default, deserialize_with = "stored_permission")]
+    pub permission: DeskPermission,
 }
 
 impl Default for DeskSettings {
@@ -837,7 +868,7 @@ impl Default for DeskSettings {
             default_agent: None,
             location: DeskLocation::Desk,
             cap: DESK_CAP_DEFAULT,
-            permissions: hide_desk::permission::Table::default(),
+            permission: DeskPermission::AllowAll,
         }
     }
 }

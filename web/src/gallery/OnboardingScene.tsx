@@ -170,7 +170,7 @@ const SCENE_DESK: DeskSection = {
   host: { state: "ready", detail: null },
   conversation: { generation: 1, items: [], dropped: 0, queued: [], queued_max: 8, queued_full: false, queued_held: false },
   approvals_waiting: 0,
-  settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "ask" } },
+  settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permission: "allow_all" },
   lane: { view_width: null, session_width: null }, opens: [],
 };
 

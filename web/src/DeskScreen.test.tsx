@@ -7,7 +7,7 @@ import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
 import { configureFileBytes } from "./fileBytes";
 import { TooltipProvider } from "./components/ui/tooltip";
-import type { DeskAgent, DeskItem, DeskJob, DeskOutput } from "./desk";
+import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
@@ -36,7 +36,7 @@ const rest = {
   },
 } as unknown as SnapshotRest;
 
-const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, always_runs: [], login_command: "claude /login", models: [], efforts: [] });
+const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, login_command: "claude /login", models: [], efforts: [] });
 
 const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = [], held = false): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
@@ -44,7 +44,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   host: { state: "ready", detail: null },
   conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held },
   approvals_waiting: 0,
-  settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
+  settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permission: "allow_all" },
   lane: { view_width: null, session_width: null }, opens: [],
 });
 
@@ -232,11 +232,10 @@ describe("Desk's room", () => {
     expect(document.body.querySelectorAll("[data-desk-queued]")).toHaveLength(0);
   });
 
-  it("draws only a failed turn in the failed colour: a stopped host is neutral words, a blocked turn and a failed install keep the warning colour", async () => {
+  it("draws only a failed turn in the failed colour: a stopped host is neutral words, a failed install keeps the warning colour", async () => {
     const colour = (kind: string) => document.body.querySelector<HTMLElement>(`[data-desk-notice='${kind}'] span`)!.className;
-    await render(desk([{ kind: "notice", id: 1, notice: "host_stopped", agent: "claude", detail: null }, { kind: "notice", id: 2, notice: "blocked", agent: "claude", detail: null }, { kind: "notice", id: 3, notice: "install_failed", agent: "claude", detail: null }]));
+    await render(desk([{ kind: "notice", id: 1, notice: "host_stopped", agent: "claude", detail: null }, { kind: "notice", id: 3, notice: "install_failed", agent: "claude", detail: null }]));
     expect(colour("host_stopped")).not.toMatch(/text-destructive|text-warning/);
-    expect(colour("blocked")).toContain("text-warning");
     expect(colour("install_failed")).toContain("text-warning");
   });
 
@@ -246,9 +245,6 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
     await show(desk(failed));
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).not.toBeNull();
-    // A blocked turn's 다시 시도 would queue a copy behind the waiting message, so it waits too.
-    await show(desk([{ kind: "notice", id: 2, notice: "blocked", agent: "claude", detail: null }], "ready", true, [{ id: 3, text: "실패해 보세요", at_ms: 0, mentions: [] }]));
-    expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
   });
 
   it("names the agent's own reason on a failed turn when it gave one", async () => {
@@ -504,13 +500,13 @@ describe("Desk's room", () => {
       // A full line stopped the same way is freed by the same button.
       await show(desk([login], "ready", false, full, true));
       expect(document.body.querySelector("[data-desk-notice-action='restart']")).not.toBeNull();
-      // Whatever refused the line, its notice carries the restart that frees it: a no-ask agent has no box to send from.
-      const noAsk: DeskItem = { kind: "notice", id: 4, notice: "no_ask_mode", agent: "grok", detail: null };
-      await show(desk([noAsk], "no_ask_mode", false, [waiting(5, "묻지 못하는 에이전트")], true));
-      expect(document.body.querySelector("[data-desk-notice='no_ask_mode'] [data-desk-notice-action='restart']")?.textContent).toBe("Restart");
+      // Whatever refused the line, its notice carries the restart that frees it, even a notice with no action of its own.
+      const resume: DeskItem = { kind: "notice", id: 4, notice: "resume_failed", agent: "claude", detail: null };
+      await show(desk([resume], "ready", true, [waiting(5, "다시 열지 못한 대화")], true));
+      expect(document.body.querySelector("[data-desk-notice='resume_failed'] [data-desk-notice-action='restart']")?.textContent).toBe("Restart");
       await press("[data-desk-notice-action='restart']");
       expect(sent("desk_restart")).toEqual([{}, {}]);
-      await show(desk([noAsk], "no_ask_mode", false, [], false));
+      await show(desk([resume], "ready", true, [], false));
       expect(document.body.querySelector("[data-desk-notice-action]")).toBeNull();
       // A line that is not stopped keeps its 대기 중.
       await show(desk([], "ready", true, [waiting(5, "그냥 기다려요")], false));
@@ -539,11 +535,18 @@ describe("Desk's room", () => {
     });
   });
 
-  describe("permissions (D-82, D-83, B46, B47)", () => {
-    const archive: DeskItem = {
-      kind: "approval", id: 7, card: "command", command: "hide agent archive agent-18285", folder: "~/repo", reason: null, state: "waiting",
-      asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "project panel results", refusal: null,
+  describe("permissions (D-92)", () => {
+    /** Claude's own answers to a shell command, as its ACP adapter names them. */
+    const claudeOptions: DeskOption[] = [
+      { id: "allow-once", kind: "allow_once", name: "Yes" },
+      { id: "allow-with-updates", kind: "allow_always", name: "Yes, and don't ask again for npm run commands" },
+      { id: "reject", kind: "reject_once", name: "No" },
+    ];
+    const build: DeskItem = {
+      kind: "approval", id: 7, card: "command", command: "npm run build", folder: "~/repo/web", reason: null, state: "waiting",
+      options: claudeOptions, chosen: null, refusal: null,
     };
+    const buttons = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-approval-option]")].map((button) => [button.dataset.deskApprovalOption, button.textContent]);
     const answers = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-approval-answer]")].map((button) => button.textContent);
     const refusal = () => document.body.querySelector<HTMLInputElement>("[data-desk-approval-refusal]");
     const type = async (value: string) => {
@@ -552,127 +555,132 @@ describe("Desk's room", () => {
     };
     const key = (name: string, composing = false) => act(async () => { refusal()!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, isComposing: composing })); });
 
-    it("names a hide line's card by its permission row, and any other command a shell command", async () => {
-      await render(desk([{ ...archive, row: "hide" }]));
-      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("hide commands");
-      await show(desk([{ ...archive, row: "shell" }]));
-      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Shell command");
-      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("~/repo");
+    it("shows the agent's own answers as 거절… · 항상 허용 · 한 번 허용 and sends the one pressed as the agent's option", async () => {
+      await render(desk([build]));
+      const card = document.body.querySelector("[data-desk-item='approval']")!.textContent!;
+      expect(card).toContain("Shell command");
+      expect(card).toContain("npm run build");
+      expect(card).toContain("~/repo/web");
+      expect(buttons()).toEqual([["reject", "Reject…"], ["allow-with-updates", "Always allow"], ["allow-once", "Allow once"]]);
+      await press("[data-desk-approval-option='allow-with-updates']");
+      await press("[data-desk-approval-option='allow-once']");
+      expect(sent("desk_approval")).toEqual([{ id: 7, option: "allow-with-updates" }, { id: 7, option: "allow-once" }]);
     });
 
-    it("asks about a working session's archive with no answer that keeps allowing it, says what it ends, and that it asks at every level", async () => {
-      await render(desk([archive]));
-      expect(document.body.querySelector("[data-desk-item='approval']")?.textContent).toContain("Asking because this can't be undone");
-      expect(document.body.querySelector("[data-desk-approval-why='end_working_session']")?.textContent).toBe("Archives a session that is working·project panel results");
-      expect(answers()).toEqual(["Reject…", "Allow once"]);
-      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks even when Desk works on its own");
-      await press("[data-desk-approval-answer='once']");
-      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "once" }]);
+    it("names answers of one kind by the agent's own names, so Claude's ways out of plan mode read apart", async () => {
+      const planExit: DeskOption[] = [
+        { id: "exit-plan-auto", kind: "allow_always", name: "Yes, and use auto mode" },
+        { id: "exit-plan-accept-edits", kind: "allow_always", name: "Yes, auto-accept edits" },
+        { id: "exit-plan-default", kind: "allow_once", name: "Yes, manually approve edits" },
+        { id: "reject", kind: "reject_once", name: "No" },
+      ];
+      await render(desk([{ ...build, card: "other", command: "ExitPlanMode", options: planExit }]));
+      expect(buttons()).toEqual([
+        ["reject", "Reject…"],
+        ["exit-plan-auto", "Yes, and use auto mode"],
+        ["exit-plan-accept-edits", "Yes, auto-accept edits"],
+        ["exit-plan-default", "Allow once"],
+      ]);
+      await press("[data-desk-approval-option='exit-plan-accept-edits']");
+      expect(sent("desk_approval")).toEqual([{ id: 7, option: "exit-plan-accept-edits" }]);
     });
 
-    it("keeps allowing a row's card for the conversation and says the level it asks under", async () => {
-      const shell: DeskItem = { ...archive, id: 11, command: "pnpm --dir web test", asks: [{ kind: "row", value: "shell" }], subject: null };
-      const changes = { ...desk([shell]), settings: { ...desk([]).settings, permissions: { hide: "run" as const, read: "run" as const, shell: "ask" as const, edit: "ask" as const } } };
-      await render(changes);
-      expect(answers()).toEqual(["Reject…", "Allow in this conversation", "Allow once"]);
-      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks because you chose Ask before changes");
-      await press("[data-desk-approval-answer='conversation']");
-      expect(sent("desk_approval")).toEqual([{ id: 11, answer: "conversation" }]);
-      // A table set row by row in Settings is said as that.
-      await show({ ...changes, settings: { ...changes.settings, permissions: { ...changes.settings.permissions, hide: "ask" as const, edit: "run" as const } } });
-      expect(document.body.querySelector("[data-desk-approval-level]")?.textContent).toBe("Asks as you set this row");
-    });
-
-    it("sets the whole table from one of three levels under the box in one event, and reads a mix as set per row", async () => {
+    it("chooses 다 허용 or 에이전트대로 under the box in one event, the second naming the chosen agent", async () => {
       const open = async () => {
         const trigger = document.body.querySelector<HTMLElement>("[data-desk-bar='permissions']")!;
         await act(async () => { trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })); });
       };
-      const levels = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-level-choice]")].map((item) => [item.dataset.deskPermissionLevelChoice, item.getAttribute("data-state")]);
+      const choices = () => [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-choice]")].map((item) => [item.dataset.deskPermissionChoice, item.getAttribute("data-state"), item.textContent]);
       await render(desk([]));
-      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("On its own");
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Allow all");
       await open();
-      expect(levels()).toEqual([["ask_all", "unchecked"], ["ask_changes", "unchecked"], ["auto", "checked"]]);
-      await press("[data-desk-permission-level-choice='ask_changes']");
-      expect(sent("desk_settings_set")).toEqual([{ permissions: { hide: "run", read: "run", shell: "ask", edit: "ask" } }]);
+      expect(document.body.textContent).toContain("How Desk asks while it works");
+      expect(choices()).toEqual([
+        ["allow_all", "checked", "Allow allDefaultDoes it right away without asking."],
+        ["agent", "unchecked", "As the agentAsks each time Claude Code asks, with its own answers."],
+      ]);
+      await press("[data-desk-permission-choice='agent']");
+      expect(sent("desk_settings_set")).toEqual([{ permission: "agent" }]);
 
-      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "ask", read: "run", shell: "ask", edit: "ask" } } });
-      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Ask for everything");
-      await show({ ...desk([]), settings: { ...desk([]).settings, permissions: { hide: "run", read: "ask", shell: "run", edit: "run" } } });
-      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("Set per row");
+      await show({ ...desk([]), settings: { ...desk([]).settings, permission: "agent" } });
+      expect(document.body.querySelector("[data-desk-bar='permissions']")?.textContent).toBe("As the agent");
       await open();
-      expect(levels().every(([, state]) => state === "unchecked")).toBe(true);
-      await press("[data-desk-permission-per-row]");
-      expect(useUiStore.getState().settingsTab).toBe("labs");
+      // The chosen one pressed again sends nothing.
+      await press("[data-desk-permission-choice='agent']");
       expect(sent("desk_settings_set")).toHaveLength(1);
     });
 
-    it("sends a refusal's line to Desk on Enter, never mid-composition, and refuses plainly when the line is empty", async () => {
-      await render(desk([archive]));
-      await press("[data-desk-approval-answer='reject']");
+    it("sends a refusal's line to Desk with the agent's reject on Enter, never mid-composition, and refuses plainly when the line is empty", async () => {
+      await render(desk([build]));
+      await press("[data-desk-approval-option='reject']");
       expect(sent("desk_approval")).toEqual([]);
       expect(answers()).toEqual(["Reject without a reason", "Reject and send"]);
-      await type("wait until it ends, then archive it");
+      await type("run the type check instead");
       await key("Enter", true);
       expect(sent("desk_approval")).toEqual([]);
       await act(async () => { refusal()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })); });
       expect(sent("desk_approval")).toEqual([]);
       await key("Enter");
-      expect(sent("desk_approval")).toEqual([{ id: 7, answer: "reject", text: "wait until it ends, then archive it" }]);
+      expect(sent("desk_approval")).toEqual([{ id: 7, option: "reject", text: "run the type check instead" }]);
 
       // Without a reason the typed words stay behind.
       await press("[data-desk-approval-answer='reject_plain']");
       // Blank words are a plain refusal too.
       await type("   ");
       await press("[data-desk-approval-answer='reject_send']");
-      expect(sent("desk_approval").slice(1)).toEqual([{ id: 7, answer: "reject" }, { id: 7, answer: "reject" }]);
+      expect(sent("desk_approval").slice(1)).toEqual([{ id: 7, option: "reject" }, { id: 7, option: "reject" }]);
 
       // Escape takes the line back to the card's answers.
       await key("Escape");
       expect(refusal()).toBeNull();
-      expect(answers()).toEqual(["Reject…", "Allow once"]);
+      expect(buttons().map(([id]) => id)).toEqual(["reject", "allow-with-updates", "allow-once"]);
     });
 
-    it("folds an answered card to how it was answered", async () => {
-      await render(desk([{ ...archive, state: "allowed_conversation" }, { ...archive, id: 8, state: "rejected", refusal: "wait for it" }, { ...archive, id: 9, state: "rejected" }]));
+    it("ends a card that offers no refusal with Hide's own 거절…, sent as no option", async () => {
+      const plan: DeskOption[] = [{ id: "plan", kind: "other", name: "Keep planning" }, { id: "go", kind: "allow_once", name: "Yes" }];
+      await render(desk([{ ...build, card: "other", command: "ExitPlanMode", options: plan }]));
+      expect(buttons()).toEqual([["plan", "Keep planning"], ["go", "Allow once"]]);
+      await press("[data-desk-approval-kind='reject']");
+      await type("keep planning instead");
+      await key("Enter");
+      await press("[data-desk-approval-answer='reject_plain']");
+      expect(sent("desk_approval")).toEqual([{ id: 7, option: null, text: "keep planning instead" }, { id: 7, option: null }]);
+    });
+
+    it("folds an answered card to the kind of answer pressed", async () => {
+      await render(desk([
+        { ...build, state: "allowed", chosen: "allow_always" },
+        { ...build, id: 8, state: "allowed", chosen: "allow_once" },
+        { ...build, id: 9, state: "allowed", chosen: null },
+        { ...build, id: 10, state: "rejected", chosen: "reject_once", refusal: "wait for it" },
+        { ...build, id: 11, state: "rejected", chosen: "reject_once" },
+        { ...build, id: 12, state: "closed" },
+        { ...build, id: 13, state: "allowed", chosen: "other", answer: "Keep planning" },
+      ]));
       const folded = [...document.body.querySelectorAll("[data-desk-approval-answered]")].map((line) => line.textContent);
       expect(folded).toEqual([
-        "Allowed in this conversation·hide agent archive agent-18285",
-        "Rejected · your line went to Desk·hide agent archive agent-18285",
-        "Rejected·hide agent archive agent-18285",
+        "Always allowed·npm run build",
+        "Allowed once·npm run build",
+        "Allowed·npm run build",
+        "Rejected · your line went to Desk·npm run build",
+        "Rejected·npm run build",
+        "Not run · closed by a new conversation or restart·npm run build",
+        "Keep planning·npm run build",
       ]);
-      expect(document.body.querySelector("[data-desk-approval-answer]")).toBeNull();
+      expect(document.body.querySelector("[data-desk-approval-option]")).toBeNull();
     });
 
-    it("sets each row to run or ask as one whole table and keeps the irreversible row locked to always ask", async () => {
+    it("has no permission table in Settings › Labs › Desk, whose changes leave the permission under the box alone", async () => {
       const actions = createActions((event) => { events.push(event); return true; });
       await act(async () => {
         useShellStore.setState({ connection: "live", rest, desk: desk([]) });
         root.render(<TooltipProvider><DeskSettingsPage actions={actions} /></TooltipProvider>);
       });
-      const chosen = () => Object.fromEntries([...document.body.querySelectorAll<HTMLElement>("[data-desk-permission]")].map((row) => [
-        row.dataset.deskPermission, row.querySelector("[data-state='on']")?.textContent ?? row.querySelector("[data-desk-permission-locked]")?.textContent,
-      ]));
-      expect(chosen()).toEqual({ hide: "Run", read: "Run", shell: "Run", edit: "Run", irreversible: "Always ask" });
-      expect(document.body.querySelector("[data-desk-permission='irreversible'] button")).toBeNull();
-
-      await press("[data-desk-permission='edit'] [data-desk-permission-answer='ask']");
-      expect(sent("desk_settings_set")).toEqual([{ enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "ask" } }]);
-      // The chosen answer pressed again changes nothing.
-      await press("[data-desk-permission='hide'] [data-desk-permission-answer='run']");
-      expect(sent("desk_settings_set")).toHaveLength(1);
+      expect(document.body.querySelector("[data-desk-settings]")).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Permissions");
+      await press("[data-desk-use]");
+      expect(sent("desk_settings_set")).toEqual([{ enabled: false, default_agent: "claude", location: "worktree", cap: 8 }]);
     });
-  });
-
-  it("names, dimmed on a row, the agents whose own setup runs it without asking (D-82)", async () => {
-    const codex: DeskAgent = { ...claude("ready", true), id: "codex", label: "Codex", always_runs: ["read"], login_command: "codex login" };
-    const actions = createActions(() => true);
-    await act(async () => {
-      useShellStore.setState({ connection: "live", rest, desk: { ...desk([]), agents: [claude("ready", true), codex] } });
-      root.render(<TooltipProvider><DeskSettingsPage actions={actions} /></TooltipProvider>);
-    });
-    const unasked = [...document.body.querySelectorAll<HTMLElement>("[data-desk-permission-unasked]")].map((note) => [note.closest<HTMLElement>("[data-desk-permission]")?.dataset.deskPermission, note.textContent]);
-    expect(unasked).toEqual([["read", "Always runs in Codex"]]);
   });
 
   it("opens a session a chip names beside Desk, stays in Desk, and closes the tab panel before the session on Escape (D-09, B2, B21)", async () => {

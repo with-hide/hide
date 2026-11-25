@@ -11894,7 +11894,6 @@ mod wire_enum_tests {
             DeskAgentState::InstallFailed,
             DeskAgentState::NodeMissing,
             DeskAgentState::CliMissing,
-            DeskAgentState::NoAskMode,
             DeskAgentState::Off,
         ];
         for state in states {
@@ -11905,7 +11904,6 @@ mod wire_enum_tests {
                 | DeskAgentState::InstallFailed
                 | DeskAgentState::NodeMissing
                 | DeskAgentState::CliMissing
-                | DeskAgentState::NoAskMode
                 | DeskAgentState::Off => {}
             }
         }
@@ -11940,39 +11938,30 @@ mod wire_enum_tests {
             ],
         );
         checked.insert("desk_card_kind");
-        {
-            use hide_desk::permission::{Answer, Ask, Irreversible, Row};
-            assert_wire(
-                &contract,
-                "desk_permission_row",
-                &[Row::Hide, Row::Read, Row::Shell, Row::Edit],
-            );
-            checked.insert("desk_permission_row");
-            assert_wire(
-                &contract,
-                "desk_permission_answer",
-                &[Answer::Run, Answer::Ask],
-            );
-            checked.insert("desk_permission_answer");
-            assert_wire(&contract, "desk_irreversible", &Irreversible::ALL);
-            checked.insert("desk_irreversible");
-            let kinds: Vec<serde_json::Value> = [
-                Ask::Irreversible(Irreversible::ForcePush),
-                Ask::Row(Row::Shell),
-            ]
-            .iter()
-            .map(|ask| serde_json::to_value(ask).unwrap()["kind"].clone())
-            .collect();
-            assert_wire(&contract, "desk_approval_ask", &kinds);
-            checked.insert("desk_approval_ask");
-        }
+        assert_wire(
+            &contract,
+            "desk_option_kind",
+            &[
+                DeskOptionKind::AllowOnce,
+                DeskOptionKind::AllowAlways,
+                DeskOptionKind::RejectOnce,
+                DeskOptionKind::RejectAlways,
+                DeskOptionKind::Other,
+            ],
+        );
+        checked.insert("desk_option_kind");
+        assert_wire(
+            &contract,
+            "desk_permission",
+            &[DeskPermission::AllowAll, DeskPermission::Agent],
+        );
+        checked.insert("desk_permission");
         assert_wire(
             &contract,
             "desk_approval_state",
             &[
                 DeskApprovalState::Waiting,
                 DeskApprovalState::Allowed,
-                DeskApprovalState::AllowedConversation,
                 DeskApprovalState::Rejected,
                 DeskApprovalState::Closed,
             ],
@@ -11982,13 +11971,11 @@ mod wire_enum_tests {
             &contract,
             "desk_notice",
             &[
-                DeskNotice::Blocked,
                 DeskNotice::Preparing,
                 DeskNotice::HostStopped,
                 DeskNotice::ResumeFailed,
                 DeskNotice::LoginNeeded,
                 DeskNotice::InstallFailed,
-                DeskNotice::NoAskMode,
                 DeskNotice::TurnFailed,
                 DeskNotice::AttachmentsGone,
             ],

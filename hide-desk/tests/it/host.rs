@@ -1,10 +1,9 @@
 //! A Desk process end to end against a stand-in ACP agent: this test binary
 //! run again in the agent's role. It proves what a caller of the host relies
-//! on: the session opens in its ask mode, a turn's reply and its permission
-//! request arrive, a refused ask mode keeps the session unused, a command
-//! the agent runs finds Desk's own `hide` first, the agent has the account's
-//! environment without a pane's identity or Hide's own variables, and
-//! ending the host leaves nothing it started running.
+//! on: the session opens, a turn's reply and its permission request
+//! arrive, a command the agent runs finds Desk's own `hide` first, the
+//! agent has the account's environment without a pane's identity or Hide's
+//! own variables, and ending the host leaves nothing it started running.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
@@ -17,6 +16,7 @@ use std::time::{Duration, Instant};
 use hide_desk::AdapterId;
 use hide_desk::adapter::{self, Launch, Paths};
 use hide_desk::host::Host;
+use hide_desk::permission::allow_once;
 use hide_desk::rpc::{Incoming, Sink};
 use hide_desk::session::{self, OpenError};
 use serde_json::{Value, json};
@@ -43,7 +43,6 @@ fn stand_in_agent() {
         std::thread::sleep(Duration::from_secs(120));
         return;
     }
-    let refuse_mode = role == "refuse-mode";
     // Loads a session as ACP says: the conversation so far replayed as
     // updates before the load answers.
     let replays = role == "replay";
@@ -100,9 +99,6 @@ fn stand_in_agent() {
                 "configOptions": [{"id": "model", "category": "model", "currentValue": "m1",
                     "options": [{"value": "m1", "name": "Model one"}]}],
                 "_meta": {"piAcp": {"startupInfo": "pi v1 started"}}}})),
-            Some("session/set_mode") if refuse_mode => send(json!({"jsonrpc": "2.0", "id": id,
-                "error": {"code": -32602, "message": "no such mode"}})),
-            Some("session/set_mode") => send(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
             Some("session/prompt") => {
                 let text = message["params"]["prompt"][0]["text"]
                     .as_str()
@@ -195,20 +191,6 @@ fn stand_in_agent() {
     drop(sleeper);
 }
 
-/// Whether this account may link a file, which a Windows account may not
-/// without a privilege or Developer Mode.
-fn file_links_allowed(dir: &Path) -> bool {
-    let probe = dir.join("link-probe");
-    match hide_platform::fs::link::create_link(&dir.join("absent"), &probe) {
-        Ok(()) => {
-            hide_platform::fs::link::remove_link(&probe).unwrap();
-            true
-        }
-        Err(error) if cfg!(windows) && hide_platform::fs::link::needs_privilege(&error) => false,
-        Err(error) => panic!("{error}"),
-    }
-}
-
 /// The arguments that run this binary as the stand-in agent alone.
 const STAND_IN: [&str; 4] = ["--exact", "host::stand_in_agent", "-q", "--test-threads=1"];
 
@@ -218,9 +200,6 @@ fn launch(role: &str, cwd: &Path) -> Launch {
         args: STAND_IN.into_iter().map(OsString::from).collect(),
         env: vec![(ROLE.into(), role.into())],
         cwd: cwd.to_owned(),
-        files: Vec::new(),
-        links: Vec::new(),
-        pi_marker: None,
     }
 }
 
@@ -265,10 +244,7 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
     let folder = tempfile::tempdir().unwrap();
     let (host, received) = start("agent", folder.path());
     let connection = host.connection().clone();
-    let opened = session::open(&connection, AdapterId::CLAUDE, folder.path(), None, &|| {
-        Ok(())
-    })
-    .unwrap();
+    let opened = session::open(&connection, folder.path(), None).unwrap();
     assert_eq!(opened.session_id, "s1");
     assert!(!opened.resumed);
     assert_eq!(opened.choices.model.unwrap().current.as_deref(), Some("m1"));
@@ -281,9 +257,15 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
         panic!("no permission request");
     };
     assert_eq!(method, "session/request_permission");
-    let request = hide_desk::permission::read_request(AdapterId::CLAUDE, &params, None);
-    assert_eq!(request.allow_once(), Some("yes"));
-    let reject = request.reject().unwrap().to_owned();
+    let request = hide_desk::permission::read_request(&params, None);
+    assert_eq!(allow_once(&request.choices), Some("yes"));
+    let reject = request
+        .choices
+        .iter()
+        .find(|choice| choice.kind.rejects())
+        .unwrap()
+        .id
+        .clone();
     connection
         .respond(
             &id,
@@ -314,14 +296,7 @@ fn a_loaded_session_s_replay_arrives_before_the_next_prompt_s_mark() {
     });
     let host = Host::start(&launch("replay", folder.path()), sink).unwrap();
     let connection = host.connection().clone();
-    let opened = session::open(
-        &connection,
-        AdapterId::CLAUDE,
-        folder.path(),
-        Some("s1"),
-        &|| Ok(()),
-    )
-    .unwrap();
+    let opened = session::open(&connection, folder.path(), Some("s1")).unwrap();
     assert!(opened.resumed);
 
     // As Desk's worker does: the mark read just before the prompt, and
@@ -370,52 +345,22 @@ fn an_agent_says_it_is_signed_out_before_it_refuses_the_open() {
         }
     });
     let host = Host::start(&launch("stale-login", folder.path()), sink).unwrap();
-    let opened = session::open(
-        host.connection(),
-        AdapterId::CODEX,
-        folder.path(),
-        None,
-        &|| Ok(()),
-    );
+    let opened = session::open(host.connection(), folder.path(), None);
     assert!(matches!(opened, Err(OpenError::Failed(_))), "{opened:?}");
     assert_eq!(*signed_out.lock().unwrap(), Some(true));
     host.end().unwrap();
 }
 
+/// The `hide` beside hided comes first on the Desk process's `PATH`, before
+/// any `hide` on the account's own `PATH`, such as an older installed one,
+/// so a command the agent runs with the process's `PATH` reaches Desk's.
 #[test]
-fn a_session_whose_ask_mode_is_refused_is_not_used() {
-    let folder = tempfile::tempdir().unwrap();
-    let (host, _received) = start("refuse-mode", folder.path());
-    let opened = session::open(
-        host.connection(),
-        AdapterId::CODEX,
-        folder.path(),
-        None,
-        &|| Ok(()),
-    );
-    assert!(
-        matches!(opened, Err(OpenError::AskModeUnconfirmed(_))),
-        "{opened:?}"
-    );
-    host.end().unwrap();
-}
-
-/// Desk's Codex runs its commands with the Desk process's `PATH` (its login
-/// shell is off), so the `hide` beside hided must come before any `hide` on
-/// the account's own `PATH`, such as an older installed one.
-#[test]
-fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
+fn a_command_desk_s_agent_runs_finds_desk_s_own_hide_before_the_account_s() {
     let root = tempfile::tempdir().unwrap();
     let desk = root.path().join("desk");
     let desk_hide = hide_in(&root.path().join("app"));
     let account = root.path().join("account-bin");
     hide_in(&account);
-    let codex_home = desk.join("codex");
-    // The operator's own Codex sign-in, which Desk's Codex reads through a
-    // link and never copies.
-    let sign_in = root.path().join("operator-codex").join("auth.json");
-    std::fs::create_dir_all(sign_in.parent().unwrap()).unwrap();
-    std::fs::write(&sign_in, "{}").unwrap();
     let mut launch = adapter::launch(
         AdapterId::CODEX,
         &Paths {
@@ -429,27 +374,14 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
             account: None,
             desk: &desk,
             capability: &root.path().join("desk.json"),
-            codex_home: &codex_home,
-            codex_sign_in: Ok(&sign_in),
         },
-        "n1",
     )
     .unwrap();
     launch.args = STAND_IN.into_iter().map(OsString::from).collect();
     launch.env.push((ROLE.into(), "agent".into()));
-    // A Windows account without the privilege to link a file cannot run
-    // Desk's Codex at all; the rest of the start is still checked there.
-    let links = file_links_allowed(root.path());
-    if !links {
-        launch.links.clear();
-    }
     let (host, received) = start_launch(&launch);
-    // Desk's Codex configuration and rules are in its own home before it runs.
-    assert!(codex_home.join("config.toml").is_file());
-    assert!(codex_home.join("rules").join("hide-desk.rules").is_file());
-    assert!(!links || hide_platform::fs::link::is_link_to(&codex_home.join("auth.json"), &sign_in));
     let connection = host.connection().clone();
-    session::open(&connection, AdapterId::CODEX, &desk, None, &|| Ok(())).unwrap();
+    session::open(&connection, &desk, None).unwrap();
 
     session::prompt(&connection, "s1", "which hide", 1).unwrap();
     let found = text(next(&received));
@@ -463,8 +395,9 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
 
 /// A provider key the account's startup files export reaches the agent, as
 /// it reaches one the operator starts in a terminal (OpenCode's
-/// `{env:BAI_API_KEY}`), while a pane's identity and Hide's own variables do
-/// not, wherever they come from, and Desk's own settings win.
+/// `{env:BAI_API_KEY}`) and so does its own configuration, as in its
+/// terminal (D-92), while a pane's identity and Hide's own variables do not,
+/// wherever they come from.
 #[test]
 fn the_agent_has_the_account_s_environment_but_no_pane_identity_or_hide_s_own() {
     let root = tempfile::tempdir().unwrap();
@@ -489,17 +422,14 @@ fn the_agent_has_the_account_s_environment_but_no_pane_identity_or_hide_s_own() 
             account: Some(&account),
             desk: &desk,
             capability: &root.path().join("desk.json"),
-            codex_home: &desk.join("codex"),
-            codex_sign_in: Err("unused"),
         },
-        "n1",
     )
     .unwrap();
     launch.args = STAND_IN.into_iter().map(OsString::from).collect();
     launch.env.push((ROLE.into(), "agent".into()));
     let (host, received) = start_launch(&launch);
     let connection = host.connection().clone();
-    session::open(&connection, AdapterId::OPENCODE, &desk, None, &|| Ok(())).unwrap();
+    session::open(&connection, &desk, None).unwrap();
 
     session::prompt(
         &connection,
@@ -518,10 +448,7 @@ fn the_agent_has_the_account_s_environment_but_no_pane_identity_or_hide_s_own() 
     ];
     let lines: Vec<&str> = seen.lines().collect();
     assert_eq!(lines[..4], expected, "{seen}");
-    assert!(
-        lines[4].starts_with("OPENCODE_CONFIG_CONTENT={\"permission\""),
-        "Desk's own permissions win: {seen}"
-    );
+    assert_eq!(lines[4], "OPENCODE_CONFIG_CONTENT={}", "{seen}");
     host.end().unwrap();
 }
 
@@ -530,10 +457,7 @@ fn ending_the_host_leaves_nothing_it_started_running() {
     let folder = tempfile::tempdir().unwrap();
     let (host, received) = start("agent", folder.path());
     let connection = host.connection().clone();
-    session::open(&connection, AdapterId::CLAUDE, folder.path(), None, &|| {
-        Ok(())
-    })
-    .unwrap();
+    session::open(&connection, folder.path(), None).unwrap();
     session::prompt(&connection, "s1", "start a sleeper", 1).unwrap();
     let sleeper: u32 = text(next(&received)).parse().unwrap();
     assert!(hide_platform::process::descends_from(sleeper, host.pid()));
