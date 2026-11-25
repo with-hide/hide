@@ -1267,6 +1267,13 @@ fn run_hook(arguments: &[String], started: Instant) {
     let transcript = payload
         .as_ref()
         .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).transcript);
+    // What a permission request asks to run, from whichever agent sends it:
+    // Codex writes the call to its session file only once it is allowed, so
+    // this is the one place the card can read it while the operator is asked.
+    let asked = (event == HookEvent::PermissionRequest)
+        .then_some(payload.as_ref())
+        .flatten()
+        .and_then(|(bytes, truncated)| counters::ToolCall::read(bytes, *truncated).asked);
     // A refused turn's end says why, for the mission that waits on it.
     let refused = (event == HookEvent::StopFailure && turn.is_some())
         .then_some(payload.as_ref())
@@ -1310,6 +1317,7 @@ fn run_hook(arguments: &[String], started: Instant) {
             transcript: transcript.as_deref(),
             refused: refused.as_ref(),
             unread: unread.as_deref(),
+            asked: asked.as_ref(),
             told,
         },
         counted,
@@ -1329,6 +1337,8 @@ struct Heard<'a> {
     transcript: Option<&'a std::path::Path>,
     refused: Option<&'a HookRefusal>,
     unread: Option<&'a str>,
+    /// What the permission request the event is asks to run.
+    asked: Option<&'a report::HookAsked>,
     /// What the event said of its subagents beyond the counts.
     told: Told<'a>,
 }
@@ -1340,6 +1350,7 @@ impl<'a> Heard<'a> {
             transcript: None,
             refused: None,
             unread: None,
+            asked: None,
             told: Told::default(),
         }
     }
@@ -1370,6 +1381,7 @@ fn report_pane(
         transcript,
         refused,
         unread,
+        asked,
         told,
     }: Heard<'_>,
     counted: bool,
@@ -1387,7 +1399,7 @@ fn report_pane(
     // (engineering rules 4 and 10). What the record alone says, the counts
     // and the turn, is left out of that report rather than guessed at.
     let kept = counters::apply(home, &pane_id, change, who, said, transcript, told);
-    let (turn, counts, subagents, waiting) = match &kept {
+    let (turn, counts, subagents, waiting, asked) = match &kept {
         Ok(applied) => {
             // An event that says something of the turn reports it each time,
             // and a tool event only when it moved the turn or an approval;
@@ -1416,6 +1428,9 @@ fn report_pane(
                 }),
                 counted.then(|| report::reported_subagents(&applied.subagents)),
                 speaks.then(|| applied.waiting.clone()),
+                // A request reports its command with its turn: a later
+                // report of a turn without one ends it (`HookFacts::record`).
+                speaks.then(|| asked.cloned()).flatten(),
             )
         }
         Err(error) => {
@@ -1430,7 +1445,7 @@ fn report_pane(
                 report::record_and_say(home, &pane_id, agent, event.name(), &failed);
                 return;
             }
-            (None, None, None, None)
+            (None, None, None, None, None)
         }
     };
     let reported = report::report(
@@ -1451,6 +1466,7 @@ fn report_pane(
                 })
                 .flatten(),
             refused: refused.cloned(),
+            asked,
         },
         deadline,
     );
@@ -1565,6 +1581,7 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             transcript: call.transcript.as_deref(),
             refused: None,
             unread: None,
+            asked: None,
             // Claude Code's `SubagentStart` names no task; the main agent's
             // `Agent` call before it does, which the start of its kind takes.
             told: Told {

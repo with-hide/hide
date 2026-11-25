@@ -523,6 +523,11 @@ pub mod phone {
         /// frame: the phone's detail is told it alone (`hided/src/mobile/ask.rs`).
         #[serde(skip)]
         pub user_turn: Option<hide_session::turns::UserTurnFact>,
+        /// What the permission the agent waits on asks to run, as its hook
+        /// named it (`SidebarAgentSnapshot::asked`). Never in the list frame,
+        /// like `user_turn`.
+        #[serde(skip)]
+        pub asked: Option<hide_node_link::panes::HookAsked>,
         /// Every declaration on the row and the ones raised to it, so a new
         /// one is announced once even while the row already stands in Needs
         /// You (B5, B17), by declaration id with what each says. Used only by
@@ -1238,6 +1243,10 @@ pub mod phone {
                     .get("user_turn")
                     .filter(|fact| !fact.is_null())
                     .and_then(|fact| serde_json::from_value(fact.clone()).ok()),
+                asked: agent
+                    .get("asked")
+                    .filter(|asked| !asked.is_null())
+                    .and_then(|asked| serde_json::from_value(asked.clone()).ok()),
                 human_turns: declared_subject(agent)
                     .into_iter()
                     .chain(

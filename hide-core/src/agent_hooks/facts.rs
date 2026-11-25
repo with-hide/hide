@@ -86,6 +86,11 @@ struct SessionFact {
     /// the main turn's `Stop`).
     #[serde(skip)]
     waiting: Vec<String>,
+    /// What the permission request of the last report that said a turn asks
+    /// to run, when it named it: the next report of a turn replaces it, so it
+    /// is the dialog's while the turn waits and nothing once the turn goes on.
+    #[serde(skip)]
+    asked: Option<hide_node_link::panes::HookAsked>,
     /// The engine state when `waiting` was last laid on the agent: a
     /// session read under a later state that finds a call's result ends
     /// its approval (a refusal in the dialog sends no hook event).
@@ -361,6 +366,11 @@ impl HookFacts {
         }) {
             return Err("hook_waiting_invalid");
         }
+        if report.asked.as_ref().is_some_and(|asked| {
+            asked.command.len() > hide_agent_hooks::report::ASKED_COMMAND_LIMIT
+        }) {
+            return Err("hook_asked_invalid");
+        }
         if report.account.as_ref().is_some_and(|account| {
             account.len() > hide_agent_hooks::account::REPORTED_VARIABLES
                 || account.iter().any(|(name, value)| {
@@ -414,6 +424,7 @@ impl HookFacts {
                 busy: false,
                 turn_seq: None,
                 waiting: Vec::new(),
+                asked: None,
                 waiting_seq: None,
                 refused: None,
                 account: None,
@@ -439,6 +450,10 @@ impl HookFacts {
             // A resumed or compacted session has no turn running yet.
             fact.turn = None;
             fact.waiting.clear();
+            fact.asked = None;
+        }
+        if report.turn.is_some() {
+            fact.asked.clone_from(&report.asked);
         }
         if let Some(waiting) = &report.waiting
             && *waiting != fact.waiting
@@ -542,6 +557,7 @@ impl HookFacts {
             agent.hook = None;
             agent.hook_refused = None;
             agent.hook_question = false;
+            agent.hook_asked = None;
             let Some(pane) = agent.pane_id.clone().or_else(|| agent.id.clone()) else {
                 continue;
             };
@@ -585,6 +601,10 @@ impl HookFacts {
             // session read words it while it holds for the engine's state, and
             // between that state's change and its read the row stays a question
             // rather than turning into an approval (`axes::native_user_turn`).
+            agent.hook_asked = fact
+                .asked
+                .clone()
+                .filter(|_| agent.hook == Some(HookTurn::Waiting));
             agent.hook_question = !fact.waiting.is_empty()
                 && fact
                     .waiting
@@ -800,6 +820,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             busy: matches!(record.turn, Some(HookTurn::Working | HookTurn::Waiting)),
             turn_seq: None,
             waiting: Vec::new(),
+            asked: None,
             waiting_seq: None,
             account: None,
             account_start: 0,
@@ -867,6 +888,7 @@ mod tests {
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         }
     }
 
@@ -983,6 +1005,69 @@ mod tests {
         facts.record("w1:p1", &ended, 130).unwrap();
         facts.record("w1:p1", &asking("call-1"), 140).unwrap();
         assert_eq!(refused_at(&mut facts), (Some(HookTurn::Waiting), None));
+    }
+
+    /// The command a permission request asks to run stands on the agent while
+    /// its hook says the turn waits, and goes with that wait: the next report
+    /// of a turn replaces it, so a later request that names none does not
+    /// keep an earlier one's, and a turn that goes on has none.
+    #[test]
+    fn the_command_a_request_asks_to_run_stands_only_while_its_turn_waits() {
+        use hide_node_link::panes::HookAsked;
+        let asked_after = |facts: &mut HookFacts| {
+            let mut laid = read("working", 9, None, &[]);
+            lay(facts, &mut laid);
+            (
+                laid.agents[0].hook,
+                laid.agents[0]
+                    .hook_asked
+                    .as_ref()
+                    .map(|asked| asked.command.clone()),
+            )
+        };
+        let request = |command: Option<&str>| {
+            let mut asking = report(Some("s-1"), Some(HookTurn::Waiting));
+            asking.asked = command.and_then(HookAsked::of);
+            asking
+        };
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &request(Some("cargo test")), 10)
+            .unwrap();
+        assert_eq!(
+            asked_after(&mut facts),
+            (Some(HookTurn::Waiting), Some("cargo test".to_owned()))
+        );
+        // A count that says no turn leaves the wait and its command as they are.
+        facts
+            .record("w1:p1", &report(Some("s-1"), None), 20)
+            .unwrap();
+        assert_eq!(asked_after(&mut facts).1.as_deref(), Some("cargo test"));
+        // The next request names another command, or none.
+        facts
+            .record("w1:p1", &request(Some("git push")), 30)
+            .unwrap();
+        assert_eq!(asked_after(&mut facts).1.as_deref(), Some("git push"));
+        facts.record("w1:p1", &request(None), 40).unwrap();
+        assert_eq!(asked_after(&mut facts), (Some(HookTurn::Waiting), None));
+        // The turn goes on: nothing is asked.
+        facts
+            .record("w1:p1", &request(Some("git push")), 50)
+            .unwrap();
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 60)
+            .unwrap();
+        assert_eq!(asked_after(&mut facts), (Some(HookTurn::Working), None));
+        // A command past the report's limit is refused, never kept whole.
+        let mut oversize = request(None);
+        oversize.asked = Some(HookAsked {
+            command: "x".repeat(hide_agent_hooks::report::ASKED_COMMAND_LIMIT + 1),
+            cut: false,
+        });
+        assert_eq!(
+            facts.record("w1:p1", &oversize, 70).unwrap_err(),
+            "hook_asked_invalid"
+        );
     }
 
     /// A device's engine goes with its link and the next link's engine counts

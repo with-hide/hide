@@ -123,9 +123,13 @@ pub struct PlanKeys {
 /// where the agent offers that, or refuse it (the operator says what to do
 /// instead in a reply after it). A permission is answered from another
 /// screen only when it names the command it waits on and the agent's screen
-/// shows that command as the keys are typed, unless `unnamed`: the agent
-/// records a call only once it is allowed (Codex), so its permission never
-/// names one and is answered as it stands.
+/// shows that command as the keys are typed, unless `by_hook`: the agent
+/// records a call only once it is allowed (Codex), so its session names no
+/// call while the operator is asked. Its permission request hook names the
+/// command instead (`hide_agent_hooks::report::HookAsked`), which the card
+/// shows; the hook is what ties the card to the dialog, so the keys are
+/// typed without a check of the screen's command, and a permission whose
+/// hook named none is answered as it stands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionKeys {
@@ -136,10 +140,10 @@ pub struct PermissionKeys {
     #[serde(default)]
     pub row: Option<String>,
     #[serde(default)]
-    pub unnamed: bool,
+    pub by_hook: bool,
     /// Where the agent's approval dialog draws the command, which a
     /// permission that names one is checked against; a table with a `row`
-    /// that is not `unnamed` needs it.
+    /// that is not `by_hook` needs it.
     #[serde(default)]
     pub command: Option<CommandSlot>,
 }
@@ -229,7 +233,7 @@ fn check_answer(name: &str, answer: &Answer) -> Result<(), String> {
                     "{name}: answer.permission.command names its title and separator in 1 to {MAX_ROW_BYTES} bytes of text"
                 ));
             }
-            None if permission.row.is_some() && !permission.unnamed => {
+            None if permission.row.is_some() && !permission.by_hook => {
                 return Err(format!(
                     "{name}: answer.permission.command says where the dialog draws the command, which a permission with a row checks before its keys"
                 ));

@@ -6383,6 +6383,7 @@ mod tests {
                 waiting: None,
                 account: None,
                 refused: None,
+                asked: None,
             };
             facts.record(&pane, &report, 0).unwrap();
             engine

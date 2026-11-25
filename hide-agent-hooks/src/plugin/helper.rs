@@ -456,6 +456,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -510,6 +511,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -563,6 +565,7 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
                 std::env::var_os(name)
             }),
             refused: None,
+            asked: None,
         },
         started + report::REPORT_TIMEOUT,
     );

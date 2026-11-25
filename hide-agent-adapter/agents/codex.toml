@@ -218,5 +218,6 @@ not = [
 marker = "›"
 question = { down = "down", pick = "enter", row = "{n}." }
 plan_approval = { approve = ["enter"], keep_planning = ["down", "down", "enter"], row = "{n}." }
-# Codex records a call only once it is allowed, so its permission names no command.
-permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", unnamed = true }
+# Codex records a call only once it is allowed, so its session names none while
+# the operator is asked: its PermissionRequest hook gives the command instead.
+permission = { allow = ["enter"], allow_always = ["down", "enter"], deny = ["esc"], row = "{n}.", by_hook = true }

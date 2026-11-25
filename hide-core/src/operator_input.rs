@@ -694,12 +694,14 @@ pub fn choice_screen(agent_kind: &str, ask: Ask, choice: &str, labels: &[String]
     }
 }
 
-/// Whether the agent's permission names no command, since it records a call
-/// only once it is allowed (`unnamed` in its key table).
-pub fn unnamed_permission(agent_kind: &str) -> bool {
+/// Whether the agent's permission is named by its hook, since the agent
+/// records a call only once it is allowed (`by_hook` in its key table): the
+/// card's command is the one its permission request hook gave, and no screen
+/// check is made of it.
+pub fn permission_by_hook(agent_kind: &str) -> bool {
     answer_table(agent_kind)
         .and_then(|answer| answer.permission.as_ref())
-        .is_some_and(|permission| permission.unnamed)
+        .is_some_and(|permission| permission.by_hook)
 }
 
 /// Whether `key` acts on the highlighted row, or moves it: every key but
