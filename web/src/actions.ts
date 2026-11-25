@@ -2942,6 +2942,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
 
+    /** A level under Desk's box: the whole permission table in one event, the other settings untouched. */
+    deskPermissions(permissions: DeskPermissions) {
+      dispatch({ schema_version: 2, kind: "desk_settings_set", payload: { permissions } });
+    },
+
     /** `취소` on a waiting card (B21). */
     deskJobCancel(id: string) {
       dispatch({ schema_version: 2, kind: "desk_job_cancel", payload: { id } });
