@@ -63,11 +63,11 @@ function shiftDate(date: string, days: number): string {
   return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
 }
 
-/** The number on the sidebar's Needs You entry, 0 while it draws none. */
+/** The one 내 차례 number, as the device rail's badge on this machine's tile draws it, 0 while it draws none. */
 async function askingCount(page: Page): Promise<number> {
-  const count = page.locator("[data-overview-count]");
-  if ((await count.count()) === 0) return 0;
-  return Number((await count.textContent())?.match(/\d+/)?.[0] ?? 0);
+  const badge = page.locator('[data-device-rail] [data-rail-badge="needs_you"]');
+  if ((await badge.count()) === 0) return 0;
+  return Number(await badge.first().getAttribute("data-rail-badge-count"));
 }
 
 /** The wall date and minute `ahead` minutes from now on this machine, whose zone hided reads a once time in. */
