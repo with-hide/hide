@@ -7,12 +7,12 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { CLOSED_DIM, PR_LOOK, pullsStaleness } from "../../prMark";
 import type { AgentRow, DeskOutputKind, PrState, SessionPull } from "../../snapshot";
-import { useFileSource, useImageFile } from "../../imageFile";
 import { PrHoverCard, PrListItem, PrMark } from "../pr-mark";
 import { Button } from "../ui/button";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
 import { UnseenMark } from "./desk-job-card";
+import { OutputPicture } from "./output-picture";
 
 /** The shelf's groups in the order they stand when none waits to be seen (Doop B4, shelf 나). */
 const KINDS: readonly DeskOutputKind[] = ["image", "page", "doc", "pr"];
@@ -71,22 +71,10 @@ function unseen(item: ShelfItem): boolean {
   return item.kind !== "pr" && item.unseen;
 }
 
-/**
- * An image's picture: the card's own thumbnail when the core sent one, else
- * the file itself, read from the machine the session runs on as the session
- * record's tiles read it; the image mark while there is none to draw.
- */
+/** An image's picture, as every part draws an output's (`OutputPicture`); the image mark while there is none to draw. */
 function Picture({ item, className }: { item: ShelfItem; className: string }) {
   if (item.kind !== "image") return null;
-  if (item.thumb) return <img src={item.thumb} alt="" aria-hidden="true" draggable={false} className={className} />;
-  const { output } = item;
-  return output.path ? <FilePicture path={output.path} device={output.device_id} root={output.checkout} className={className} /> : <ImageIcon aria-hidden="true" className={ICON} />;
-}
-
-function FilePicture({ path, device, root, className }: { path: string; device: string | null; root: string | null; className: string }) {
-  const url = useImageFile(path, useFileSource(device, root));
-  if (url === null || url === "failed") return <ImageIcon aria-hidden="true" className={ICON} />;
-  return <img src={url} alt="" aria-hidden="true" draggable={false} className={className} data-desk-shelf-picture="true" />;
+  return <OutputPicture output={item.output} className={className} fallback={<ImageIcon aria-hidden="true" className={ICON} />} />;
 }
 
 /** A picture on a chip, or the image mark while none is drawn yet. */

@@ -4,6 +4,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
+import { configureFileBytes, receiveBytes } from "../../fileBytes";
 import { keepSent } from "../../deskComposer";
 import type { CopyText } from "../human-turn-copy";
 import type { AskLine } from "../open-asks";
@@ -219,6 +220,23 @@ it("draws the files a sent message typed before its words over its bubble, by th
   const sent = container.querySelector("[data-desk-sent-attachments]");
   expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
+});
+
+it("draws an image the session showed as its picture, read from the file as the shelf reads it", async () => {
+  const reads: Record<string, unknown>[] = [];
+  configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
+  vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: () => "blob:dark", revokeObjectURL: () => undefined }));
+  const { container } = await mount();
+  const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
+  expect(reads).toMatchObject([{ path: "/repo/shots/dark.png" }]);
+  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: reads[0]!.request_id, path: "/repo/shots/dark.png", offset: 0, total: 1, eof: true }));
+  const frame = new Uint8Array(4 + header.length + 1);
+  new DataView(frame.buffer).setUint32(0, header.length, false);
+  frame.set(header, 4);
+  await act(async () => receiveBytes(frame.buffer));
+  const tile = container.querySelector('[data-desk-hide-part="view"] [data-desk-output-thumb="image"]');
+  expect(tile?.querySelector("img")?.getAttribute("src")).toBe("blob:dark");
 });
 
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
