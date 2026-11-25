@@ -122,8 +122,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const box = useRef<MentionInputHandle>(null);
   // The words a send carried, held until the conversation shows them, so a refused send keeps them in the box.
   const pending = useRef<{ text: string; after: number; queued: ReadonlySet<number> } | null>(null);
-  // The last send as written, put back in the box when the agent turned out not to be signed in (B6).
-  const lastSent = useRef<{ words: typeof draft; after: number } | null>(null);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -135,9 +133,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
   // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
-  // The core refuses a ninth waiting message, so at eight the words stay in the box.
+  // A message the agent could not take (its sign-in, a session that did not open) comes back as the first waiting one, so
+  // the box never gets it again (B6). The core refuses one more when the line is full: then the words stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
-  const canSend = agent?.state === "ready" && queued.length < DESK_QUEUED_MAX;
+  const queuedFull = desk?.conversation.queued_full ?? false;
+  const canSend = agent?.state === "ready" && !queuedFull;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
@@ -149,12 +149,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
       if (outgoing(useUiStore.getState().deskDraft).text === sent.text) setDraft({ text: "", mentions: [] });
     }
   }, [items, queued, setDraft]);
-  useEffect(() => {
-    const sent = lastSent.current;
-    if (!sent || !items?.some((item) => item.kind === "notice" && item.notice === "login_needed" && item.id > sent.after)) return;
-    lastSent.current = null;
-    if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
-  }, [items, setDraft]);
 
   useLayoutEffect(() => {
     const box = scroller.current;
@@ -177,7 +171,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     const out = outgoing(words);
     if (!out.text) return;
     pending.current = { text: out.text, after: lastUserId(items), queued: new Set(queued.map((one) => one.id)) };
-    lastSent.current = { words, after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions);
   };
@@ -308,6 +301,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const shownOutput = front?.kind === "output" ? front.output.id : null;
   const composer = (
     <DeskComposer
+      notice={queuedFull ? t("desk.queued.full") : null}
       value={draft.text}
       draft={draft}
       inputRef={box}
@@ -517,8 +511,6 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   );
 }
 
-/** Messages that wait at once (`DESK_QUEUED_MAX` in hide-core). */
-const DESK_QUEUED_MAX = 8;
 const NO_QUEUED: readonly DeskQueuedMessage[] = [];
 const NO_WIDTHS = { view_width: null, session_width: null };
 

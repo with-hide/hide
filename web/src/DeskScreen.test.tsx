@@ -39,7 +39,7 @@ const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: 
   selection: { agent: "claude", model: null, effort: null },
   agents: [claude(state, signedIn)],
   host: { state: "ready", detail: null },
-  conversation: { generation: 1, items, dropped: 0, queued },
+  conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8 },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
   lane: { view_width: null, session_width: null },
@@ -118,16 +118,14 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
   });
 
-  it("puts a sent message back in the box when the agent turned out not to be signed in (B6)", async () => {
+  it("lets a message the agent could not take go from the box, since the core keeps it as the first waiting one (B6)", async () => {
     useUiStore.setState({ deskDraft: { text: "ask @session(w1:p2 fixer)", mentions: [fixer] } });
     await render(desk([], "ready", false));
     await press("[data-desk-composer-send]");
-    await show(desk([{ kind: "user", id: 1, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }], "ready", false));
+    // The core refused the open, said how to sign in and put the message first in the waiting line.
+    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", false, [{ id: 3, text: "ask @session(w1:p2 fixer)", at_ms: 0, mentions: [fixer] }]));
     expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
-
-    // The core takes the message out again and says how to sign in.
-    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }], "ready", false));
-    expect(useUiStore.getState().deskDraft).toEqual({ text: "ask @session(w1:p2 fixer)", mentions: [fixer] });
+    expect(document.body.querySelectorAll("[data-desk-queued]")).toHaveLength(1);
   });
 
   it("sends the operator's last message again as they wrote it on 다시 시도", async () => {
@@ -322,6 +320,7 @@ describe("Desk's room", () => {
       await show(desk([], "ready", true, [waiting(5, "끝나면 알려줘")]));
       expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
+      expect(document.body.textContent).not.toContain("The waiting line is full");
     });
 
     it("keeps the words in the box and sends nothing while eight messages already wait", async () => {
@@ -332,6 +331,7 @@ describe("Desk's room", () => {
       await key("Enter");
       expect(sent("desk_send")).toEqual([]);
       expect(useUiStore.getState().deskDraft.text).toBe("九番目");
+      expect(document.body.querySelector("[data-desk-composer-notice]")?.textContent).toBe("The waiting line is full");
       // One leaves the line, and the same press goes.
       await show(desk([], "ready", true, eight.slice(1)));
       await key("Enter");
