@@ -3,7 +3,7 @@ name = "hide-desk"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Desk's agent boundary: the ACP client for the operator's chosen agent, how each catalog agent speaks ACP in its ask mode, the adapters' installation and the permission rule"
+description = "Desk's agent boundary: the ACP client for the operator's chosen agent, how each catalog agent speaks ACP, the adapters' installation and the reading of an agent's permission requests"
 
 [lib]
 name = "hide_desk"

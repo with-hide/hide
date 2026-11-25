@@ -545,8 +545,8 @@ impl Worker {
         }
     }
 
-    /// Starts the Desk process for `send.adapter` and opens its session in
-    /// the adapter's ask mode, then applies the chosen model and effort.
+    /// Starts the Desk process for `send.adapter` and opens its session,
+    /// then applies the chosen model and effort.
     fn open(&mut self, send: &Send) -> Result<(Running, bool, Choices), OpenError> {
         let adapter = send.adapter;
         let places = self.platform.places();

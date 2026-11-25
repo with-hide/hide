@@ -1,10 +1,9 @@
 //! A Desk process end to end against a stand-in ACP agent: this test binary
 //! run again in the agent's role. It proves what a caller of the host relies
-//! on: the session opens in its ask mode, a turn's reply and its permission
-//! request arrive, a refused ask mode keeps the session unused, a command
-//! the agent runs finds Desk's own `hide` first, the agent has the account's
-//! environment without a pane's identity or Hide's own variables, and
-//! ending the host leaves nothing it started running.
+//! on: the session opens, a turn's reply and its permission request
+//! arrive, a command the agent runs finds Desk's own `hide` first, the
+//! agent has the account's environment without a pane's identity or Hide's
+//! own variables, and ending the host leaves nothing it started running.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};

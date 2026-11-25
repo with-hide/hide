@@ -564,9 +564,15 @@ pub enum DeskItem {
         options: Vec<DeskOption>,
         state: DeskApprovalState,
         /// The kind of the option the operator pressed; none while it waits,
-        /// once closed, and on a card kept from before it was sent.
+        /// once closed, when `거절…` ended a card that offered no rejecting
+        /// option, and on a card kept from before it was sent.
         #[serde(default)]
         chosen: Option<DeskOptionKind>,
+        /// The agent's own name for the option pressed, which the answered
+        /// line shows for an option Hide has no word for; none where
+        /// `chosen` is none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<String>,
         /// The line the operator sent Desk with `거절…` (D-83).
         #[serde(default)]
         refusal: Option<String>,
@@ -628,11 +634,17 @@ impl DeskItem {
                 command,
                 folder,
                 reason,
+                options,
+                answer,
                 refusal,
                 ..
             } => {
                 command.len()
-                    + [folder, reason, refusal]
+                    + options
+                        .iter()
+                        .map(|option| option.id.len() + option.name.len())
+                        .sum::<usize>()
+                    + [folder, reason, answer, refusal]
                         .into_iter()
                         .map(|text| text.as_ref().map_or(0, String::len))
                         .sum::<usize>()
@@ -744,10 +756,24 @@ pub enum DeskPermission {
     /// but a line of `hide` commands, which Hide allows once itself.
     Agent,
     /// `다 허용`: every request is answered with the agent's allow-once
-    /// option, with no card. A value this build does not know reads as it.
+    /// option, with no card.
     #[default]
-    #[serde(other)]
     AllowAll,
+}
+
+/// The stored choice: a word this build cannot read, written by a later
+/// Hide, restores as `에이전트대로`, the side that asks, never as `다 허용`.
+fn stored_permission<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DeskPermission, D::Error> {
+    let word = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(word).unwrap_or_else(|_| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "desk",
+            "kind": "desk.permission_unknown",
+        }));
+        DeskPermission::Agent
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -815,7 +841,7 @@ pub struct DeskSettings {
     pub cap: u8,
     /// The choice under Desk's box (D-92): `다 허용` in a store written
     /// before it existed, whatever its earlier permission table said.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "stored_permission")]
     pub permission: DeskPermission,
 }
 

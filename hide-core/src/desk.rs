@@ -586,6 +586,11 @@ mod tests {
         });
         let restored = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
         assert_eq!(restored.settings.permission, DeskPermission::AllowAll);
+        // A word a later Hide wrote restores as the side that asks.
+        let mut later = older.clone();
+        later["settings"]["permission"] = "ask_more".into();
+        let later = decode(&serde_json::to_vec(&later).unwrap()).unwrap();
+        assert_eq!(later.settings.permission, DeskPermission::Agent);
         assert_eq!(
             restored.conversation.items,
             [DeskItem::Approval {
@@ -597,6 +602,7 @@ mod tests {
                 options: Vec::new(),
                 state: DeskApprovalState::Allowed,
                 chosen: None,
+                answer: None,
                 refusal: None,
             }]
         );
@@ -614,6 +620,7 @@ mod tests {
                         options: Vec::new(),
                         state: DeskApprovalState::Allowed,
                         chosen: Some(DeskOptionKind::AllowAlways),
+                        answer: Some("Yes, and don't ask again".into()),
                         refusal: None,
                     }],
                     ..Conversation::default()
@@ -624,6 +631,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(written["conversation"]["items"][0]["state"], "allowed");
+    }
+
+    /// The largest card a request can make, its most options each at its
+    /// longest, stores and comes back, and its options count against the
+    /// conversation's bytes.
+    #[test]
+    fn a_card_with_the_most_and_longest_options_stores_and_comes_back() {
+        use hide_desk::permission::{
+            MAX_OPTION_ID_BYTES, MAX_OPTION_NAME_BYTES, MAX_OPTIONS, read_request,
+        };
+
+        use crate::model::{DeskApprovalState, DeskCardKind};
+        let options: Vec<serde_json::Value> = (0..MAX_OPTIONS + 4)
+            .map(|n| {
+                serde_json::json!({
+                    "optionId": format!("{n:0>MAX_OPTION_ID_BYTES$}"),
+                    "kind": "allow_once",
+                    "name": "가".repeat(MAX_OPTION_NAME_BYTES),
+                })
+            })
+            .collect();
+        let request = read_request(
+            &serde_json::json!({"toolCall": {"toolCallId": "t", "kind": "execute", "title": "ls"},
+                "options": options}),
+            None,
+        );
+        assert_eq!(request.choices.len(), MAX_OPTIONS);
+        let card = DeskItem::Approval {
+            id: 1,
+            card: DeskCardKind::Command,
+            command: "ls".into(),
+            folder: None,
+            reason: None,
+            options: request.choices,
+            state: DeskApprovalState::Waiting,
+            chosen: None,
+            answer: None,
+            refusal: None,
+        };
+        assert!(card.text_bytes() > MAX_OPTIONS * MAX_OPTION_ID_BYTES);
+        let mut stored = Stored::default();
+        stored.conversation.push(card.clone());
+        let restored = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(restored.conversation.items, [card]);
     }
 
     #[test]
