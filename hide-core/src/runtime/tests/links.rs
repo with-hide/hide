@@ -2167,6 +2167,7 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
             next_due_unix_ms: None,
             records: Vec::new(),
             next_run_number: 0,
+            look_run: None,
         };
         let run = automation.new_run(crate::automations::Trigger::Scheduled, Some(1), 1);
         automation.run_mut(run).unwrap().agent_id = Some("agent-4".into());

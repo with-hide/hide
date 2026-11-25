@@ -158,6 +158,9 @@ pub(crate) struct AutomationsRuntime {
     /// opening's: a pane such a start made is the run's before its agent
     /// registers (`started::StartingPane`).
     asking: HashSet<String>,
+    /// The once automations, by id: their runs' rows say so
+    /// (`HideAiSnapshot::once`), laid again when this set moves.
+    once: HashSet<String>,
     /// What last kept each finished run's terminal open, so the hold is
     /// logged when it changes, not on every look.
     close_held: HashMap<RunKey, &'static str>,
@@ -346,9 +349,10 @@ impl Runtime {
                 save |= moved_here(automation, &here, now, &mut left_elsewhere);
             }
             // A book saved by an earlier run keeps its times; one on with no
-            // time takes its next one now.
+            // time takes its next one now, which a once automation whose time
+            // was taken never gets again.
             if automation.on() && automation.next_due_unix_ms.is_none() {
-                automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
+                automation.next_due_unix_ms = automation.next_time(now, &zone);
             }
         }
         for (automation, run, machine, (intents, worktree)) in left_elsewhere {
@@ -359,6 +363,11 @@ impl Runtime {
         self.automations.zone = Some(zone);
         self.automations.next_zone_read_unix_ms = now.saturating_add(ZONE_READ_MS);
         self.automations_changed(save);
+    }
+
+    /// Whether the automation `id` runs once (mission-104 O-4).
+    pub(super) fn automation_once(&self, id: &str) -> bool {
+        self.automations.once.contains(id)
     }
 
     /// Whether `agent_id` is the agent of one of the automations' runs.
@@ -459,9 +468,20 @@ impl Runtime {
             })
             .map(str::to_owned)
             .collect();
-        if asking != self.automations.asking {
+        let once: HashSet<String> = self
+            .automations
+            .book
+            .automations
+            .iter()
+            .filter(|automation| automation.schedule.is_once())
+            .map(|automation| automation.id.clone())
+            .collect();
+        let once_moved = once != self.automations.once;
+        self.automations.once = once;
+        if asking != self.automations.asking || once_moved {
             self.automations.asking = asking;
-            // A start's pane changes hands: its row is laid again.
+            // A start's pane changes hands, or a run's automation became or
+            // stopped being once: its row is laid again.
             self.refresh_agent_lineage();
         }
         let unlisted: HashSet<String> = self
@@ -639,7 +659,7 @@ impl Runtime {
         let now = super::unix_milliseconds();
         for automation in &mut self.automations.book.automations {
             if automation.on() {
-                automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
+                automation.next_due_unix_ms = automation.next_time(now, &zone);
             }
         }
         self.automations.zone = Some(zone);
@@ -647,9 +667,14 @@ impl Runtime {
         true
     }
 
-    /// A time came for the automation at `index` (D-14, D-15, D-16).
+    /// A time came for the automation at `index` (D-14, D-15, D-16). A
+    /// once automation's one time is never skipped at the usage limit
+    /// (mission-104 O-3): it starts as a manual run does, and a refusal for
+    /// the limit ends the run, which the operator then finds in Needs You.
+    /// A run of it already going is the run for its time.
     fn fire(&mut self, index: usize, due: crate::automations::Due, now: u64) {
-        let gate = self.run_gate(&self.automations.book.automations[index].agent, now, true);
+        let automation = &self.automations.book.automations[index];
+        let gate = self.run_gate(&automation.agent, now, !automation.schedule.is_once());
         let automation = &mut self.automations.book.automations[index];
         let missed = due.missed.is_some();
         if let Some(line) = due.missed {
@@ -724,16 +749,20 @@ impl Runtime {
 
     /// A failure a person fixes: the run ends failed, its terminal closes,
     /// and the automation stops and raises its own Needs You line (D-12,
-    /// B23); no retry.
+    /// B23); no retry. A once automation with no time left has nothing to
+    /// stop: its run ends failed with the reason, which its own line in
+    /// Needs You shows (mission-104 O-3, O-4).
     fn pause_for_person(&mut self, key: &RunKey, reason: PauseReason, now: u64) {
         let Some(automation) = self.automation_mut(&key.0) else {
             return;
         };
-        automation.paused = Some(Pause {
-            reason,
-            at_unix_ms: now,
-        });
-        automation.next_due_unix_ms = None;
+        if !automation.schedule.is_once() || automation.next_due_unix_ms.is_some() {
+            automation.paused = Some(Pause {
+                reason,
+                at_unix_ms: now,
+            });
+            automation.next_due_unix_ms = None;
+        }
         self.finish_run(key, RunState::Failed, Some(reason.code()), Close::Now, now);
         crate::diagnostic!(json!({
             "component": "automations", "kind": "automation.paused_for_person",
@@ -783,7 +812,12 @@ impl Runtime {
         now: u64,
     ) {
         self.forget(key);
-        let Some(run) = self.run_mut(key) else {
+        let viewed = self.automations.viewing.contains_key(key);
+        let Some(automation) = self.automation_mut(&key.0) else {
+            return;
+        };
+        let once = automation.schedule.is_once();
+        let Some(run) = automation.run_mut(key.1) else {
             return;
         };
         let ended = run.state.active() && !state.active();
@@ -793,6 +827,12 @@ impl Runtime {
         run.reason = reason.map(reason_code);
         run.closing = close == Close::Idle;
         run.ask = None;
+        // A once automation's run that ended waits in the operator's Needs
+        // You until they open it, whatever its result (mission-104 O-4),
+        // unless a window shows it as it ends.
+        if ended && once && !viewed {
+            automation.look_run = Some(key.1);
+        }
         if ended && let Some(sink) = &self.product_analytics {
             use crate::product_analytics::{AutomationOutcome, AutomationTrigger, Event};
             let outcome = match state {
@@ -1555,10 +1595,15 @@ impl Runtime {
             return match refused.refusal.kind {
                 // The account's limit: trying again before it resets would
                 // be refused the same (D-16).
+                // A once automation's run stays a run, failed for the limit,
+                // so its one time is not a skip nobody is told of
+                // (mission-104 O-3).
                 hide_node_link::panes::RefusalKind::Limit => {
                     self.finish_run(key, RunState::Failed, Some("usage_limit"), Close::Now, now);
                     self.automations.viewing.remove(key);
-                    if let Some(automation) = self.automation_mut(&key.0) {
+                    if let Some(automation) = self.automation_mut(&key.0)
+                        && !automation.schedule.is_once()
+                    {
                         automation.skip_run(key.1, now);
                     }
                     true
@@ -2105,7 +2150,7 @@ impl Runtime {
                 return (found, false);
             }
             Call::Preview { schedule, name } => {
-                return (self.preview(&schedule, &name, now), false);
+                return (self.preview(schedule, &name, now), false);
             }
         };
         match answer {
@@ -2353,8 +2398,16 @@ impl Runtime {
     /// A finished run the operator opened is dealt with (operator decision
     /// 2026-11-21): its row is resolved, so it leaves Needs You, and comes
     /// back when the run's agent asks again. A run going, or an agent that
-    /// works or waits on an approval, keeps its row (`resolve_refusal`).
+    /// works or waits on an approval, keeps its row (`resolve_refusal`). A
+    /// once automation's line for the run goes too (mission-104 O-4).
     fn put_away_viewed_run(&mut self, key: &RunKey) {
+        if self.run_of(key).is_some_and(|run| !run.state.active())
+            && let Some(automation) = self.automation_mut(&key.0)
+            && automation.look_run == Some(key.1)
+        {
+            automation.look_run = None;
+            self.automations_changed(true);
+        }
         let Some(run) = self.run_of(key).filter(|run| !run.state.active()) else {
             return;
         };
@@ -2440,12 +2493,13 @@ impl Runtime {
     /// the home is not known.
     fn preview(
         &self,
-        schedule: &crate::automations::Schedule,
+        schedule: crate::automations::Asked,
         name: &str,
         now: u64,
     ) -> Result<Value, String> {
         let zone = self.zone();
-        schedule.validate(&zone).map_err(str::to_owned)?;
+        let schedule = schedule.resolve(now, &zone).map_err(str::to_owned)?;
+        schedule.validate(now, &zone).map_err(str::to_owned)?;
         Ok(json!({
             "reads_as": schedule.meaning().reads_as,
             "next_run_at_unix_ms": schedule.next_after(now, &zone),
@@ -2518,16 +2572,18 @@ impl Runtime {
         if self.automations.store.is_none() {
             return Err("automations_unavailable");
         }
-        if self.automations.book.automations.len() >= crate::automations::AUTOMATION_CAP {
+        let full = self.automations.book.automations.len() >= crate::automations::AUTOMATION_CAP;
+        if full && self.automations.book.oldest_done().is_none() {
             return Err("automation_cap");
         }
         let zone = self.zone();
         let name = crate::automations::checked_name(&draft.name)?;
+        let task = crate::automations::checked_task(&draft.task)?;
+        let schedule = draft.schedule.resolve(now, &zone)?;
+        schedule.validate(now, &zone)?;
         if self.automations.book.find(&name).is_some() {
             return Err("automation_name_taken");
         }
-        let task = crate::automations::checked_task(&draft.task)?;
-        draft.schedule.validate(&zone)?;
         let agent = crate::automations::checked_agent(&draft.agent)?;
         let taken: Vec<&str> = self
             .automations
@@ -2539,12 +2595,23 @@ impl Runtime {
         let id = crate::automations::new_id(now, &taken);
         let folder =
             self.checked_folder(draft.folder, draft.worktree, || self.own_folder(&name, &id))?;
+        // At the cap the done once automation that ended first goes, its
+        // records with it and its folder kept (mission-104 O-5), once the
+        // new one is known to be made.
+        if full && let Some(index) = self.automations.book.oldest_done() {
+            let dropped = self.automations.book.automations[index].id.clone();
+            crate::diagnostic!(json!({
+                "component": "automations", "kind": "automation.cap_dropped",
+                "automation": dropped, "cap": crate::automations::AUTOMATION_CAP,
+            }));
+            self.remove_automation(&dropped, now)?;
+        }
         let automation = Automation {
             id: id.clone(),
             name,
             task,
-            next_due_unix_ms: draft.schedule.next_after(now, &zone),
-            schedule: draft.schedule,
+            next_due_unix_ms: schedule.next_after(now, &zone),
+            schedule,
             agent: agent.clone(),
             folder,
             machine: self.node.as_str().to_owned(),
@@ -2552,6 +2619,7 @@ impl Runtime {
             created_at_unix_ms: now,
             records: Vec::new(),
             next_run_number: 0,
+            look_run: None,
         };
         let mut answer = json!({
             "id": id,
@@ -2619,8 +2687,12 @@ impl Runtime {
             .as_deref()
             .map(crate::automations::checked_task)
             .transpose()?;
-        if let Some(schedule) = &changes.schedule {
-            schedule.validate(&zone)?;
+        let schedule = changes
+            .schedule
+            .map(|schedule| schedule.resolve(now, &zone))
+            .transpose()?;
+        if let Some(schedule) = &schedule {
+            schedule.validate(now, &zone)?;
         }
         let agent = changes
             .agent
@@ -2664,7 +2736,10 @@ impl Runtime {
         if let Some(task) = task {
             automation.task = task;
         }
-        if let Some(schedule) = changes.schedule {
+        // A new schedule takes effect from its next time: a done once
+        // automation given a new time or a repeating schedule waits again
+        // (mission-104 O-3).
+        if let Some(schedule) = schedule {
             automation.schedule = schedule;
             if automation.on() {
                 automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
@@ -2695,6 +2770,12 @@ impl Runtime {
             .position(id)
             .ok_or("automation_unknown")?;
         let automation = &mut self.automations.book.automations[index];
+        // A once automation whose one time was taken, done or with its run
+        // going, has no time left to stop (mission-104 O-3).
+        if automation.schedule.is_once() && automation.on() && automation.next_due_unix_ms.is_none()
+        {
+            return Err("automation_done");
+        }
         if automation.paused.is_none() {
             automation.paused = Some(Pause {
                 reason: PauseReason::Operator,
@@ -2718,7 +2799,10 @@ impl Runtime {
         let automation = &mut self.automations.book.automations[index];
         automation.machine = here;
         if automation.paused.take().is_some() {
-            automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
+            // A once automation whose one time passed while it was paused
+            // runs now, once, rather than end unrun (mission-104 O-3).
+            let passed = automation.schedule.is_once().then_some(now);
+            automation.next_due_unix_ms = automation.schedule.next_after(now, &zone).or(passed);
         }
         Ok(json!({
             "id": automation.id,
@@ -2993,7 +3077,9 @@ impl Runtime {
 
     /// The automations stopped for a person to fix, oldest first: each one
     /// its own Needs You line on this machine's scope (D-12, B23), counted
-    /// with its agents as a mission's own ask is.
+    /// with its agents as a mission's own ask is; and beside them the once
+    /// automations whose run ended and waits for the operator to open it,
+    /// the one that ended first first (mission-104 O-4).
     pub(super) fn publish_automation_asks(&mut self) -> bool {
         let mut asks: Vec<(u64, String)> = self
             .automations
@@ -3009,14 +3095,34 @@ impl Runtime {
             })
             .collect();
         asks.sort();
-        let mut by_device = std::collections::BTreeMap::new();
-        if !asks.is_empty() {
-            by_device.insert(
-                self.node.as_str().to_owned(),
-                asks.into_iter().map(|(_, id)| id).collect::<Vec<_>>(),
-            );
-        }
-        self.agent_scope_cache.note_automation_asks(by_device) && self.refresh_agent_scopes()
+        let mut looks: Vec<(u64, String)> = self
+            .automations
+            .book
+            .automations
+            .iter()
+            .filter_map(|automation| {
+                let number = automation.look_run?;
+                let run = automation.runs().find(|run| run.number == number)?;
+                Some((
+                    run.ended_at_unix_ms.unwrap_or(run.started_at_unix_ms),
+                    automation.id.clone(),
+                ))
+            })
+            .collect();
+        looks.sort();
+        let here = self.node.as_str();
+        let by_device = |lines: Vec<(u64, String)>| {
+            let mut by_device = std::collections::BTreeMap::new();
+            if !lines.is_empty() {
+                by_device.insert(
+                    here.to_owned(),
+                    lines.into_iter().map(|(_, id)| id).collect::<Vec<_>>(),
+                );
+            }
+            by_device
+        };
+        let (asks, looks) = (by_device(asks), by_device(looks));
+        self.agent_scope_cache.note_automation_asks(asks, looks) && self.refresh_agent_scopes()
     }
 }
 
@@ -3148,6 +3254,7 @@ fn moved_here(automation: &mut Automation, here: &str, now: u64, left: &mut Left
     let mut changed = false;
     let id = automation.id.clone();
     let mut leftovers = Vec::new();
+    let mut ended = None;
     for entry in &mut automation.records {
         let Entry::Run(run) = entry else {
             continue;
@@ -3160,9 +3267,15 @@ fn moved_here(automation: &mut Automation, here: &str, now: u64, left: &mut Left
             run.reason = Some(MACHINE_CHANGED.to_owned());
             run.ended_at_unix_ms = Some(now);
             run.ask = None;
+            ended = Some(run.number);
         }
         leftovers.push(run.number);
         changed = true;
+    }
+    // A once automation's run ended: the operator learns it in Needs You
+    // (mission-104 O-4).
+    if automation.schedule.is_once() && ended.is_some() {
+        automation.look_run = ended;
     }
     for number in leftovers {
         let run = automation
@@ -3181,7 +3294,8 @@ fn moved_here(automation: &mut Automation, here: &str, now: u64, left: &mut Left
     }
     let operator = automation.paused.map(|pause| pause.reason) == Some(PauseReason::Operator);
     let flagged = automation.paused.map(|pause| pause.reason) == Some(PauseReason::MachineChanged);
-    if !operator && !flagged {
+    // A done once automation has no time to run on this machine.
+    if !operator && !flagged && !automation.done() {
         automation.paused = Some(Pause {
             reason: PauseReason::MachineChanged,
             at_unix_ms: now,

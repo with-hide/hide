@@ -150,6 +150,13 @@ pub struct Scope {
     /// oldest first, counted as a mission's own ask is.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub automation_asks: Vec<String>,
+    /// The once automations whose run ended and waits for the operator to
+    /// open it (mission-104 O-4, `AutomationSnapshot::look_run`), each its
+    /// own Needs You line on its machine's scope, the one that ended first
+    /// first, counted as `automation_asks` are. Unlike those, no phone is
+    /// pushed for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub automation_looks: Vec<String>,
     pub owners: BTreeMap<String, String>,
     pub badge_total: usize,
     pub rows: Vec<RowRef>,
@@ -805,8 +812,10 @@ pub(crate) struct Cache {
     /// mission views last marked them; laid on the device scopes and the
     /// overall one at every apply, never into the cached output.
     mission_asks: BTreeMap<String, Vec<String>>,
-    /// Each device's automations that are their own Needs You line.
+    /// Each device's automations that are their own Needs You line: those
+    /// stopped for a person, and the once ones whose run waits to be opened.
     automation_asks: BTreeMap<String, Vec<String>>,
+    automation_looks: BTreeMap<String, Vec<String>>,
     /// The bots in own mode, by connection id and name, in the access list's
     /// order: each has a cell (PRD hide-external-control D-47, mission-87);
     /// an all-mode bot's work is the operator's and has none.
@@ -1415,12 +1424,18 @@ impl Cache {
     }
 
     /// Takes each device's automations that are their own Needs You line,
+    /// stopped for a person (`asks`) or with a once run to open (`looks`),
     /// laid as `note_mission_asks` lays missions; true when they moved.
-    pub(crate) fn note_automation_asks(&mut self, asks: BTreeMap<String, Vec<String>>) -> bool {
-        if self.automation_asks == asks {
+    pub(crate) fn note_automation_asks(
+        &mut self,
+        asks: BTreeMap<String, Vec<String>>,
+        looks: BTreeMap<String, Vec<String>>,
+    ) -> bool {
+        if self.automation_asks == asks && self.automation_looks == looks {
             return false;
         }
         self.automation_asks = asks;
+        self.automation_looks = looks;
         true
     }
 
@@ -1448,6 +1463,9 @@ impl Cache {
         for asks in self.automation_asks.values() {
             with_automation_asks(&mut overall, asks);
         }
+        for looks in self.automation_looks.values() {
+            with_automation_looks(&mut overall, looks);
+        }
         let mut changed = snapshot.navigator.agent_scope != overall;
         snapshot.navigator.agent_scope = overall;
         for device in &mut snapshot.navigator.devices {
@@ -1462,6 +1480,9 @@ impl Cache {
             }
             if let Some(asks) = self.automation_asks.get(&device.id) {
                 with_automation_asks(&mut next, asks);
+            }
+            if let Some(looks) = self.automation_looks.get(&device.id) {
+                with_automation_looks(&mut next, looks);
             }
             changed |= device.agent_scope != next;
             device.agent_scope = next;
@@ -1531,6 +1552,14 @@ fn with_automation_asks(scope: &mut Scope, asks: &[String]) {
     scope.overview_needs_you += asks.len();
     scope.groups.needs_you += asks.len();
     scope.automation_asks.extend(asks.iter().cloned());
+}
+
+/// Counts a device's once automations whose run waits to be opened as its
+/// automations stopped for a person are counted.
+fn with_automation_looks(scope: &mut Scope, looks: &[String]) {
+    scope.overview_needs_you += looks.len();
+    scope.groups.needs_you += looks.len();
+    scope.automation_looks.extend(looks.iter().cloned());
 }
 
 /// A physical source occurrence. Pane identity alone cannot distinguish

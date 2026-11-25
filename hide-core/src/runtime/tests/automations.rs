@@ -2796,3 +2796,150 @@ fn a_run_shown_in_the_automation_screen_stays_attached_until_the_window_looks_aw
         .unwrap();
     assert_eq!(terminals.releases(), [pane]);
 }
+
+/// The wall date and time `unix_ms` falls on in UTC, the tests' zone, as a
+/// once schedule keeps it.
+fn once_at(unix_ms: u64) -> Value {
+    let at = jiff::Timestamp::from_millisecond(unix_ms as i64)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    json!({
+        "kind": "once",
+        "date": at.strftime("%Y-%m-%d").to_string(),
+        "time": at.strftime("%H:%M").to_string(),
+    })
+}
+
+/// The automations with a once run to open, as the scope names them.
+fn looks(runtime: &mut Runtime) -> Vec<String> {
+    runtime.snapshot_delta_payload(0);
+    runtime
+        .snapshot
+        .navigator
+        .agent_scope
+        .automation_looks
+        .clone()
+}
+
+impl Harness {
+    /// A once automation in the repository's folder, its time `minutes`
+    /// from now as a call names it: its id and the time it was kept as.
+    fn once_in(&self, name: &str, minutes: u32) -> (String, u64) {
+        let added = self
+            .call(json!({
+                "call": "add", "name": name, "task": "Check the webhook failures",
+                "schedule": {"kind": "once_in_minutes", "minutes": minutes},
+                "agent": {"kind": "claude"}, "folder": REPO,
+            }))
+            .unwrap();
+        (
+            added["id"].as_str().unwrap().to_owned(),
+            added["next_run_at_unix_ms"].as_u64().expect("a next time"),
+        )
+    }
+
+    fn item(&self, id: &str) -> Value {
+        show(&mut self.runtime.lock().unwrap(), id)
+    }
+
+    fn looks(&self) -> Vec<String> {
+        looks(&mut self.runtime.lock().unwrap())
+    }
+
+    fn phone(&self) -> crate::agent_state::phone::PhoneAutomations {
+        let mut runtime = self.runtime.lock().unwrap();
+        runtime.snapshot_delta_payload(0);
+        let scope = runtime.snapshot.navigator.agent_scope.clone();
+        crate::agent_state::phone::PhoneAutomations::project(
+            runtime.snapshot.automations.as_deref(),
+            &scope.automation_asks,
+            &scope.automation_looks,
+        )
+    }
+}
+
+/// mission-104 O-1, O-3, O-4 (the wire the screens draw): a once time named
+/// from now is kept as the date and time it falls on, and reads back as
+/// that; its run, once ended, leaves the automation done with no next time
+/// and stands in Needs You on the automation's own line, on the desktop's
+/// scope and the phone's alike, until a window shows the run.
+#[test]
+fn a_once_automation_is_kept_as_its_date_and_its_end_waits_in_needs_you_until_opened() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let before = unix_milliseconds();
+    let (id, due) = harness.once_in("Webhooks", 1);
+    // Now and a minute more, to the minute.
+    assert!(
+        due > before && due <= before + MINUTE_MS,
+        "{due} from {before}"
+    );
+    assert_eq!(due % MINUTE_MS, 0);
+    let item = harness.item(&id);
+    assert_eq!(item["schedule"], once_at(due));
+    assert_eq!(item["reads_as"], once_at(due));
+    assert_eq!(item["next_run_at_unix_ms"], due);
+    assert_eq!(item["done"], false);
+    assert_eq!(item.get("look_run"), None);
+
+    harness.tick(61);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    let item = harness.item(&id);
+    assert_eq!(
+        (
+            &item["done"],
+            &item["running"],
+            &item["next_run_at_unix_ms"]
+        ),
+        (&json!(false), &json!(true), &Value::Null),
+        "its run goes: not done yet"
+    );
+    assert_eq!(item["records"][0]["trigger"], "scheduled");
+    assert!(harness.looks().is_empty());
+
+    harness.show(&pane_of(&intent(&id, 1, 1)), answered);
+    harness.tick(1);
+    let item = harness.item(&id);
+    assert_eq!(
+        (
+            &item["done"],
+            &item["running"],
+            &item["look_run"],
+            &item["next_run_at_unix_ms"],
+            &item["records"][0]["state"],
+        ),
+        (
+            &json!(true),
+            &json!(false),
+            &json!(1),
+            &Value::Null,
+            &json!("succeeded")
+        )
+    );
+    assert_eq!(harness.looks(), [id.clone()]);
+    let phone = harness.phone();
+    assert_eq!(
+        phone.looks,
+        [id.clone()],
+        "the phone's 내 차례 counts it too"
+    );
+    let listed = phone.find(&id).unwrap();
+    assert_eq!((listed.done, listed.look_run), (true, Some(1)));
+    assert_eq!(
+        serde_json::to_value(&listed.schedule).unwrap(),
+        once_at(due),
+        "the phone words the date itself"
+    );
+
+    // Opened in the automation screen, it is put away; the automation
+    // stays done and never runs again on schedule.
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    assert!(harness.looks().is_empty());
+    let item = harness.item(&id);
+    assert_eq!((&item["done"], item.get("look_run")), (&json!(true), None));
+    assert!(harness.phone().looks.is_empty());
+    harness.tick(2 * 24 * 60 * 60);
+    assert_eq!(harness.asked().len(), 1, "one time, one run");
+}

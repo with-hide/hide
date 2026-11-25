@@ -60,19 +60,24 @@ fn projection_failed(stage: &str, message: &str) {
     );
 }
 
-/// The automations the core counts as the operator's turn, oldest pause
-/// first (`navigator.agent_scope.automation_asks`, PRD automations D-12); the
-/// core leaves the field out while there are none.
-fn automation_asks(rest: &Value) -> Vec<String> {
-    rest.pointer("/navigator/agent_scope/automation_asks")
-        .and_then(Value::as_array)
-        .map(|asks| {
-            asks.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+/// The automations the core counts as the operator's turn: those stopped
+/// for a person, oldest pause first (`navigator.agent_scope.automation_asks`,
+/// PRD automations D-12), and the once ones whose run waits to be opened
+/// (`automation_looks`, mission-104 O-4); the core leaves a field out while
+/// it names none.
+fn automation_asks(rest: &Value) -> (Vec<String>, Vec<String>) {
+    let ids = |field: &str| {
+        rest.pointer(&format!("/navigator/agent_scope/{field}"))
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (ids("automation_asks"), ids("automation_looks"))
 }
 
 /// How often the checklist is read again while Settings › Devices is open.
@@ -2928,7 +2933,11 @@ impl Mobile {
                 moved
             };
             if section_moved || asks_moved {
-                self.publish_automations(PhoneAutomations::project(automations.as_deref(), &asks));
+                self.publish_automations(PhoneAutomations::project(
+                    automations.as_deref(),
+                    &asks.0,
+                    &asks.1,
+                ));
             }
             match rest_moved {
                 Err(error) => {
