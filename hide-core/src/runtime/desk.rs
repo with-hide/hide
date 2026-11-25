@@ -672,7 +672,7 @@ impl Runtime {
     /// and the turn under way's. hided's keep of Desk's folder never removes
     /// them (`hided/src/attachments.rs`, `commit_named`).
     pub(crate) fn desk_files_in_use(&self) -> Vec<String> {
-        let turn = self.desk.turn.as_ref().map(|turn| turn.message);
+        let turn = self.desk.turn.as_ref().and_then(|turn| turn.message);
         let turn_files = self
             .desk
             .stored
