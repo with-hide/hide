@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { Blob as NodeBlob } from "node:buffer";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
@@ -32,7 +32,10 @@ let mounted: ReturnType<typeof createRoot>[] = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The input box holds the corner's notices above it by its measured box (`noticeFloor.ts`).
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   saved = useShellStore.getState();
+  useShellStore.setState({ connection: "live" });
   events = [];
   configureAttachments({ dispatch: (event) => events.push({ kind: event.kind, payload: event.payload as Record<string, unknown> }), sendBinary: () => undefined });
 });
@@ -45,7 +48,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -54,7 +57,7 @@ async function mount() {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={job} actions={actions} pinned={false} onBack={noop} onPin={noop} onClose={noop} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -81,6 +84,17 @@ it("opens its pane's thread while shown, draws what the core read, and closes it
   await act(async () => root.unmount());
   mounted = [];
   expect(actions.closeThread).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a sleeping session's record above the foot that wakes it once its card is gone with its pane (PRD desk-2-ui B43)", async () => {
+  const { container } = await mount(null, <p data-foot="true">에이전트 깨우기</p>);
+  await act(async () => useShellStore.setState({ sessionThread: section({ pane: "gone" }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  expect(container.textContent).toContain("다크도 찍어줘");
+  expect(container.textContent).toContain("라이트는 끝났어요");
+  // The foot stands in the input box's place, after the conversation.
+  const conversation = container.querySelector('[data-desk-thread-conversation="true"]')!;
+  expect(conversation.compareDocumentPosition(container.querySelector('[data-foot="true"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector("textarea")).toBeNull();
 });
 
 it("sends the box's words on Enter, keeps them until the pane took them, and never sends mid-composition", async () => {
@@ -203,4 +217,16 @@ it("draws the files a sent message typed before its words over its bubble, by th
   const sent = container.querySelector("[data-desk-sent-attachments]");
   expect([...sent!.querySelectorAll("[data-desk-attachment]")].map((tile) => tile.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual(["화면 1.png", "install.log"]);
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
+});
+
+it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
+  const { container } = await mount();
+  const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said("라이트는"), interrupted], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const line = container.querySelector('[data-desk-thread-line="interrupted"]');
+  expect(line?.textContent).toBe("Interrupted");
+  expect(container.textContent).not.toContain("Request interrupted");
+  // The only bubble is the operator's own words.
+  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
 });

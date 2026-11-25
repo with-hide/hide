@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, markedMention, mentionParts, outputKindOf, sessionFacts, threadGroups, threadLines, threadTurns, unseenOutputs, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -11,26 +11,19 @@ const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}):
 
 const text = (sessionUpdate: "user_message_chunk" | "agent_message_chunk", words: string): AcpSessionUpdate => ({ sessionUpdate, content: { type: "text", text: words } });
 
-describe("the Threads list (B28)", () => {
-  it("lists 내 차례, 작업 중 and 끝남 in that order, each only while it holds a thread", () => {
-    const groups = threadGroups([job("a", "done"), job("b", "working"), job("c", "asking"), job("d", "queued"), job("e", "failed")]);
-    expect(groups.map((group) => [group.key, group.jobs.map((one) => one.id)])).toEqual([
-      ["turn", ["c", "e"]],
-      ["working", ["b", "d"]],
-      ["done", ["a"]],
-    ]);
+describe("the sidebar's Desk row (PRD desk-2-ui B46)", () => {
+  it("counts the sessions Desk started that ask the operator", () => {
+    expect(askingCount([job("a", "asking"), job("b", "asking"), job("c", "done"), job("d", "working")])).toBe(2);
   });
+});
 
-  it("keeps a mission's workers under their Conductor and leaves out a thread pulled into the operator's tabs (B37)", () => {
-    const groups = threadGroups([job("conductor", "working", { workers: ["pane-w1", "pane-w2"] }), job("w1", "done"), job("w2", "asking"), job("mine", "moved_out")]);
-    expect(groups.map((group) => [group.key, group.jobs.map((one) => one.id)])).toEqual([["working", ["conductor"]]]);
-  });
-
-  it("counts the threads asking for ☰ and the outputs not seen for ▣", () => {
-    const seen = { id: "o1", kind: "image" as const, label: "a.png", thumb: null, seen: true, pr_state: null, device_id: null, checkout: null, path: null, url: null };
-    const unseen = { id: "o2", kind: "doc" as const, label: "b.md", thumb: null, seen: false, pr_state: null, device_id: null, checkout: null, path: null, url: null };
-    const jobs = [job("a", "asking", { outputs: [seen, unseen] }), job("b", "asking"), job("c", "done", { outputs: [unseen] })];
-    expect([askingCount(jobs), unseenOutputs(jobs)]).toEqual([2, 2]);
+describe("a failed turn's reason (B5)", () => {
+  it("drops the protocol's error name, and is none when the reply above already says it", () => {
+    expect(failureReason("Internal error: API Error: 400 거부", null)).toBe("API Error: 400 거부");
+    expect(failureReason("Internal error: API Error: 400 거부", "API Error: 400 거부")).toBeNull();
+    expect(failureReason("Rate limit reached", "다른 말")).toBe("Rate limit reached");
+    expect(failureReason(null, null)).toBeNull();
+    expect(failureReason("Internal error:", null)).toBeNull();
   });
 });
 

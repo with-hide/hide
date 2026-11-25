@@ -16,6 +16,7 @@ import { PR_LOOK } from "./prMark";
 import { machineName, ownMachineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import { listedWorkspaces, type AgentRow, type Checkout, type Device, type GithubSearchResult, type PrState, type PullRequest, type SessionWorkSearch, type SnapshotRest, type Task, type WorkSession, type Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
+import { missionCounts } from "./missions";
 import { askSubjectText } from "./askSubject";
 import { pullLabel } from "./codeHost";
 
@@ -32,6 +33,8 @@ const DEVICES_GROUP: SearchGroup = { id: "devices", label: "search.group.devices
 const COMMANDS_GROUP: SearchGroup = { id: "commands", label: "search.group.commands" };
 export const GITHUB_GROUP: SearchGroup = { id: "github", label: "search.group.github" };
 export const SESSIONS_GROUP: SearchGroup = { id: "sessions", label: "sessionWork.sessions" };
+/** Desk's ⌘K lists the missions beside sessions and pull requests (PRD desk-2-ui B39); no other screen's does. */
+const MISSIONS_GROUP: SearchGroup = { id: "missions", label: "kind.mission" };
 /** The Related list's own header; an entry in it keeps its kind's group for search. */
 export const RELATED_GROUP: SearchGroup = { id: "related", label: "search.group.related" };
 /** The empty query's second header: the checkouts last brought to the front (PRD cmdk-recent). */
@@ -39,7 +42,7 @@ export const RECENT_GROUP: SearchGroup = { id: "recent", label: "search.group.re
 /** How many Recent rows ⌘K shows; the core keeps ten so the exclusions still leave five. */
 export const RECENT_SHOWN = 5;
 
-type EntryKind = "agent" | "session" | "project" | "checkout" | "device" | "issue" | "pr" | "command";
+type EntryKind = "agent" | "session" | "project" | "checkout" | "device" | "issue" | "pr" | "command" | "mission";
 
 /** A colour family for a state; the palette maps each to a token class. */
 export type Tone = "working" | "attention" | "done" | "open" | "pending" | "failed" | "muted";
@@ -70,6 +73,8 @@ export type SearchEntry = {
   /** An issue's or pull request's number, which `#N` ranks first. */
   number?: number;
   taskKey?: string;
+  /** A mission row's mission. */
+  missionId?: string;
   /** Where a pull request or issue lives on GitHub; a result the core searched is opened there. */
   url?: string | null;
   /** `owner/repo` of a GitHub search result. */
@@ -416,6 +421,22 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
     });
   }
   return entries;
+}
+
+/** The missions the core keeps, as Desk's ⌘K rows (B39): the title, its progress and project. */
+export function missionEntries(rest: SnapshotRest | null): SearchEntry[] {
+  return (rest?.missions?.items ?? []).map((mission) => {
+    const { done, total } = missionCounts(mission);
+    return {
+      id: `mission:${mission.id}`,
+      title: mission.title,
+      subtitle: `${done}/${total} · ${mission.project}`,
+      kind: "mission",
+      group: MISSIONS_GROUP,
+      missionId: mission.id,
+      deviceId: mission.device_id,
+    };
+  });
 }
 
 /** The digits of `273` or a hash-prefixed `273`, which name an issue or a pull request, else null. */

@@ -703,7 +703,7 @@ async fn conversation_step(
 
 /// The open calls of the session `source` names, read on if `follow`; kept
 /// as they were read last otherwise, and started anew for another session.
-fn follow_calls(
+pub(super) fn follow_calls(
     reader: &Mobile,
     source: &conversation::Source,
     account: &hide_agent_adapter::AccountKey,
@@ -833,7 +833,7 @@ const HOLDER_CUT_KEEPS: usize = {
 // phone frame.
 const _: () = assert!(HOLDER_CUT_KEEPS > FRAME_LIMIT);
 
-fn key_of(message: &Value) -> Option<AgentKey> {
+pub(super) fn key_of(message: &Value) -> Option<AgentKey> {
     let device_id = message.get("device_id").and_then(Value::as_str)?;
     let pane_id = message.get("pane_id").and_then(Value::as_str)?;
     (!device_id.is_empty() && device_id.len() <= 256 && !pane_id.is_empty() && pane_id.len() <= 512)
@@ -843,7 +843,7 @@ fn key_of(message: &Value) -> Option<AgentKey> {
         })
 }
 
-fn request_id_of(message: &Value) -> Option<&str> {
+pub(super) fn request_id_of(message: &Value) -> Option<&str> {
     message
         .get("request_id")
         .and_then(Value::as_str)

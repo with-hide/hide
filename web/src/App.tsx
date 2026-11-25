@@ -62,6 +62,7 @@ import { configureAccessCalls } from "./accessCall";
 import { configureAutomationCalls } from "./automationCall";
 import { configureGuestCloseCalls } from "./guestCloseCall";
 import { OpeningStatus } from "./OpeningStatus";
+import { watchDeskFiles } from "./deskFiles";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -144,6 +145,8 @@ export function App() {
     const unsubscribeScreen = useUiStore.subscribe((state, previous) => {
       if (state.screen !== previous.screen) observeRecent(useShellStore.getState().rest, true);
     });
+    // Desk's file tabs reach hided as the room's whole file set, on each change and each connect (`deskFiles.ts`).
+    const unwatchDeskRoom = watchDeskFiles((files) => actions.deskFiles(files));
     // A failure the operator can act on is a notice rather than only a diagnostic (design 13); it is raised
     // before the rest of this subscriber runs, as it always was.
     const unsubscribeNotices = watchErrorNotices();
@@ -178,6 +181,7 @@ export function App() {
       window.removeEventListener("pointerdown", noteOperatorPointer, true);
       window.removeEventListener("keydown", endCommit, true);
       unsubscribeScreen();
+      unwatchDeskRoom();
       unsubscribeNotices();
       unsubscribe();
       keyboard();
@@ -294,6 +298,7 @@ export function App() {
   // waits on the core; every other notice stands in the window's corner,
   // newest nearest the corner.
   const remoteScreen = useUiStore((s) => s.remoteScreen);
+  const noticeFloor = useUiStore((s) => s.noticeFloor);
   const notices: [string, ReactNode][] = [
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
@@ -358,7 +363,7 @@ export function App() {
               </>
             )}
           </div>
-          <ToastStack>{notices.map(leftOut)}</ToastStack>
+          <ToastStack floor={noticeFloor}>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}
         </div>
       </RenderBoundary>

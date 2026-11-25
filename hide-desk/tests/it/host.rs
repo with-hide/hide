@@ -44,6 +44,12 @@ fn stand_in_agent() {
         return;
     }
     let refuse_mode = role == "refuse-mode";
+    // Loads a session as ACP says: the conversation so far replayed as
+    // updates before the load answers.
+    let replays = role == "replay";
+    // codex-acp 2.5.0 with a login it can no longer refresh: it logs itself
+    // out, says so, and refuses the open with an internal error.
+    let stale_login = role == "stale-login";
     let stdout = std::io::stdout();
     let send = |value: Value| {
         let mut out = stdout.lock();
@@ -59,7 +65,36 @@ fn stand_in_agent() {
         let id = message["id"].clone();
         match message["method"].as_str() {
             Some("initialize") => send(json!({"jsonrpc": "2.0", "id": id, "result": {
-                "protocolVersion": 1, "agentCapabilities": {"loadSession": false}}})),
+                "protocolVersion": 1, "agentCapabilities": {"loadSession": replays}}})),
+            Some("session/new") if stale_login => {
+                send(json!({"jsonrpc": "2.0", "method": "_auth/status_update",
+                    "params": {"authStatus": {"kind": "none", "label": "Not logged in"}}}));
+                send(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603,
+                    "message": "Internal error", "data": "Please log out and sign in again.\n\nYou have been logged out. Please try again."}}));
+            }
+            Some("session/load") if replays => {
+                for said in ["응답: 알파첫째", "응답: 브라보둘째"] {
+                    send(
+                        json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": "s1", "update": {"sessionUpdate": "user_message_chunk",
+                        "content": {"type": "text", "text": said}}}}),
+                    );
+                    send(
+                        json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": said}}}}),
+                    );
+                }
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+            }
+            Some("session/prompt") if replays => {
+                send(
+                    json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "응답: 델타넷째"}}}}),
+                );
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "end_turn"}}));
+            }
             Some("session/new") => send(json!({"jsonrpc": "2.0", "id": id, "result": {
                 "sessionId": "s1",
                 "configOptions": [{"id": "model", "category": "model", "currentValue": "m1",
@@ -261,6 +296,89 @@ fn a_turn_s_reply_and_its_permission_request_reach_the_owner() {
     };
     assert_eq!(tag, 7);
     assert_eq!(session::stop_reason(&result.unwrap()), Some("end_turn"));
+    host.end().unwrap();
+}
+
+/// letter-47179: a session loaded after `다시 시작` replays the
+/// conversation, and the owner reads those updates only after it sent the
+/// next prompt. Numbered as they arrived, every replayed one comes before
+/// the prompt's mark, so the turn owns its own answer alone.
+#[test]
+fn a_loaded_session_s_replay_arrives_before_the_next_prompt_s_mark() {
+    let folder = tempfile::tempdir().unwrap();
+    let (sender, received) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let arrivals = session::Arrivals::default();
+    let sink = arrivals.sink(move |number, incoming| {
+        let _ = sender.lock().unwrap().send((number, incoming));
+    });
+    let host = Host::start(&launch("replay", folder.path()), sink).unwrap();
+    let connection = host.connection().clone();
+    let opened = session::open(
+        &connection,
+        AdapterId::CLAUDE,
+        folder.path(),
+        Some("s1"),
+        &|| Ok(()),
+    )
+    .unwrap();
+    assert!(opened.resumed);
+
+    // As Desk's worker does: the mark read just before the prompt, and
+    // every message read only after it, the replay still waiting.
+    let mut turn = session::TurnReader::new(opened.prelude.clone());
+    let from = arrivals.next();
+    session::prompt(&connection, "s1", "델타넷째", 9).unwrap();
+    turn.start(9, from);
+    let (mut replayed, mut reply) = (0, Vec::new());
+    loop {
+        let (number, incoming) = received.recv_timeout(WAIT).expect("the agent sent nothing");
+        match incoming {
+            Incoming::Notification { params, .. } => {
+                let update = session::read_update(&params);
+                if matches!(update, session::Update::Text { .. }) && number < from {
+                    replayed += 1;
+                }
+                reply.extend(turn.read(number, &update).map(|(_, text)| text));
+            }
+            Incoming::Reply { tag, .. } => {
+                assert_eq!(turn.end(tag), Some(Vec::new()));
+                break;
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!(replayed, 2, "the load replayed both earlier answers");
+    assert_eq!(reply, ["응답: 델타넷째"]);
+    host.end().unwrap();
+}
+
+/// letter-47232: an agent that refuses the open for a login it could no
+/// longer refresh answers an internal error, but says it is signed out
+/// first, so its owner knows the refusal was for the sign-in by the time
+/// the refusal arrives.
+#[test]
+fn an_agent_says_it_is_signed_out_before_it_refuses_the_open() {
+    let folder = tempfile::tempdir().unwrap();
+    let signed_out = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&signed_out);
+    let sink: Sink = Arc::new(move |incoming| {
+        if let Incoming::Notification { method, params } = &incoming
+            && let Some(signed_in) = session::sign_in_status(method, params)
+        {
+            *seen.lock().unwrap() = Some(!signed_in);
+        }
+    });
+    let host = Host::start(&launch("stale-login", folder.path()), sink).unwrap();
+    let opened = session::open(
+        host.connection(),
+        AdapterId::CODEX,
+        folder.path(),
+        None,
+        &|| Ok(()),
+    );
+    assert!(matches!(opened, Err(OpenError::Failed(_))), "{opened:?}");
+    assert_eq!(*signed_out.lock().unwrap(), Some(true));
     host.end().unwrap();
 }
 
