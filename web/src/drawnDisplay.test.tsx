@@ -3,42 +3,44 @@
 // choices, not its own core's (UI_BEHAVIOR.md, Device rail, Another
 // computer's screen; operator decision 2026-11-25): the showing window sends
 // them with its language and name, and a change reaches the open screen at
-// once. The page hears the showing window once per load, so each test loads
-// the modules afresh behind a stand-in bridge.
+// once. The page hears the showing window once per load, so the stand-in
+// bridge is on the page before any module loads, and the tests tell it in turn.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
-
-vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createActions } from "./actions";
+import { AgentRowMark } from "./AgentRowMark";
+import { SidebarMenus } from "./components/sidebar-menus";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { usePaneTurnRowMode } from "./drawnDisplay";
+import { initializeInterfaceI18n } from "./i18n/instance";
+import { useShellStore } from "./store";
 
 type Told = { language: string; name: string | null; display?: unknown };
 
+const bridge = vi.hoisted(() => {
+  HTMLCanvasElement.prototype.getContext = () => null;
+  const heard: { tell: ((viewer: { language: string; name: string | null; display?: unknown }) => void) | null } = { tell: null };
+  (window as unknown as { hideRemote: unknown }).hideRemote = { bridge: 1, onViewer: (listener: typeof heard.tell) => { heard.tell = listener; } };
+  return heard;
+});
+
+beforeAll(() => initializeInterfaceI18n("en"));
 afterEach(() => {
   vi.unstubAllGlobals();
-  vi.resetModules();
   document.body.replaceChildren();
 });
 
-/** A computer's screen whose own core chose hidden logos and two lines, shown by a window that tells it through `tell`. */
+function TurnRow() {
+  return <span data-turn-row={usePaneTurnRowMode()} />;
+}
+
+/** A computer's screen whose own core chose hidden logos and two lines, as the showing window tells it. */
 async function remoteScreen() {
-  vi.resetModules();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
-  let tell: ((viewer: Told) => void) | null = null;
-  vi.stubGlobal("hideRemote", { bridge: 1, onViewer: (listener: (viewer: Told) => void) => { tell = listener; } });
-  const { useShellStore } = await import("./store");
-  const { AgentRowMark } = await import("./AgentRowMark");
-  const { usePaneTurnRowMode } = await import("./drawnDisplay");
-  const { SidebarMenus } = await import("./components/sidebar-menus");
-  const { TooltipProvider } = await import("./components/ui/tooltip");
-  const { createActions } = await import("./actions");
-  const { initializeInterfaceI18n } = await import("./i18n/instance");
-  initializeInterfaceI18n("en");
   useShellStore.setState({ connection: "live", rest: { ui_state: { agent_logo_mode: "hidden", pane_turn_row_mode: "two_lines" } } } as never);
   const actions = createActions(() => true);
-  function TurnRow() {
-    return <span data-turn-row={usePaneTurnRowMode()} />;
-  }
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -48,7 +50,7 @@ async function remoteScreen() {
     turnRow: container.querySelector("[data-turn-row]")?.getAttribute("data-turn-row"),
     viewMenu: container.querySelector("[data-view-menu-trigger]") !== null,
   });
-  return { drawn, tell: async (viewer: Told) => act(async () => tell!(viewer)), unmount: () => act(async () => root.unmount()) };
+  return { drawn, tell: async (viewer: Told) => act(async () => bridge.tell!(viewer)), unmount: () => act(async () => root.unmount()) };
 }
 
 it("draws rows and turn rows with the showing window's choices over its own core's, and follows each change at once", async () => {

@@ -20,7 +20,7 @@ export function useFollowsViewer(): boolean {
 
 /** How agent panes draw their turn row on this screen. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
-  const own = useShellStore((state) => state.rest?.ui_state?.pane_turn_row_mode) ?? "one_line";
+  const own = useShellStore((state) => ownDisplayPreferences(state.rest?.ui_state).pane_turn_row_mode);
   const viewer = useSyncExternalStore(subscribeViewer, () => readViewer()?.display?.pane_turn_row_mode ?? null, () => null);
   return viewer ?? own;
 }

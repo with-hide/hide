@@ -8,6 +8,7 @@
 import { EyeIcon } from "lucide-react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
+import { ownDisplayPreferences } from "../displayPreferences";
 import type { AgentLogoMode, PaneTurnRowMode } from "../generated/hided-ws";
 import { useInterfaceTranslation } from "../i18n/client";
 import { agentPeekKey } from "../shortcutLabels";
@@ -25,14 +26,14 @@ const TURN_ROW_MODES = [
 
 export function ViewMenu({ actions, place = "footer" }: { actions: Actions; place?: MenuPlace }) {
   const { t } = useInterfaceTranslation();
-  const mode: AgentLogoMode = useShellStore((s) => s.rest?.ui_state?.agent_logo_mode) ?? "hidden";
+  const mode: AgentLogoMode = useShellStore((s) => ownDisplayPreferences(s.rest?.ui_state).agent_logo_mode);
   const connected = useShellStore((s) => s.connection === "live");
   const key = useShellStore((s) => agentPeekKey(s.rest?.ui_state));
   // The core's value is the only authority; choosing what is already chosen only closes the menu (B9).
   const choose = (next: AgentLogoMode) => {
     if (next !== mode) actions.setAgentLogoMode(next);
   };
-  const turnRow: PaneTurnRowMode = useShellStore((s) => s.rest?.ui_state?.pane_turn_row_mode) ?? "one_line";
+  const turnRow: PaneTurnRowMode = useShellStore((s) => ownDisplayPreferences(s.rest?.ui_state).pane_turn_row_mode);
   const chooseTurnRow = (next: PaneTurnRowMode) => {
     if (next !== turnRow) actions.setPaneTurnRowMode(next);
   };
