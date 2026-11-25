@@ -314,6 +314,17 @@ describe("snapshot merge", () => {
     expect(useShellStore.getState().folderChanges["/r/src"]).toBe(1);
   });
 
+  it("counts a shown file's change only for the device it shows", () => {
+    const store = useShellStore.getState();
+    useShellStore.setState({ rest: { navigator: { focused_device_id: "mac" } } as never, fileChanges: {} });
+    store.applyFrame({ type: "file_changed", payload: { path: "/r/plan.md", device_id: "local" } });
+    expect(useShellStore.getState().fileChanges).toEqual({});
+    store.applyFrame({ type: "file_changed", payload: { path: "/r/plan.md", device_id: "mac" } });
+    store.applyFrame({ type: "file_changed", payload: { path: "/r/plan.md", device_id: "mac" } });
+    expect(useShellStore.getState().fileChanges["/r/plan.md"]).toBe(2);
+    expect(useShellStore.getState().folderChanges["/r/plan.md"]).toBeUndefined();
+  });
+
   it("keeps a changed folder's rows until its re-read lands", () => {
     const store = useShellStore.getState();
     const entry = { name: "a.ts", path: "/r/src/a.ts", is_directory: false };

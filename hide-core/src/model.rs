@@ -568,6 +568,34 @@ pub struct ViewSplitSnapshot {
     pub second: Box<ViewNodeSnapshot>,
 }
 
+impl WorkspaceViewSnapshot {
+    /// The files its View areas show, each once, in the order the areas lie:
+    /// what the shown files' watch in hided stamps (`hided/src/watch.rs`).
+    pub fn file_paths(&self) -> Vec<&str> {
+        let mut paths: Vec<&str> = Vec::new();
+        let mut nodes = vec![&self.layout.root];
+        while let Some(node) = nodes.pop() {
+            match node {
+                ViewNodeSnapshot::Area(area) => {
+                    for display in &area.displays {
+                        if display.kind == crate::view_layout::DisplayKind::File
+                            && !display.path.is_empty()
+                            && !paths.contains(&display.path.as_str())
+                        {
+                            paths.push(&display.path);
+                        }
+                    }
+                }
+                ViewNodeSnapshot::Split(split) => {
+                    nodes.push(&split.second);
+                    nodes.push(&split.first);
+                }
+            }
+        }
+        paths
+    }
+}
+
 /// One display: which document it shows and whether it can show it now.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ViewDisplaySnapshot {

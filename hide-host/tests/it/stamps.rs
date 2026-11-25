@@ -1,6 +1,7 @@
-//! The stamps a device Explorer's watch compares (PRD S5.5 B43): a folder's
-//! stamp moves when its list of names changes or another folder takes its
-//! path, stays put otherwise, and never reads a folder outside the checkout.
+//! The stamps the Explorer's watch and the shown files' watch compare (PRD
+//! S5.5 B43): a folder's stamp moves when its list of names changes or
+//! another folder takes its path, a file's when it is written or replaced,
+//! each stays put otherwise, and nothing outside the checkout is read.
 #![cfg(unix)]
 
 use std::fs;
@@ -57,4 +58,43 @@ fn a_folders_stamp_moves_only_when_its_names_change_or_it_is_replaced() {
     assert_eq!(error.code, ErrorCode::TooLarge);
     let error = stamps(root.dir(), &["../outside".to_owned()]).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidPath);
+}
+
+#[test]
+fn a_files_stamp_moves_when_it_is_written_or_replaced() {
+    let outer = tempfile::tempdir().unwrap();
+    let checkout = outer.path().join("checkout");
+    fs::create_dir_all(checkout.join("docs")).unwrap();
+    fs::write(checkout.join("docs/plan.md"), "one").unwrap();
+    fs::write(outer.path().join("secret.md"), "outside").unwrap();
+    symlink(outer.path().join("secret.md"), checkout.join("leak.md")).unwrap();
+    let root = Root::open(&checkout).unwrap();
+    let files = ["docs/plan.md".to_owned(), "leak.md".to_owned()];
+
+    let first = stamps(root.dir(), &files).unwrap();
+    assert!(first[0].is_some());
+    assert_eq!(
+        first[1], None,
+        "a link that leaves the checkout is not read"
+    );
+    assert_eq!(
+        stamps(root.dir(), &files).unwrap(),
+        first,
+        "nothing changed"
+    );
+
+    fs::write(checkout.join("docs/plan.md"), "one, then two").unwrap();
+    let written = stamps(root.dir(), &files).unwrap();
+    assert_ne!(written[0], first[0], "a write in place moves the stamp");
+
+    fs::write(checkout.join("docs/next.md"), "three").unwrap();
+    fs::rename(checkout.join("docs/next.md"), checkout.join("docs/plan.md")).unwrap();
+    let replaced = stamps(root.dir(), &files).unwrap();
+    assert_ne!(
+        replaced[0], written[0],
+        "an editor's atomic save moves the stamp"
+    );
+
+    fs::remove_file(checkout.join("docs/plan.md")).unwrap();
+    assert_eq!(stamps(root.dir(), &files).unwrap()[0], None);
 }

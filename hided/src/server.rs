@@ -1239,8 +1239,8 @@ async fn screen_loop(
                                 .and_then(|value| value.pointer(&format!("/payload/{name}")))
                                 .and_then(Value::as_str)
                         };
-                        // A folder on this machine is re-checked against its
-                        // checkout roots; a device's folder names a path there,
+                        // A folder or file on this machine is re-checked against
+                        // its checkout roots; a device's names a path there,
                         // which only that device's catalog roots can vouch for.
                         let admitted = match (field("path"), field("device_id")) {
                             (Some(path), Some(device)) if !state.boundary.names_this_node(Some(device)) => {

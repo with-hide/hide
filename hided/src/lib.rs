@@ -1198,6 +1198,23 @@ fn apply_snapshot(
         rest,
         boundary.node().as_str(),
     ));
+    // This machine's shown files are stamped by the identity the boundary
+    // verified, like its Explorer, and only where the boundary admits them.
+    watch.reconcile_files(
+        watch::files_target_from_rest(rest, boundary.node().as_str()).and_then(|target| {
+            if target.node != boundary.node().as_str() {
+                return Some(target);
+            }
+            let identity = boundary.root_identity(&target.root)?;
+            let folders: Vec<String> = target
+                .folders
+                .iter()
+                .filter(|path| boundary.resolve_target(path).is_ok())
+                .cloned()
+                .collect();
+            (!folders.is_empty()).then(|| watch::Target { folders, ..target }.pinned_by(identity))
+        }),
+    );
 }
 
 fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {

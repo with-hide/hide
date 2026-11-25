@@ -657,7 +657,17 @@ impl Runtime {
                         && tab.unavailable_reason.is_none()
                 });
                 if let Some(existing) = existing {
-                    existing.id.clone()
+                    let tab_id = existing.id.clone();
+                    // An agent that opens a file again after writing it sees
+                    // what the file says now, as a page opened again loads
+                    // again; a tab holding the operator's edit, save or
+                    // conflict keeps it (`follow_document`).
+                    if let Some((document, place)) = material.file
+                        && self.follows_disk(&tab_id, &document)
+                    {
+                        self.replace_document(&tab_id, document, place);
+                    }
+                    tab_id
                 } else {
                     let Some((document, place)) = material.file else {
                         return Err(Refusal {

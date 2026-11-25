@@ -154,6 +154,21 @@ export function DocumentKeeper({ tabId, actions }: { tabId: string; actions: Act
     if (document?.dirty) scheduleAutosave(tabId, actions);
   }, [document?.conflict, document?.dirty, tabId, connection, actions]);
 
+  // The file changed on disk while a View shows it (`file_changed`): a text
+  // document with no edit, save or conflict of its own follows it. The core
+  // makes the same check when the read lands, so a draft typed meanwhile is
+  // kept; the check here only spares a read it would refuse.
+  const changes = useShellStore((s) => (path ? (s.fileChanges[path] ?? 0) : 0));
+  const followed = useRef(changes);
+  useEffect(() => {
+    if (changes === followed.current) return;
+    followed.current = changes;
+    const current = latest.current;
+    if (!current || (current.document_kind !== "text" && current.document_kind !== "markdown")) return;
+    if (current.dirty || current.conflict || current.save) return;
+    actions.resolveConflict(tabId, "follow");
+  }, [changes, tabId, actions]);
+
   // The save landed when the core reports the document clean.
   useEffect(() => {
     if (document?.dirty === false) useShellStore.getState().noteSaving(tabId, false);

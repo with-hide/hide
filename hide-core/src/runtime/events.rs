@@ -3932,6 +3932,9 @@ impl Runtime {
             Event::FileConflict(payload) => {
                 let tab_id = match payload.tab_id {
                     Some(tab_id) if self.file_document_open(&tab_id) => tab_id,
+                    // A change on disk a window saw for a tab closed since
+                    // asks nothing of the operator.
+                    _ if payload.action == "follow" => return false,
                     Some(tab_id) => {
                         self.set_error(
                             "file.conflict_without_tab",
@@ -3955,10 +3958,11 @@ impl Runtime {
                 match payload.action.as_str() {
                     "reload" => self.reload_document(&tab_id),
                     "keep_editing" => self.keep_editing_document(&tab_id),
+                    "follow" => self.follow_document(&tab_id),
                     _ => {
                         self.set_error(
                             "file.invalid_conflict_action",
-                            "Conflict action must be reload or keep_editing",
+                            "Conflict action must be reload, keep_editing or follow",
                             false,
                         );
                         true
