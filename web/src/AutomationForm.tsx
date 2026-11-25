@@ -3,9 +3,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
 import { addCall, datePlus, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ONCE_QUICK_DAYS, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
-import { onceText, scheduleText, wallDay, whenText, WEEKDAYS, weekdayText } from "./automationWords";
+import { onceText, onceUntilText, scheduleText, wallDay, whenText, WEEKDAYS, weekdayText } from "./automationWords";
 import { AgentPicker } from "./components/agent-picker";
-import { formatElapsed, useMinuteClock } from "./components/elapsed";
+import { useMinuteClock } from "./components/elapsed";
 import { Button } from "./components/ui/button";
 import { Checkbox } from "./components/ui/checkbox";
 import { Input } from "./components/ui/input";
@@ -220,8 +220,7 @@ function PreviewLine({ preview }: { preview: Preview }) {
   if (preview.state !== "read") return <p className="text-caption text-muted-foreground" aria-hidden="true">&nbsp;</p>;
   const { value } = preview;
   if (value.reads_as.kind === "once" && value.next_run_at_unix_ms !== null) {
-    const left = value.next_run_at_unix_ms - now;
-    const until = left < 60_000 ? t("automationScreen.soon") : t("automationScreen.inTime", { time: formatElapsed(language, left) });
+    const until = onceUntilText(value.reads_as, value.next_run_at_unix_ms, now, value.zone ?? undefined, language, t);
     return <p className="text-caption text-subtle-foreground" data-automation-preview="once">{t("automationScreen.form.previewOnce", { when: onceText(value.reads_as, language, t), until })}</p>;
   }
   const reads = scheduleText(value.reads_as, language, t);

@@ -11,7 +11,7 @@ import { RunSummary } from "./AutomationRunSummary";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
 import { automationGroups } from "./automationGroups";
-import { isOnce, lastResult, onceText, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
+import { isOnce, lastResult, onceText, onceUntilText, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { LookChip } from "./components/linked-view";
 import { formatElapsed } from "./components/elapsed";
@@ -352,7 +352,7 @@ function OnceTime({ automation, words, large = false }: { automation: Automation
   return (
     <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next={at == null ? "none" : "at"} data-automation-once-at={`${automation.schedule.date} ${automation.schedule.time}`}>
       <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{onceText(automation.schedule, words.language, words.t)}</span>
-      {at == null ? null : <span className="min-w-0 truncate text-muted-foreground">{untilText(at, words)}</span>}
+      {at == null ? null : <span className="min-w-0 truncate text-muted-foreground">{onceUntilText(automation.schedule, at, words.now, words.zone, words.language, words.t)}</span>}
     </span>
   );
 }
