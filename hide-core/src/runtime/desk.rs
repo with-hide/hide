@@ -154,6 +154,9 @@ struct Refusal {
     command: String,
     kind: permission::CardKind,
     text: Option<String>,
+    /// How much of the turn's reply had been written when the operator
+    /// refused: a plain refusal is sent only if nothing was written after.
+    said: usize,
 }
 
 /// What the shell asked (`desk_*`).
@@ -799,15 +802,24 @@ impl Runtime {
         if payload.answer == ApprovalAnswer::Reject {
             // A line stops the turn so it reaches Desk as the next message;
             // a plain refusal leaves the turn to the agent, and is sent only
-            // if the agent ends its turn on it.
+            // if the agent ends its turn without a word after it. The last
+            // plain refusal is the one told, and a line is never replaced.
             if text.is_some() {
                 self.order(Order::Cancel);
             }
-            if text.is_some() || self.desk.refusal.is_none() {
+            if text.is_some()
+                || self
+                    .desk
+                    .refusal
+                    .as_ref()
+                    .is_none_or(|refusal| refusal.text.is_none())
+            {
+                let said = self.desk.turn.as_ref().map_or(0, |turn| turn.text.len());
                 self.desk.refusal = Some(Refusal {
                     command: approval.command,
                     kind: approval.kind,
                     text,
+                    said,
                 });
             }
         }
@@ -1325,16 +1337,23 @@ impl Runtime {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
                 }
-                let cancelled = matches!(outcome, TurnOutcome::Cancelled);
+                // Whether the agent ended its turn on a plain refusal
+                // without a word after it: OpenCode's turn ends cancelled
+                // there and Antigravity's as answered, while an agent that
+                // went on said so itself.
+                let silent = matches!(outcome, TurnOutcome::Done | TurnOutcome::Cancelled)
+                    && self.desk.turn.as_ref().is_some_and(|turn| {
+                        self.desk
+                            .refusal
+                            .as_ref()
+                            .is_some_and(|refusal| !turn.cut && turn.text.len() == refusal.said)
+                    });
                 self.desk_close_turn(outcome);
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
-                // A plain refusal goes to the agent only when the agent
-                // ended its turn on it, as OpenCode does with a refusal
-                // that carries no words; one that went on said so itself.
                 if let Some(refusal) = self.desk.refusal.take()
-                    && (refusal.text.is_some() || cancelled)
+                    && (refusal.text.is_some() || silent)
                     && let Some(agent) = self.selected_agent()
                 {
                     let sent = hide_desk::refusal_message(
@@ -2102,6 +2121,7 @@ mod tests {
     fn a_plain_refusal_lets_the_turn_go_on() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received, tag) = talking(root.path());
+        said(&mut runtime, tag, "Deleting it now.");
         let id = ask(&mut runtime);
         assert!(event(
             &mut runtime,
@@ -2110,6 +2130,12 @@ mod tests {
         ));
         let orders: Vec<Order> = received.try_iter().collect();
         assert!(!orders.iter().any(|order| matches!(order, Order::Cancel)));
+        // The agent says the refusal itself, as Claude Code, Pi and omp do.
+        said(
+            &mut runtime,
+            tag,
+            " It was refused, so nothing was deleted.",
+        );
         runtime.desk_report(Report::TurnEnded {
             tag,
             outcome: TurnOutcome::Done,
@@ -2171,6 +2197,40 @@ mod tests {
                 .try_iter()
                 .any(|order| matches!(order, Order::Send(_)))
         );
+    }
+
+    /// Antigravity answers its turn as ended after a refusal without a
+    /// word about it, its words before the call aside: Desk tells it too.
+    #[test]
+    fn a_plain_refusal_the_agent_answered_its_turn_after_without_a_word_is_sent_to_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, tag) = talking(root.path());
+        said(&mut runtime, tag, "Running the removal directly.");
+        let id = ask(&mut runtime);
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "reject"})
+        ));
+        runtime.desk_report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Done,
+        });
+        let send = sent(&received);
+        assert!(send.text.contains("rm -rf /tmp/x"), "{}", send.text);
+        assert!(
+            send.text.contains("Do not try the same thing another way."),
+            "{}",
+            send.text
+        );
+    }
+
+    /// The agent writes `text` into the turn's reply.
+    fn said(runtime: &mut Runtime, tag: u64, text: &str) {
+        runtime.desk_report(Report::Text {
+            tag,
+            text: text.into(),
+        });
     }
 
     #[test]
