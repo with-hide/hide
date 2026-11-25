@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { closeCovering, installKeyboard } from "./keyboard";
-import type { AgentRow, DeskSection } from "./snapshot";
+import type { AgentRow, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -145,6 +145,16 @@ describe("⌘E beside Desk", () => {
     // Nothing is left to open, and nothing pretends to be.
     emit("keydown", "KeyE", { metaKey: true });
     expect(room().session).toBeNull();
+  });
+
+  it("opens nothing when the session's agent ended and only its pane stays as a shell", () => {
+    emit("keydown", "KeyE", { metaKey: true });
+    // The pane is still listed in its tab, but no agent runs in it: an empty panel would open.
+    const rest = { navigator: { workspaces: [{ id: "w1", device_id: "mac", checkouts: [{ path: "/repo", tabs: [{ panes: [{ id: "w1:p2" }] }] }] }] } } as unknown as SnapshotRest;
+    useShellStore.setState({ rest, agents: [] });
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
+    expect(room().closed).toBeNull();
   });
 
   it("does nothing after leaving Desk's room and coming back", () => {

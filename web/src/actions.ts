@@ -85,7 +85,6 @@ import {
   type PrMergeMethod,
   type LookAt,
   type SignInReply,
-  paneRowOf,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -4032,7 +4031,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const pane = room.closed;
       if (!pane) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
       const state = useShellStore.getState();
-      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane) && !paneRowOf(state.rest, pane)) {
+      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane)) {
         ui().setDeskRoom((now) => ({ ...now, closed: null }));
         return diagnostic(`toggle_lane: the session closed beside Desk (${pane}) is gone`);
       }

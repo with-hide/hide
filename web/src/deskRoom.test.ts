@@ -85,6 +85,11 @@ describe("Desk's room", () => {
     expect(closeSession(room)).toEqual({ ...room, session: null, panel: null, closed: "p1" });
   });
 
+  it("keeps the session just closed when ✕ is pressed with none open", () => {
+    const closed = closeSession(openSession(DESK_ROOM_CLOSED, "p1"));
+    expect(closeSession(closed)).toBe(closed);
+  });
+
   it("closes the panel with its last tab, the neighbour coming to the front", () => {
     const room = openTab(openTab(openTab(openSession(DESK_ROOM_CLOSED, "p1"), pr), mission), file("a.ts"));
     const shown = openTab(room, mission);

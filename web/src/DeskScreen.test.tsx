@@ -137,6 +137,22 @@ describe("Desk's room", () => {
     expect(sent("desk_send")).toEqual([{ text: "@project(/work/repo-home repo) fix the build", mentions: [repo] }]);
   });
 
+  it("draws only a failed turn in the failed colour: a stopped host is neutral words, a blocked turn and a failed install keep the warning colour", async () => {
+    const colour = (kind: string) => document.body.querySelector<HTMLElement>(`[data-desk-notice='${kind}'] span`)!.className;
+    await render(desk([{ kind: "notice", id: 1, notice: "host_stopped", agent: "claude", detail: null }, { kind: "notice", id: 2, notice: "blocked", agent: "claude", detail: null }, { kind: "notice", id: 3, notice: "install_failed", agent: "claude", detail: null }]));
+    expect(colour("host_stopped")).not.toMatch(/text-destructive|text-warning/);
+    expect(colour("blocked")).toContain("text-warning");
+    expect(colour("install_failed")).toContain("text-warning");
+  });
+
+  it("hides a failed turn's 다시 시도 while its message waits, so one more press does not send it twice", async () => {
+    const failed: DeskItem[] = [user(1), { kind: "notice", id: 2, notice: "turn_failed", agent: "claude", detail: null }];
+    await render(desk(failed, "ready", true, [{ id: 3, text: "실패해 보세요", at_ms: 0, mentions: [] }]));
+    expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
+    await show(desk(failed));
+    expect(document.body.querySelector("[data-desk-notice-action='retry']")).not.toBeNull();
+  });
+
   it("names the agent's own reason on a failed turn when it gave one", async () => {
     const notice = () => document.body.querySelector<HTMLElement>("[data-desk-notice='turn_failed']")!.textContent!;
     await render(desk([{ kind: "notice", id: 1, notice: "turn_failed", agent: "claude", detail: "Rate limit reached" }]));
