@@ -94,6 +94,20 @@ export type FileIndexResult = {
   /** Why a device's helper could not walk the root; the next query walks again. */
   unavailable: string | null;
 };
+/** The answer to a `file_index_all` query: every project's matches, each naming its project root (PRD desk-2-ui B38). */
+export type FileIndexAllResult = {
+  query: string;
+  /** The `prefer` project's first (up to 40 while others match), then the others' by score; at most 80. */
+  files: (FileIndexEntry & { device_id: string; root_path: string })[];
+  /** Some project matched more than are listed. */
+  more: boolean;
+  /** Some project's index stopped at its 50,000-file cap. */
+  index_truncated: boolean;
+  /** A project's walk has not landed or is refreshing: ask again. */
+  indexing: boolean;
+  /** The projects whose walk failed, with the code a `file_index_result` would carry. */
+  unavailable: { device_id: string; root_path: string; code: string }[];
+};
 
 export type Frame = {
   type: string;
@@ -258,6 +272,7 @@ type Store = {
   directoryUnavailable: DirectoryUnavailable | null;
   /** The ⌘P palette's last answer, keyed by the query it answered. */
   fileIndex: FileIndexResult | null;
+  fileIndexAll: FileIndexAllResult | null;
   /** The last attachment the daemon refused, drawn as one line over its pane (B15). */
   attachmentRefusal: { pane_id: string; reason: string } | null;
   /** Tabs whose save is in flight; the strip shows only these (D-10). */
@@ -418,6 +433,7 @@ export const useShellStore = create<Store>((set, get) => ({
   projectTarget: null,
   directoryUnavailable: null,
   fileIndex: null,
+  fileIndexAll: null,
   attachmentRefusal: null,
   savingTabs: new Set<string>(),
   bufferWarnings: new Set<string>(),
@@ -691,6 +707,10 @@ export const useShellStore = create<Store>((set, get) => ({
       // link; a link that waits again starts a new connection, whose split is tried again.
       if (link.phase === "live") set({ coreSplit: link.split_failed ?? null });
       else set({ coreLink: link, coreSplit: null });
+      return [];
+    }
+    if (frame.type === "file_index_all_result") {
+      set({ fileIndexAll: frame.payload as unknown as FileIndexAllResult });
       return [];
     }
     if (frame.type === "file_index_result") {

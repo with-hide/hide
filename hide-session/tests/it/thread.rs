@@ -771,6 +771,46 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
     );
 }
 
+/// Claude Code writes `[Image: original …, displayed at …]` beside an image
+/// it scaled for the model, as a meta record after a tool's image and as a
+/// block beside a pasted one (records as Claude Code 2.1.331 wrote them).
+/// The thread shows each image and none of the notes (PRD desk-2-ui B12).
+#[test]
+fn claude_s_image_note_shows_no_text_and_the_image_it_describes_stays_an_image() {
+    let placed = Placed::new(&SAMPLES[0]);
+    let note = "[Image: original 2880x1800, displayed at 2000x1250. Multiply coordinates by 1.44 to map to original image.]";
+    let image = |data: &str| json!({"type":"image","source":{"type":"base64","data":data,"media_type":"image/png"}});
+    let records = [
+        json!({"type":"assistant","uuid":"a","isSidechain":false,"cwd":CHECKOUT,"message":{"id":"msg_a","content":[
+            {"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/work/app/shot.png"}}]}}),
+        json!({"type":"user","uuid":"b","isSidechain":false,"message":{"content":[
+            {"type":"tool_result","tool_use_id":"toolu_1","content":[image("c2hvdA==")]}]}}),
+        json!({"type":"user","uuid":"c","isSidechain":false,"isMeta":true,"message":{"content":note}}),
+        json!({"type":"user","uuid":"d","isSidechain":false,"message":{"content":[
+            image("cGFzdGVk"), {"type":"text","text":format!("{note}\n")}, {"type":"text","text":"이 화면 봐줘"}]}}),
+    ];
+    let contents = records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+    std::fs::write(&placed.path, contents).unwrap();
+    let page = placed.read(None).unwrap();
+    let updates = json_of(&page);
+    let found = blocks(&updates);
+    let texts = found
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["이 화면 봐줘"], "{updates:#?}");
+    let images = found
+        .iter()
+        .filter(|block| block["type"] == "image")
+        .map(|block| block["data"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(images, ["c2hvdA==", "cGFzdGVk"]);
+    assert_eq!(page.skipped.get("claude_image_note"), Some(&2));
+}
+
 /// A letter's line says whom it came from: the envelope's sender, or the
 /// sender the doorbell's line names.
 #[test]

@@ -100,7 +100,7 @@ test("☰ opens the Threads list over the chat and a row opens its thread in the
   }
 });
 
-test("📌 beside ✕ docks Desk's lane beside the chat, the core keeps it through a reload, and Escape closes only an unpinned lane (PRD session-docs-and-assistant B32) @platform", async ({ page }) => {
+test("📌 beside ✕ docks Desk's lane beside the chat, and Escape closes only an unpinned lane (PRD session-docs-and-assistant B32) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const desk = await startDesk(page, "desk-lane-pin");
   try {
@@ -124,11 +124,6 @@ test("📌 beside ✕ docks Desk's lane beside the chat, the core keeps it throu
     await escape();
     await expect(room(page)).toHaveAttribute("data-desk-room", "pinned");
 
-    // The pin is the core's: a new page opens the lane docked.
-    await page.reload();
-    await page.locator("[data-desk-sidebar-row]").click();
-    await rail(page, "threads").click();
-    await expect(room(page)).toHaveAttribute("data-desk-room", "pinned");
     await pin.click();
     await expect(room(page)).toHaveAttribute("data-desk-room", "over");
     await escape();

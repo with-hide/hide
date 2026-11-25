@@ -1700,6 +1700,131 @@ async fn the_file_index_answers_the_ranked_matches_for_a_checkout() {
     running.stop();
 }
 
+/// Desk's ⌘P with no session open (PRD desk-2-ui B38): one query searches
+/// every registered project at once and each match names its project.
+#[tokio::test]
+async fn the_file_index_of_every_project_answers_each_match_with_its_project() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    let alpha = home.join("projects/alpha");
+    let beta = home.join("projects/beta");
+    for (checkout, file) in [(&alpha, "src/login.rs"), (&beta, "web/login.tsx")] {
+        std::fs::create_dir_all(checkout.join(file).parent().unwrap()).unwrap();
+        std::fs::write(checkout.join(file), "x").unwrap();
+        std::fs::write(checkout.join("readme.md"), "x").unwrap();
+    }
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": Value::Null,
+            "selected_pane_id": Value::Null,
+            "workspace_registrations": [
+                {"id": "w-alpha", "label": "alpha", "path": wire(&alpha)},
+                {"id": "w-beta", "label": "beta", "path": wire(&beta)},
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+
+    async fn ask(socket: &mut Socket) -> Value {
+        send_event_expecting(
+            socket,
+            "file_index_all",
+            json!({"query": "login"}),
+            |frame| frame["type"] == "file_index_all_result",
+        )
+        .await
+    }
+    let mut result = ask(&mut socket).await;
+    for _ in 0..40 {
+        if result["payload"]["indexing"] == json!(false)
+            && result["payload"]["files"]
+                .as_array()
+                .is_some_and(|files| files.len() == 2)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await; // wait-ok: every project's walk landed (the answer drops `indexing`)
+        result = ask(&mut socket).await;
+    }
+    assert_eq!(result["payload"]["indexing"], json!(false), "{result}");
+    let mut found: Vec<(String, String)> = result["payload"]["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|file| {
+            assert_eq!(
+                file["path"].as_str().unwrap(),
+                format!(
+                    "{}/{}",
+                    file["root_path"].as_str().unwrap(),
+                    file["relative_path"].as_str().unwrap()
+                ),
+                "a match carries the absolute path to open"
+            );
+            (
+                file["root_path"].as_str().unwrap().to_owned(),
+                file["relative_path"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (wire(&alpha), "src/login.rs".to_owned()),
+            (wire(&beta), "web/login.tsx".to_owned()),
+        ],
+        "both projects' matches, and no readme"
+    );
+    assert_eq!(result["payload"]["unavailable"], json!([]));
+    assert_eq!(result["payload"]["more"], json!(false));
+    assert_eq!(result["payload"]["index_truncated"], json!(false));
+    running.stop();
+}
+
+/// A window's ask of an agent (PRD desk-2-ui B14) reaches the phone's ask
+/// rules from the socket and is answered on that connection: a pane no agent
+/// runs in reads no ask and a choice there is refused, nothing typed.
+#[tokio::test]
+async fn a_windows_ask_and_choice_are_answered_on_its_own_socket() {
+    let (_dir, env) = test_env(true);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+    let pane = json!({"device_id": "no-such-device", "pane_id": "w1:p1"});
+
+    let asked = send_event_expecting(&mut socket, "pane_ask", pane.clone(), |frame| {
+        frame["type"] == "pane_ask"
+    })
+    .await;
+    assert_eq!(
+        asked["payload"],
+        json!({"device_id": "no-such-device", "pane_id": "w1:p1", "ask": null, "reason": "gone"})
+    );
+
+    let mut press = pane;
+    press.as_object_mut().unwrap().extend(
+        json!({"request_id": "r1", "choice": "allow", "ask": {"kind": "permission", "turn": "5"}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let answered = send_event_expecting(&mut socket, "pane_choice", press, |frame| {
+        frame["type"] == "pane_choice_result"
+    })
+    .await;
+    assert_eq!(
+        answered["payload"],
+        json!({"request_id": "r1", "ok": false, "reason": "gone"})
+    );
+    running.stop();
+}
+
 #[tokio::test]
 async fn browser_socket_cannot_start_a_host_file_handler() {
     let (dir, mut env) = test_env(true);

@@ -976,3 +976,62 @@ fn a_program_hide_knows_is_read_with_its_words() {
         [Some("agent-1".to_owned())]
     );
 }
+
+/// letter-47180: every card names the folder its request acts in (desk.md:
+/// "A card shows the command or files, the folder and the agent's reason"),
+/// also when the agent's request names none, as Claude's `Bash` does not;
+/// and a `hide` line reads as the `hide 명령` row, which is the card's kind.
+#[test]
+fn every_card_names_its_folder_and_a_hide_line_reads_as_the_hide_row() {
+    let hide = reading("hide agent list");
+    assert_eq!(
+        (hide.row, hide.card.folder.as_deref()),
+        (Row::Hide, Some(WORK))
+    );
+    let shell = reading("echo hi > notes.txt");
+    assert_eq!(
+        (shell.row, shell.card.folder.as_deref()),
+        (Row::Shell, Some(WORK))
+    );
+    let named = classify(
+        &Action::Command {
+            command: "rm -rf /tmp/x".into(),
+            folder: Some(PROJECT.into()),
+            reason: None,
+        },
+        &place(),
+    );
+    assert_eq!(named.card.folder.as_deref(), Some(PROJECT));
+
+    let edit = |paths: &[&str]| {
+        classify(
+            &Action::Edit {
+                paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+                delete: false,
+                reason: None,
+            },
+            &place(),
+        )
+        .card
+        .folder
+    };
+    assert_eq!(
+        edit(&["/r/herdr-ide/web/a.ts", "/r/herdr-ide/web/src/b.ts"]).as_deref(),
+        Some("/r/herdr-ide/web")
+    );
+    assert_eq!(edit(&["notes.md"]).as_deref(), Some(WORK));
+    assert_eq!(edit(&["/a/x", "/b/y"]).as_deref(), Some("/"));
+    // A Windows drive's root, read by the wire's spelling on every system.
+    assert_eq!(edit(&["C:/a/x", "C:/b/y"]).as_deref(), Some("C:/"));
+    assert_eq!(edit(&["C:/a/x", "D:/a/y"]), None);
+    // A path Hide cannot name leaves the folder out rather than guess.
+    assert_eq!(edit(&["$HOME/x"]), None);
+
+    let read = classify(
+        &Action::Read {
+            what: "src/lib.rs".into(),
+        },
+        &place(),
+    );
+    assert_eq!(read.card.folder.as_deref(), Some(WORK));
+}
