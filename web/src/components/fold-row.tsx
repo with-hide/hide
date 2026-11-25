@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { RowButton } from "./ui/row-button";
 
+/** Where a project's name, a checkout's kind glyph, a plain folder's glyph, a group header's chevron and every fold start in the 프로젝트 list. */
+export const PROJECT_COLUMN = "var(--spacing-sm)";
+
 /**
  * A fold in the 프로젝트 list drawn as one row (다른 체크아웃, 정리할 것, a head
  * of another machine's work): its label and count, the marks of what it
@@ -16,7 +19,7 @@ export function FoldRow({
   current = false,
   badge,
   lead,
-  inset = "var(--spacing-sm)",
+  inset = PROJECT_COLUMN,
   onToggle,
   ...data
 }: {

@@ -11,6 +11,7 @@ import { createActions } from "../actions";
 import { EntryPointMenu } from "../components/entry-menu";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { ConfirmGuestPaneClose, GuestPaneScreen, guestPaneMenu } from "../GuestPaneScreen";
+import { NO_CHECKOUT_ROWS } from "../guestWork";
 import { GuestMachineGroups, GuestProjectRows, PeerWorkRows } from "../GuestWorkRows";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
 import { NOTHING_UNDER_WAY, type Peer } from "../pairing";
@@ -69,7 +70,7 @@ export function GuestWorkScene({ params }: { params: URLSearchParams }) {
             <PeerWorkRows group="needs_you" actions={actions} />
             <PeerWorkRows group="done" actions={actions} />
             <li className="px-sm py-xs text-caption text-foreground">shop-api</li>
-            <GuestProjectRows projectId="shop" folder="/work/shop-api" columns={{ head: "var(--spacing-sm)", rows: "var(--spacing-xl)", rail: "var(--spacing-md)" }} actions={actions} />
+            <GuestProjectRows projectId="shop" folder="/work/shop-api" layout={NO_CHECKOUT_ROWS} columns={{ head: "var(--spacing-sm)", rows: "var(--spacing-xl)", rail: "var(--spacing-md)" }} actions={actions} />
             <GuestMachineGroups actions={actions} projects={new Set(["shop"])} columns={{ head: "var(--spacing-sm)", rows: "var(--spacing-xl)", rail: "var(--spacing-md)" }} />
           </ul>
           <div className="relative flex min-w-0 flex-1 flex-col">

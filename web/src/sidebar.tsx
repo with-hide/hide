@@ -9,7 +9,7 @@ import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hi
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
-import { FoldRow } from "./components/fold-row";
+import { FoldRow, PROJECT_COLUMN } from "./components/fold-row";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
 import { Hint } from "./components/ui/tooltip";
@@ -79,6 +79,7 @@ import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFoc
 import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
 import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
 import { GuestCheckoutRows, GuestMachineGroups, GuestProjectRows, PeerWorkRows, useGuestInFront, usePeerRows } from "./GuestWorkRows";
+import { guestFoldInFront, NO_CHECKOUT_ROWS, type GuestLayout } from "./guestWork";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
@@ -772,10 +773,8 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
 // chevron stands at its left, on its tab's guide. A row's menu opens on a
 // right-click, or the menu key or ⇧F10 on the focused row; nothing on the
 // row stands for it.
-/** Where a project's name, a checkout's kind glyph, a plain folder's glyph, a group header's chevron and every fold start. */
-const PROJECT_COLUMN = "var(--spacing-sm)";
 /** Where a plain folder's name and its agent marks start. */
-const PROJECT_NAME_COLUMN = "calc(var(--spacing-sm) + var(--size-checkout-icon) + var(--spacing-sm))";
+const PROJECT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-sm))`;
 /** Where a checkout's name, its line two and its agents' marks start. */
 const CHECKOUT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
 /**
@@ -957,9 +956,10 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   // under the checkout row that holds them, else at the project's end inside
   // it, and hidden with it by the project's fold or the fold their checkout
   // waits in (PRD device-connect-iroh B10, operator review 2026-11-25,
-  // `guestPlaces`). The one the center shows marks the fold that hides it.
+  // `guestPlaces`). The one the center shows marks the fold that hides it
+  // (`guestFoldInFront`).
   const guestRows = !workspace.remote_target_id;
-  const guestInFront = useGuestInFront(workspace.id);
+  const guestsInFront = useGuestInFront();
   const folder = folderCheckout(workspace);
   if (folder) {
     return (
@@ -979,7 +979,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
     );
   }
   // Every checkout waits under 정리할 것: the project draws no row, and its machines' heads stand in its place.
-  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} columns={GUESTS_OUTSIDE} actions={actions} /> : null;
+  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} layout={NO_CHECKOUT_ROWS} columns={GUESTS_OUTSIDE} actions={actions} /> : null;
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1005,10 +1005,14 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
       context={context}
     />
   );
-  const rowCheckouts = new Set([...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id));
-  const foldedCheckouts = new Set(othersOpen ? [] : others.map((checkout) => checkout.id));
-  const projectCurrent = hiding === "project" || (!expanded && guestInFront !== null);
-  const othersCurrent = !othersOpen && ((context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)) || (guestInFront !== null && foldedCheckouts.has(guestInFront.checkoutId ?? "")));
+  const guestLayout: GuestLayout = {
+    open: expanded,
+    rows: new Set([...main, ...(othersOpen ? others : [])].map((checkout) => checkout.id)),
+    folded: new Set(othersOpen ? [] : others.map((checkout) => checkout.id)),
+  };
+  const guestFold = guestRows ? guestFoldInFront(guestsInFront.panes, guestsInFront.inFront, workspace.id, guestLayout) : null;
+  const projectCurrent = hiding === "project" || guestFold === "project";
+  const othersCurrent = !othersOpen && ((context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)) || guestFold === "others");
   return (
     <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
@@ -1081,7 +1085,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               {othersOpen ? <ul>{others.map(checkoutRow)}</ul> : null}
             </li>
           ) : null}
-          {guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} rows={rowCheckouts} folded={foldedCheckouts} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
+          {guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} layout={guestLayout} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
         </ul>
       ) : null}
     </li>

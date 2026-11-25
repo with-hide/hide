@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byMachine, guestPaneRefuses, guestPanes, guestPlaces, guestTabs, isGuestPaneId, peerRows } from "./guestWork";
+import { byMachine, guestFoldInFront, guestHead, guestPaneRefuses, guestPanes, guestPlaces, guestsOutside, guestTabs, isGuestPaneId, NO_CHECKOUT_ROWS, peerRows } from "./guestWork";
 import type { SnapshotRest, Workspace } from "./snapshot";
 
 const KEY = "cd".repeat(32);
@@ -79,22 +79,51 @@ describe("another machine's work on this computer (PRD device-connect-iroh B10, 
     const names = (list: readonly { label: string }[] | undefined) => (list ?? []).map((pane) => pane.label);
     const none = new Set<string>();
     // Both checkouts drawn as rows: each pane under the deepest checkout that holds its folder, in the order they came.
-    const open = guestPlaces(panes, "modakbul", { open: true, rows: new Set(["main", "login"]), folded: none });
+    const id = (label: string) => panes.find((pane) => pane.label === label)!.id;
+    const bothRows = { open: true, rows: new Set(["main", "login"]), folded: none };
+    const open = guestPlaces(panes, "modakbul", bothRows);
     expect(names(open.byCheckout.get("main"))).toEqual(["강의 정산", "리마인드 확인"]);
     expect(names(open.byCheckout.get("login"))).toEqual(["로그인 시험"]);
-    expect([open.atEnd, open.hidden]).toEqual([[], []]);
-    // The worktree waits in the closed 다른 체크아웃 fold: its pane is hidden with it, not moved out.
-    const otherFolded = guestPlaces(panes, "modakbul", { open: true, rows: new Set(["main"]), folded: new Set(["login"]) });
-    expect(names(otherFolded.byCheckout.get("main"))).toEqual(["강의 정산", "리마인드 확인"]);
-    expect([names(otherFolded.atEnd), names(otherFolded.hidden)]).toEqual([[], ["로그인 시험"]]);
+    expect(open.atEnd).toEqual([]);
+    expect(guestFoldInFront(panes, id("로그인 시험"), "modakbul", bothRows)).toBeNull();
+    // The worktree waits in the closed 다른 체크아웃 fold: its pane is hidden with it, not moved out, and that fold holds it in front.
+    const otherFolded = { open: true, rows: new Set(["main"]), folded: new Set(["login"]) };
+    const placed = guestPlaces(panes, "modakbul", otherFolded);
+    expect([names(placed.byCheckout.get("main")), names(placed.byCheckout.get("login")), names(placed.atEnd)]).toEqual([["강의 정산", "리마인드 확인"], [], []]);
+    expect(guestFoldInFront(panes, id("로그인 시험"), "modakbul", otherFolded)).toBe("others");
+    expect(guestFoldInFront(panes, id("강의 정산"), "modakbul", otherFolded)).toBeNull();
     // The project's row stands for its main checkout, which draws no row: its panes stand at the project's end.
     const mainUnrowed = guestPlaces(panes, "modakbul", { open: true, rows: new Set(["login"]), folded: none });
     expect([names(mainUnrowed.atEnd), names(mainUnrowed.byCheckout.get("login"))]).toEqual([["강의 정산", "리마인드 확인"], ["로그인 시험"]]);
-    // The project folded: every one of its panes is hidden with it.
-    const folded = guestPlaces(panes, "modakbul", { open: false, rows: none, folded: none });
-    expect([folded.byCheckout.size, folded.atEnd.length, names(folded.hidden)]).toEqual([0, 0, ["강의 정산", "로그인 시험", "리마인드 확인"]]);
-    // A pane in no folder of the project is not the project's.
-    expect([...open.byCheckout.values()].flat().concat(open.atEnd, folded.hidden).some((pane) => pane.label === "정리")).toBe(false);
+    // Every checkout under 정리할 것: the tree draws none, and all its panes stand at its end.
+    expect(names(guestPlaces(panes, "modakbul", NO_CHECKOUT_ROWS).atEnd)).toEqual(["강의 정산", "로그인 시험", "리마인드 확인"]);
+    // The project folded: none of its panes stands, and the project's own fold holds the one in front.
+    const projectFolded = { open: false, rows: none, folded: none };
+    const folded = guestPlaces(panes, "modakbul", projectFolded);
+    expect([folded.byCheckout.size, folded.atEnd.length]).toEqual([0, 0]);
+    expect(guestFoldInFront(panes, id("로그인 시험"), "modakbul", projectFolded)).toBe("project");
+    // A pane in no folder of the project is not the project's: no fold of it holds it, and it stands outside.
+    expect([...open.byCheckout.values()].flat().concat(open.atEnd).some((pane) => pane.label === "정리")).toBe(false);
+    expect(guestFoldInFront(panes, id("정리"), "modakbul", projectFolded)).toBeNull();
+    expect(names(guestsOutside(panes, new Set(["modakbul"])))).toEqual(["정리"]);
+    // A project the list draws no tree for (another device's) leaves its panes outside too.
+    expect(names(guestsOutside(panes, new Set()))).toEqual(["강의 정산", "로그인 시험", "리마인드 확인", "정리"]);
+  });
+
+  it("opens a machine's head unless folded in that place, and marks a folded head that holds the pane in front (operator review 2026-11-25)", () => {
+    const panes = guestPanes(rest([{ pane: "w1:p1", folder: "/work/hide", name: "결제" }, { pane: "w1:p2", folder: "/scratch", name: "로그" }]), [project("hide", "/work/hide")], TERMINAL);
+    const [machine] = byMachine(panes.filter((pane) => pane.projectId === "hide"));
+    const folds = [{ device_id: "macbook", folder: "" }];
+    // Folded outside every project only: the head in the project stays open.
+    expect(guestHead(folds, machine!, "/work/hide", null)).toEqual({ open: true, current: false });
+    expect(guestHead(folds, machine!, "", null)).toEqual({ open: false, current: false });
+    const here = [{ device_id: "macbook", folder: "/work/hide" }, { device_id: "windows", folder: "/work/hide" }];
+    expect(guestHead(here, machine!, "/work/hide", null)).toEqual({ open: false, current: false });
+    expect(guestHead(here, machine!, "/work/hide", panes[0]!.id)).toEqual({ open: false, current: true });
+    // Open, it holds nothing: the row itself is marked.
+    expect(guestHead([], machine!, "/work/hide", panes[0]!.id)).toEqual({ open: true, current: false });
+    // A pane of another place is not this head's.
+    expect(guestHead(here, machine!, "/work/hide", panes[1]!.id)).toEqual({ open: false, current: false });
   });
 
   it("does only the closed set to another machine's pane (D-74)", () => {
