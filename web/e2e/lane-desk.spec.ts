@@ -54,7 +54,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
 
     // B2: the watched agent's open waits on the closed lane; the rail counts it, naming this tab.
     await open(watchedAgent, "a.md");
-    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(deskButton(page)).toHaveAttribute("aria-disabled", "false");
     await deskButton(page).hover();
@@ -76,7 +76,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     await expect(deskTabs(page)).toHaveCount(2);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(chip).toHaveText(/1 view/);
-    await expect(page.locator('[data-lane-badge="2"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "2 views open");
     await screenshot(page, "lane-desk-two-tabs");
 
     // B8: moving between the tab's panes leaves its desk, its front tab and the lane as they were.
@@ -92,7 +92,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     await front(page).locator("button").click();
     await expect(deskTabs(page)).toHaveCount(1);
     await expect(chip).toHaveText(/1 view/);
-    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
 
     // B9: the second Agent tab shows its own desk, empty, its button off; the first tab's comes back as it was.
     await agentTab(page, second.tab).click();
@@ -104,14 +104,14 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     await agentTab(page, engine.tab).click();
     await expect(deskTabs(page)).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
-    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
 
     // A file the operator opens from Explorer joins the same desk, in front.
     await showTool(page, "explorer");
     await page.locator('[data-explorer-row$="/c.md"]').click();
     await expect(deskTabs(page)).toHaveCount(2);
     await expect(front(page)).toHaveAttribute("aria-label", /\/c\.md/);
-    await expect(page.locator('[data-lane-badge="2"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "2 views open");
     await screenshot(page, "lane-desk-explorer");
 
     // B30: ⌘E closes the lane and brings the desk back.

@@ -1693,6 +1693,11 @@ pub(super) struct ProductAnalyticsSetPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct RailCountsSetPayload {
+    pub(super) shown: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ThemeSetPayload {
     pub(super) theme: crate::model::ThemePreference,
 }
@@ -1928,6 +1933,7 @@ pub(super) enum Event {
     PaneTextScale(PaneTextScalePayload),
     EditorTextScale(EditorTextScalePayload),
     ProductAnalyticsSet(ProductAnalyticsSetPayload),
+    RailCountsSet(RailCountsSetPayload),
     ProductAnalyticsConnected,
     ThemeSet(ThemeSetPayload),
     AgentLogoModeSet(AgentLogoModeSetPayload),
@@ -2324,6 +2330,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pane_text_scale" => decode!(PaneTextScalePayload, PaneTextScale),
         "editor_text_scale" => decode!(EditorTextScalePayload, EditorTextScale),
         "product_analytics_set" => decode!(ProductAnalyticsSetPayload, ProductAnalyticsSet),
+        "rail_counts_set" => decode!(RailCountsSetPayload, RailCountsSet),
         "product_analytics_connected" => Ok(Event::ProductAnalyticsConnected),
         "theme_set" => decode!(ThemeSetPayload, ThemeSet),
         "agent_logo_mode_set" => decode!(AgentLogoModeSetPayload, AgentLogoModeSet),
@@ -4579,6 +4586,14 @@ impl Runtime {
                 self.persist_ui_state();
                 true
             }
+            Event::RailCountsSet(payload) => {
+                if self.snapshot.ui_state.rail_counts_shown == payload.shown {
+                    return false;
+                }
+                self.snapshot.ui_state.rail_counts_shown = payload.shown;
+                self.persist_ui_state();
+                true
+            }
             Event::ThemeSet(payload) => {
                 if self.snapshot.ui_state.theme == payload.theme {
                     return false;
@@ -4848,6 +4863,7 @@ impl Runtime {
                     first_run_choices: current.first_run_choices,
                     desktop_notifications: current.desktop_notifications,
                     product_analytics_enabled: current.product_analytics_enabled,
+                    rail_counts_shown: current.rail_counts_shown,
                     product_active_days: current.product_active_days,
                     desktop_notifications_done: current.desktop_notifications_done,
                     screen_intros_seen: current.screen_intros_seen,

@@ -3,6 +3,7 @@ import type { Actions } from "../actions";
 import { Input } from "../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Slider } from "../components/ui/slider";
+import { Switch } from "../components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { Group, Note, Row, Value } from "../components/settings-rows";
@@ -157,6 +158,7 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
   const theme = useShellStore((s) => readTheme(s.rest?.ui_state?.theme).choice);
   const colorTheme = useShellStore((s) => readColorTheme(s.rest?.ui_state?.color_theme).choice);
   const connected = useShellStore((s) => s.connection === "live");
+  const railCounts = useShellStore((s) => s.rest?.ui_state?.rail_counts_shown ?? true);
   const fontSize = useShellStore((s) => usableFontSize(s.rest?.ui_state?.font_size)) ?? FONT_SIZE_BASE;
   const terminalFontSize = useShellStore((s) => usableTerminalFontSize(s.rest?.ui_state?.terminal_font_size)) ?? TERMINAL_FONT_SIZE_BASE;
   const textLarger = useShellStore((s) => commandLabel("text_larger", s.rest?.ui_state));
@@ -262,6 +264,9 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
         }}
       />
       <TerminalFontRow actions={actions} onCommit={() => setChangedAt(Date.now())} />
+      <Row label={t("settings.railCounts")} data-appearance-row="rail-counts" detail={<Note>{t("settings.railCountsDetail")}</Note>}>
+        <Switch aria-label={t("settings.railCounts")} checked={railCounts} disabled={!connected} onCheckedChange={actions.setRailCounts} data-rail-counts="true" />
+      </Row>
     </Group>
   );
 }

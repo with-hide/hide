@@ -111,6 +111,20 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')).toBeNull();
   });
 
+  it("draws the rail's counts gray, none on the desk button, and Settings can turn them off while the hint keeps saying them", async () => {
+    const rest = snapshot(status({ strays: [stray()], strays_total: 1 }), { kind: "worktrees", workspace_id: "p" });
+    await render(rest, null, null, suggestionsProject({ counts: { suggestions: 2, rail: 3 } }));
+    for (const tool of ["project", "memory"]) {
+      const badge = container.querySelector(`[data-lane-tool="${tool}"] [data-lane-todo-count]`);
+      expect(badge?.className).not.toContain("warning");
+    }
+    expect(container.querySelector('[data-lane-tool="documents"] [data-lane-badge]')).toBeNull();
+    await act(async () => useShellStore.setState({ rest: { ...rest, ui_state: { ...rest.ui_state, rail_counts_shown: false } } }));
+    expect(container.querySelector("[data-lane-todo-count]")).toBeNull();
+    expect(container.querySelector('[data-lane-tool="project"]')?.getAttribute("aria-description")).toBe("1 left behind");
+    expect(container.querySelector('[data-lane-tool="memory"]')?.getAttribute("aria-description")).toBe("Suggestions 2 · Memory 1");
+  });
+
   it("counts what Hide AI asks on its icon, apart from the Project's 흘린 것", async () => {
     await render(snapshot(status()), null, null, suggestionsProject({ counts: { suggestions: 2, rail: 3 } }));
     expect(container.querySelector('[data-lane-tool="memory"] [data-lane-todo-count]')?.textContent).toBe("3");

@@ -63,18 +63,18 @@ function useScope(checkout: Checkout | null): (tool: Tool) => string {
 }
 
 /**
- * The tool rail (B2, B3, B11, B14): above the rule the desk's button with
- * the front Agent tab's desk counted (PRD lane-desk-pair-view D-29), pressed
+ * The tool rail (B2, B3, B11, B14): above the rule the desk's button, pressed
  * while the viewing column shows it and folding the column when pressed
- * again; below it one icon per tool, its
- * name, scope and chord in its hint, pressed while the tool column shows
- * it, opening the tool column on it or closing the column when it already
- * shows it. The Project tool counts its project's 흘린 것 and the Hide AI
- * tool what its two tabs ask of the operator, each no number at 0. With an
- * empty desk the button is off and says so. Its hint's scope is the front
- * Agent tab, whose desk it counts (D-35), so the number is not read as the
- * checkout's. At the bottom the `…` stays in place whether the lane is up or
- * not and whichever column it shows (B15).
+ * again, with no number (the hint says how many Views its front Agent tab's
+ * desk holds); below it one icon per tool, its name, scope and chord in its
+ * hint, pressed while the tool column shows it, opening the tool column on it
+ * or closing the column when it already shows it. The Project tool counts its
+ * project's 흘린 것 and the Hide AI tool what its two tabs ask of the
+ * operator, each a gray number, none at 0 or while Settings > General turns
+ * the rail's counts off: the warning colour belongs to the operator's 내 차례
+ * alone. With an empty desk the button is off and says so. At the bottom the
+ * `…` stays in place whether the lane is up or not and whichever column it
+ * shows (B15).
  */
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -95,15 +95,16 @@ export function ToolRail({ actions }: { actions: Actions }) {
   });
   const scope = useScope(checkout);
   const uiState = useShellStore((s) => s.rest?.ui_state);
+  // Settings > General: the gray counts on the Project and Hide AI icons; the hint and the reader's description say them either way.
+  const countsShown = uiState?.rail_counts_shown ?? true;
   const up = laneUp(drawn.mode);
   const documentsChord = commandLabel("toggle_lane_documents", uiState);
   // In focus mode the button is the desk beside the pane, which it folds and stands as ⌘E does: pressed while the desk
-  // stands, and while folded it counts the left pane's Views, the pane head's `뷰 N개` (D-63). It does nothing while the
+  // stands, and while folded its hint says the left pane's Views, the pane head's `뷰 N개` (D-63). It does nothing while the
   // desk holds no tab the strip shows, the core's `shown` count (D-60).
   const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
   const pairViews = usePaneViewRows(pair?.pane_id ?? "").length;
   const documentsShown = pair ? pair.alone !== true : up && drawn.view === "documents";
-  const count = pair ? (documentsShown ? 0 : pairViews) : views;
   const listed = pair ? pairViews : views;
   const available = pair ? (pair.shown ?? 0) > 0 : views > 0;
   // The rail is always drawn, so the Hide AI tool's count reads its Project whichever tool shows.
@@ -124,11 +125,6 @@ export function ToolRail({ actions }: { actions: Actions }) {
         >
           {documentsShown ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
           <FilesIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-          {count > 0 ? (
-            <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-primary px-xxs text-micro text-primary-foreground" data-lane-badge={count}>
-              {count}
-            </span>
-          ) : null}
         </button>
       </Hint>
       {/* The viewing column's buttons end and the tools begin (D-07). */}
@@ -158,8 +154,8 @@ export function ToolRail({ actions }: { actions: Actions }) {
             >
               {pressed ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
               <Icon aria-hidden="true" className="size-(--size-icon-lg)" />
-              {needs > 0 ? (
-                <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-warning px-xxs text-micro tabular-nums text-background" data-lane-todo-count={needs}>
+              {needs > 0 && countsShown ? (
+                <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-accent px-xxs text-micro tabular-nums text-foreground" data-lane-todo-count={needs}>
                   {needs}
                 </span>
               ) : null}

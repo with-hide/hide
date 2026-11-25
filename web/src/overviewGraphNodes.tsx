@@ -173,9 +173,11 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
   const { t } = useInterfaceTranslation();
   const { row, root, branch, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
-  const asking = row.agent.mark === "turn" || row.agent.mark === "look";
+  // The orb stands in the warning colour only for the operator's turn (the model's `activity`, the core's group); a read ask or a read View keeps its place on the map as an idle session.
+  const asking = row.activity === "turn";
+  const mark = asking || (row.agent.mark !== "turn" && row.agent.mark !== "look") ? row.agent.mark : "quiet";
   const launch = launchWords(row);
-  return <div className="og-session" data-root={root} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
+  return <div className="og-session" data-root={root} data-mark={mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />
     <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null, branch].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
