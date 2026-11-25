@@ -476,6 +476,19 @@ impl BuiltHolders {
     pub(crate) fn start_in(shell: Vec<std::ffi::OsString>) -> Self {
         let (root, [home, state_dir, folder]) = holder_root();
         let (node, service) = built_node(&home, &state_dir, shell);
+        // The machine the engine starts agents on, whose node keeps a
+        // start's first input (`Call::PromptFile`).
+        let place = super::own::Place {
+            engine_dir: hide_kit::layout::engine_dir(&state_dir),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            node: std::sync::Arc::clone(&node) as std::sync::Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
+            definitions: std::sync::Arc::new(hide_agent_adapter::definition::Catalog::read(
+                Vec::new(),
+            )),
+            launches: std::sync::Arc::default(),
+            switched: false,
+        };
         // Asked as every own engine asks its machine's holders: through the
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
@@ -484,7 +497,7 @@ impl BuiltHolders {
             .recovered(Duration::from_secs(120))
             .expect("the contract acquires pane ownership");
         Self {
-            engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
+            engine: super::own::OwnEngine::placed(std::sync::Arc::clone(&linked), place),
             panes: linked,
             service,
             home,
@@ -1304,6 +1317,7 @@ fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_shell() {
 }
 
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // a poll bounded by START_WITHIN that shows the pane when it ends
 fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     use std::os::unix::fs::PermissionsExt;
     struct Running(BuiltHolders);
@@ -1319,8 +1333,10 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     engine.set_agent_definitions(std::sync::Arc::new(
         hide_agent_adapter::definition::Catalog::read(Vec::new()),
     ));
-    // A stand-in Codex on the pane's PATH that writes each word it was
-    // given, ended by a NUL, to the file its pane names.
+    // A stand-in Codex that writes each word it was given, ended by a NUL,
+    // to the file its pane names, started by its file as the node names
+    // one (`StartForm::Direct`), never by a name a login shell's `PATH`
+    // could resolve to a real Codex.
     let bin = tempfile::tempdir().unwrap();
     let codex = bin.path().join("codex");
     std::fs::write(
@@ -1336,10 +1352,6 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
             written.to_str().unwrap().to_owned(),
         ),
         ("LC_ALL".to_owned(), "C".to_owned()),
-        (
-            "PATH".to_owned(),
-            format!("{}:/usr/bin:/bin", bin.path().display()),
-        ),
     ]);
     let (_, _, pane) = engine
         .create_workspace(WAIT, &built.folder, "c-locale", false, env)
@@ -1351,14 +1363,13 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
             .is_ok_and(|processes| processes.shell_holds_terminal())
     });
     let input = "한글 첫 지시입니다: '따옴표' \"큰따옴표\" $HOME `tick`\n둘째 줄 -x";
-    let words = crate::start_prompt::launched(
-        "codex",
-        &[],
-        input,
-        Some(&hide_node_link::protocol::StartForm::Program),
-    )
-    .expect("the start carries the input")
-    .expect("Codex declares a launch");
+    let form = hide_node_link::protocol::StartForm::Direct {
+        program: codex.to_str().unwrap().to_owned(),
+        leading: Vec::new(),
+    };
+    let words = crate::start_prompt::launched("codex", &[], input, Some(&form))
+        .expect("the start carries the input")
+        .expect("Codex declares a launch");
     let (lead, prompt) = crate::start_prompt::split_carried(words.clone());
     let start = engine
         .prepare_start(super::AgentLaunch {
@@ -1368,16 +1379,24 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
             args: lead,
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
-            program: None,
+            program: super::StartProgram::of("codex", &form),
             prompt,
         })
         .expect("the start is prepared");
     engine
         .start_agent(WAIT, &start)
         .unwrap_or_else(|error| panic!("{named} takes the start: {error:?}"));
-    until_within("the program records its arguments", START_WITHIN, || {
-        written.exists()
-    });
+    let deadline = Instant::now() + START_WITHIN;
+    while !written.exists() {
+        if Instant::now() >= deadline {
+            let screen = engine
+                .read_pane(WAIT, &pane, "visible", 40)
+                .map(|read| read.text)
+                .unwrap_or_default();
+            panic!("{named} never ran the start; its pane shows:\n{screen}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let given: Vec<String> = std::fs::read(&written)
         .unwrap()
         .split(|byte| *byte == 0)

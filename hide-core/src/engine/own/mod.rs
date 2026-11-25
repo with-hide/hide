@@ -295,6 +295,13 @@ impl OwnEngine<'static> {
         Self::with(Topology::default(), holders, None, true).expect("a test engine starts")
     }
 
+    /// [`OwnEngine::new`] on a machine `place` names, as a daemon's engine
+    /// reaches its node, still saving and restoring nothing: a test's.
+    #[cfg(test)]
+    pub(crate) fn placed(holders: Arc<dyn PaneHolders>, place: Place) -> Self {
+        Self::with(Topology::default(), holders, Some(place), true).expect("a test engine starts")
+    }
+
     /// A daemon's engine (PRD engine-bundle-3-core-owns D-6, D-7): its
     /// session read from `place`'s saved session, saved there after every
     /// change, and laid out again around what `holders` found running as
