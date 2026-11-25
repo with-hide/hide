@@ -167,27 +167,32 @@ describe("Desk's room", () => {
     await show(desk([{ kind: "user", id: 1, text: "왜 끊기는지 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "install.log", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-install.log` }] }]));
     expect(tiles()).toEqual([["ready", expect.stringContaining("later.txt")]]);
     expect(document.body.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("install.log");
-
-    // The agent was not signed in: the core takes the message out, and its words and its file come back to send again (B6).
-    await show(desk([{ kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" }]));
-    expect(useUiStore.getState().deskDraft.text).toBe("왜 끊기는지 봐 줘");
-    expect(tiles()).toEqual([["ready", expect.stringContaining("later.txt")], ["ready", expect.stringContaining("install.log")]]);
   });
 
-  it("puts the words back and says so when a file the message named is gone", async () => {
-    configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
-    useUiStore.setState({ deskDraft: { text: "이거 봐 줘", mentions: [] } });
-    await render(desk([]));
-    await dropFile("shot.png", [1, 2]);
-    await press("[data-desk-composer-send]");
-    const [message] = sent("desk_send") as { request_id: string }[];
-    await show(desk([{ kind: "user", id: 1, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [{ name: "shot.png", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-shot.png` }] }]));
+  // letter-47579: the line is the one way back, so a refused message never also returns to the box, where the next send carried its words twice.
+  for (const notice of ["login_needed", "attachments_gone"] as const) {
+    it(`leaves the box empty after a refused send (${notice}) and shows the message held first in line with its file (B6)`, async () => {
+      configureAttachments({ dispatch: (event) => { events.push(event); return true; }, sendBinary: () => undefined });
+      useUiStore.setState({ deskDraft: { text: "이거 봐 줘", mentions: [] } });
+      await render(desk([]));
+      await dropFile("shot.png", [1, 2]);
+      await press("[data-desk-composer-send]");
+      const [message] = sent("desk_send") as { request_id: string }[];
+      const file = { name: "shot.png", bytes: 2, path: `/state/desk-attachments/${message!.request_id}-0-shot.png` };
+      await show(desk([{ kind: "user", id: 1, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [file] }]));
+      expect(useUiStore.getState().deskDraft.text).toBe("");
 
-    await show(desk([{ kind: "notice", id: 2, notice: "attachments_gone", agent: "claude", detail: null }]));
-    expect(useUiStore.getState().deskDraft.text).toBe("이거 봐 줘");
-    expect(tiles()).toEqual([]);
-    expect(document.body.querySelector("[data-desk-notice='attachments_gone']")).not.toBeNull();
-  });
+      // The agent never took it: the core moved it, file and all, to the head of the line and holds the line.
+      await show(desk([{ kind: "notice", id: 2, notice, agent: "claude", detail: null }], "ready", true, [{ id: 3, text: "이거 봐 줘", at_ms: 0, mentions: [], attachments: [file] }], true));
+      expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
+      expect(tiles()).toEqual([]);
+      const held = document.body.querySelector("[data-desk-queued='3']");
+      expect(held?.textContent).toContain("이거 봐 줘");
+      expect(held?.textContent).toContain("Sent after you restart");
+      expect(held?.querySelector("[data-desk-sent-attachments]")?.textContent).toContain("shot.png");
+      expect(document.body.querySelector(`[data-desk-notice='${notice}']`)).not.toBeNull();
+    });
+  }
 
   it("draws only a failed turn in the failed colour: a stopped host is neutral words, a blocked turn and a failed install keep the warning colour", async () => {
     const colour = (kind: string) => document.body.querySelector<HTMLElement>(`[data-desk-notice='${kind}'] span`)!.className;

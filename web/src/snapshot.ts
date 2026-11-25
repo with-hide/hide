@@ -3401,7 +3401,8 @@ export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
 /** A message sent while a reply was being written, waiting for the turn before it (`desk_queued_remove` takes it out); none is in `items` until its turn starts. */
-export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[] };
+/** A message waiting its turn, whole: its words, chips and files (absent when it has none). */
+export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed" | "attachments_gone";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };

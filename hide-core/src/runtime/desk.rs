@@ -552,7 +552,13 @@ impl Runtime {
             return true;
         }
         self.desk.held = false;
-        self.desk_start_turn(agent, text.to_owned(), text.to_owned(), payload.mentions, files);
+        self.desk_start_turn(
+            agent,
+            text.to_owned(),
+            text.to_owned(),
+            payload.mentions,
+            files,
+        );
         true
     }
 
@@ -2757,7 +2763,11 @@ mod tests {
         assert!(held(&runtime));
         no_send(&received);
 
-        assert!(event(&mut runtime, "desk_send", json!({"text": "signed in"})));
+        assert!(event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "signed in"})
+        ));
         let again = sent(&received);
         assert_eq!(again.text, format!("\"{}\" look", shot.display()));
         assert_eq!(again.files, [shot.display().to_string()]);

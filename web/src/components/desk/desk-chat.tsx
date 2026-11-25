@@ -66,14 +66,14 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention }:
 
 /**
  * A message sent while a reply was being written, waiting for the turn before
- * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble with `대기 중` and `✕`, which takes it out before it
- * goes (it is not in the conversation until its turn starts).
+ * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble, its files
+ * with it, with `대기 중` and `✕`, which takes it out before it goes (it is not in the conversation until its turn starts).
  */
 export function DeskQueuedBubble({ message, held = false, onRemove, onMention }: { message: DeskQueuedMessage; held?: boolean; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-queued={message.id}>
-      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} onMention={onMention} /></div>
+      <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} attachments={message.attachments} onMention={onMention} /></div>
       <span className="flex items-center gap-xxs text-micro text-muted-foreground">
         {t(held ? "desk.queued.held" : "desk.queued.waiting")}
         <Hint label={t("desk.queued.remove")}>

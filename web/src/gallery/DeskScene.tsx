@@ -128,7 +128,7 @@ const CODEX: DeskSelection = { agent: "codex", model: "gpt", effort: "medium" };
 
 /** A tray that holds `files` as a scene sets them. */
 function sceneTray(files: readonly TrayFile[]): ComposerTray {
-  return { files, add: noop, remove: noop, outgoing: () => null, clear: noop, restore: noop };
+  return { files, add: noop, remove: noop, outgoing: () => null, clear: noop };
 }
 
 /** A sent picture, so its bubble draws it as this window's own send would. */

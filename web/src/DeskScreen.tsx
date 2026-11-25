@@ -127,8 +127,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const tray = useComposerTray();
   const [notice, setNotice] = useState<string | null>(null);
   const refusal = useShellStore((s) => s.composerRefusal);
-  // The last send as written, its files with it, put back in the box when the agent turned out not to be signed in (B6).
-  const lastSent = useRef<{ words: typeof draft; files: { name: string; bytes: Uint8Array; type: string }[]; after: number } | null>(null);
 
   const byId = useMemo(() => Object.fromEntries(jobs.map((job) => [job.id, job])), [jobs]);
   const items = desk?.conversation.items;
@@ -140,8 +138,9 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
   // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
-  // A message the agent could not take (its sign-in, a session that did not open) comes back as the first waiting one, so
-  // the box never gets it again (B6). The core refuses one more when the line is full: then the words stay in the box.
+  // A message the agent could not take (its sign-in, a session that did not open, a file that is gone) comes back as the
+  // first waiting one with its files, so the box never gets it again (B6). The core refuses one more when the line is
+  // full: then the words and files stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
   const queuedFull = desk?.conversation.queued_full ?? false;
   const queuedHeld = desk?.conversation.queued_held ?? false;
@@ -166,15 +165,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     pending.current = null;
     setNotice(refusalText(refusal.reason, t));
   }, [refusal, t]);
-  useEffect(() => {
-    const sent = lastSent.current;
-    const back = items?.find((item) => item.kind === "notice" && (item.notice === "login_needed" || item.notice === "attachments_gone") && item.id > (sent?.after ?? Infinity));
-    if (!sent || !back || back.kind !== "notice") return;
-    lastSent.current = null;
-    if (!useUiStore.getState().deskDraft.text) setDraft(sent.words);
-    // A file that is gone cannot come back; the notice asks for it again.
-    if (back.notice === "login_needed" && sent.files.length > 0) tray.restore(sent.files);
-  }, [items, setDraft]);
 
   useLayoutEffect(() => {
     const box = scroller.current;
@@ -205,7 +195,6 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     if (staged) files.forEach((file, index) => keepSent(staged.stages[index]!, file.name, file.image));
     setNotice(null);
     pending.current = { text: out.text, after: lastUserId(items), request: staged?.request_id ?? null, tiles: files.map((file) => file.id), queued: new Set(queued.map((one) => one.id)) };
-    lastSent.current = { words, files: files.map(({ name, bytes, type }) => ({ name, bytes, type })), after: items.reduce((last, item) => Math.max(last, item.id), -1) };
     stick.current = true;
     actions.deskSend(out.text, out.mentions, staged);
   };
