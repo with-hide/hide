@@ -2283,7 +2283,10 @@ async fn scoped_client_loop(
                             // the whole Hide allows, judged here for every
                             // command (B20-B23, mission-87 D3).
                             admit_command(&cap, &command)?;
-                            if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
+                            // Desk's file open waits in the core for a window
+                            // showing Desk, so it needs none now.
+                            let desk = cap.pane_id == hide_core::workspace_control::DESK_CALLER;
+                            if command.needs_renderer() && !desk && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
                                     "Open Hide's web or desktop shell and retry",
@@ -2525,9 +2528,13 @@ async fn scoped_client_loop(
                                 ScopedRequest::Action(action) => {
                                     // A file outside every checkout of this
                                     // machine is the window's to grant; the
-                                    // core gets the grant alone.
+                                    // core gets the grant alone. Desk's tab
+                                    // panel shows no outside file, and its
+                                    // path may be a device's, so the core
+                                    // places or refuses it.
                                     let boundary = roots.boundary();
                                     let outside = (caller_node.is_none()
+                                        && !desk
                                         && boundary.names_this_node(Some(&cap.context.device_id)))
                                     .then(|| {
                                         crate::outside_open::outside_target(&action, boundary, || {

@@ -224,6 +224,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("desk_job_requeue", Screen),
     ("desk_lane", Screen),
     ("desk_new_conversation", Screen),
+    ("desk_open_taken", Screen),
     ("desk_output_seen", Screen),
     ("desk_queued_remove", Screen),
     ("desk_restart", Screen),
