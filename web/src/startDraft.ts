@@ -175,6 +175,7 @@ export const useInlineStarts = create<{
   closing: Readonly<Record<string, { device: string; path: string; tab: string }>>;
   retired: ReadonlySet<string>;
   retireFailed: (requestId: string) => void;
+  dismissLive: (requestId: string) => void;
   retainRetired: (requestIds: ReadonlySet<string>) => void;
   noteClose: (request: string, device: string, path: string, tab: string) => void;
   settleClose: (request: string, confirmed: boolean) => void;
@@ -200,6 +201,12 @@ export const useInlineStarts = create<{
     for (const [key, draft] of matches) drafts[key] = { ...draft, request: null, phase: "editing", taskId: null, failure: null };
     set({ drafts, retired: new Set([...state.retired, requestId]) });
   },
+  // A live tab's start answer the operator dismissed from the start notice;
+  // the tab shows its terminal, so no form of that start is kept either.
+  dismissLive: (requestId) => set((state) => state.retired.has(requestId) ? state : {
+    drafts: Object.fromEntries(Object.entries(state.drafts).filter(([, draft]) => draft.request?.id !== requestId)),
+    retired: new Set([...state.retired, requestId]),
+  }),
   noteClose: (request, device, path, tab) => set((state) => ({ closing: { ...state.closing, [request]: { device, path, tab } } })),
   settleClose: (request, confirmed) => set((state) => {
     const closed = state.closing[request];

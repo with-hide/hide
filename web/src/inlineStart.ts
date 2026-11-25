@@ -1,11 +1,42 @@
 import type { AgentStartReceipt, AgentStartTarget } from "./agentLayout";
 import { findArea, locateDisplay } from "./areaLayout";
-import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type SnapshotRest, type TaskOperation } from "./snapshot";
 import { startAnswer, type StartAnswer } from "./startAnswer";
 
 export const receiptTarget = (receipt: AgentStartReceipt): AgentStartTarget => ({ group_id: receipt.group_id, area_id: receipt.area_id, tab_id: receipt.draft_tab_id ?? (receipt.add_pane ? receipt.live_tab_id : null), add_pane: receipt.add_pane });
 export function inlineReceipts(rest: SnapshotRest | null) {
   return catalogWorkspaces(rest).flatMap((workspace) => workspace.checkouts.flatMap((checkout) => (checkout.agent_groups?.start_receipts ?? []).map((receipt) => ({ device: workspace.device_id, path: checkout.path, receipt }))));
+}
+
+/**
+ * A live tab's start whose agent the core could not confirm or saw fail, and
+ * that the operator has not dismissed: the start notice's to show, since the
+ * tab itself shows its terminal. The intent's latest answer decides what it
+ * says: `answering`, the task now answering it with an unconfirmed or failed
+ * agent, takes over as the task notice; otherwise the saved receipt is drawn,
+ * with `failedBy` and the core's `failureCode` when its last check failed or
+ * was refused, and `checking` while a check runs. Only values the snapshot
+ * holds are returned, so a store selector can compare them. A check whose agent started ends the notice.
+ */
+export function liveStartNotice(rest: SnapshotRest | null, dismissed: ReadonlySet<string>): { device: string; path: string; receipt: AgentStartReceipt; answering: TaskOperation | null; failedBy: "check" | "refusal" | null; failureCode: string | null; checking: boolean } | null {
+  const operation = rest?.task_operation ?? null;
+  const error = rest?.status?.last_error ?? null;
+  for (const { device, path, receipt } of inlineReceipts(rest)) {
+    if (receipt.live_tab_id === null || dismissed.has(receipt.request_id)) continue;
+    if (receipt.state !== "ready" || (receipt.agent_phase !== "unknown" && receipt.agent_phase !== "failed")) continue;
+    const notice = { device, path, receipt, answering: null, failedBy: null, failureCode: null, checking: false };
+    // The task slot holds the intent's newest answer; a refusal reaches only the error slot.
+    if (operation?.request_id === receipt.request_id) {
+      if (operation.agent_phase === "started") continue;
+      if (operation.agent_phase === "unknown" || operation.agent_phase === "failed") return { ...notice, answering: operation };
+      // A failed check stays in the slot; a later check's refusal reaches only the error slot and is the newer answer, as in `startAnswer`.
+      if (operation.phase === "failed") return error?.request_id === receipt.request_id ? { ...notice, failedBy: "refusal" as const, failureCode: error.kind } : { ...notice, failedBy: "check" as const, failureCode: operation.failure };
+      return { ...notice, checking: true };
+    }
+    if (error?.request_id === receipt.request_id) return { ...notice, failedBy: "refusal" as const, failureCode: error.kind };
+    return notice;
+  }
+  return null;
 }
 
 /** Only a definite failure can be abandoned after the core moves its target. */
