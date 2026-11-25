@@ -195,11 +195,12 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Ask about the cut in the same message, in one line in the operator's language that names the count and what you joined: `노드 3개로 나눴어요 (화면은 core와 한 노드로 합침). 더 합치거나 나눌까요?`; the operator's answer reshapes the plan before it starts.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - With the plan, show the verification table: one line for each finish line of a node (its `criteria`), so the operator sees before anything starts what will be checked, with which evidence and by whom.
-  The columns are `확인할 것` (the behaviour or cell by its name), `증거` (a unit test, a real CLI journey, an isolated candidate app, the screen) and `누가` (a checker's agent kind, the worker, or `사람`); group the lines under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
+  The columns are `확인할 것` (the behaviour or cell by its name), `증거` (the check that proves it, named as `docs/VERIFICATION.md`, Pick the check by the claim, names it: a unit test, a web or desktop e2e, a real CLI journey, an isolated candidate app, the screen) and `누가` (a checker's agent kind, the worker, or `사람`); group the rows under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
+  Name the cheapest check that can observe the claim: a flow a user performs is never proved by a unit test alone, and a node that changes what a user runs has a row on the isolated candidate app (above).
   The table is the criteria and checks shown, never a second list to keep in step with them, so a node has at most the three rows its criteria allow.
   Many behaviours to check do not make more nodes or more rows: group them by theme into those rows and name each cell inside its row's words; cut a node only on the usual four lines, never because its table is long.
-  A row whose `누가` is `사람` is the node's `gate`: the operator looks while the agents go on, and it holds the node only as a start gate does.
-  A row nothing here can run (no candidate app, no device) is written as `못 함` with its reason, never left out, so a gap in the checking is seen at the plan and not after a bug.
+  A row whose `누가` is `사람` is the node's `gate` (one line, at most 80 characters) and not one of its criteria: the operator looks while the agents go on, and it holds the node only as a start gate does.
+  A row nothing here can run (no candidate app, no device) is shown as `못 함` with its reason and put to the operator in the plan, as a `gate` or a decision, never left out, so a gap in the checking is seen at the plan and not after a bug; no checker is given such a row, so it never turns a verification into a failure.
 
   ```text
   fix-1487
@@ -262,7 +263,7 @@ Join two nodes when they always change together, when the first has nothing a re
 A mission of one node is a fine mission: the plan, the checkers and the map still hold it.
 A review or verify of one node is a checker in its `checks`, never another node; a general node with the `verify` preset is only for changes that work only together.
 A checker's brief says what to check, where (an isolated candidate app, never the operator's), its line (`review` or `verify`), and to record its result with `hide mission record`.
-A verify checker's brief copies the node's rows of the verification table (what, evidence) and says to run each one; a review checker's brief names `docs/CODE_REVIEW.md` and says to give every perspective in the first round.
+A verify checker's brief copies the node's rows of the verification table that it runs (what, evidence) and says to write a short scenario from each and run it; a review checker's brief copies the whole table too, names `docs/CODE_REVIEW.md`, and says to give every perspective in the first round.
 A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
 A `deploy` node for each step that goes out where it is hard to take back (a deploy, an app submission, a release), after the nodes whose work it ships.
 A mission that changes what existing code does starts with a node that lists everything the existing implementation does, one cell per behaviour, each with the check that proves it; later nodes' finish lines name those cells.
@@ -554,7 +555,7 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The map shows the summary first and folds the evidence under it, so a long report in another language never stands in the operator's way (`mission_summary_invalid` for a longer or multi-line one).
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
-  A `verify` names in its evidence each row of the node's verification table and what happened when it ran it; it passes only when every row was run and held, and a row it could not run makes it `--fail` naming that row and why, which the Conductor settles (`hide mission skip <node> verify --reason`), never a pass.
+  A `verify` names in its evidence each row of the node's verification table and what happened when it ran it; it passes only when every row it was given was run and held, and a row it was given but could not run makes it `--fail` naming that row and why, which the Conductor settles (`hide mission skip <node> verify --reason`), never a pass.
   A `review`'s first round names the perspective of each finding and, for a perspective with none, says so in the evidence, so a perspective that was not read shows.
 - A record from a pane whose registration belongs to an earlier agent session than the one running there is refused `participant_session_changed`, and one from a pane with no registration `participant_unavailable`: tell your Conductor rather than retry, since only a new agent bound to the line can record it; `participant_registering` means the spawn that started you has not registered you yet, so run the same record again in a few seconds.
   A worker's or checker's record that Hide cannot judge because it could not read its agent ledger is refused `ledger_unavailable`: stop and tell the operator; the Conductor's record on a node that never had a worker needs no ledger.

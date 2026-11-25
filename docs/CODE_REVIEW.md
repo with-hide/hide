@@ -55,6 +55,7 @@ So every review covers the perspectives below, and names the perspective of each
 
 - A test asserts what a caller observes, with the expected answer taken from outside the implementation.
 - A test that costs more to keep than it returns, or that would still pass with the fix reverted, is a finding.
+- A mission plan's verification row that rests on a weaker check than its claim needs (a unit test for a flow a user performs, an isolated-app row missing on a node that changes what a user runs) is an ordinary finding; `docs/VERIFICATION.md`, Pick the check by the claim, names the check each claim needs.
 - A bug fix comes with a test that fails without it and covers the kind of bug, not only the reported case, so the same bug cannot come back unseen; a fix without one is a finding.
 - A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
 - An end-to-end test names the user flow it protects and why a cheaper layer cannot observe it; a spec without both is an ordinary finding.
