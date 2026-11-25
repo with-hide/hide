@@ -10,7 +10,7 @@ import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
 import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, namesView, openSession, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
+import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
 import { DisplayEditor, DocumentKeeper } from "./Editor";
@@ -383,16 +383,9 @@ function everyCard(): DeskJob[] {
   return laneCards(useShellStore.getState().deskJobs);
 }
 
-/**
- * The output a session's own line names, as its card lists it when it does: the View's id, or its address or file.
- * A line the card does not list names a file as the session typed it, read where the session runs (B27), so it
- * carries that session's device and checkout when they are another machine's.
- */
+/** The output a session's own line names, as `outputNamed` resolves it, on this machine's node. */
 function outputOf(job: DeskJob | undefined, output: DeskOutput, place?: { device: string; checkout: string } | null): DeskOutput {
-  const made = job?.outputs.find((one) => one.id === output.id || (output.url !== null && one.url === output.url) || (output.path !== null && namesView(one, output.path)));
-  if (made) return made;
-  const node = localDeviceId(useShellStore.getState().rest);
-  return place && output.path !== null && output.device_id === null && place.device !== node ? { ...output, device_id: place.device, checkout: place.checkout } : output;
+  return outputNamed(job?.outputs ?? [], output, place ?? null, localDeviceId(useShellStore.getState().rest));
 }
 
 /** A mission's title as the mission list names it, else as its Conductor's card does. */

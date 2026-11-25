@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeTab, MAX_DESK_FILE_TABS, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, keepTab, namesView, openSession, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskTab } from "./deskRoom";
+import { activeTab, MAX_DESK_FILE_TABS, closePanel, closeSession, closeTab, DESK_ROOM_CLOSED, keepTab, namesView, openSession, outputNamed, openTab, panelPlace, roomWidths, tabKey, tabNames, toggleExplorer, type DeskTab } from "./deskRoom";
 import type { DeskOutput } from "./snapshot";
 
 // Expected answers are PRD desk-2-ui D-05, D-08, D-14, D-15, D-22-D-25 and
@@ -137,5 +137,25 @@ describe("Desk's room", () => {
     expect([namesView(posix, "/other/docs/notes.md"), namesView(posix, "otes.md"), namesView(posix, "../notes.md"), namesView(posix, "docs\\notes.md")]).toEqual([false, false, false, false]);
     const windows = { ...output("notes"), path: "C:/repo/docs/notes.md" };
     expect([namesView(windows, "C:\\repo\\docs\\notes.md"), namesView(windows, "c:/repo/docs/notes.md"), namesView(windows, "docs\\notes.md")]).toEqual([true, true, true]);
+  });
+});
+
+describe("the output a session's own line names (B27)", () => {
+  const listed = { ...output("view-1"), device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/shot.png" };
+  const typed = (path: string): DeskOutput => ({ ...output(path), id: path, device_id: null, checkout: null, path });
+
+  it("is the card's output, with its device and checkout, when the card lists the file", () => {
+    expect(outputNamed([listed], typed("/home/me/repo/shot.png"), { device: "deepbox", checkout: "/home/me/repo" }, "mac")).toBe(listed);
+  });
+
+  it("takes the session's device and checkout for a file the card does not list, so it is read there and not on this machine", () => {
+    const read = outputNamed([], typed("/home/me/repo/new.md"), { device: "deepbox", checkout: "/home/me/repo" }, "mac");
+    expect(read).toMatchObject({ device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" });
+  });
+
+  it("leaves a file of this machine's own session as typed", () => {
+    const own = typed("/work/repo/a.md");
+    expect(outputNamed([], own, { device: "mac", checkout: "/work/repo" }, "mac")).toBe(own);
+    expect(outputNamed([], own, null, "mac")).toBe(own);
   });
 });
