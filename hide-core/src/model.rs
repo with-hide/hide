@@ -5273,6 +5273,10 @@ pub struct UiStateSnapshot {
     /// Content-free product statistics, shared by every window of this core.
     #[serde(default = "default_panel_visible")]
     pub product_analytics_enabled: bool,
+    /// Whether the tool rail draws the gray counts on the Project and Hide AI
+    /// icons (Settings > General). The hover text states the counts either way.
+    #[serde(default = "default_panel_visible")]
+    pub rail_counts_shown: bool,
     /// The UTC day each surface last sent `hide_active`. Persisted, never on
     /// the wire.
     #[serde(skip)]
@@ -6243,6 +6247,7 @@ impl Default for UiStateSnapshot {
             first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
             product_analytics_enabled: true,
+            rail_counts_shown: true,
             product_active_days: Default::default(),
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),

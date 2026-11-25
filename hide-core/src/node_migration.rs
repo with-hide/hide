@@ -2523,6 +2523,7 @@ mod tests {
         "color_theme",
         "interface_language",
         "product_analytics_enabled",
+        "rail_counts_shown",
         "product_active_days",
         "usage",
         "agent_onboarding",

@@ -360,6 +360,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("project_memory_navigate", Screen),
     ("project_settings_set", Screen),
     ("project_target", Screen),
+    ("rail_counts_set", Screen),
     ("reconnect_pane", Screen),
     ("refresh_status", Screen),
     ("register_device", Local),
