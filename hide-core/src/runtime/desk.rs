@@ -700,9 +700,10 @@ impl Runtime {
     }
 
     /// The operator's answer to a card (D-83): `한 번 허용` runs this one
-    /// call, `이 대화에서 계속 허용` also stops asking what it asked until the
-    /// Desk process ends, and `거절…` refuses it and, with a line, stops the
-    /// turn so the line reaches Desk as the next message.
+    /// call, `이 대화에서 계속 허용` also stops asking the rows it asked until
+    /// the Desk process ends, and `거절…` refuses it and, with a line, stops
+    /// the turn so the line reaches Desk as the next message. What cannot be
+    /// undone always asks, so a card that asks it is never kept allowed.
     fn desk_answer(&mut self, payload: ApprovalPayload) -> bool {
         let Some(index) = self
             .desk
@@ -721,6 +722,14 @@ impl Runtime {
             text.len() > MAX_REFUSAL_BYTES || payload.answer != ApprovalAnswer::Reject
         }) {
             return refused("approval_text");
+        }
+        if payload.answer == ApprovalAnswer::Conversation
+            && self.desk.approvals[index]
+                .asks
+                .iter()
+                .any(|ask| matches!(ask, Ask::Irreversible(_)))
+        {
+            return refused("approval_always_asks");
         }
         let approval = self.desk.approvals.remove(index);
         let (option, state) = match payload.answer {
@@ -780,16 +789,8 @@ impl Runtime {
 
     /// Whether Desk may archive the working session registration `id`
     /// without the archive's own confirmation: the operator allowed its card
-    /// once, which this uses up, or allowed ending working sessions for the
-    /// conversation.
+    /// once, which this uses up.
     pub(super) fn desk_takes_archive(&mut self, id: &str) -> bool {
-        if self
-            .desk
-            .allowed
-            .contains(&Ask::Irreversible(Irreversible::EndWorkingSession))
-        {
-            return true;
-        }
         match self
             .desk
             .archive_grants
@@ -1933,12 +1934,17 @@ mod tests {
     }
 
     #[test]
-    fn allowing_for_the_conversation_stops_asking_that_kind_until_the_desk_process_ends() {
+    fn allowing_for_the_conversation_stops_asking_that_row_until_the_desk_process_ends() {
         let root = tempfile::tempdir().unwrap();
         let (mut runtime, received, _) = talking(root.path());
-        let first = ask(&mut runtime);
-        let beside = request(&mut runtime, "rm -rf /tmp/y").expect("asked alongside");
-        let force = request(&mut runtime, "git push -f").expect("another kind");
+        assert!(event(
+            &mut runtime,
+            "desk_settings_set",
+            json!({"permissions": {"hide": "ask", "read": "run", "shell": "ask", "edit": "run"}})
+        ));
+        let first = request(&mut runtime, "touch notes.md").expect("the shell row asks");
+        let beside = request(&mut runtime, "mkdir drafts").expect("asked alongside");
+        let other_row = request(&mut runtime, "hide agent list").expect("another row");
         answers(&received);
 
         assert!(event(
@@ -1946,8 +1952,8 @@ mod tests {
             "desk_approval",
             json!({"id": first, "answer": "conversation"})
         ));
-        // The card asked alongside, now allowed in full, runs too; the push
-        // of another kind still waits.
+        // The card asked alongside, now allowed in full, runs too; the
+        // `hide` line of another row still waits.
         assert_eq!(answers(&received), vec![selected("allow-once"); 2]);
         for id in [first, beside] {
             assert!(matches!(
@@ -1959,19 +1965,46 @@ mod tests {
             ));
         }
         assert!(matches!(
-            card(&runtime, force),
+            card(&runtime, other_row),
             DeskItem::Approval {
                 state: DeskApprovalState::Waiting,
                 ..
             }
         ));
-        assert_eq!(request(&mut runtime, "rm -rf /tmp/z"), None);
+        assert_eq!(request(&mut runtime, "touch other.md"), None);
         assert_eq!(answers(&received), [selected("allow-once")]);
 
         assert!(event(&mut runtime, "desk_new_conversation", json!({})));
         event(&mut runtime, "desk_send", json!({"text": "again"}));
         opened(&mut runtime, AdapterId::CLAUDE);
-        assert!(request(&mut runtime, "rm -rf /tmp/z").is_some());
+        assert!(request(&mut runtime, "touch other.md").is_some());
+    }
+
+    #[test]
+    fn a_card_that_always_asks_is_never_kept_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received, _) = talking(root.path());
+        let id = ask(&mut runtime);
+        answers(&received);
+        assert!(!event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "conversation"})
+        ));
+        assert_eq!(answers(&received), Vec::<Value>::new());
+        assert!(matches!(
+            card(&runtime, id),
+            DeskItem::Approval {
+                state: DeskApprovalState::Waiting,
+                ..
+            }
+        ));
+        assert!(event(
+            &mut runtime,
+            "desk_approval",
+            json!({"id": id, "answer": "once"})
+        ));
+        assert!(request(&mut runtime, "rm -rf /tmp/y").is_some());
     }
 
     #[test]
