@@ -512,6 +512,13 @@ Diffs are placed by the same rules.
 Open to the side (from the Explorer's file menu, a History row's menu, or ⌘↵ on a ⌘P result) is the only way to show one file twice.
 It puts a pinned second view in the area beside the active one, trying right, then left, then below, then above, or in a new area on the right when there is only one area; when that area already shows the file, its view is focused instead, and with no view open at all it opens in the empty area.
 From the only area, Open to the side is a split, so it is offered only where Split right would be, and otherwise stays listed, disabled, with its reason.
+
+While Desk is the screen, ⌘P and ⌘K are the same palettes with their picks opening where Desk shows things (PRD desk-2-ui D-23, D-24; `web/src/deskPalette.ts`):
+with a session open beside Desk ⌘P lists that session's checkout, and with none it lists every project's files at once (hided's `file_index_all`, at most 80), each result led by a muted `project ›`, the project Desk's conversation named last first and then `Other projects`.
+↵ opens the file as the tab panel's italic preview tab, as the app's ⌘P does, and ⌘↵ (Ctrl+Enter off macOS) opens it to the side, a second view of the file in the panel that the window holds and no Workspace's layout does; the panel stands beside the session, or at the window's right edge with none, and ⌘P never opens or closes the Explorer column.
+Its footer says when the list was cut at 80 matches and how many projects could not be listed.
+In ⌘K the same rows are found, with the missions added, and before anything is typed Desk's ⌘K lists the sessions, the pull requests and the missions, up to eight of each, instead of Related and Recent; ↵ on a session opens it beside Desk and ⌘↵ goes to its tab, and a pull request or a mission opens in the tab panel and opens no session.
+Every other screen's ⌘P and ⌘K are unchanged.
 Both views show one document: an edit in either appears in the other at once, and each keeps its own scroll position, cursor, and selection.
 Closing one of them leaves the document, its text, and its unsaved state in the other; closing the last one goes through the same save and conflict protection every document close has.
 Dragging a tab moves its view and never copies it.

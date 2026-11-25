@@ -2815,6 +2815,25 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
+     * tab panel, as the checkout's preview tab as the app's ⌘P opens it, or
+     * to the side (`beside`, ⌘↵): a second view of the file in the panel, the
+     * window's own, which leaves nothing in any Workspace's layout. The
+     * Explorer column stays as it was.
+     */
+    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, beside = false) {
+      ui().closeOverlay();
+      ui().setExplorerSelection(hit.path);
+      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, beside ? { beside: true } : { preview: true });
+    },
+
+    /** ⌘↵ on a session in Desk's ⌘K (PRD desk-2-ui D-24, B39): its tab, where ⌘J brings Desk back (B7). */
+    openDeskSessionTab(paneId: string) {
+      ui().setDeskReturn(paneId);
+      this.openAgent(paneId);
+    },
+
+    /**
      * The whole set of files Desk's room shows (PRD desk-2-ui B19, B36, B37,
      * `deskFiles.ts`): hided holds them for this window and lets them go
      * when it leaves. The room's watcher calls it.
@@ -4104,10 +4123,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
     },
 
-    /**
-     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
-     * project Desk named last, comes first in the answer.
-     */
     /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
     askPane(deviceId: string, paneId: string) {
       dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
@@ -4125,6 +4140,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return sent === false ? null : requestId;
     },
 
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
     requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
       dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },
