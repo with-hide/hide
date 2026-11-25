@@ -151,7 +151,7 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
     await show(desk(failed));
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).not.toBeNull();
-    // A blocked open puts its message back first in the waiting line: its retry waits too.
+    // A blocked turn's 다시 시도 would queue a copy behind the waiting message, so it waits too.
     await show(desk([{ kind: "notice", id: 2, notice: "blocked", agent: "claude", detail: null }], "ready", true, [{ id: 3, text: "실패해 보세요", at_ms: 0, mentions: [] }]));
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
   });
