@@ -2689,7 +2689,11 @@ impl Runtime {
             }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
+                let attached = payload.attached && !self.ui_attached;
                 self.ui_attached = payload.attached;
+                if attached {
+                    self.session_thread_screen_attached();
+                }
                 false
             }
             Event::GuestPanes(payload) => {
