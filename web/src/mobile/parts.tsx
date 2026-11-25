@@ -16,6 +16,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { finishHumanTurn } from "./connection";
 import type { PhoneAgent } from "./protocol";
 import { usePhone } from "./store";
+import { cn } from "../lib/utils";
 
 /** The phone's own clipboard, which Copy of a person's turn's place writes; a refusal is the log's. */
 const clipboard = browserClipboard((message) => console.warn("phone.copy_failed", { message }));
@@ -26,6 +27,19 @@ export function AgentStatusMark({ agent }: { agent: PhoneAgent }) {
   if (agent.starred && agent.group === "revisit") return <RevisitStarShape slot data-phone-mark="star" />;
   if (agent.read) return <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" />;
   return <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />;
+}
+
+/**
+ * The phone's one chip, in the desktop chip's shape (a small-cornered fill): the children chip, a mission's and a pull request's
+ * on the list and the detail all wear it, each with the face the desktop draws inside (`TreeChipFace`, `MissionChipFace`, the PR
+ * mark). Its border shows only when a child asks the operator (`raised`); the caller makes it a press.
+ */
+export function PhoneChip({ raised = false, className, children, ...data }: { raised?: boolean; className?: string; children: ReactNode } & Record<`data-${string}`, string | undefined>) {
+  return (
+    <span className={cn("flex min-w-0 shrink-0 items-center gap-xxs rounded-xs border bg-secondary px-xs py-xxs text-body font-normal", raised ? "border-warning/60" : "border-transparent", className)} {...data}>
+      {children}
+    </span>
+  );
 }
 
 /** What leads the detail's title: the mark and the agent's logo, which a list row leaves out (PRD agent-mark-quiet B12). */
@@ -69,8 +83,9 @@ export function DeviceTag({ label, computer = false }: { label: string; computer
  * Where an agent works, as pieces of a line its caller lays out: the gathered view's computer (`computer`), the tool whose work
  * the row is, leading as on the desktop's sidebar row (PRD hide-external-control B46), the place, and the SSH device's chip. A
  * list row names the project alone (`project`), from a Mac that predates it the whole place; the detail names project and branch.
+ * A row's place keeps at most half its line, for the words after it; a line the place has to itself (`alone`, the detail's) gives it all.
  */
-export function PlaceParts({ agent, project = false, computer }: { agent: PhoneAgent; project?: boolean; computer?: string }) {
+export function PlaceParts({ agent, project = false, computer, alone = false }: { agent: PhoneAgent; project?: boolean; computer?: string; alone?: boolean }) {
   const place = project ? (agent.project ?? agent.place) : agent.place;
   return (
     <>
@@ -82,7 +97,7 @@ export function PlaceParts({ agent, project = false, computer }: { agent: PhoneA
           {place ? <span aria-hidden="true">·</span> : null}
         </span>
       ) : null}
-      {place ? <span className="min-w-0 max-w-1/2 shrink-0 truncate text-muted-foreground" data-phone-place={place}>{place}</span> : null}
+      {place ? <span className={cn("min-w-0 truncate text-muted-foreground", alone ? "shrink" : "max-w-1/2 shrink-0")} data-phone-place={place}>{place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </>
   );

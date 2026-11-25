@@ -1,5 +1,5 @@
 import { DropdownMenu as MenuPrimitive, Slot } from "radix-ui";
-import { createContext, useContext, useRef, useState, type ComponentProps, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { cn } from "../../lib/utils";
 import { useEscapeLayer, useReturnFocus } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator, menuShortcut } from "./menu-styles";
@@ -49,13 +49,27 @@ function ContextMenu({ onOpenChange, canOpen, returnToInput = false, children }:
   );
 }
 
+/** How long a finger rests on a target before its menu opens, and how far it may drift meanwhile (iOS's own long press). */
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
+
 /**
- * The target: a right-click opens the menu at the pointer, the menu key or ⇧F10 under the target.
- * A `disabled` target offers no menu: the right-click opens nothing, not even the browser's own.
+ * The target: a right-click opens the menu at the pointer, the menu key or ⇧F10 under the target, and a finger
+ * held still on it opens the menu where it rests, since iOS sends no `contextmenu` for a long press. The click
+ * that ends a long press is not the target's: it is swallowed, so the press that opened the menu does not also
+ * open the row. A `disabled` target offers no menu: the right-click opens nothing, not even the browser's own.
  */
-function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDown, onPointerDown, disabled = false, ...props }: ComponentProps<"div"> & { asChild?: boolean; disabled?: boolean }) {
+function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDown, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onClickCapture, disabled = false, ...props }: ComponentProps<"div"> & { asChild?: boolean; disabled?: boolean }) {
   const { point, openAt, host, returnToInput } = useContextMenu();
   const Comp = asChild ? Slot.Root : "div";
+  const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  // Set when a long press opened the menu; the next pointer down clears it, so a click that never comes swallows nothing later.
+  const held = useRef(false);
+  const release = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  };
+  useEffect(() => release, []);
   return (
     <>
       <Comp
@@ -68,6 +82,25 @@ function ContextMenuTrigger({ asChild = false, className, onContextMenu, onKeyDo
         onPointerDown={(event) => {
           onPointerDown?.(event);
           if (returnToInput && event.button === 2) event.preventDefault();
+          held.current = false;
+          release();
+          if (disabled || event.pointerType !== "touch") return;
+          const { clientX: x, clientY: y } = event;
+          press.current = { x, y, timer: setTimeout(() => { press.current = null; held.current = true; openAt({ x, y }); }, LONG_PRESS_MS) };
+        }}
+        onPointerMove={(event) => {
+          onPointerMove?.(event);
+          const at = press.current;
+          if (at && Math.hypot(event.clientX - at.x, event.clientY - at.y) > LONG_PRESS_SLOP_PX) release();
+        }}
+        onPointerUp={(event) => { onPointerUp?.(event); release(); }}
+        onPointerCancel={(event) => { onPointerCancel?.(event); release(); }}
+        onClickCapture={(event) => {
+          onClickCapture?.(event);
+          if (!held.current) return;
+          held.current = false;
+          event.preventDefault();
+          event.stopPropagation();
         }}
         onContextMenu={(event: MouseEvent<HTMLDivElement>) => {
           onContextMenu?.(event);

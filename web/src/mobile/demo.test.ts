@@ -92,7 +92,10 @@ describe("the sample host", () => {
     const { connection, settle, state } = await demoPhone();
     connection.openStartSheet();
     await settle();
-    expect(state().startCatalog?.targets).toHaveLength(1);
+    // One sample project, with the branches its sample agents work on, its main checkout marked.
+    const targets = state().startCatalog?.targets ?? [];
+    expect(new Set(targets.map((target) => target.project_id))).toEqual(new Set(["demo"]));
+    expect(targets.filter((target) => target.main).map((target) => target.branch)).toEqual(["main"]);
     connection.editStartSheet({ text: "Tidy the changelog" });
     expect(connection.submitStart()).toBe(true);
     await settle();

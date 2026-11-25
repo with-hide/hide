@@ -244,16 +244,55 @@ export function browserPartition(workspace: string, url: string, node: string | 
   return "persist:hide-browser-web";
 }
 
+/** A page's address (`source_url`, the one the core keeps) and the address this Mac loads it from (`url`). */
+export type PageRoute = { url: string; source_url: string };
+
+/**
+ * Whether a page reaches this Mac through a route from another machine: hided
+ * answers a loopback route of this Mac's for a connected device's file or
+ * loopback page, or for the core machine's loopback page on a node's window,
+ * and the page's own address for a page this Mac loads as it is (a web page,
+ * a local file page, an outside file). The one test of it; every caller asks
+ * here rather than reading the two addresses itself.
+ */
+export function routed(route: PageRoute): boolean {
+  return route.url !== route.source_url;
+}
+
+/**
+ * Where a file page's navigation or new tab to `raw` goes (null for a page
+ * that is not a file page). A routed file page, a device's, stays on its own
+ * route and anything else is `refuse`d; a local one hands an `http` or `https`
+ * address to a browser display beside it (`beside`), since a web page does not
+ * load in a file page's partition, and `follow`s the rest, which the file and
+ * app link rules then judge.
+ */
+export function fileLink(route: PageRoute | null, raw: string): "follow" | "beside" | "refuse" | null {
+  if (!route || protocolOf(route.source_url) !== "file:") return null;
+  if (routed(route)) return remoteRequest(route, raw).cancel ? "refuse" : "follow";
+  const target = protocolOf(raw);
+  return target === "http:" || target === "https:" ? "beside" : "follow";
+}
+
+/** An address's scheme as `URL` spells it (`https:`), or `unparsable`. */
+export function protocolOf(url: string): string {
+  try {
+    return new URL(url).protocol;
+  } catch {
+    return "unparsable";
+  }
+}
+
 /** Route a remote page's absolute loopback requests through its owned View.
  * An unsupported local address is refused instead of reaching this Mac. */
-export function remoteRequest(route: { url: string; source_url: string }, raw: string): { redirectURL?: string; cancel?: boolean } {
+export function remoteRequest(route: PageRoute, raw: string): { redirectURL?: string; cancel?: boolean } {
   try {
     const address = new URL(raw);
     const local = new URL(route.url);
     const source = new URL(route.source_url);
     if (source.protocol === "file:") return address.origin === local.origin && address.protocol === local.protocol ? {} : { cancel: true };
     const loopback = isLoopbackHost(address.hostname);
-    if (route.url === route.source_url) return loopback ? { cancel: true } : {};
+    if (!routed(route)) return loopback ? { cancel: true } : {};
     if (address.origin === local.origin || (address.protocol === "ws:" && local.protocol === "http:" && address.host === local.host) || (address.protocol === "wss:" && local.protocol === "https:" && address.host === local.host)) return {};
     if (!loopback) return {};
     const sourcePort = source.port || (source.protocol === "https:" ? "443" : "80");

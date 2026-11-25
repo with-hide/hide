@@ -75,7 +75,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding, and `variant="remote"` fills it in the other-device colour (`--device-remote`) for the mission map's card and panel |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
-| The children chip (`≡ ● 2 · • 3 ⌄`) | `TreeChipFace` (`tree-chip.tsx`), which the desktop pane header's button and the phone list's toggle both draw at their own sizes |
+| The children chip (`≡ ● 2 · • 3 ⌄`) | `TreeChipFace` (`tree-chip.tsx`), which the desktop pane header's button and the phone's chip on a list row and a detail's state strip all draw at their own sizes |
 | Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Labs › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a session reads as `StatusMark`, agent mark and title wherever it appears; a card is unfilled with a `--border` line, `rounded-lg` and two lines, selected on `bg-accent`; nothing filled sits inside another filled box; the approval card's two answers are `Button variant="secondary"`, the composer's send a round `secondary` icon, and every other action is words (`variant="text"`, such as `답하기 ›`); Desk draws no `default` button, so lime marks focus and selection only; Desk's lane pin is `LanePinButton` (`components/lane-pin.tsx`), which only Desk draws (the Workspace's lane has no pin), in the head of the column at the lane's edge just before `✕` |
 
 ## The phone
@@ -85,14 +85,18 @@ The phone app (`web/src/mobile`) builds its screens from the same parts and toke
 | You need | Use | Notes |
 | --- | --- | --- |
 | A list screen's head (에이전트, 미션, 자동화) | `ScreenHead` | The big `text-headline` title, one line under it, and its action at the right. |
-| A page's head (an agent, a mission, an automation, a look) | `PageHead` | Back, the marks that lead the title, the title with one line under it, an action at the right, and what the page keeps under its head (tabs, cells, buttons) as children. The lead is one title line tall, so the marks stay on the first line of a wrapped title. |
+| A page's head (an agent, a mission, an automation, a look) | `PageHead` | Back, the marks that lead the title, the title with what never shrinks after it on its line (`titleEnd`, an agent's chips) and one line under it, an action at the right, and what the page keeps under its head (tabs, cells, buttons) as children. The lead is one title line tall, so the marks stay on the first line of a wrapped title. |
 | A row of a list | `TwoLineRow` inside `RowButton`, or behind `RowOverlayButton` when the row holds a control | The lead column (a status mark), the title with what never shrinks after it, the time at the right; the second line starts under the title (`ROW_INSET`). Rows are separated by spacing, not dividers, except a page's run history. |
 | The state of what a page is about | `StatusStrip` | The state's word in its colour, one line of what it does now and how long ago it changed; drawn only from fields the Mac sends. |
 | What an agent does now, at the foot of its conversation | `ActivityLine` | `생각 중 · 4초`, its time counted on the phone. |
 | A field a reply is written in | `Composer` | One rounded line with a round `secondary` send; each screen passes its own name, limit and test marks. |
 | An agent's mark and logo, title, project | `AgentLead`, `AgentTitle`, `PlaceParts` (`web/src/mobile/parts.tsx`) | `PlaceParts` shows the project alone when the Mac sends `project`, else the place. |
+| A chip (children, a mission, a pull request) | `PhoneChip` (`web/src/mobile/parts.tsx`) with the desktop's face inside (`TreeChipFace`, `MissionChipFace`, the PR mark) | The desktop chip's shape at the phone's text size; its border shows only while a child asks the operator. A press wraps it in a touch target. |
 
 - Every press is at least `--size-touch-target` (44 px) tall; a row that is one press spans the screen's width.
+- A row's less frequent action, such as removing a device, is its menu (`ContextMenu`), which a held finger opens as a right-click does, never a second button on the row; the click that ends the long press does not press the row.
+- A hover fill lights only where a pointer can hover: the shared `hover` variant (`web/src/index.css`) sits in `@media (hover: hover)`, so a tap on a touch screen leaves no filled box behind.
+- A device is drawn as the device picker draws it (`web/src/mobile/HostList.tsx`): its icon in a small rounded `bg-secondary` tile, its name on one line, its state's dot and word, and its 내 차례 and 작업 중 counts as two small mono `Badge`s at the right, the first in `text-warning`.
 - The heads take the top safe area with `phone-safe-top`, and what sits at the bottom of a screen takes `phone-safe-bottom`; nothing else pads for the notch or the home bar.
 - Check a phone screen at 393 by 852 in Light and Dark, with a long Korean title and with `--interface-scale` raised, as the compare captures for a phone pull request do.
 

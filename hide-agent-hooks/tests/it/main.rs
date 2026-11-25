@@ -15,6 +15,7 @@ mod codex_folder_trust;
 mod codex_permission_ask;
 mod codex_subagent_counts;
 mod codex_trust;
+mod folder_trust_contract;
 mod grok_cursor_hooks;
 mod guardrails;
 mod guidance_hook;

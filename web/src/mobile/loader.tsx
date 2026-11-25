@@ -8,8 +8,8 @@ import { Button } from "../components/ui/button";
 import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { scanInApp } from "./ScanQr";
-import { AddScreen, FirstScreen, StartSettings } from "./StartScreens";
-import { bundlePath, HOST_LIST_LINK, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
+import { AddChoice, AddScreen, FirstScreen, StartSettings } from "./StartScreens";
+import { addStep, bundlePath, HOST_LIST_LINK, hostStore, hostToOpen, MAX_HOSTS, type PairedHost } from "./hosts";
 import { appHost, markAppHost, serviceWorkerAllowed } from "./appHost";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
@@ -50,7 +50,10 @@ function protocolOf(room: string, signal: AbortSignal): Promise<number> {
 function Loader() {
   const { t } = useLoaderTranslation();
   const [pair, setPair] = useState<PairingQr | null>(null);
-  const [adding, setAdding] = useState(new URLSearchParams(location.search).has("add"));
+  // 기기 추가 asks what is added first (`choice`); a computer's own page is `computer`, reached from the choice or straight away.
+  const [adding, setAdding] = useState<"choice" | "computer" | null>(addStep(new URLSearchParams(location.search)));
+  // The computer's page came from the choice, so its back returns there.
+  const [chose, setChose] = useState(false);
   const [target, setTarget] = useState<PairedHost | PairingQr | null>(null);
   const [error, setError] = useState<"qrError" | "cameraError" | "cameraBusy" | "storage" | "loadError" | "limit" | null>(null);
   const [version, setVersion] = useState<{ device: number; supported: number[] } | null>(null);
@@ -84,12 +87,12 @@ function Loader() {
       void takePairing().then((qr) => {
         if (!qr) return;
         paired = true;
-        setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr);
+        setTarget(null); setVersion(null); setError(null); setAdding(null); setPair(qr);
       }).catch(() => setError("qrError"));
     };
     window.addEventListener("hashchange", followQr);
     // A link that opened the app lands on the same pairing screen a scanned QR does, and waits for the person's tap.
-    const stopLinks = followNativeLinks((qr) => { paired = true; setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr); }, () => setError("qrError"));
+    const stopLinks = followNativeLinks((qr) => { paired = true; setTarget(null); setVersion(null); setError(null); setAdding(null); setPair(qr); }, () => setError("qrError"));
     if (serviceWorkerAllowed()) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
     return () => { window.removeEventListener("hashchange", followQr); stopLinks(); stopOpens(); };
   }, []);
@@ -145,12 +148,12 @@ function Loader() {
     <DeviceIdentity name={pair.name} large />
     <p className="max-w-(--size-mobile-copy) text-subhead leading-relaxed text-subtle-foreground">{t("mobile.pair.description")}</p>
     <Button variant="secondary" className="min-h-(--size-touch-target) rounded-lg px-xl text-subhead" disabled={!!target} onClick={() => setTarget(pair)}>{t(target ? "mobile.relay.connecting" : "mobile.pair.connect")}</Button>
-    {target ? <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
+    {target ? <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={() => { setTarget(null); setPair(null); setAdding(null); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
     {error ? <p role="alert" className="max-w-(--size-mobile-copy) text-body text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </Landing>;
   if (target && openingNotice && !error) return <main className="min-h-full" />;
   if (target) return <DeviceConnecting t={t} name={target.name} error={error}
-    onChoose={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }} />;
+    onChoose={() => { setTarget(null); setPair(null); setAdding(null); setError(null); }} />;
   const demo = () => window.location.assign(`/p/${PHONE_PROTOCOL}/?demo=1`);
   if (!adding && known === null) return <main className="min-h-full" />;
   if (!adding && known === 0) {
@@ -158,13 +161,15 @@ function Loader() {
     return <>
       <FirstScreen t={t} onDemo={demo} onSettings={() => setSettings(true)}
         // The app reads the code in its own camera view at once; a browser has the camera and paste page.
-        onScan={() => { setError(null); if (appHost()) void scanInApp(t, (qr) => setPair(qr), (failure) => setError(failure)); else setAdding(true); }} />
+        onScan={() => { setError(null); if (appHost()) void scanInApp(t, (qr) => setPair(qr), (failure) => setError(failure)); else setAdding("computer"); }} />
       {error ? <p role="alert" className="px-xl pb-lg text-center text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
     </>;
   }
-  // Back from the add page: the list when a computer is kept, else the first screen, at an address that opens neither by itself.
-  if (adding) return <AddScreen t={t} full={(known ?? 0) >= MAX_HOSTS} onPair={(qr) => { setError(null); setPair(qr); setAdding(false); }}
-    onBack={() => { setError(null); setAdding(false); window.history.replaceState(null, "", known ? HOST_LIST_LINK : "/"); }} />;
+  // Back from adding: the list when a computer is kept, else the first screen, at an address that opens neither by itself.
+  const leaveAdding = () => { setError(null); setAdding(null); setChose(false); window.history.replaceState(null, "", known ? HOST_LIST_LINK : "/"); };
+  if (adding === "choice") return <AddChoice t={t} onBack={leaveAdding} onComputer={() => { setChose(true); setAdding("computer"); }} />;
+  if (adding === "computer") return <AddScreen t={t} full={(known ?? 0) >= MAX_HOSTS} onPair={(qr) => { setError(null); setPair(qr); setAdding(null); setChose(false); }}
+    onBack={chose ? () => { setError(null); setAdding("choice"); } : leaveAdding} />;
   return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
     <h1 className="pt-lg text-headline font-semibold">hide</h1>
     <h2 className="text-title">{t("mobile.relay.devices")}</h2>

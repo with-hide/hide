@@ -101,8 +101,8 @@ export function phoneDevices(groups: readonly AgentGroup[]): PhoneDevice[] {
       .filter((top) => top.kind === "agent" && top.device_id === device).length;
   return [
     { device_id: "local", label: null, local: true, connected: true, needs_you: tally("needs_you", "local"), working: tally("working", "local") },
-    { device_id: "mini", label: "Mac mini", connected: true, needs_you: tally("needs_you", "mini"), working: tally("working", "mini") },
-    { device_id: "old", label: "Linux 서버", connected: false, needs_you: 0, working: 0 },
+    { device_id: "mini", label: "Mac mini", connected: true, needs_you: tally("needs_you", "mini"), working: tally("working", "mini"), link: "ssh" },
+    { device_id: "old", label: "Linux 서버", connected: false, needs_you: 0, working: 0, link: "ssh" },
   ];
 }
 

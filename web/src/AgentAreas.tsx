@@ -19,8 +19,6 @@ import { useShellStore } from "./store";
 import { AgentDraftTab, AgentTab } from "./TabBar";
 import { AgentGroupSelector } from "./AgentGroupControls";
 import { AgentTabStart } from "./AgentTabStart";
-import { inlineStartKey, useInlineStarts } from "./startDraft";
-import { receiptTarget } from "./inlineStart";
 import { useGroupName } from "./groupTabs";
 import type { MenuEntry } from "./components/entry-menu";
 import { agentEntries, workspaceViewOf } from "./workspace";
@@ -35,7 +33,6 @@ const SharedAgentTree = createAreaTree<AgentItem>("agent");
 export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checkout: Checkout; actions: Actions; deviceId?: string; remoteBody?: (tabId: string | null) => React.ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [renaming, setRenaming] = useState<string | null>(null);
-  const startDrafts = useInlineStarts((state) => state.drafts);
   const saved = useShellStore((s) => workspaceViewOf(s.rest)?.agent_layout);
   const owner = useKeyboardOwner();
   // A ⌘ hold numbers the tabs ⌘n selects, the Agent area in use only (`numbering.ts`).
@@ -72,7 +69,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
   const isDraft = (id: string) => layout.drafts?.includes(id) ?? false;
   const groupName = layout.groups?.find((group) => group.id === (layout.group_id ?? null))?.name ?? t("groups.ungrouped");
   const label = (id: string) => isDraft(id) ? t("groups.newTab") : entries.find((entry) => entry.source_id === id)?.label ?? id;
-  const startForm = (tabId: string | null, areaId: string, addPane = false, recovery?: import("./agentLayout").AgentStartTarget) => <AgentTabStart key={`${layout.group_id}\0${tabId}\0${areaId}\0${addPane}`} workspace={workspace} target={recovery ?? { group_id: layout.group_id ?? null, area_id: areaId, tab_id: tabId, add_pane: addPane }} groupName={groupName} actions={actions} />;
+  const startForm = (tabId: string | null, areaId: string) => <AgentTabStart key={`${layout.group_id}\0${tabId}\0${areaId}`} workspace={workspace} target={{ group_id: layout.group_id ?? null, area_id: areaId, tab_id: tabId, add_pane: false }} groupName={groupName} actions={actions} />;
   const adapter: AreaAdapter<AgentItem> = {
     words: AGENT_WORDS,
     keyboardArea: owner.kind !== "none" && owner.workspace === checkout.id
@@ -96,11 +93,10 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
       const entry = entries.find((row) => row.source_id === item.id);
       return entry ? <AgentTab entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} number={tabNumber(item.id)} /> : null;
     },
+    // A tab whose pane is alive always shows that pane, whatever its start's
+    // receipt says; the start's progress and failure are the start notice's
+    // and the tab's status (`WorkspaceNotices`), never a form over the terminal.
     body: (item, area) => isDraft(item.id) ? startForm(item.id, area.id) : <div className="relative flex min-h-0 flex-1 flex-col">
-      {(() => {
-        const receipt = layout.start_receipts?.find((row) => row.live_tab_id === item.id && startDrafts[inlineStartKey(device, checkout.path, receiptTarget(row))]?.request?.id === row.request_id);
-        return receipt ? <div className="absolute inset-0 z-20 flex bg-background">{startForm(item.id, area.id, receipt.add_pane, receiptTarget(receipt))}</div> : null;
-      })()}
       {area.id === layout.active_area ? <><RelationStatus actions={actions} visiblePaneIds={visiblePaneIds} /><FindBar actions={actions} /></> : null}
       <PaneMovePreview areaId={area.id} />
       {remote ? remoteBody?.(single ? null : item.id) : <PaneCanvas key={item.id} tab={checkout.tabs.find((tab) => tab.id === item.id) ?? null} actions={actions} />}

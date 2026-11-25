@@ -844,11 +844,7 @@ fn take_out(
 /// piece the kit judges ([`written`]); `None` for an agent whose trust Hide
 /// does not record.
 fn trust_spot(own: &Own) -> Option<(hide_agent_hooks::folder_trust::Agent, Spot)> {
-    let agent = own
-        .adapter
-        .declaration()
-        .start
-        .and_then(hide_agent_hooks::folder_trust::Agent::of)?;
+    let agent = hide_agent_hooks::folder_trust::Agent::of_kind(own.adapter.declaration().id)?;
     let Place::At(location) = own.account.place(AccountPath::FolderTrust) else {
         return None;
     };

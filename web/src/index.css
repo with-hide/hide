@@ -8,8 +8,20 @@
  * The dev gallery pins a pointer or keyboard state on a System part with
  * `data-gallery-state`, so each state Pen draws renders without a pointer.
  * Nothing in the shell sets the attribute.
+ * A hover lights only where a pointer can hover, as Tailwind's own `hover`
+ * does: a touch screen keeps `:hover` on what was last tapped, so a pressed
+ * button would stay filled after the finger left it (the phone's head).
  */
-@custom-variant hover (&:hover, &[data-gallery-state~="hover"]);
+@custom-variant hover {
+  @media (hover: hover) {
+    &:hover {
+      @slot;
+    }
+  }
+  &[data-gallery-state~="hover"] {
+    @slot;
+  }
+}
 @custom-variant focus-visible (&:focus-visible, &[data-gallery-state~="focus"]);
 
 /*

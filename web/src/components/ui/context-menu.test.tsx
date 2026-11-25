@@ -79,3 +79,53 @@ it("returns a View menu to the input it borrowed from another area", async () =>
   await act(async () => { await vi.runOnlyPendingTimersAsync(); });
   expect(document.activeElement).toBe(input);
 });
+
+/** A finger on the target: iOS sends pointer events and a click, never `contextmenu`. */
+function touch(type: "pointerdown" | "pointermove" | "pointerup", target: Element, x = 20, y = 20) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  target.dispatchEvent(event);
+}
+
+async function renderPressable(onOpen: () => void) {
+  await act(async () => {
+    root.render(
+      <ContextMenu>
+        <ContextMenuTrigger><button onClick={onOpen}>Mac mini</button></ContextMenuTrigger>
+        <ContextMenuContent><ContextMenuItem>Remove device</ContextMenuItem></ContextMenuContent>
+      </ContextMenu>,
+    );
+  });
+  return document.querySelector("button")!;
+}
+
+it("opens the menu on a held finger, and the click that ends the press does not press the target", async () => {
+  const onOpen = vi.fn();
+  const row = await renderPressable(onOpen);
+  await act(async () => {
+    touch("pointerdown", row);
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  expect(document.querySelector('[role="menu"]')?.textContent).toContain("Remove device");
+  await act(async () => { touch("pointerup", row); row.click(); });
+  expect(onOpen).not.toHaveBeenCalled();
+});
+
+it("leaves a tap and a scrolling finger to the target, with no menu", async () => {
+  const onOpen = vi.fn();
+  const row = await renderPressable(onOpen);
+  await act(async () => {
+    touch("pointerdown", row);
+    await vi.advanceTimersByTimeAsync(200);
+    touch("pointerup", row);
+    row.click();
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  expect(onOpen).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    touch("pointerdown", row);
+    touch("pointermove", row, 20, 60);
+    await vi.advanceTimersByTimeAsync(600);
+  });
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+});

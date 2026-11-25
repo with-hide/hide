@@ -6,7 +6,8 @@
 // needs no store release. The build number is the UTC time the run starts, `YYYYMMDDHHMMSS`: it rises with every
 // run, a second run on the same commit takes a new one, and it is never written into the repository.
 //
-// The Android app (`release-version.mjs android`) has its own version, `mobile/android/version.json`, and its version
+// The Android app (`release-version.mjs android`) keeps its version in `mobile/android/version.json`, the same number as
+// the iOS app's (both take the desktop release they ship beside, docs/BUILD.md), and its version
 // code is the Unix minute the run starts: Play takes a whole number up to 2100000000, which the minute stays under until
 // the year 5962, and refuses one that is not higher than every earlier upload's.
 import { readFileSync } from 'node:fs';

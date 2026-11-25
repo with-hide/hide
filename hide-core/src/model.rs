@@ -2279,6 +2279,11 @@ pub struct SidebarAgentSnapshot {
     /// the rest (needs-you-cleanup D-13).
     #[serde(skip)]
     pub(crate) laid_since_unix_ms: Option<u64>,
+    /// Which of the core's questions laid on this row leads it, by the id
+    /// `laid_asks` keeps it under: the ask the row stands for while the
+    /// agent works and rests under it (`RowState::ask_key`).
+    #[serde(skip)]
+    pub(crate) laid_lead: Option<String>,
     /// When the core first read this delegated child blocked, while it still
     /// is (`runtime/blocked_children.rs`): the start of the grace its parent
     /// has before its lineage root is raised (`escalation::grace_end`).
