@@ -1454,6 +1454,16 @@ pub fn handle_with_progress(
                 .map_err(|reason| HostError::new(ErrorCode::InvalidPath, reason))?,
         ),
         Call::AgentInstalled { name } => to_value(agent_start_form(Path::new(&name))),
+        Call::PromptFile { start, text } => {
+            crate::prompt_files::write(env.state.as_deref(), &start, &text)
+                .map(Value::from)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))
+        }
+        Call::PromptFileRemove { start } => {
+            crate::prompt_files::remove(env.state.as_deref(), &start)
+                .map(|()| Value::Null)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))
+        }
         Call::AntigravityForkMark { source, cwd } => {
             let home = env.home("antigravity_fork_home_unavailable")?;
             let cwd = antigravity_fork_cwd(&cwd)?;

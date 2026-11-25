@@ -449,7 +449,30 @@ use crate::error::HostError;
 /// failed commands, so it is refused at Hello and upgraded with its core.
 /// The list read asks `mergeable` from 102 on, so a 101 node's allow-list
 /// would refuse that query too.
-pub const PROTOCOL_VERSION: u32 = 102;
+/// 103: a start's first input reaches the agent through a private file of
+/// the pane's node (`PromptFile`, `PromptFileRemove`), which the start line
+/// reads, so the text never crosses the pane's shell; a node on 102 does not
+/// know the calls, so it is refused at Hello and upgraded with its core.
+pub const PROTOCOL_VERSION: u32 = 103;
+
+/// The longest text a prompt file holds ([`Call::PromptFile`]): a start's
+/// first input past `hide-core`'s 64 KiB, in the form the pane's shell reads,
+/// which a Windows command line's quoting can make longer.
+pub const PROMPT_FILE_MAX_BYTES: usize = 160 * 1024;
+
+/// The most prompt files a node keeps: a start's line removes its own once
+/// its shell read it, and the core removes one whose start typed nothing, so
+/// only a start whose line never ran leaves one; past this the oldest go.
+pub const PROMPT_FILES_CAP: usize = 32;
+
+/// Whether `start` can name a prompt file: 1 to 64 ASCII letters, digits,
+/// `-` or `_`, so it stays one file in the node's folder.
+pub fn valid_prompt_start(start: &str) -> bool {
+    (1..=64).contains(&start.len())
+        && start
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1123,6 +1146,22 @@ pub enum Call {
     AgentInstalled {
         name: String,
     },
+    /// Writes `text`, the first input of the start `start` (its form for the
+    /// pane's shell), to a private file of this node's state folder and
+    /// answers its path; the start line reads the file and removes it, so
+    /// the input never crosses the shell as typed text, whose locale could
+    /// change it (docs/delivery.md, The input ladder). The same `start`
+    /// writes the same file again. At most [`PROMPT_FILES_CAP`] are kept,
+    /// the oldest removed first.
+    PromptFile {
+        start: String,
+        text: String,
+    },
+    /// Removes the prompt file of `start`, for a start that typed nothing;
+    /// one already gone is not an error.
+    PromptFileRemove {
+        start: String,
+    },
     /// What agy's index holds in `cwd` before Hide types `/fork` into a
     /// pane that resumed `source`, an [`AntigravityForkMark`]
     /// (`hide_session::antigravity::fork_mark`).
@@ -1542,6 +1581,8 @@ impl Call {
             | Self::Git { .. }
             | Self::TerminateGroup { .. }
             | Self::AgentInstalled { .. }
+            | Self::PromptFile { .. }
+            | Self::PromptFileRemove { .. }
             | Self::AntigravityForkMark { .. }
             | Self::AntigravityFork { .. }
             | Self::OpenCodeFork { .. }
