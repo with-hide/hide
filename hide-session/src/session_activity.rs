@@ -5,8 +5,10 @@
 //! the boundary; paths, native IDs and conversation records never do.
 
 use crate::account::Accounts;
+use crate::label_owner::ConfirmedLabelSession;
 use hide_agent_adapter::AccountKey;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -42,21 +44,150 @@ pub struct SessionActivity {
 /// The session's activity, or why it cannot be read: a read that met the
 /// agent writing its records ([`ReadRefusal::InMotion`]) says nothing about
 /// the session or its route, and a read a moment later can answer.
+///
+/// A plain look (no route or owner proof asked, not Cursor) remembers where
+/// it found the session (`FOUND`): a later look whose file kept its identity,
+/// size and time answers from there without locating or proving it again,
+/// and one whose file moved proves that file alone before it locates anew.
+/// An open session thread looks once a second, and locating can read the
+/// header of every session in a checkout's folder.
 pub fn read(
     accounts: &Accounts,
     request: &SessionActivityRequest,
 ) -> Result<SessionActivity, ReadRefusal> {
-    let accounts = &accounts.reading(request.agent, &request.account)?;
+    let reading = &accounts.reading(request.agent, &request.account)?;
     if request.agent == Agent::OpenCode {
-        return crate::opencode::activity(accounts, request);
+        return crate::opencode::activity(reading, request);
     }
-    let (path, before) = label_transcript::locate_confirmed(
+    let plain =
+        request.agent != Agent::Cursor && !request.exact_route && request.expected_id.is_none();
+    if !plain {
+        return read_found(reading, request, None).map(|(activity, _)| activity);
+    }
+    let key = (accounts.home().to_path_buf(), request.clone());
+    let remembered = found(&key);
+    if let Some(activity) = remembered.as_ref().and_then(Found::unmoved) {
+        return Ok(activity);
+    }
+    let answer = read_found(reading, request, remembered.map(|found| found.path));
+    remember(key, answer.as_ref().ok().map(|(_, found)| found.clone()));
+    answer.map(|(activity, _)| activity)
+}
+
+/// Where plain looks found their sessions, the one used last at the end; past
+/// `FOUND_CAP` the one used longest ago is dropped (engineering rule 15).
+/// Paths stay on this machine: only a look's time and size cross the boundary.
+static FOUND: Mutex<Held> = Mutex::new(Vec::new());
+const FOUND_CAP: usize = 64;
+
+type Held = Vec<((PathBuf, SessionActivityRequest), Found)>;
+
+#[derive(Clone)]
+struct Found {
+    path: PathBuf,
+    incarnation: String,
+    bytes: u64,
+    modified_at_unix_ms: u64,
+}
+
+impl Found {
+    /// The activity, when the file is the one proven and has not moved since.
+    fn unmoved(&self) -> Option<SessionActivity> {
+        let file = crate::source::open(&self.path).ok()?;
+        let metadata = file.metadata().ok()?;
+        let incarnation = FileIdentity::of(&file).ok()?.incarnation();
+        let modified_at_unix_ms = modified_ms(&metadata).ok()?;
+        (metadata.is_file()
+            && incarnation == self.incarnation
+            && metadata.len() == self.bytes
+            && modified_at_unix_ms == self.modified_at_unix_ms)
+            .then_some(SessionActivity {
+                modified_at_unix_ms,
+                bytes: self.bytes,
+            })
+    }
+}
+
+fn found(key: &(PathBuf, SessionActivityRequest)) -> Option<Found> {
+    touch(
+        &mut FOUND.lock().unwrap_or_else(PoisonError::into_inner),
+        key,
+    )
+}
+
+/// Keeps `found` for `key`, or forgets it after a look that failed.
+fn remember(key: (PathBuf, SessionActivityRequest), found: Option<Found>) {
+    keep(
+        &mut FOUND.lock().unwrap_or_else(PoisonError::into_inner),
+        key,
+        found,
+    );
+}
+
+/// `key`'s entry, moved to the end as the one used last.
+fn touch(held: &mut Held, key: &(PathBuf, SessionActivityRequest)) -> Option<Found> {
+    let at = held.iter().position(|(held, _)| held == key)?;
+    let entry = held.remove(at);
+    let found = entry.1.clone();
+    held.push(entry);
+    Some(found)
+}
+
+fn keep(held: &mut Held, key: (PathBuf, SessionActivityRequest), found: Option<Found>) {
+    held.retain(|(held, _)| *held != key);
+    if let Some(found) = found {
+        if held.len() >= FOUND_CAP {
+            held.remove(0);
+        }
+        held.push((key, found));
+    }
+}
+
+/// The session the request names, proven: at `remembered` when that file
+/// still proves to be its owner's, otherwise located anew.
+fn located(
+    accounts: &Accounts,
+    request: &SessionActivityRequest,
+    remembered: Option<PathBuf>,
+) -> Result<(PathBuf, ConfirmedLabelSession), ReadRefusal> {
+    let reported_id = (request.reference_kind == "id").then_some(request.reference_value.as_str());
+    if let Some(path) = remembered
+        && let Ok(confirmed) = crate::confirm_session_file(
+            accounts,
+            request.agent,
+            &path,
+            reported_id,
+            request.cwd.as_deref(),
+        )
+    {
+        return Ok((path, confirmed));
+    }
+    label_transcript::locate_confirmed(
         accounts,
         request.agent,
         &request.reference_kind,
         &request.reference_value,
         request.cwd.as_deref(),
-    )?;
+    )
+}
+
+fn modified_ms(metadata: &std::fs::Metadata) -> Result<u64, String> {
+    metadata
+        .modified()
+        .map_err(|_| "session_activity_mtime_unavailable".to_owned())?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| "session_activity_mtime_invalid".to_owned())?
+        .as_millis()
+        .try_into()
+        .map_err(|_| "session_activity_mtime_invalid".to_owned())
+}
+
+fn read_found(
+    accounts: &Accounts,
+    request: &SessionActivityRequest,
+    remembered: Option<PathBuf>,
+) -> Result<(SessionActivity, Found), ReadRefusal> {
+    let (path, before) = located(accounts, request, remembered)?;
     if request
         .expected_id
         .as_deref()
@@ -96,7 +227,13 @@ pub fn read(
         if before.owner != after.owner || before.incarnation != after.incarnation {
             return Err("session_activity_read_changed".into());
         }
-        return Ok(activity);
+        let found = Found {
+            path,
+            incarnation: after.incarnation,
+            bytes: activity.bytes,
+            modified_at_unix_ms: activity.modified_at_unix_ms,
+        };
+        return Ok((activity, found));
     }
     let file = crate::source::open(&path).map_err(|_| "session_activity_open_failed".to_owned())?;
     let metadata = file
@@ -105,14 +242,7 @@ pub fn read(
     let identity =
         FileIdentity::of(&file).map_err(|_| "session_activity_identity_unavailable".to_owned())?;
     let sampled_incarnation = identity.incarnation();
-    let modified_at_unix_ms = metadata
-        .modified()
-        .map_err(|_| "session_activity_mtime_unavailable".to_owned())?
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|_| "session_activity_mtime_invalid".to_owned())?
-        .as_millis()
-        .try_into()
-        .map_err(|_| "session_activity_mtime_invalid".to_owned())?;
+    let modified_at_unix_ms = modified_ms(&metadata)?;
     let reported_id = request
         .expected_id
         .as_deref()
@@ -134,10 +264,17 @@ pub fn read(
     {
         return Err("session_activity_read_changed".into());
     }
-    Ok(SessionActivity {
+    let activity = SessionActivity {
         modified_at_unix_ms,
         bytes: metadata.len(),
-    })
+    };
+    let found = Found {
+        path,
+        incarnation: sampled_incarnation,
+        bytes: activity.bytes,
+        modified_at_unix_ms,
+    };
+    Ok((activity, found))
 }
 
 #[cfg(test)]
@@ -315,6 +452,102 @@ mod tests {
             assert_eq!(after.bytes, fs::metadata(&path).unwrap().len());
             assert!(!serde_json::to_string(&after).unwrap().contains("private"));
         }
+    }
+
+    #[test]
+    fn a_look_answers_from_where_it_found_the_session_until_that_file_no_longer_proves() {
+        use std::io::Write;
+        let home = tempfile::tempdir().unwrap();
+        let path = transcript(home.path(), Agent::Codex);
+        let accounts = crate::Accounts::new(home.path());
+        let input = SessionActivityRequest {
+            account: Default::default(),
+            agent: Agent::Codex,
+            reference_kind: "id".into(),
+            reference_value: "native-a".into(),
+            cwd: None,
+            exact_route: false,
+            expected_id: None,
+        };
+        let first = read(&accounts, &input).unwrap();
+        // From here a fresh locate of the id is refused at the discovery capacity.
+        for day in ["02", "03"] {
+            let directory = home.path().join(format!(".codex/sessions/2026/01/{day}"));
+            fs::create_dir_all(&directory).unwrap();
+            for entry in 0..=crate::SESSION_DISCOVERY_LIMIT / 2 {
+                fs::write(directory.join(format!("skipped-{entry}.txt")), b"").unwrap();
+            }
+        }
+        assert_eq!(
+            read(&accounts, &input).unwrap(),
+            first,
+            "an unmoved file answers from where it was found"
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"new private bytes\n")
+            .unwrap();
+        let moved = read(&accounts, &input).unwrap();
+        assert_eq!(
+            moved.bytes,
+            fs::metadata(&path).unwrap().len(),
+            "a moved file is proven where it was found"
+        );
+        // The file left its place: the session is located anew.
+        fs::rename(&path, path.with_file_name("native-b.jsonl")).unwrap();
+        assert_eq!(
+            read(&accounts, &input).unwrap_err(),
+            ReadRefusal::Refused(format!(
+                "session_capacity:discovery_entries:{}",
+                crate::SESSION_DISCOVERY_LIMIT
+            ))
+        );
+    }
+
+    #[test]
+    fn the_found_sessions_drop_the_one_used_longest_ago_at_the_cap() {
+        let key = |n: usize| {
+            (
+                PathBuf::from("/home"),
+                SessionActivityRequest {
+                    account: Default::default(),
+                    agent: Agent::Claude,
+                    reference_kind: "id".into(),
+                    reference_value: format!("session-{n}"),
+                    cwd: None,
+                    exact_route: false,
+                    expected_id: None,
+                },
+            )
+        };
+        let at = |n: usize| Found {
+            path: PathBuf::from(format!("/sessions/{n}.jsonl")),
+            incarnation: String::new(),
+            bytes: 0,
+            modified_at_unix_ms: 0,
+        };
+        let mut held = Held::new();
+        for n in 0..FOUND_CAP {
+            keep(&mut held, key(n), Some(at(n)));
+        }
+        // The first session found is looked at again before the cap is passed.
+        assert!(touch(&mut held, &key(0)).is_some());
+        keep(&mut held, key(FOUND_CAP), Some(at(FOUND_CAP)));
+        assert_eq!(held.len(), FOUND_CAP);
+        assert_eq!(
+            touch(&mut held, &key(0)).map(|found| found.path),
+            Some(at(0).path),
+            "found first, used a moment ago"
+        );
+        assert!(touch(&mut held, &key(1)).is_none(), "used longest ago");
+        keep(&mut held, key(2), None);
+        assert!(
+            touch(&mut held, &key(2)).is_none(),
+            "forgotten after a failed look"
+        );
+        assert_eq!(held.len(), FOUND_CAP - 1);
     }
 
     #[test]
