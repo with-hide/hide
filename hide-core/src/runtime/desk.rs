@@ -2161,7 +2161,7 @@ mod tests {
             }
         ));
 
-        let offers = ask(&mut runtime);
+        let offers = request(&mut runtime, "rm -rf /tmp/x").unwrap();
         assert!(!event(
             &mut runtime,
             "desk_approval",
