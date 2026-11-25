@@ -1174,6 +1174,7 @@ pub(crate) struct TaskAgentLaunch {
     /// profile before anything starts (PRD agent-profiles B19,
     /// `Runtime::settle_session_profile`).
     pub(crate) profile_from_session: Option<crate::sidebar::SessionAgentSessionPayload>,
+    pub(crate) relocated_claude: Option<hide_session::SessionReadScope>,
 }
 
 /// One repository of a node's GitHub read: the generation it was last asked

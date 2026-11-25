@@ -2044,6 +2044,21 @@ pub fn handle_with_progress(
                 .map_err(session_refusal)?;
             to_value(account)
         }
+        Call::ClaudeResumePath {
+            session_id,
+            previous_checkout,
+            account,
+        } => {
+            let accounts = accounts(env, "session_account_home_unavailable")?;
+            let path = hide_session::session_account::claude_resume_path(
+                &accounts,
+                &account,
+                &session_id,
+                &previous_checkout,
+            )
+            .map_err(session_refusal)?;
+            to_value(path)
+        }
         Call::SessionThread { request } => {
             let accounts = accounts(env, "session_thread_home_unavailable")?;
             session_thread(&accounts, &request)

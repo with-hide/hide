@@ -14,6 +14,7 @@ import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
+import { catalogWorkspaces } from "./snapshot";
 import { lineNode, nodeKindWord, resultLine, waitCard, waitCardWords } from "./missionLine";
 import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest, MissionExternal, MissionOutside, MissionWaitTarget } from "./snapshot";
 import { pullLabel, pullName } from "./codeHost";
@@ -1306,6 +1307,18 @@ export function conductorResume(mission: Mission): { provider: ProviderKind; ses
   const session = mission.conductor.session;
   const provider = session ? resumeProvider(session.agent) : null;
   return session && provider ? { provider, sessionId: session.session_id } : null;
+}
+
+/** Resume in the original checkout while it exists, otherwise in the same project's primary checkout. */
+export function missionTakeOverCheckout(mission: Mission, rest: SnapshotRest | null): string {
+  const projectCheckouts = catalogWorkspaces(rest)
+    .filter((project) => project.device_id === mission.device_id && project.path === mission.project)
+    .flatMap((project) => project.checkouts)
+    .filter((checkout) => checkout.exists && !checkout.worktree?.missing);
+  const original = projectCheckouts.find((checkout) => checkout.path === mission.checkout_path);
+  const primary = projectCheckouts.find((checkout) => checkout.is_primary)
+    ?? projectCheckouts.find((checkout) => checkout.path === mission.project);
+  return (original ?? primary)?.path ?? mission.checkout_path;
 }
 
 /**

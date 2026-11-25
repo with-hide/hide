@@ -4114,6 +4114,31 @@ impl Runtime {
         Ok(found.cloned())
     }
 
+    /// The original directory of a Claude Code Conductor resuming in a
+    /// different checkout of its mission's own project and device.
+    pub(super) fn relocated_claude_conductor(
+        &self,
+        device: &str,
+        project: &str,
+        checkout: &str,
+        session_id: &str,
+    ) -> Option<hide_session::SessionReadScope> {
+        self.missions.book.missions.iter().find_map(|mission| {
+            let session = mission.conductor.session.as_ref()?;
+            (mission.status.open()
+                && mission.device_id == device
+                && mission.project == project
+                && mission.checkout_path != checkout
+                && session.device_id == device
+                && session.agent == "claude"
+                && session.session_id == session_id)
+                .then(|| hide_session::SessionReadScope {
+                    id: session_id.to_owned(),
+                    cwd: mission.checkout_path.clone(),
+                })
+        })
+    }
+
     /// What GitHub says now of pull request `number` in `mission`'s
     /// project, as a node remembers it; none before a current read holds it.
     /// The unit of the host `mission`'s project is read from, whose words

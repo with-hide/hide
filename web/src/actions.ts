@@ -2365,15 +2365,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     readTurnAnswer(paneId: string, offset: number) {
       dispatch({ schema_version: 2, kind: "turn_answer_read", payload: { pane_id: paneId, offset } });
     },
-    takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
-      const mission = rest()?.missions?.items.find((row) => row.id === missionId);
+    takeOverMission(missionId: string, checkoutPath: string, request: { requestId: string; confirmOnly: boolean }) {
+      const snapshot = rest();
+      const mission = snapshot?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
-      const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
+      const provider = takeOverProvider(mission, snapshot?.ui_state?.agent_start);
       this.startAgent({
-        target: { checkoutPath: mission.checkout_path },
-        ...(mission.device_id !== localDeviceId(rest()) ? { deviceId: mission.device_id } : {}),
+        target: { checkoutPath },
+        ...(mission.device_id !== localDeviceId(snapshot) ? { deviceId: mission.device_id } : {}),
         provider,
-        model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
+        model: snapshot?.ui_state?.agent_start?.models?.[provider] ?? null,
         prompt: takeOverPrompt(mission),
         ...request,
       });

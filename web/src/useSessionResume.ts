@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useInterfaceTranslation } from "./i18n/client";
-import { startAnswer, startRequestId, START_ANSWER_TIMEOUT_MS } from "./startAnswer";
+import { startRequestId, START_ANSWER_TIMEOUT_MS } from "./startAnswer";
+import { inlineReceipts, inlineStartAnswer } from "./inlineStart";
 import { coreErrorKey } from "./coreError";
 import { startReasonText } from "./startReason";
 import { agentFailure } from "./startDraft";
@@ -20,7 +21,7 @@ type Send = (request: string, confirmOnly: boolean) => void;
  * Follows one resume to its answer (B12, B14): a tab that opened moves the
  * screen to its pane, a refusal or a failure stays on the line with Retry.
  */
-export function useSessionResume(): { resume: Resume; start: (send: Send) => void } {
+export function useSessionResume(): { resume: Resume; start: (send: Send, changedDestination?: boolean) => void } {
   const { t } = useInterfaceTranslation();
   const [resume, setResume] = useState<Resume>({ request: null, failure: null, uncertain: false });
   const sending = useRef(false);
@@ -38,8 +39,12 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
     if (!freshError && !freshOperation) return;
     const rest = useShellStore.getState().rest;
     // An unrelated error cannot make an old receipt this attempt's answer.
-    const answer = startAnswer(!freshError && rest ? { ...rest, status: { ...rest.status, last_error: null } } : rest, request);
-    if (answer.phase === "ready") {
+    const receipt = inlineReceipts(rest).find(({ receipt }) => receipt.request_id === request)?.receipt;
+    const answer = inlineStartAnswer(!freshError && rest ? { ...rest, status: { ...rest.status, last_error: null } } : rest, request, receipt);
+    if (answer.phase === "unknown") {
+      sending.current = false;
+      setResume({ request, failure: answer.message ? startReasonText(answer.message, t) : null, uncertain: true });
+    } else if (answer.phase === "ready") {
       if (answer.agentPhase === "starting") return;
       sending.current = false;
       if (answer.agentPhase === "unknown") {
@@ -49,7 +54,7 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
       const ui = useUiStore.getState();
       if (answer.agentPhase !== "failed") {
         intent.current = null;
-        if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
+        if (answer.agentPhase && answer.taskId) ui.setWatchedTask(answer.taskId);
         if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
       }
       const failure = agentFailure(answer.agentReason, null);
@@ -57,8 +62,8 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
       setResume({ request: null, failure: answer.agentPhase === "failed" ? reason : null, uncertain: false });
     } else if (answer.phase === "refused" || answer.phase === "failed") {
       sending.current = false;
-      // Refusing an inspection says nothing about the original launch.
-      const uncertain = confirming.current && answer.phase === "refused";
+      // An unsuccessful inspection says nothing about the original launch.
+      const uncertain = confirming.current;
       const failure = answer.phase === "refused" ? t(startRefusalKey(answer.kind)) : answer.message ? startReasonText(answer.message, t) : "";
       setResume({ request: uncertain ? request : null, failure, uncertain });
     }
@@ -70,10 +75,11 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
   }, [request, resume.uncertain]);
   return {
     resume,
-    start: (send) => {
+    start: (send, changedDestination = false) => {
       if (sending.current) return;
       sending.current = true;
       confirming.current = resume.uncertain;
+      if (changedDestination && !resume.uncertain && resume.failure !== null) intent.current = null;
       const original = intent.current ?? { id: startRequestId(), send };
       intent.current = original;
       const rest = useShellStore.getState().rest;

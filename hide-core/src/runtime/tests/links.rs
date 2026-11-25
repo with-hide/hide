@@ -1825,6 +1825,10 @@ fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
             mission.conductor.profile = profile.cloned();
             mission
         };
+    let mut relocated = conducted("mission-6", "claude", "relocated", Some(&work));
+    relocated.project = runtime.snapshot.navigator.workspaces[0].path.clone();
+    relocated.checkout_path = format!("{path}-removed");
+    relocated.status = crate::missions::MissionStatus::Running;
     runtime.missions.book.missions = vec![
         conducted("mission-1", "claude", "claude-conductor", Some(&work)),
         conducted("mission-2", "codex", "codex-conductor", None),
@@ -1837,6 +1841,7 @@ fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
             },
             ..conducted("mission-5", "claude", "by-hand", None)
         },
+        relocated,
     ];
     let start = |runtime: &mut Runtime, provider: &str, session: &str, file: Option<&str>| {
         runtime.snapshot.task_operation = None;
@@ -1857,6 +1862,26 @@ fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
     assert_eq!(
         start(&mut runtime, "claude", "claude-conductor", None),
         Some((Some((work.id.clone(), work.name.clone())), None))
+    );
+    assert_eq!(
+        start(&mut runtime, "claude", "relocated", None),
+        Some((Some((work.id.clone(), work.name.clone())), None))
+    );
+    let task = runtime.task_agent_launch.as_ref().unwrap().task;
+    assert_eq!(
+        runtime.relocated_claude_session(task),
+        Some(hide_session::SessionReadScope {
+            id: "relocated".to_owned(),
+            cwd: format!("{path}-removed"),
+        })
+    );
+    let transcript = "/accounts/work/projects/-repo-removed/relocated.jsonl";
+    runtime
+        .use_claude_resume_path(task, "relocated", transcript.to_owned())
+        .unwrap();
+    assert_eq!(
+        runtime.task_agent_launch.as_ref().unwrap().args[..2],
+        ["--resume", transcript]
     );
     // A Codex Conductor recorded with the built-in default resumes as it
     // always has, however old its session's folder.

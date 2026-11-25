@@ -5087,7 +5087,41 @@ impl Runtime {
             profile,
             resume_reference: None,
             profile_from_session: None,
+            relocated_claude: None,
         });
+    }
+
+    pub(crate) fn relocated_claude_session(
+        &self,
+        task: u64,
+    ) -> Option<hide_session::SessionReadScope> {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == task)?
+            .relocated_claude
+            .clone()
+    }
+
+    pub(crate) fn use_claude_resume_path(
+        &mut self,
+        task: u64,
+        session_id: &str,
+        path: String,
+    ) -> Result<(), &'static str> {
+        let launch = self
+            .task_agent_launch
+            .as_mut()
+            .filter(|launch| launch.task == task)
+            .ok_or("agent_start.failed")?;
+        let [flag, argument, ..] = launch.args.as_mut_slice() else {
+            return Err("agent_start.invalid_resume");
+        };
+        if flag.as_str() != "--resume" || argument.as_str() != session_id {
+            return Err("agent_start.invalid_resume");
+        }
+        *argument = path;
+        launch.relocated_claude = None;
+        Ok(())
     }
 
     /// The session task `id` resumes when it names no account

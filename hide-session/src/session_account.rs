@@ -75,6 +75,30 @@ fn default_alone(accounts: &Accounts, agent: Agent, id: &str) -> Result<AccountK
     }
 }
 
+/// Gives Claude Code the exact transcript when its old checkout is gone.
+/// The old path is a lookup hint, and the provider account and session id
+/// are proven on the machine that holds the file.
+pub fn claude_resume_path(
+    accounts: &Accounts,
+    account: &AccountKey,
+    session_id: &str,
+    previous_checkout: &str,
+) -> Result<String, ReadRefusal> {
+    let accounts = accounts.reading(Agent::Claude, account)?;
+    let native = hide_platform::path::from_wire(previous_checkout).ok();
+    let (path, _) = crate::label_transcript::locate_confirmed(
+        &accounts,
+        Agent::Claude,
+        "id",
+        session_id,
+        native.as_ref().and_then(|path| path.to_str()),
+    )?;
+    path.to_str()
+        .filter(|path| path.len() <= 4096 && !path.chars().any(char::is_control))
+        .map(str::to_owned)
+        .ok_or_else(|| "label_session_path_invalid".into())
+}
+
 fn file(accounts: &Accounts, agent: Agent, path: &Path) -> Result<AccountKey, ReadRefusal> {
     if !path.is_absolute() {
         return Err(RootRefusal::Outside.reason().into());
@@ -124,4 +148,34 @@ fn opencode(accounts: &Accounts, id: &str) -> Result<AccountKey, ReadRefusal> {
         }
     }
     holding.ok_or_else(|| RootRefusal::Missing.reason().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_resume_path_proves_the_session_after_its_checkout_is_removed() {
+        let home = tempfile::tempdir().unwrap();
+        let accounts = Accounts::new(home.path());
+        let gone = hide_platform::path::to_wire(&home.path().join("gone checkout")).unwrap();
+        let logs = home.path().join(".claude/projects/gone-checkout");
+        std::fs::create_dir_all(&logs).unwrap();
+        let id = "b13b7d92-6623-4572-9c31-a5776b532dd7";
+        let log = logs.join(format!("{id}.jsonl"));
+        let line = |native_id| serde_json::json!({"type": "user", "sessionId": native_id, "message": {"role": "user", "content": "Saved conversation"}});
+        std::fs::write(&log, format!("{}\n", line(id))).unwrap();
+        let path = claude_resume_path(&accounts, &AccountKey::Default, id, &gone).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(path).unwrap(),
+            std::fs::canonicalize(&log).unwrap()
+        );
+
+        std::fs::write(
+            &log,
+            format!("{}\n", line("f3044bf8-a75a-4073-8b0a-3053564e53a2")),
+        )
+        .unwrap();
+        assert!(claude_resume_path(&accounts, &AccountKey::Default, id, &gone).is_err());
+    }
 }

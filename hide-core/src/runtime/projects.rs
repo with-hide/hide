@@ -4935,6 +4935,16 @@ impl Runtime {
                 return true;
             }
         };
+        let relocated_claude = payload.resume_session_id.as_deref().and_then(|session_id| {
+            if agent_kind
+                .as_deref()
+                .and_then(hide_session::Agent::from_kind)
+                != Some(hide_session::Agent::Claude)
+            {
+                return None;
+            }
+            self.relocated_claude_conductor(&device, &workspace_path, &checkout_path, session_id)
+        });
         // A natively proven resume names the reference its proof reads:
         // OpenCode's session id itself, a file reader's source file.
         let proof = agent_kind
@@ -5084,6 +5094,7 @@ impl Runtime {
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
             launch.profile_from_session = from_session;
+            launch.relocated_claude = relocated_claude;
         }
         if retry.is_some() {
             return self.retry_task_agent(id);

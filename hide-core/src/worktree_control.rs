@@ -1884,6 +1884,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
             folder_present(node, request)?;
         }
         settle_task_session_profile(target, request)?;
+        settle_relocated_claude_session(target, request)?;
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target
@@ -2145,6 +2146,57 @@ fn settle_task_session_profile(
         .lock()
         .map_err(|_| TASK_GONE.to_owned())?
         .settle_session_profile(request.id, kind, &account)
+        .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
+    Ok(())
+}
+
+fn settle_relocated_claude_session(
+    target: &TabTarget,
+    request: &CheckoutTabRequest,
+) -> Result<(), ControlFailure> {
+    let runtime = target
+        .runtime
+        .upgrade()
+        .ok_or("runtime stopped".to_owned())?;
+    let (scope, account) = {
+        let runtime = runtime.lock().map_err(|_| TASK_GONE.to_owned())?;
+        let Some(scope) = runtime.relocated_claude_session(request.id) else {
+            return Ok(());
+        };
+        let kind = request
+            .agent_kind
+            .as_deref()
+            .ok_or("session_resume_agent_required".to_owned())?;
+        let account = runtime
+            .task_agent_account(request.id, kind)
+            .map_err(str::to_owned)?;
+        (scope, account)
+    };
+    let kind = request
+        .agent_kind
+        .as_deref()
+        .ok_or("session_resume_agent_required".to_owned())?;
+    let node = task_session_node(&runtime, request.id, kind)?;
+    let path = crate::node_access::call_as::<String>(
+        node.as_ref(),
+        Call::ClaudeResumePath {
+            session_id: scope.id.clone(),
+            previous_checkout: scope.cwd,
+            account,
+        },
+        PROCESS_READ_TIMEOUT,
+    )
+    .map_err(|error| ControlFailure::Definite(error.to_string()))?;
+    target.check_current(request.id)?;
+    if !Arc::ptr_eq(&node, &task_session_node(&runtime, request.id, kind)?) {
+        return Err(ControlFailure::Definite(
+            "session_resume_reader_changed".into(),
+        ));
+    }
+    runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .use_claude_resume_path(request.id, &scope.id, path)
         .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
     Ok(())
 }

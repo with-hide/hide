@@ -455,7 +455,9 @@ use crate::error::HostError;
 /// 102 reads the core's ping as a request it cannot read and keeps a link
 /// whose core went silent, holding its pane ownership, so it is refused at
 /// Hello and upgraded with its core.
-pub const PROTOCOL_VERSION: u32 = 103;
+/// 104: a Claude Code conversation can be located by its native id and
+/// account for a resume in a different checkout (`ClaudeResumePath`).
+pub const PROTOCOL_VERSION: u32 = 104;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1251,6 +1253,12 @@ pub enum Call {
     SessionAccount {
         request: hide_session::session_account::SessionAccountRequest,
     },
+    /// A verified native transcript for a Claude Code resume in another checkout.
+    ClaudeResumePath {
+        session_id: String,
+        previous_checkout: String,
+        account: hide_agent_adapter::AccountKey,
+    },
     /// The device's session files changed since a time and, for a later
     /// page, up to one, newest first and capped
     /// (`hide_session::links::candidates`).
@@ -1564,6 +1572,7 @@ impl Call {
             | Self::SessionWorkTurn { .. }
             | Self::SessionActivity { .. }
             | Self::SessionAccount { .. }
+            | Self::ClaudeResumePath { .. }
             | Self::LinkFiles { .. }
             | Self::LinkRead { .. }
             | Self::UsageFiles { .. }
