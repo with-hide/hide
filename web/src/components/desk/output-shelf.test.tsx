@@ -24,7 +24,7 @@ async function render(outputs: DeskOutput[], pulls: SessionPull[], opened: strin
   document.body.append(host);
   const root = createRoot(host);
   mounted.push(root);
-  await act(async () => root.render(<TooltipProvider><OutputShelf outputs={outputs} pulls={pulls} onOpen={(one) => opened.push(one.id)} onPull={(one) => opened.push(`#${one.number}`)} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider><OutputShelf outputs={outputs} pulls={pulls} onOpen={(one) => opened.push(one.id)} onPull={(one, external) => opened.push(`${external ? "github " : ""}#${one.number}`)} /></TooltipProvider>));
   return host;
 }
 
@@ -44,11 +44,13 @@ it("shows a thing alone of its kind as itself and opens it with one press; a lar
   expect(host.querySelector('[data-desk-shelf-group="pr"]')?.textContent).toContain(`#${2532}`);
   await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="doc"]')!.click());
   await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="pr"]')!.click());
-  expect(opened).toEqual(["notes.md", `#${2532}`]);
+  // ⌘-press opens a pull request on its host, as every PR mark does.
+  await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="pr"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true })));
+  expect(opened).toEqual(["notes.md", `#${2532}`, `github #${2532}`]);
   expect(host.querySelector("[data-desk-shelf-list]")).toBeNull();
   await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="image"]')!.click());
   await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-list="image"] [data-desk-shelf-item="b.png"]')!.click());
-  expect(opened).toEqual(["notes.md", `#${2532}`, "b.png"]);
+  expect(opened).toEqual(["notes.md", `#${2532}`, `github #${2532}`, "b.png"]);
 });
 
 it("lists six pull requests and the rest behind + n more", async () => {
@@ -58,6 +60,16 @@ it("lists six pull requests and the rest behind + n more", async () => {
   expect(host.querySelector("[data-desk-shelf-more]")?.textContent).toBe(`+ 3 more · ${[2520, 917, 914].map((number) => `#${number}`).join(" ")}`);
   await act(async () => host.querySelector<HTMLElement>("[data-desk-shelf-more]")!.click());
   expect(host.querySelectorAll("[data-desk-shelf-list] [data-desk-shelf-item]")).toHaveLength(9);
+});
+
+it("draws a listed pull request as every PR list does: stale, closed and who holds it", async () => {
+  const pulls: SessionPull[] = [{ ...pull(2537), stale: true }, { ...pull(2536), state: "closed" }, { ...pull(2535), own: false, holders: ["fixer"] }];
+  const host = await render([], pulls, []);
+  await act(async () => host.querySelector<HTMLElement>('[data-desk-shelf-group="pr"]')!.click());
+  const rows = Array.from(host.querySelectorAll("[data-desk-shelf-list] [data-desk-shelf-item]"));
+  expect(rows[0]?.querySelector("[data-stale=\"true\"]")).not.toBeNull();
+  expect(rows[1]?.querySelector("[data-pr-closed]")).not.toBeNull();
+  expect(rows[2]?.textContent).toContain("fixer");
 });
 
 it("draws nothing for a session that made nothing", async () => {

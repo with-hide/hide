@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedIn, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedIn, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, namedText, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -205,5 +205,14 @@ describe("a chip's session (D-86, B50)", () => {
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.card).toBeNull();
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.listed).toBe(true);
     expect(sessionFacts(rows, cards, { name: "nobody", mark: null, agent_kind: null })).toBeNull();
+  });
+});
+
+describe("namedText", () => {
+  it("says each held mention by its name, as the operator reads the message", () => {
+    const fixer = { kind: "session" as const, id: "w1:p3", name: "fixer" };
+    const repo = { kind: "project" as const, id: "/Users/me/repo", name: "repo name" };
+    const text = `${markedMention(fixer)} 결과를 ${markedMention(repo)}에 정리해 줘, ${markedMention(fixer)}`;
+    expect(namedText(text, [fixer, repo])).toBe("@fixer 결과를 @repo name에 정리해 줘, @fixer");
   });
 });

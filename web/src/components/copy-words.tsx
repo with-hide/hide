@@ -1,34 +1,20 @@
 // `복사` as words: a message's original Markdown, a code block's code.
 
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import type { CopyText } from "./human-turn-copy";
+import { useCopied, type CopyText } from "./human-turn-copy";
 import { Button } from "./ui/button";
-
-/** How long `복사함 ✓` stays after the text was copied. */
-const COPIED_MS = 1500;
 
 /**
  * `복사` (Doop E2): puts `text` on the clipboard of the screen the operator
- * looks at and turns into `복사함 ✓` for a moment. A refused write is the
- * log's (design principle 13) and leaves the words as they were. It never
+ * looks at and turns into `복사함 ✓` for a moment (`useCopied`). It never
  * takes the keyboard from what the operator was doing.
  */
 export function CopyWords({ text, what, copy, className }: { text: string; what: string; copy: CopyText; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<number | null>(null);
-  // A write that lands after the part went arms no timer for a part that is gone.
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    };
-  }, []);
+  const { copied, run } = useCopied(copy);
   return (
     <Button
       type="button"
@@ -40,12 +26,7 @@ export function CopyWords({ text, what, copy, className }: { text: string; what:
       onMouseDown={(event) => event.preventDefault()}
       onClick={(event) => {
         event.stopPropagation();
-        void copy(text, what).then((took) => {
-          if (!took || !mounted.current) return;
-          if (timer.current !== null) window.clearTimeout(timer.current);
-          setCopied(true);
-          timer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
-        });
+        run(text, what);
       }}
     >
       {copied ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}

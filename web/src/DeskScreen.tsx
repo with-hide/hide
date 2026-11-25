@@ -613,7 +613,8 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
           pulls={pulls}
           selected={front?.kind === "output" ? front.output.id : null}
           onOpen={(output) => actions.deskOpen({ kind: "output", output })}
-          onPull={(pull) => deskActions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number, reference: pull.reference }, { pane: paneId })}
+          onPull={(pull, external) => (external ? actions.openLink(pull.url, true) : deskActions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number, reference: pull.reference }, { pane: paneId }))}
+          row={row}
         />
         </>
       }

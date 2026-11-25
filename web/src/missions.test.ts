@@ -202,14 +202,14 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
 
   it("is the mission whose node this session works, read on the mission's machine when the node names none", () => {
     // The node's worker is agent-7 in pane w1:p2 of the mission's machine (`machine` null, as the core reads it).
-    const worked = mission("m-2", { device_id: "mac", nodes: [node("n", { status: "running", agent_id: "agent-7", pane_id: "w1:p2", machine: null })] });
-    const at = (id: string, device_id: string) => missionWorkedIn(rest([worked]), { id, pane_id: "w1:p2", device_id })?.node.key ?? null;
+    const worked = mission("m-2", { device_id: "mac", nodes: [node("n", { status: "working", agent_id: "agent-7", pane_id: "w1:p2", machine: null })] });
+    const at = (agent: string, device_id: string) => missionWorkedIn(rest([worked]), { pane_id: "w1:p2", device_id }, agent)?.node.key ?? null;
     expect(at("agent-7", "mac")).toBe("n");
     // The same pane id on a connected device is another session.
     expect(at("agent-7", "mini")).toBeNull();
-    // A later session in the worker's pane is not the worker.
+    // A later session in the worker's pane, its card naming another agent, is not the worker.
     expect(at("agent-9", "mac")).toBeNull();
-    expect(missionWorkedIn({ missions: { items: [worked], failed: "unreadable" } } as unknown as SnapshotRest, { id: "agent-7", pane_id: "w1:p2", device_id: "mac" })).toBeNull();
+    expect(missionWorkedIn({ missions: { items: [worked], failed: "unreadable" } } as unknown as SnapshotRest, { pane_id: "w1:p2", device_id: "mac" }, "agent-7")).toBeNull();
   });
 });
 

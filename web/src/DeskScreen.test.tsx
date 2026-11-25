@@ -628,8 +628,10 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } }));
     await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, closed: null, answer: 0 })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
-    // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its words.
-    expect(document.body.querySelector("[data-desk-ask]")).toBeNull();
+    // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its
+    // words, and the card's question is not said again in a card of its own.
+    expect(document.body.querySelector("[data-desk-ask], [data-desk-question]")).toBeNull();
+    expect(document.body.textContent).not.toContain("Delete the old captures?");
 
     const ask = { kind: "question" as const, turn: "7", since_ms: null, text: "Delete the old captures?", choices: [{ id: "1", label: "Keep" }, { id: "2", label: "Delete" }], answerable: true };
     await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask, reason: null } }));

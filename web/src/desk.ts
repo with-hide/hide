@@ -386,6 +386,11 @@ export const markedMention = (mention: DeskMention) => `@${mention.kind}(${menti
 /** A mention as a session's own words say it. */
 export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
+/** A Desk message's words as the operator reads them, each held mention said by its name: what `복사` puts on the clipboard. */
+export function namedText(text: string, mentions: readonly DeskMention[]): string {
+  return mentions.reduce((words, mention) => words.split(markedMention(mention)).join(namedMention(mention)), text);
+}
+
 /** An agent Desk cannot be given (B4, D-79): one that cannot ask before acting, or one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "no_ask_mode" && agent.state !== "off";

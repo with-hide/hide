@@ -13,10 +13,9 @@ import { addressShown, browserStillOf } from "./browserViews";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
 import type { DeskOutput } from "./desk";
-import type { FileSource } from "./fileBytes";
+import { useFileSource } from "./imageFile";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MarkdownText } from "./MarkdownText";
-import { localDeviceId } from "./snapshot";
 import { downloadFailureText } from "./fileFailure";
 import { useShellStore } from "./store";
 import { ImageBody, PdfBody, VideoBody, ViewerNotice } from "./viewers/FileViewer";
@@ -27,10 +26,6 @@ const PDF = /\.pdf$/i;
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i;
 
 /** The checkout an output's file is read under: none for this machine, its device and root for a device's. */
-function useOutputSource(output: DeskOutput): FileSource {
-  const node = useShellStore((s) => localDeviceId(s.rest));
-  return output.device_id && output.checkout && output.device_id !== node ? { device: output.device_id, root: output.checkout } : null;
-}
 
 export function DeskOutputView({ output, viewKey, actions }: { output: DeskOutput; viewKey: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -66,7 +61,7 @@ export function DeskOutputView({ output, viewKey, actions }: { output: DeskOutpu
 function FileOutput({ path, output, viewKey }: { path: string; output: DeskOutput; viewKey: string }) {
   const { t } = useInterfaceTranslation();
   const [attempt, setAttempt] = useState(0);
-  const state = useFileBytesFrom(path, useOutputSource(output), attempt);
+  const state = useFileBytesFrom(path, useFileSource(output.device_id, output.checkout), attempt);
   const displayId = `desk:${viewKey}`;
   const reason = state.status === "failed" ? state.reason : null;
   useEffect(() => {

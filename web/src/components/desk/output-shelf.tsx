@@ -1,16 +1,14 @@
 import { ChevronDownIcon, ChevronUpIcon, FileIcon, GitPullRequestIcon, GlobeIcon, ImageIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { pullLabel } from "../../codeHost";
 import type { DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
-import { PR_LOOK } from "../../prMark";
-import type { DeskOutputKind, PrState, SessionPull } from "../../snapshot";
-import { useImageFile } from "../../imageFile";
-import { localDeviceId } from "../../snapshot";
-import { useShellStore } from "../../store";
-import { PrMark } from "../pr-mark";
+import { CLOSED_DIM, PR_LOOK, pullsStaleness } from "../../prMark";
+import type { AgentRow, DeskOutputKind, PrState, SessionPull } from "../../snapshot";
+import { useFileSource, useImageFile } from "../../imageFile";
+import { PrHoverCard, PrListItem, PrMark } from "../pr-mark";
 import { Button } from "../ui/button";
 import { RowButton } from "../ui/row-button";
 import { Hint } from "../ui/tooltip";
@@ -86,8 +84,7 @@ function Picture({ item, className }: { item: ShelfItem; className: string }) {
 }
 
 function FilePicture({ path, device, root, className }: { path: string; device: string | null; root: string | null; className: string }) {
-  const here = useShellStore((state) => localDeviceId(state.rest));
-  const url = useImageFile(path, device && root && device !== here ? { device, root } : null);
+  const url = useImageFile(path, useFileSource(device, root));
   if (url === null || url === "failed") return <ImageIcon aria-hidden="true" className={ICON} />;
   return <img src={url} alt="" aria-hidden="true" draggable={false} className={className} data-desk-shelf-picture="true" />;
 }
@@ -145,21 +142,24 @@ const CHIP = "h-(--size-control-lg) min-w-0 gap-xs px-sm text-body font-normal t
  * `+ n개 더`. The line never wraps: a thing alone of its kind gives up its
  * name's room first. A session with nothing made has no shelf.
  */
-export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }: {
+export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull, row = null }: {
   outputs: readonly DeskOutput[];
   pulls: readonly SessionPull[];
   /** The output in front of the tab panel, ringed. */
   selected?: string | null;
   onOpen: (output: DeskOutput) => void;
-  onPull: (pull: SessionPull) => void;
+  /** Opens a pull request of the session's list; `external` (⌘-press) opens it on its host, as every PR mark does. */
+  onPull: (pull: SessionPull, external: boolean) => void;
+  /** The session's row, whose PR card a lone pull request shows under the pointer as the pane head's mark does. */
+  row?: AgentRow | null;
 }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState<DeskOutputKind | null>(null);
   const [allPulls, setAllPulls] = useState(false);
   const groups = shelfGroups(outputs, pulls);
   if (groups.length === 0) return null;
-  const press = (item: ShelfItem) => {
-    if (item.kind === "pr" && item.pull) onPull(item.pull);
+  const press = (item: ShelfItem, event: MouseEvent) => {
+    if (item.kind === "pr" && item.pull) onPull(item.pull, event.metaKey || event.ctrlKey);
     else if (item.output) onOpen(item.output);
   };
   const shown = groups.find((group) => group.kind === open && group.items.length > 1) ?? null;
@@ -170,19 +170,23 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }:
           const one = group.items.length === 1 ? group.items[0]! : null;
           if (one) {
             const face: ReactNode = one.kind === "pr"
-              ? <PrMark state={one.state} label={one.label} className="min-w-0" />
+              ? <PrMark state={one.state} label={one.label} stale={one.pull?.stale} className={cn("min-w-0", one.state === "closed" && CLOSED_DIM)} />
               : <>
                 {one.kind === "image" ? <Thumb item={one} /> : <KindIcon kind={one.kind} />}
                 <span className="min-w-0 truncate" data-desk-shelf-one={one.id}>{one.label}</span>
               </>;
-            return (
-              <Hint key={group.kind} label={one.label} side="bottom" content={<ItemDetails item={one} />}>
-                <Button variant="outline" size="sm" className={cn(CHIP, "shrink", selected !== null && one.output?.id === selected && "ring-1 ring-ring")} aria-pressed={one.output ? selected === one.output.id : undefined} data-desk-shelf-group={group.kind} data-desk-shelf-unseen={group.unseen ? "true" : undefined} onClick={() => press(one)}>
-                  {face}
-                  {group.unseen ? <UnseenMark /> : null}
-                </Button>
-              </Hint>
+            const chip = (
+              <Button variant="outline" size="sm" className={cn(CHIP, "shrink", selected !== null && one.output?.id === selected && "ring-1 ring-ring")} aria-pressed={one.output ? selected === one.output.id : undefined} data-desk-shelf-group={group.kind} data-desk-shelf-unseen={group.unseen ? "true" : undefined} onClick={(event) => press(one, event)}>
+                {face}
+                {group.unseen ? <UnseenMark /> : null}
+              </Button>
             );
+            // A pull request of the session's list shows the PR card every PR mark shows; anything else its own details.
+            if (one.kind === "pr" && one.pull && row) {
+              const pull = one.pull;
+              return <PrHoverCard key={group.kind} agent={row} pulls={[pull]} staleness={pullsStaleness([pull])} side="bottom" onOpenPullRequest={(_, external) => onPull(pull, external)}>{chip}</PrHoverCard>;
+            }
+            return <Hint key={group.kind} label={one.label} side="bottom" content={<ItemDetails item={one} />}>{chip}</Hint>;
           }
           const opened = open === group.kind;
           const Chevron = opened ? ChevronUpIcon : ChevronDownIcon;
@@ -203,7 +207,7 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }:
             <ul className="grid min-w-0 grid-cols-2 gap-sm">
               {shown.items.map((item) => (
                 <li key={item.id} className="flex min-w-0 flex-col gap-xxs">
-                  <RowButton className={cn("relative h-(--size-desk-shelf-thumb) overflow-hidden rounded-sm border border-border bg-muted p-0 hover:border-ring", item.output?.id === selected && "border-ring ring-1 ring-ring")} aria-label={unseen(item) ? `${item.label} · ${t("desk.outputs.unseen")}` : item.label} onClick={() => press(item)} data-desk-shelf-item={item.id}>
+                  <RowButton className={cn("relative h-(--size-desk-shelf-thumb) overflow-hidden rounded-sm border border-border bg-muted p-0 hover:border-ring", item.output?.id === selected && "border-ring ring-1 ring-ring")} aria-label={unseen(item) ? `${item.label} · ${t("desk.outputs.unseen")}` : item.label} onClick={(event) => press(item, event)} data-desk-shelf-item={item.id}>
                     <span className="flex size-full items-center justify-center"><Picture item={item} className="size-full object-cover object-top" /></span>
                     {unseen(item) ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
                   </RowButton>
@@ -215,12 +219,12 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }:
             <ul className="flex min-w-0 flex-col">
               {(shown.kind === "pr" && !allPulls ? shown.items.slice(0, PR_ROWS) : shown.items).map((item) => (
                 <li key={item.id} className="min-w-0">
-                  <RowButton className={cn("h-(--size-control-lg) gap-xs rounded-sm px-xs text-body", item.output?.id === selected && "bg-accent")} onClick={() => press(item)} data-desk-shelf-item={item.id}>
-                    {item.kind === "pr" ? (
+                  <RowButton className={cn("h-(--size-control-lg) gap-xs rounded-sm px-xs text-body", item.output?.id === selected && "bg-accent")} onClick={(event) => press(item, event)} data-desk-shelf-item={item.id}>
+                    {item.kind === "pr" && item.pull ? <PrListItem pull={item.pull} />
+                    : item.kind === "pr" ? (
                       <>
-                        <PrMark state={item.state} label={item.label} className="shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-foreground" title={item.title}>{item.title}</span>
-                        <span className={cn("shrink-0 text-caption", PR_LOOK[item.state].tone)}>{t(PR_LOOK[item.state].word)}</span>
+                        <PrMark state={item.state} label={item.label} className={cn("shrink-0", item.state === "closed" && CLOSED_DIM)} />
+                        <span className={cn("min-w-0 flex-1 truncate text-foreground", item.state === "closed" && CLOSED_DIM)} title={item.title}>{item.title}</span>
                       </>
                     ) : (
                       <>

@@ -58,7 +58,7 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
 }) {
   const { t } = useInterfaceTranslation();
   const conducts = usePaneMission(paneId);
-  const works = useShellStore((s) => (row && !conducts ? missionWorkedIn(s.rest, row) : null));
+  const works = useShellStore((s) => (row && !conducts ? missionWorkedIn(s.rest, row, job?.agent_id ?? null) : null));
   const plan = useShellStore((s) => (sleeping ? null : planOfPane(s.rest, paneId)));
   const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
   const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null;

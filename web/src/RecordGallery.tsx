@@ -3,15 +3,12 @@ import { useState } from "react";
 import type { Actions } from "./actions";
 import { browserStillOf, addressShown } from "./browserViews";
 import { FileMark } from "./components/file-mark";
-import type { FileSource } from "./fileBytes";
-import { useImageFile } from "./imageFile";
+import { useFileSource, useImageFile } from "./imageFile";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { FIRST_PICTURES, FIRST_ROWS, pictureOf, rowDetail, type GalleryTile } from "./galleryTiles";
 import type { RecordView } from "./snapshot";
-import { localDeviceId } from "./snapshot";
-import { useShellStore } from "./store";
 
 const PICTURE = "relative flex aspect-[5/2] w-full min-w-0 overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 const ROW = "flex w-full min-w-0 items-center gap-xs rounded-xs px-xxs py-xxs text-left text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -75,9 +72,7 @@ function Mark({ view }: { view: RecordView }) {
 
 /** An image is its own picture: its bytes, read once and kept for the next draw. */
 function ImagePicture({ view }: { view: RecordView }) {
-  const node = useShellStore((state) => localDeviceId(state.rest));
-  const source: FileSource = view.device_id === node ? null : { device: view.device_id, root: view.checkout_path };
-  const url = useImageFile(view.path, source);
+  const url = useImageFile(view.path, useFileSource(view.device_id, view.checkout_path));
   if (url === "failed") return <span className="flex w-full items-center justify-center"><FileMark icon={fileIcon(view.label)} /></span>;
   return url ? <img src={url} alt="" aria-hidden="true" draggable={false} className="size-full object-cover" data-record-view-image="true" /> : null;
 }

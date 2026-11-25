@@ -367,15 +367,10 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
   const latest = useRef({ onSession, onCopy });
   latest.current = { onSession, onCopy };
   const bridge = useSessionChipBridge();
-  // The chips follow what the mentions say, not the array they arrive in: a caller's new array with the same
-  // sessions keeps every message's view as it is (a new chip set rebuilds each one, losing a selection in it).
-  const said = mentions.map((mention) => JSON.stringify([namedMention(mention), mention.mark ?? null, mention.agent_kind ?? null])).join("\n");
-  const latestMentions = useRef(mentions);
-  latestMentions.current = mentions;
-  const chips = useMemo<MarkdownChip[]>(() => latestMentions.current.map((mention) => {
+  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => {
     const session: DeskSessionRef = { name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null };
     return { token: namedMention(mention), node: bridge(<SessionChip session={session} onPress={() => latest.current.onSession(session)} />) };
-  }), [said, bridge]);
+  }), [mentions, bridge]);
   const copy = useCallback<CopyText>((text, what) => latest.current.onCopy(text, what), []);
   return useMemo(() => ({ chips, copy }), [chips, copy]);
 }

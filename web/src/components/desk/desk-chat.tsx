@@ -2,7 +2,7 @@ import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSear
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention, namedText } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { DeskAttachment } from "../../snapshot";
@@ -62,7 +62,7 @@ export function DeskUserMessage({ text, mentions, attachments = [], onMention, c
   return (
     <div className="flex min-w-0 flex-col items-end gap-xs" data-desk-item="user">
       <SentAttachments files={files} />
-      {bubble && copy ? <CopyableMessage text={text} copy={copy} align="end">{bubble}</CopyableMessage> : bubble}
+      {bubble && copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy} align="end">{bubble}</CopyableMessage> : bubble}
     </div>
   );
 }
@@ -105,7 +105,7 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
   const words = <MarkdownText text={text} size="chat" chips={chips} copyCode={copy} />;
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-desk-item="reply" data-desk-reply={live ? "live" : stopped ? "stopped" : "done"}>
-      {copy ? <CopyableMessage text={text} copy={copy}>{words}</CopyableMessage> : words}
+      {copy ? <CopyableMessage text={namedText(text, mentions)} copy={copy}>{words}</CopyableMessage> : words}
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
   );
