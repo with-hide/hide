@@ -2943,11 +2943,22 @@ fn a_once_automation_is_kept_as_its_date_and_its_end_waits_in_needs_you_until_op
         "the phone words the date itself"
     );
 
-    // Opened in the automation screen, it is put away; the automation
+    // The line outlasts the run's terminal, which closes on the usual rule.
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.tick(1);
+    assert!(harness.closed().contains(&pane), "{:?}", harness.closed());
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
+
+    // Opened in the automation screen, it is put away, and the word is
+    // announced though nothing else on the screen moved; the automation
     // stays done and never runs again on schedule.
-    harness
-        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
-        .unwrap();
+    let viewing = serde_json::from_value(json!(
+        {"call": "run_viewing", "id": id, "run": 1, "on": true}
+    ))
+    .unwrap();
+    let (answer, changed) = harness.runtime.lock().unwrap().automation_call(viewing);
+    answer.unwrap();
+    assert!(changed, "the screen's word is announced to every window");
     assert!(harness.looks().is_empty());
     let item = harness.item(&id);
     assert_eq!((&item["done"], item.get("look_run")), (&json!(true), None));
