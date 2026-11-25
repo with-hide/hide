@@ -136,6 +136,10 @@ mod tests {
         assert!(plain.contains("file change"));
         assert!(plain.contains("<refused>\nnotes.md\n</refused>"));
         assert!(plain.ends_with(REFUSED_DO_NOT_RETRY));
+        // What the sentence must keep saying, whatever its wording: no
+        // other way to the same, and words that it did not run.
+        assert!(REFUSED_DO_NOT_RETRY.contains("another way"));
+        assert!(REFUSED_DO_NOT_RETRY.contains("did not run"));
         assert!(!plain.contains("The operator's message"));
 
         let line = refusal_message(
