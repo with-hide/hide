@@ -644,8 +644,9 @@ pub enum Call {
         root: RootRef,
         path: String,
     },
-    /// A stamp per folder (`hide_host::list::stamps`), at most
-    /// `MAX_STAMPED_FOLDERS`, for a device Explorer's watch.
+    /// A stamp per folder or file (`hide_host::list::stamps`), at most
+    /// `MAX_STAMPED_FOLDERS`, for a device Explorer's watch and its shown
+    /// files' watch.
     Stamps {
         root: RootRef,
         folders: Vec<String>,

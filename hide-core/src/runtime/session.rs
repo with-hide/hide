@@ -6350,6 +6350,7 @@ impl Runtime {
                     root,
                     channel,
                     documents::OpenRequestFields {
+                        follow: false,
                         workspace_id: payload.workspace_id,
                         checkout_id: payload.checkout_id,
                         path: payload.path,

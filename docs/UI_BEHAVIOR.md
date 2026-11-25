@@ -555,6 +555,11 @@ A view whose file is being read shows `Opening…`.
 A restored view whose device or root is not ready says what it waits for (such as `Waiting for <device> to connect`) and reads its file by itself once that is ready.
 A view whose file cannot be read shows why, with Close view and Retry, and its tab title reads as struck through; either action acts on that view alone and leaves the active area where it was.
 Each state belongs to its view alone, so one missing file never blanks another view or area.
+A file a view shows that changes on disk, written by an agent, an editor or a command, shows its new contents in every view of the Workspace in front within a moment, on this machine and on a connected device, the way a page reloads when an agent opens it again.
+An image, a PDF or a video keeps its last picture until the new one arrives, so it does not blink.
+A text or Markdown document follows the file only while it holds nothing of the operator's: a draft, a save under way or a conflict keeps what the operator has, and the next save meets the change as a conflict with Reload and Keep editing; a draft typed while the new contents are read is kept too.
+A file removed while it shows keeps the last contents in its view and puts nothing on the screen.
+At most 32 shown files are watched at once, the first in the order the areas lie; a file past them shows the contents read when it opened, as before.
 After a restart the app reopens the last Workspace as it was left: its areas and their sizes, each area's tabs in order with its preview, pinned views, and active view, the active area, the lane's tool, tree and its widths, and each Agent tab's desk, the desk standing beside the agents; unsaved text returns from the browser's drafts, and the engine's current tabs and panes are used as they are.
 A first run, or a last Workspace that no longer exists, starts on the Overview.
 The engine connecting before the initial path catalog and saved View arrive does not mean the last Workspace is gone; the existing starting screen waits for that saved choice to settle.

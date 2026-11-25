@@ -301,6 +301,9 @@ type Store = {
   /** Watch frames per folder, counted so the Explorer re-reads even a folder
    * whose listing was in flight when the change landed. */
   folderChanges: Record<string, number>;
+  /** Watch frames per shown file (`file_changed`), counted so each View
+   * showing the file reads it again once per change. */
+  fileChanges: Record<string, number>;
   /** The newest `DIAGNOSTIC_CAP` entries; older ones are counted in `diagnosticsDropped`. */
   diagnostics: string[];
   diagnosticsDropped: number;
@@ -378,6 +381,18 @@ function withHomeFolder(answers: Record<string, HomeFolderAnswer>, answer: HomeF
 
 /** Watch-frame counts the store keeps; far above the 64-folder watch set. */
 export const FOLDER_CHANGE_CAP = 512;
+
+/** One more watch frame for `path`, in a map bounded to `FOLDER_CHANGE_CAP`
+ * and ordered by recency, so a path that keeps changing is evicted last. */
+function countChange(changes: Record<string, number>, path: string): Record<string, number> {
+  const next = { ...changes };
+  delete next[path];
+  next[path] = (changes[path] ?? 0) + 1;
+  const paths = Object.keys(next);
+  const overflow = paths.length - FOLDER_CHANGE_CAP;
+  for (const stale of overflow > 0 ? paths.slice(0, overflow) : []) delete next[stale];
+  return next;
+}
 
 function withListing(
   listings: Record<string, DirectoryList>,
@@ -457,6 +472,7 @@ export const useShellStore = create<Store>((set, get) => ({
   recoveryDrafts: [],
   setRecoveryDrafts: (recoveryDrafts) => set({ recoveryDrafts }),
   folderChanges: {},
+  fileChanges: {},
   diagnostics: [],
   diagnosticsDropped: 0,
   viewGeneration: 0,
@@ -677,6 +693,18 @@ export const useShellStore = create<Store>((set, get) => ({
       });
       return [];
     }
+    if (frame.type === "file_changed") {
+      // A file a View shows changed on disk; every View showing it reads it
+      // again (`useFileBytes`, `DocumentKeeper`). The watch stamps the files
+      // of the Workspace in front on its own device, so a frame for another
+      // device is not for them.
+      const path = payload.path;
+      const shownDevice = get().rest?.workspace_view?.device_id ?? frontDeviceId(get().rest);
+      if (path && (payload.device_id || localDeviceId(get().rest)) === shownDevice) {
+        set({ fileChanges: countChange(get().fileChanges, path) });
+      }
+      return [];
+    }
     if (frame.type === "directory_changed") {
       // A watched folder moved; its cached listing turns stale, so its rows
       // stay drawn until the re-read lands instead of vanishing for the round
@@ -688,15 +716,7 @@ export const useShellStore = create<Store>((set, get) => ({
       const shownDevice = frontDeviceId(get().rest);
       if (path && (payload.device_id || localDeviceId(get().rest)) === shownDevice) {
         get().refreshListings([path]);
-        // A bounded map ordered by recency: the count is re-inserted so a
-        // folder that keeps changing is the last one evicted.
-        const next = { ...get().folderChanges };
-        delete next[path];
-        next[path] = (get().folderChanges[path] ?? 0) + 1;
-        const paths = Object.keys(next);
-        const overflow = paths.length - FOLDER_CHANGE_CAP;
-        for (const stale of overflow > 0 ? paths.slice(0, overflow) : []) delete next[stale];
-        set({ folderChanges: next });
+        set({ folderChanges: countChange(get().folderChanges, path) });
       }
       return [];
     }

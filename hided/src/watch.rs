@@ -1,5 +1,5 @@
 //! The watch behind the Explorer's live refresh (PRD B2, D-04, D-08, S5.5 B5,
-//! B43, core-host-node D-21).
+//! B43, core-host-node D-21), and behind the shown files' (`file_changed`).
 //!
 //! An Explorer's folders are its node's: the checkout root and the folders
 //! the core reports as expanded, most recently expanded last. The node that
@@ -10,11 +10,15 @@
 //! client re-read that one folder; a folder past the cap is not watched, and
 //! the client draws the refresh badge on its row instead.
 //!
-//! There are two watchers, both addressed by node id: this machine's
-//! Explorer, and the selected device's while its Explorer shows on a ready
-//! helper. The core's own node answers in this process, so its folders are
-//! polled often and a burst is coalesced; another node's answer crosses a
-//! link, so it is polled less often and announced at once.
+//! There are three watchers, all addressed by node id: this machine's
+//! Explorer, the selected device's while its Explorer shows on a ready
+//! helper, and the files the View areas of the Workspace in front show, on
+//! whichever node holds that Workspace. The core's own node answers in this
+//! process, so its paths are polled often and a burst is coalesced; another
+//! node's answer crosses a link, so it is polled less often and announced at
+//! once. A shown file whose stamp moved is announced as a `file_changed`
+//! frame naming the node, which makes the client read that file again; a
+//! file shown for the first time is not, since its View has just read it.
 //!
 //! The resource is bounded on purpose (engineering 14 and 15): at most
 //! `WATCH_CAP` folders are stamped per poll, one request per poll carries
@@ -46,6 +50,11 @@ use crate::core::CoreHandle;
 /// Folders watched at once, the checkout root included. The web's listing
 /// cache uses the same number (`web/src/watch.ts`).
 pub const WATCH_CAP: usize = 64;
+
+/// Shown files watched at once: the first ones in the order the View areas
+/// lie. Within `hide_host::list::MAX_STAMPED_FOLDERS`, so a device's helper
+/// of an earlier build stamps them in one request as it stamps folders.
+pub const FILE_WATCH_CAP: usize = 32;
 
 /// One folder's changes within this window collapse into a single frame, so a
 /// burst (a git checkout, an editor's atomic save) is one client re-read.
@@ -159,23 +168,74 @@ pub fn device_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Op
     Some(Target::of(device, checkout.path.clone(), expanded))
 }
 
+/// The files the View areas of the Workspace in front show, on the node that
+/// holds that Workspace, as a target to stamp: at most `FILE_WATCH_CAP`,
+/// each under the Workspace's checkout root. A device's is asked only while
+/// its helper is ready, so the watch never starts a helper connection; this
+/// machine's comes unpinned, for the caller to pin by the root's verified
+/// identity and keep to the paths its boundary admits.
+pub fn files_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Option<Target> {
+    let view = rest.workspace_view.as_ref()?;
+    let files = shown_files(&view.path, &view.file_paths());
+    if files.is_empty() {
+        return None;
+    }
+    if view.device_id != node
+        && rest
+            .navigator
+            .devices
+            .iter()
+            .find(|row| row.id == view.device_id)?
+            .host
+            .state
+            != "ready"
+    {
+        return None;
+    }
+    Some(Target {
+        node: view.device_id.clone(),
+        root: view.path.clone(),
+        folders: files,
+        pinned: None,
+    })
+}
+
+/// The shown files to stamp: the first `FILE_WATCH_CAP` under `root`, in the
+/// order given; a file past them shows what it read when it opened.
+fn shown_files(root: &str, paths: &[&str]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| relative(root, path).is_some_and(|relative| !relative.is_empty()))
+        .take(FILE_WATCH_CAP)
+        .map(|path| (*path).to_owned())
+        .collect()
+}
+
 /// The daemon's watch service: this machine's Explorer, the selected
-/// device's, and the broadcast every client subscribes to.
+/// device's, the shown files, and the broadcast every client subscribes to.
 pub struct WatchService {
     frames: broadcast::Sender<String>,
     local: Watcher,
     device: Watcher,
+    files: Watcher,
 }
 
 impl WatchService {
     pub fn new(core: Arc<CoreHandle>) -> Self {
         let (frames, _) = broadcast::channel(64);
-        let local = Watcher::spawn("local", Arc::clone(&core), frames.clone());
-        let device = Watcher::spawn("device", core, frames.clone());
+        let local = Watcher::spawn(Watched::Folders, "local", Arc::clone(&core), frames.clone());
+        let device = Watcher::spawn(
+            Watched::Folders,
+            "device",
+            Arc::clone(&core),
+            frames.clone(),
+        );
+        let files = Watcher::spawn(Watched::Files, "files", core, frames.clone());
         Self {
             frames,
             local,
             device,
+            files,
         }
     }
 
@@ -190,17 +250,32 @@ impl WatchService {
         self.device.set(target);
     }
 
-    /// Whether a renderer draws the Explorer. With none, neither watcher
-    /// stamps anything; the targets the snapshot asked for are kept, so the
-    /// first renderer back is stamped for again at once.
+    /// Announces the shown files to stamp, or none.
+    pub fn reconcile_files(&self, target: Option<Target>) {
+        self.files.set(target);
+    }
+
+    /// Whether a renderer draws the Explorer and the Views. With none, no
+    /// watcher stamps anything; the targets the snapshot asked for are kept,
+    /// so the first renderer back is stamped for again at once.
     pub fn set_drawn(&self, drawn: bool) {
         self.local.set_drawn(drawn);
         self.device.set_drawn(drawn);
+        self.files.set_drawn(drawn);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.frames.subscribe()
     }
+}
+
+/// What a watcher's paths are: folders the Explorer lists, or files the
+/// Views show. It names the frame a change is announced by, and whether a
+/// path watched for the first time counts as changed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Watched {
+    Folders,
+    Files,
 }
 
 struct Watcher {
@@ -215,10 +290,16 @@ struct Watcher {
 }
 
 impl Watcher {
-    fn spawn(kind: &'static str, core: Arc<CoreHandle>, frames: broadcast::Sender<String>) -> Self {
+    fn spawn(
+        watched: Watched,
+        kind: &'static str,
+        core: Arc<CoreHandle>,
+        frames: broadcast::Sender<String>,
+    ) -> Self {
         let target = Arc::new(Mutex::new(None));
         let changed = Arc::new(Notify::new());
         tokio::spawn(run(
+            watched,
             kind,
             core,
             frames,
@@ -280,8 +361,8 @@ struct Answer {
 }
 
 /// What one watcher remembers between polls.
-#[derive(Default)]
 struct Watching {
+    watched: Watched,
     /// The node and root the stamps belong to, and the root's identity when
     /// it was first opened for them.
     pinned: Option<((String, String), RootIdentity)>,
@@ -294,6 +375,16 @@ struct Watching {
 }
 
 impl Watching {
+    fn new(watched: Watched) -> Self {
+        Self {
+            watched,
+            pinned: None,
+            replaced: false,
+            stamps: Stamps::new(),
+            moving: HashMap::new(),
+        }
+    }
+
     /// The root identity to stamp `target` by: the one it carries, else the
     /// one pinned for its node and root.
     fn pin_for(&self, target: &Target) -> Option<RootIdentity> {
@@ -305,11 +396,12 @@ impl Watching {
         })
     }
 
-    /// Takes one stamping of `target` and answers the folders to announce. A
-    /// folder whose stamp moved is announced once it has held still for
+    /// Takes one stamping of `target` and answers the paths to announce. A
+    /// path whose stamp moved is announced once it has held still for
     /// `coalesce`, at once when that is zero; a folder watched for the first
     /// time in the same checkout counts as moved, because the page listed it
-    /// when it was expanded, which may be before its first stamp. A new
+    /// when it was expanded, which may be before its first stamp, while a
+    /// file does not, because its View read it on opening. A new
     /// checkout starts over and announces nothing; the same checkout stamped
     /// by another root identity is a replaced root opened again, so every
     /// folder is announced for the page to re-read.
@@ -337,7 +429,7 @@ impl Watching {
                 return announced;
             }
         }
-        let moved = changed_folders(&self.stamps, &now);
+        let moved = changed_folders(&self.stamps, &now, self.watched == Watched::Folders);
         self.stamps = now;
         self.moving.retain(|path, _| self.stamps.contains_key(path));
         let mut announced = Vec::new();
@@ -360,12 +452,15 @@ impl Watching {
     }
 }
 
-/// The folders whose stamp differs from the one recorded before, and a folder
-/// watched for the first time.
-fn changed_folders(before: &Stamps, now: &Stamps) -> Vec<String> {
+/// The paths whose stamp differs from the one recorded before, and, when
+/// `new` holds, a path watched for the first time.
+fn changed_folders(before: &Stamps, now: &Stamps, new: bool) -> Vec<String> {
     let mut changed: Vec<String> = now
         .iter()
-        .filter(|(path, stamp)| before.get(*path).is_none_or(|previous| previous != *stamp))
+        .filter(|(path, stamp)| match before.get(*path) {
+            Some(previous) => previous != *stamp,
+            None => new,
+        })
         .map(|(path, _)| path.clone())
         .collect();
     changed.sort();
@@ -379,9 +474,12 @@ fn relative(root: &str, folder: &str) -> Option<String> {
         .map(hide_platform::path::RelPath::into_string)
 }
 
-fn frame(node: &str, path: &str) -> String {
+fn frame(watched: Watched, node: &str, path: &str) -> String {
     serde_json::json!({
-        "type": "directory_changed",
+        "type": match watched {
+            Watched::Folders => "directory_changed",
+            Watched::Files => "file_changed",
+        },
         "payload": {"path": path, "device_id": node},
     })
     .to_string()
@@ -431,13 +529,14 @@ fn stamp_on(
 }
 
 async fn run(
+    watched: Watched,
     kind: &'static str,
     core: Arc<CoreHandle>,
     frames: broadcast::Sender<String>,
     target: Arc<Mutex<Option<Target>>>,
     target_changed: Arc<Notify>,
 ) {
-    let mut watching = Watching::default();
+    let mut watching = Watching::new(watched);
     let mut poll = IN_PROCESS_POLL;
     let mut failing: Option<String> = None;
     // The last node asked and its link, kept while it answers so a poll does
@@ -449,7 +548,7 @@ async fn run(
             _ = target_changed.notified() => {}
         }
         let Some(current) = target.lock().expect("watch target").clone() else {
-            watching = Watching::default();
+            watching = Watching::new(watched);
             failing = None;
             linked = None;
             continue;
@@ -542,7 +641,7 @@ async fn run(
             .zip(answer.stamps)
             .collect();
         for path in watching.observe(&current, answer.identity, now, Instant::now(), coalesce) {
-            let _ = frames.send(frame(&current.node, &path));
+            let _ = frames.send(frame(watched, &current.node, &path));
         }
     }
 }
@@ -769,12 +868,99 @@ pub(crate) mod tests {
             ("/r/new".to_owned(), Some("1:9:9".to_owned())),
         ]);
         assert_eq!(
-            changed_folders(&before, &now),
+            changed_folders(&before, &now, true),
             vec!["/r/new".to_owned(), "/r/src".to_owned()]
+        );
+        assert_eq!(
+            changed_folders(&before, &now, false),
+            vec!["/r/src".to_owned()],
+            "a path watched for the first time is not a change of its own"
         );
         assert_eq!(relative("/r", "/r"), Some(String::new()));
         assert_eq!(relative("/r", "/r/src/deep"), Some("src/deep".to_owned()));
         assert_eq!(relative("/r", "/rx/src"), None);
+    }
+
+    /// The shown files' watch keeps to the checkout and to its cap, the
+    /// first files in the order the areas lie.
+    #[test]
+    fn the_shown_files_are_the_first_ones_under_the_checkout_up_to_the_cap() {
+        let paths: Vec<String> = (0..FILE_WATCH_CAP + 8)
+            .map(|index| format!("/r/doc{index}.md"))
+            .collect();
+        let mut shown: Vec<&str> = vec!["/r", "/rx/sibling.md", "/elsewhere/a.md"];
+        shown.extend(paths.iter().map(String::as_str));
+        let files = shown_files("/r", &shown);
+        assert_eq!(files.len(), FILE_WATCH_CAP);
+        assert_eq!(files.first().map(String::as_str), Some("/r/doc0.md"));
+        assert_eq!(
+            files.last(),
+            Some(&format!("/r/doc{}.md", FILE_WATCH_CAP - 1))
+        );
+    }
+
+    /// A file a View starts showing is not announced, since the View has
+    /// just read it; a write to a shown file is, as a `file_changed` frame,
+    /// once it holds still.
+    #[test]
+    fn a_shown_file_is_announced_when_written_not_when_first_shown() {
+        let identity = RootIdentity {
+            device: 1,
+            inode: 2,
+        };
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let one = Target {
+            node: "local".to_owned(),
+            root: "/r".to_owned(),
+            folders: vec!["/r/plan.md".to_owned()],
+            pinned: None,
+        };
+        let two = Target {
+            folders: vec!["/r/plan.md".to_owned(), "/r/shot.png".to_owned()],
+            ..one.clone()
+        };
+        let mut watching = Watching::new(Watched::Files);
+        assert!(
+            watching
+                .observe(
+                    &one,
+                    identity,
+                    stamps(&[("/r/plan.md", "a")]),
+                    at(0),
+                    COALESCE
+                )
+                .is_empty()
+        );
+        let shown = stamps(&[("/r/plan.md", "a"), ("/r/shot.png", "x")]);
+        assert!(
+            watching
+                .observe(&two, identity, shown.clone(), at(200), COALESCE)
+                .is_empty(),
+            "a newly shown file is not announced"
+        );
+        assert!(
+            watching
+                .observe(&two, identity, shown, at(400), COALESCE)
+                .is_empty()
+        );
+        let written = stamps(&[("/r/plan.md", "b"), ("/r/shot.png", "x")]);
+        assert!(
+            watching
+                .observe(&two, identity, written.clone(), at(600), COALESCE)
+                .is_empty(),
+            "a file still being written is not announced"
+        );
+        assert_eq!(
+            watching.observe(&two, identity, written, at(800), COALESCE),
+            vec!["/r/plan.md".to_owned()]
+        );
+        let frame: serde_json::Value =
+            serde_json::from_str(&frame(Watched::Files, "local", "/r/plan.md")).unwrap();
+        assert_eq!(
+            frame,
+            serde_json::json!({"type": "file_changed", "payload": {"path": "/r/plan.md", "device_id": "local"}})
+        );
     }
 
     fn stamps(values: &[(&str, &str)]) -> Stamps {
@@ -795,7 +981,7 @@ pub(crate) mod tests {
         };
         let start = Instant::now();
         let at = |ms: u64| start + Duration::from_millis(ms);
-        let mut watching = Watching::default();
+        let mut watching = Watching::new(Watched::Folders);
         assert!(
             watching
                 .observe(&target, identity, stamps(&[("/r", "a")]), at(0), COALESCE)
@@ -823,7 +1009,7 @@ pub(crate) mod tests {
                 .is_empty()
         );
 
-        let mut linked = Watching::default();
+        let mut linked = Watching::new(Watched::Folders);
         linked.observe(
             &target,
             identity,
@@ -896,7 +1082,7 @@ pub(crate) mod tests {
         let identity = boundary.root_identity(&root_path).unwrap();
         let target = Target::of("local", root_path.clone(), &[]).pinned_by(identity);
 
-        let pinned = Watching::default().pin_for(&target);
+        let pinned = Watching::new(Watched::Folders).pin_for(&target);
         assert_eq!(pinned, Some(identity), "the watcher opens nothing itself");
         let (stamped_by, stamps) = stamp_on(&node, &root_path, pinned, &[String::new()]).unwrap();
         assert_eq!(
@@ -930,7 +1116,7 @@ pub(crate) mod tests {
         };
         let at = Instant::now();
         let both = stamps(&[("/r", "a"), ("/r/src", "b")]);
-        let mut watching = Watching::default();
+        let mut watching = Watching::new(Watched::Folders);
         assert!(
             watching
                 .observe(&target, first, both.clone(), at, Duration::ZERO)
@@ -977,7 +1163,7 @@ pub(crate) mod tests {
             let now: Stamps = target.folders.iter().cloned().zip(answer).collect();
             (identity, now)
         };
-        let mut watching = Watching::default();
+        let mut watching = Watching::new(Watched::Folders);
         let (identity, now) = read(None);
         let start = Instant::now();
         assert!(
