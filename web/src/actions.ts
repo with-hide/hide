@@ -1678,6 +1678,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     setProductAnalytics(enabled: boolean) {
       dispatch({ schema_version: 2, kind: "product_analytics_set", payload: { enabled } });
     },
+    setRailCounts(shown: boolean) {
+      dispatch({ schema_version: 2, kind: "rail_counts_set", payload: { shown } });
+    },
     setDesktopNotifications(enabled: boolean, doneEnabled?: boolean) {
       dispatch({ schema_version: 2, kind: "desktop_notifications_set", payload: doneEnabled === undefined ? { enabled } : { enabled, done_enabled: doneEnabled } });
     },

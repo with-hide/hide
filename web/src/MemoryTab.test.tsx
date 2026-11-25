@@ -123,7 +123,8 @@ describe("the Memory tab", () => {
         root.render(<TooltipProvider><ToolRail actions={actions} /></TooltipProvider>);
       });
       expect(container.querySelector('[data-lane-tool="documents"]')?.getAttribute("aria-pressed")).toBe(view === "documents" ? "true" : "false");
-      expect(container.querySelector('[data-lane-tool="documents"] [data-lane-badge]')?.textContent).toBe("2");
+      expect(container.querySelector('[data-lane-tool="documents"]')?.getAttribute("aria-description")).toBe("2 views open");
+      expect(container.querySelector('[data-lane-badge]')).toBeNull();
     }
   });
 

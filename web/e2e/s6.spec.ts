@@ -203,8 +203,8 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     await expect.poll(() => last.get("workspace_view")).toEqual({ open: false });
     await expect(documentsIcon).toHaveAttribute("aria-pressed", "false");
-    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
     await expect(documentsIcon).toHaveAttribute("aria-description", "2 views open");
+    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveCount(0);
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest("[data-pane-view]")?.getAttribute("data-pane-view") ?? null))
       .not.toBeNull();
@@ -214,7 +214,7 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect(workspace).toHaveAttribute("data-lane-shows", "none");
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);
-    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
+    await expect(documentsIcon).toHaveAttribute("aria-description", "2 views open");
 
     // An agent chosen from the sidebar changes no lane (B22, D-17).
     await page.locator(`[data-agent-open="${child}"]`).first().click();

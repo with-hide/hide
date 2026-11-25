@@ -159,7 +159,7 @@ test("an opened file stands beside the panes, each terminal resizing once as the
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(pane(page, lane.fixture.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
-    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
     await resizedOnce("the desk went away");
 
     // Escape on the rail closes it too (the press leaves the keyboard on the
@@ -176,7 +176,7 @@ test("an opened file stands beside the panes, each terminal resizing once as the
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(page.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-description", "1 view open");
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
@@ -266,7 +266,7 @@ test("the Explorer floats beside the standing desk without narrowing it, stays t
     await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
     await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "true");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
-    await expect(railTool(page, "documents").locator("[data-lane-badge]")).toHaveText("1");
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-description", "1 view open");
     expect(Math.abs((await documentArea(page).boundingBox())!.width - width)).toBeLessThanOrEqual(1);
     // The Explorer has nothing of its own to turn off: no toggle, no hint about a tree alone (B5).
     await expect(page.locator("[data-lane-tree-toggle], [data-lane-tree-footer]")).toHaveCount(0);
