@@ -1,5 +1,5 @@
 import { CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -58,7 +58,11 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
 }) {
   const { t } = useInterfaceTranslation();
   const conducts = usePaneMission(paneId);
-  const works = useShellStore((s) => (row && !conducts ? missionWorkedIn(s.rest, row, job?.agent_id ?? null) : null));
+  // The record is picked from the store and the pair made from it here: a selector making a new pair on each read
+  // would never settle.
+  const rest = useShellStore((s) => s.rest);
+  const agentId = job?.agent_id ?? null;
+  const works = useMemo(() => (row && !conducts ? missionWorkedIn(rest, row, agentId) : null), [rest, row, conducts, agentId]);
   const plan = useShellStore((s) => (sleeping ? null : planOfPane(s.rest, paneId)));
   const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
   const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null;
