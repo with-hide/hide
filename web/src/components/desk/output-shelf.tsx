@@ -7,6 +7,9 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { cn } from "../../lib/utils";
 import { PR_LOOK } from "../../prMark";
 import type { DeskOutputKind, PrState, SessionPull } from "../../snapshot";
+import { useImageFile } from "../../imageFile";
+import { localDeviceId } from "../../snapshot";
+import { useShellStore } from "../../store";
 import { PrMark } from "../pr-mark";
 import { Button } from "../ui/button";
 import { RowButton } from "../ui/row-button";
@@ -70,11 +73,30 @@ function unseen(item: ShelfItem): boolean {
   return item.kind !== "pr" && item.unseen;
 }
 
+/**
+ * An image's picture: the card's own thumbnail when the core sent one, else
+ * the file itself, read from the machine the session runs on as the session
+ * record's tiles read it; the image mark while there is none to draw.
+ */
+function Picture({ item, className }: { item: ShelfItem; className: string }) {
+  if (item.kind !== "image") return null;
+  if (item.thumb) return <img src={item.thumb} alt="" aria-hidden="true" draggable={false} className={className} />;
+  const { output } = item;
+  return output.path ? <FilePicture path={output.path} device={output.device_id} root={output.checkout} className={className} /> : <ImageIcon aria-hidden="true" className={ICON} />;
+}
+
+function FilePicture({ path, device, root, className }: { path: string; device: string | null; root: string | null; className: string }) {
+  const here = useShellStore((state) => localDeviceId(state.rest));
+  const url = useImageFile(path, device && root && device !== here ? { device, root } : null);
+  if (url === null || url === "failed") return <ImageIcon aria-hidden="true" className={ICON} />;
+  return <img src={url} alt="" aria-hidden="true" draggable={false} className={className} data-desk-shelf-picture="true" />;
+}
+
 /** A picture on a chip, or the image mark while none is drawn yet. */
 function Thumb({ item, className }: { item: ShelfItem; className?: string }) {
   return (
     <span className={cn("flex h-(--size-icon) w-(--size-control-sm) shrink-0 items-center justify-center overflow-hidden rounded-xs border border-border bg-muted", className)} aria-hidden="true">
-      {item.kind === "image" && item.thumb ? <img src={item.thumb} alt="" draggable={false} className="size-full object-cover object-top" /> : <ImageIcon className={ICON} />}
+      <Picture item={item} className="size-full object-cover object-top" />
     </span>
   );
 }
@@ -101,7 +123,7 @@ function ItemDetails({ item }: { item: ShelfItem }) {
   const { t } = useInterfaceTranslation();
   return (
     <span className="flex max-w-(--size-pr-popover) flex-col gap-xxs" data-desk-shelf-details={item.id}>
-      {item.kind === "image" && item.thumb ? <img src={item.thumb} alt="" className="w-full rounded-xs border border-border object-contain" /> : null}
+      {item.kind === "image" ? <Picture item={item} className="w-full rounded-xs border border-border object-contain" /> : null}
       <span className="break-all font-medium">{item.kind === "pr" && item.title ? `${item.label} ${item.title}` : item.label}</span>
       {item.kind === "pr" ? <span className={PR_LOOK[item.state].tone}>{t(PR_LOOK[item.state].word)}</span> : item.where ? <span className="break-all text-muted-foreground">{item.where}</span> : null}
     </span>
@@ -154,7 +176,7 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }:
                 <span className="min-w-0 truncate" data-desk-shelf-one={one.id}>{one.label}</span>
               </>;
             return (
-              <Hint key={group.kind} label={one.label} content={<ItemDetails item={one} />}>
+              <Hint key={group.kind} label={one.label} side="bottom" content={<ItemDetails item={one} />}>
                 <Button variant="outline" size="sm" className={cn(CHIP, "shrink", selected !== null && one.output?.id === selected && "ring-1 ring-ring")} aria-pressed={one.output ? selected === one.output.id : undefined} data-desk-shelf-group={group.kind} data-desk-shelf-unseen={group.unseen ? "true" : undefined} onClick={() => press(one)}>
                   {face}
                   {group.unseen ? <UnseenMark /> : null}
@@ -176,13 +198,13 @@ export function OutputShelf({ outputs, pulls, selected = null, onOpen, onPull }:
         })}
       </div>
       {shown ? (
-        <div className="max-h-(--size-overview-graph-root-height) min-w-0 overflow-y-auto px-md pb-sm" data-desk-shelf-list={shown.kind}>
+        <div className="max-h-(--size-desk-shelf-list) min-w-0 overflow-y-auto px-md pb-sm" data-desk-shelf-list={shown.kind}>
           {shown.kind === "image" ? (
             <ul className="grid min-w-0 grid-cols-2 gap-sm">
               {shown.items.map((item) => (
                 <li key={item.id} className="flex min-w-0 flex-col gap-xxs">
                   <RowButton className={cn("relative h-(--size-desk-shelf-thumb) overflow-hidden rounded-sm border border-border bg-muted p-0 hover:border-ring", item.output?.id === selected && "border-ring ring-1 ring-ring")} aria-label={unseen(item) ? `${item.label} · ${t("desk.outputs.unseen")}` : item.label} onClick={() => press(item)} data-desk-shelf-item={item.id}>
-                    {item.kind === "image" && item.thumb ? <img src={item.thumb} alt="" aria-hidden="true" draggable={false} className="size-full object-cover object-top" /> : <ImageIcon aria-hidden="true" className="m-auto size-(--size-icon) text-muted-foreground" />}
+                    <span className="flex size-full items-center justify-center"><Picture item={item} className="size-full object-cover object-top" /></span>
                     {unseen(item) ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
                   </RowButton>
                   <span className="min-w-0 truncate text-caption text-subtle-foreground" title={item.label}>{item.label}</span>
