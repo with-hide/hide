@@ -219,6 +219,14 @@ export const IRREVERSIBLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
   asks: [{ kind: "irreversible", value: "end_working_session" }], subject: "프로젝트 패널 결과 구현", refusal: null,
 };
 
+/** A card for a long line Hide cannot read, which folds to two lines and asks at every level. */
+export const LONG_UNREADABLE_CARD: Extract<DeskItem, { kind: "approval" }> = {
+  kind: "approval", id: 57, card: "command",
+  command: "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id,.name,.pane,.runtime,.connection,(.parent//\"-\"),(.project//\"-\")] | @tsv'; echo ---; hide mission list | head -40; python3 scripts/merge-order.py --branch desk/feedback",
+  folder: "~/.hide/state/desk/work", reason: null, state: "waiting",
+  asks: [{ kind: "irreversible", value: "unreadable" }], subject: null, refusal: null,
+};
+
 /** The lines of the card scene that change no state, and Desk's own approval card asked and answered. */
 export function cardSceneItems(): DeskItem[] {
   return [
@@ -237,7 +245,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "approval", id: 62, card: "edit", command: "edit web/src/PaneHeader.tsx", folder: "~/projects/herdr-ide", reason: "hover 조건을 고쳐야 해요", state: "allowed", asks: [{ kind: "row", value: "edit" }], subject: null, refusal: null },
     { kind: "approval", id: 63, card: "command", command: "rm -rf web/dist", folder: "~/projects/herdr-ide", reason: "빌드 결과를 지우고 새로 만들게요", state: "rejected", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
     { kind: "approval", id: 64, card: "command", command: "pnpm --dir web test", folder: "~/projects/herdr-ide", reason: "테스트를 돌려 볼게요", state: "closed", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
-    { ...IRREVERSIBLE_CARD, id: 91, state: "allowed_conversation" },
+    { kind: "approval", id: 91, card: "command", command: "pnpm --dir web test desk-chat", folder: "~/projects/herdr-ide", reason: null, state: "allowed_conversation", asks: [{ kind: "row", value: "shell" }], subject: null, refusal: null },
     { ...IRREVERSIBLE_CARD, id: 92, command: "hide agent archive agent-18301", state: "rejected", refusal: "대신 끝날 때까지 기다렸다가 보관해줘" },
     { kind: "user", id: 93, text: "대신 끝날 때까지 기다렸다가 보관해줘", at_ms: at(now, 2), mentions: [] },
     { kind: "model", id: 65, model: "sonnet", effort: "low" },
