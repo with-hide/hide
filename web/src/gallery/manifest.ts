@@ -25,7 +25,7 @@ export const GALLERY = {
   "Popover": ["Open"],
   "Tooltip": ["Open", "With Shortcut"],
   "Command": ["Default", "Filtered", "Empty"],
-  "Toast": ["Info", "Important", "With Action", "Long Korean"]
+  "Toast": ["Info", "Important", "With Action", "Skill Ask", "Long Korean"]
 } as const;
 
 export type Section = keyof typeof GALLERY;

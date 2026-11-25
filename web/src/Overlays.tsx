@@ -379,7 +379,8 @@ export function NoticeToasts({ actions }: { actions: Actions }) {
   const dismiss = useUiStore((s) => s.dismissNotice);
   return notices.map((notice) => {
     const dontSave = notice.dontSave;
-    const offers = notice.refreshable || dontSave;
+    const storeAsk = notice.storeAsk;
+    const offers = notice.refreshable || dontSave || storeAsk;
     return (
       <Toast
         key={notice.id}
@@ -393,6 +394,19 @@ export function NoticeToasts({ actions }: { actions: Actions }) {
             {notice.refreshable ? (
               <Button variant="text" size="inline" onClick={() => actions.refreshStatus()}>
                 {t("workspace.checkStatus")}
+              </Button>
+            ) : null}
+            {storeAsk ? (
+              <Button
+                variant="text"
+                size="inline"
+                data-notice-store-ask={storeAsk}
+                onClick={() => {
+                  dismiss(notice.id);
+                  actions.openStoreAsk(storeAsk);
+                }}
+              >
+                {t("agents.human.confirm")}
               </Button>
             ) : null}
             {dontSave ? (
