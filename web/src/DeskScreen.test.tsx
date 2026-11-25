@@ -269,6 +269,30 @@ describe("Desk's room", () => {
     expect(box().querySelectorAll("[data-desk-token]")).toHaveLength(1);
   });
 
+  it("opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
+    const remoteRest = {
+      navigator: {
+        focused_device_id: "local", focused_checkout_id: null, focused_workspace_id: null,
+        devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }, { id: "deepbox", label: "deepbox", kind: "remote", state: "connected" }],
+        workspaces: [{ id: "w-deep", label: "deep", device_id: "deepbox", agent_scope: emptyScope(), checkouts: [
+          { id: "c-deep", workspace_id: "w-deep", path: "/home/me/repo", label: "main", active_tab_id: "t1", strip: [], tabs: [{ id: "t1", panes: [{ id: "d:p1" }] }] },
+        ] }],
+      },
+    } as unknown as SnapshotRest;
+    const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
+      tail: { updates: [{ sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" } }, sessions: {} } };
+    await act(async () => {
+      useShellStore.setState({ rest: remoteRest, agents: [row], sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } });
+      useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
+    });
+    await press("[data-desk-output='/home/me/repo/new.md']");
+    const front = useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
+    expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
+  });
+
   it("opens the checkout a project chip names", async () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");
@@ -291,6 +315,20 @@ describe("Desk's room", () => {
       await show(desk([], "ready", true, [waiting(5, "끝나면 알려줘")]));
       expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
+    });
+
+    it("keeps the words in the box and sends nothing while eight messages already wait", async () => {
+      useUiStore.setState({ deskDraft: { text: "九番目", mentions: [] } });
+      const eight = Array.from({ length: 8 }, (_, index) => waiting(index + 1, `대기 ${index + 1}`));
+      await render(desk([], "ready", true, eight));
+      await writing();
+      await key("Enter");
+      expect(sent("desk_send")).toEqual([]);
+      expect(useUiStore.getState().deskDraft.text).toBe("九番目");
+      // One leaves the line, and the same press goes.
+      await show(desk([], "ready", true, eight.slice(1)));
+      await key("Enter");
+      expect(sent("desk_send")).toEqual([{ text: "九番目", mentions: [] }]);
     });
 
     it("is taken out with its ✕, which sends the core's one event", async () => {
