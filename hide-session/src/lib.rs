@@ -1965,7 +1965,8 @@ pub const INJECTED_PREFIXES: &[&str] = &[
 ];
 
 /// The tags a Project Memory delivery begins with: a prompt's cards follow
-/// Hide's instruction for reporting a stale one, the index stands alone.
+/// Hide's instruction for reporting a stale one, the index stands alone, and
+/// the open questions a prompt gives are a block of their own beside them.
 const MEMORY_TAGS: &[&str] = &[
     "<hide-memory-context",
     "<hide-memory-instruction",

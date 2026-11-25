@@ -487,7 +487,10 @@ impl Thread {
     }
 }
 
-/// The line an interrupted turn is drawn as, in every agent's thread.
+/// The line an interrupted turn is drawn as, in every agent's thread. It
+/// replaces the text of every message read as an interruption on purpose,
+/// Claude Code's variants (`[Request interrupted by user for tool use]`)
+/// included: the thread says that the turn stopped, not why.
 const INTERRUPTED: &str = "[Request interrupted by user]";
 
 /// What the text itself says the message is, unless metadata already said.
