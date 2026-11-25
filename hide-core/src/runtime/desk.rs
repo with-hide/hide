@@ -36,7 +36,7 @@ use crate::model::{
     DeskItem, DeskLiveSnapshot, DeskLocation, DeskMention, DeskNotice, DeskQueuedMessage,
     DeskReplyState, DeskSnapshot,
 };
-use hide_desk::permission::{self, Ask, Irreversible};
+use hide_desk::permission::{self, Ask, Irreversible, Row};
 use hide_desk::session::{Choice, Choices, OpenError};
 use worker::{Order, Report, TurnEnd, TurnOutcome};
 
@@ -60,9 +60,9 @@ pub(super) struct Desk {
     turn: Option<Turn>,
     next_tag: u64,
     approvals: Vec<Approval>,
-    /// What the operator allowed with `이 대화에서 계속 허용`, until the
-    /// Desk process ends (D-83).
-    allowed: BTreeSet<Ask>,
+    /// The rows the operator allowed with `이 대화에서 계속 허용`, until the
+    /// Desk process ends (D-83); what cannot be undone is never kept.
+    allowed: BTreeSet<Row>,
     /// Working sessions the operator allowed Desk to archive with
     /// `한 번 허용`, by registration id, until the turn ends.
     archive_grants: Vec<String>,
@@ -740,7 +740,12 @@ impl Runtime {
                 (Some(approval.allow.clone()), DeskApprovalState::Allowed)
             }
             ApprovalAnswer::Conversation => {
-                self.desk.allowed.extend(approval.asks.iter().copied());
+                self.desk
+                    .allowed
+                    .extend(approval.asks.iter().filter_map(|ask| match ask {
+                        Ask::Row(row) => Some(*row),
+                        Ask::Irreversible(_) => None,
+                    }));
                 (
                     Some(approval.allow.clone()),
                     DeskApprovalState::AllowedConversation,
@@ -755,19 +760,18 @@ impl Runtime {
         self.set_approval(payload.id, state, text.clone());
         if payload.answer == ApprovalAnswer::Conversation {
             // A card the agent asked alongside, now allowed in full, runs.
-            let covered: Vec<usize> = self
-                .desk
-                .approvals
-                .iter()
-                .enumerate()
-                .filter(|(_, waiting)| {
-                    waiting
-                        .asks
-                        .iter()
-                        .all(|ask| self.desk.allowed.contains(ask))
-                })
-                .map(|(index, _)| index)
-                .collect();
+            let covered: Vec<usize> =
+                self.desk
+                    .approvals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, waiting)| {
+                        waiting.asks.iter().all(
+                            |ask| matches!(ask, Ask::Row(row) if self.desk.allowed.contains(row)),
+                        )
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
             for index in covered.into_iter().rev() {
                 let waiting = self.desk.approvals.remove(index);
                 self.order(Order::Answer {

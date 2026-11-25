@@ -265,13 +265,14 @@ pub struct Decision {
     pub overwritten: Option<String>,
 }
 
-/// Answers a reading from the table, the asks the operator allowed for the
-/// rest of the conversation, and the core's facts.
+/// Answers a reading from the table, the rows the operator allowed for the
+/// rest of the conversation, and the core's facts. What cannot be undone is
+/// never allowed beyond one call, so only a row can be in `allowed`.
 pub fn decide(
     reading: &Reading,
     table: &Table,
     facts: &dyn Facts,
-    allowed: &BTreeSet<Ask>,
+    allowed: &BTreeSet<Row>,
 ) -> Decision {
     let sessions: Vec<String> = reading
         .ends
@@ -311,10 +312,9 @@ pub fn decide(
         })
         .map(Ask::Irreversible)
         .collect();
-    if table.answer(reading.row) == Answer::Ask {
+    if table.answer(reading.row) == Answer::Ask && !allowed.contains(&reading.row) {
         asks.push(Ask::Row(reading.row));
     }
-    asks.retain(|ask| !allowed.contains(ask));
     Decision {
         asks,
         sessions,
@@ -1170,12 +1170,18 @@ const ASSIGNING: &[&str] = &[
     "readarray",
     "getopts",
     "printf",
+    "let",
 ];
 
 fn read_line(text: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: &mut Line) {
     if depth > MAX_DEPTH {
         line.unreadable();
         return;
+    }
+    if cfg!(windows) && text.contains('\\') {
+        // On Windows the line may be PowerShell's, where `\` separates a
+        // path's names; read as POSIX it would name another path.
+        line.unreadable();
     }
     let parsed = hide_shell::shell_line(text, hide_shell::Syntax::Posix);
     if parsed.commands.is_empty() && parsed.substitutions.is_empty() {
@@ -1336,6 +1342,46 @@ fn read_command(
     }
 }
 
+/// The variables a command of [`ASSIGNING`] sets: `printf` only the one
+/// after `-v`, the others every word that names one. A name made to stand
+/// for another variable (`declare -n`, `typeset -n`, `local -n`) may stand
+/// for any of them, so Hide cannot read what it sets.
+fn assigns(
+    program: &str,
+    args: &[String],
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    if program == "printf" {
+        let mut words = args.iter();
+        while let Some(word) = words.next() {
+            match word.strip_prefix("-v") {
+                Some("") => {
+                    if let Some(target) = words.next() {
+                        assign(target, folders, place, depth, line);
+                    }
+                }
+                Some(target) => assign(target, folders, place, depth, line),
+                None => {}
+            }
+        }
+        return;
+    }
+    if matches!(program, "declare" | "typeset" | "local")
+        && args
+            .iter()
+            .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('n'))
+    {
+        line.environment = true;
+        return;
+    }
+    for word in args {
+        assign(word, folders, place, depth, line);
+    }
+}
+
 /// What setting a variable can change of what a line runs. Any other
 /// variable is a value the command it runs reads, so the line is judged by
 /// that command (`F=/tmp/x; cat "$F"`, `NO_COLOR=1 rg x`).
@@ -1351,29 +1397,87 @@ enum Sets {
     Choice,
 }
 
-/// Variables that choose which program a name runs or where a path leads
-/// (`PATH`, zsh's `path`, `PATHEXT`, `CDPATH`, `HOME`, `PWD`, `OLDPWD`),
-/// how the shell reads a line or what it runs first (`IFS`, `ENV`,
-/// `BASH_ENV`, `ZDOTDIR`, `SHELLOPTS`, `BASHOPTS`, `PS4`,
-/// `PROMPT_COMMAND`), what runs a command line for a program (`SHELL`,
-/// `LESSOPEN`, `LESSCLOSE`) or the configuration it reads, which may name
-/// one (`XDG_CONFIG_HOME`, `RIPGREP_CONFIG_PATH`). Compared without case,
-/// as Windows reads the environment's names.
+/// Variables that choose which code runs: the class is "a variable the
+/// shell, the loader or a program reads to find or run code, or to find the
+/// file a relative path names", taken from bash(1)'s Shell Variables and
+/// zsh's parameters (zshparam(1) and the zsh/parameter module of
+/// zshmodules(1)); a variable either shell reads only as a value (`LANG`,
+/// `LC_ALL`, `COLUMNS`, `TMPDIR`, `REPLY`) chooses no code and is left out.
+/// Compared without case, as Windows reads the environment's names.
 const CHOOSING: &[&str] = &[
+    // Where a name or a relative path is found.
     "PATH",
     "PATHEXT",
+    "EXECIGNORE",
     "CDPATH",
     "HOME",
     "PWD",
     "OLDPWD",
-    "IFS",
+    // bash's own tables of what a name runs, and its loadable builtins.
+    "BASH_CMDS",
+    "BASH_ALIASES",
+    "BASH_LOADABLES_PATH",
+    // zsh's tables of what a name runs (zsh/parameter), its function and
+    // module folders, its named folders (`~name`) and its options.
+    "COMMANDS",
+    "FUNCTIONS",
+    "FUNCTIONS_SOURCE",
+    "DIS_FUNCTIONS",
+    "ALIASES",
+    "GALIASES",
+    "SALIASES",
+    "DIS_ALIASES",
+    "DIS_GALIASES",
+    "DIS_SALIASES",
+    "BUILTINS",
+    "DIS_BUILTINS",
+    "RESWORDS",
+    "DIS_RESWORDS",
+    "FPATH",
+    "MODULE_PATH",
+    "NAMEDDIRS",
+    "OPTIONS",
+    // What a shell runs on its own: its startup files, the command for a
+    // line of redirections alone, the functions it calls on events, and the
+    // prompts and trace line it expands.
     "ENV",
     "BASH_ENV",
     "ZDOTDIR",
+    "NULLCMD",
+    "READNULLCMD",
+    "PRECMD_FUNCTIONS",
+    "PREEXEC_FUNCTIONS",
+    "CHPWD_FUNCTIONS",
+    "PERIODIC_FUNCTIONS",
+    "ZSHADDHISTORY_FUNCTIONS",
+    "ZSHEXIT_FUNCTIONS",
+    "PROMPT_COMMAND",
+    "PS0",
+    "PS1",
+    "PS2",
+    "PS3",
+    "PS4",
+    "PROMPT",
+    "PROMPT2",
+    "PROMPT3",
+    "PROMPT4",
+    "RPS1",
+    "RPS2",
+    "RPROMPT",
+    "RPROMPT2",
+    // How the shell reads the rest of the line, and the files it writes on
+    // its own (its trace, history and here-document files).
+    "IFS",
     "SHELLOPTS",
     "BASHOPTS",
-    "PS4",
-    "PROMPT_COMMAND",
+    "POSIXLY_CORRECT",
+    "BASH_COMPAT",
+    "BASH_XTRACEFD",
+    "HISTFILE",
+    "INPUTRC",
+    "TMPPREFIX",
+    // What runs a command line for a program, or the configuration it
+    // reads, which may name one.
     "SHELL",
     "LESSOPEN",
     "LESSCLOSE",
@@ -1431,6 +1535,12 @@ fn assign(word: &str, folders: &Folders, place: &Place<'_>, depth: usize, line: 
             c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
         });
     if !is_name {
+        return;
+    }
+    // An element of an array or a table: bash's and zsh's tables of what a
+    // name runs are set this way, and no ordinary line needs it.
+    if target[name.len()..].starts_with('[') {
+        line.environment = true;
         return;
     }
     match sets(name) {
@@ -1520,9 +1630,7 @@ fn run_program(
         return Move::Stay;
     }
     if ASSIGNING.contains(&name) {
-        for word in args {
-            assign(word, folders, place, depth, line);
-        }
+        assigns(name, args, folders, place, depth, line);
     }
     match name {
         // It runs in this shell, so where it leaves the shell is not

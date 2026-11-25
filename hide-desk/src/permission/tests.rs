@@ -45,7 +45,7 @@ fn reading(line: &str) -> Reading {
     classify(&command(line), &place())
 }
 
-fn asks_with(line: &str, table: &Table, facts: &Known, allowed: &BTreeSet<Ask>) -> Vec<Ask> {
+fn asks_with(line: &str, table: &Table, facts: &Known, allowed: &BTreeSet<Row>) -> Vec<Ask> {
     decide(&reading(line), table, facts, allowed).asks
 }
 
@@ -333,9 +333,9 @@ fn a_program_hide_cannot_read_always_asks() {
 }
 
 #[test]
-fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() {
+fn what_the_operator_allowed_in_this_conversation_stops_asking_that_row_only() {
     let mut allowed = BTreeSet::new();
-    allowed.insert(Ask::Row(Row::Shell));
+    allowed.insert(Row::Shell);
     assert_eq!(
         asks_with("touch notes.md", &ALL_ASK, &NONE_WORKING, &allowed),
         []
@@ -349,10 +349,11 @@ fn what_the_operator_allowed_in_this_conversation_stops_asking_that_kind_only() 
         asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed),
         [Ask::Irreversible(Irreversible::ForcePush)]
     );
-    allowed.insert(Ask::Irreversible(Irreversible::ForcePush));
+    // Every row allowed still asks what cannot be undone.
+    allowed.extend([Row::Hide, Row::Read, Row::Edit]);
     assert_eq!(
         asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed),
-        []
+        [Ask::Irreversible(Irreversible::ForcePush)]
     );
     assert_eq!(
         asks_with("rm -rf /tmp/x", &Table::default(), &NONE_WORKING, &allowed),
@@ -602,10 +603,16 @@ fn what_a_heredoc_body_substitutes_is_read_unless_its_end_word_is_quoted() {
     for line in [
         "cat <<'EOF'\n$(rm -f /fixture/outside/victim)\nEOF",
         "cat <<\"EOF\"\n`rm -f /fixture/outside/victim`\nEOF",
+    ] {
+        assert_eq!(asks(line), [], "{line}");
+    }
+    // On Windows a backslash makes any line one Hide cannot read.
+    let escaped: &[Ask] = if cfg!(windows) { &[UNREADABLE] } else { &[] };
+    for line in [
         "cat <<\\EOF\n$(rm -f /fixture/outside/victim)\nEOF",
         "cat <<EOF\nonly \\$(text) here\nEOF",
     ] {
-        assert_eq!(asks(line), [], "{line}");
+        assert_eq!(asks(line), escaped, "{line}");
     }
 }
 
@@ -656,6 +663,14 @@ fn a_line_that_sets_a_variable_is_judged_by_the_command_it_runs() {
         ("ID=agent-1; hide agent read \"$ID\" --lines 20", Row::Hide),
         ("export FOO=1; cat README.md", Row::Shell),
         ("DIR=/r/herdr-ide; mkdir -p \"$DIR/notes\"", Row::Shell),
+        // Variables both shells read only as values.
+        ("LANG=C sort notes.md", Row::Read),
+        ("LC_ALL=C grep -c x notes.md", Row::Read),
+        ("COLUMNS=200 ls -l", Row::Read),
+        // `printf` sets only the variable after `-v`; brackets in what it
+        // prints are words, not a table's element.
+        ("printf '%s' 'items[0]'", Row::Read),
+        ("printf -v OUT '%s' x; echo \"$OUT\"", Row::Read),
     ] {
         assert_eq!(reading(line).row, row, "{line}");
         assert_eq!(asks(line), [], "{line}");
@@ -683,6 +698,27 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
         "RIPGREP_CONFIG_PATH=/fixture/rg.conf rg desk",
         // The Hide a `hide` command reaches is not the one the core knows.
         "HIDE_STATE_DIR=/fixture/state hide agent list",
+        // The shell's own tables of what a name runs, set through a
+        // variable: bash(1) Shell Variables `BASH_CMDS`, `BASH_ALIASES`, and
+        // the zsh/parameter module's `commands`, `functions`, `aliases`.
+        "printf -v 'BASH_CMDS[cat]' /bin/rm; cat /fixture/outside/victim",
+        "read -r 'BASH_CMDS[cat]' <<< /bin/rm; cat x",
+        "printf -v 'BASH_ALIASES[cat]' 'rm -f'; cat x",
+        "BASH_CMDS=([cat]=/bin/rm); cat x",
+        "printf -v 'commands[cat]' /bin/rm; cat x",
+        "typeset 'functions[cat]=rm -f /fixture/outside/victim'; cat x",
+        "declare 'aliases[cat]=rm'; cat x",
+        "fpath=(/fixture/functions); cat x",
+        // What zsh runs on its own: for a line of redirections alone, and
+        // on a change of folder (zshparam(1), zshmisc(1)).
+        "NULLCMD=sh; <<<'rm -rf /fixture/outside/victim'",
+        "READNULLCMD=sh; < notes.md",
+        "chpwd_functions=(cleanup); cd notes",
+        // A name made to stand for another variable may stand for any.
+        "declare -n P=PATH; P=/fixture/bin; cat x",
+        "local -n table=BASH_CMDS; cat x",
+        // Arithmetic that sets one.
+        "let PATH=1; cat x",
         // A program another one runs, set to one Hide cannot read or to a
         // value it does not see.
         "EDITOR=vim git commit",
@@ -697,6 +733,15 @@ fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
         assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
         assert_eq!(reading(line).row, Row::Shell, "{line}");
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
+    // PowerShell's `rm -r C:\Users\me\x` read as POSIX would delete
+    // `C:Usersmex` below the folder it runs in.
+    let line = r"cd /r/herdr-ide; rm -r C:\Users\me\x";
+    assert!(asks(line).contains(&UNREADABLE), "{:?}", asks(line));
 }
 
 #[test]
