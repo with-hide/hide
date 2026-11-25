@@ -351,7 +351,7 @@ describe("Desk's room", () => {
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
     await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } }));
-    await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, answer: 0 })));
+    await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, closed: null, answer: 0 })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
     // Until the screen is read, the card says what the card knows, with 직접 쓰기 only.
     expect(document.body.querySelector("[data-desk-question]")?.textContent).toContain("Delete the old captures?");

@@ -36,11 +36,13 @@ export type DeskRoomWindow = {
   session: string | null;
   /** The tab panel, null while it is closed (B16, B21). */
   panel: DeskPanel | null;
+  /** The session the last close took away in this visit of the room, which ⌘E opens again; the web's memory alone, the core keeps no open session (B26, operator decision 2026-11-25). */
+  closed: string | null;
   /** Moves each time `답하기` or `직접 쓰기` asks for the session's input box, so it takes the keyboard once per press. */
   answer: number;
 };
 
-export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, panel: null, answer: 0 };
+export const DESK_ROOM_CLOSED: DeskRoomWindow = { session: null, panel: null, closed: null, answer: 0 };
 
 /** Where the tab panel stands: attached to the session panel's left edge, or at the window's right edge with no session open (D-23, D-24, B38, B39). */
 export type DeskPanelPlace = "beside_session" | "window_edge";
@@ -69,12 +71,12 @@ export function tabKey(tab: DeskTab): string {
 export function openSession(room: DeskRoomWindow, pane: string, options: { answer?: boolean } = {}): DeskRoomWindow {
   const answer = options.answer ? room.answer + 1 : room.answer;
   if (room.session === pane) return { ...room, answer };
-  return { session: pane, panel: null, answer };
+  return { ...room, session: pane, panel: null, answer };
 }
 
-/** The session panel's `✕` or Escape (B6): Desk widens again and the tab panel, which was that session's, goes with it. */
+/** The session panel's `✕`, Escape or ⌘E (B6): Desk widens again and the tab panel, which was that session's, goes with it; the session is kept for ⌘E to open again. */
 export function closeSession(room: DeskRoomWindow): DeskRoomWindow {
-  return { ...room, session: null, panel: null };
+  return { ...room, session: null, panel: null, closed: room.session ?? room.closed };
 }
 
 /**

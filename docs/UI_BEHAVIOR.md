@@ -1205,6 +1205,7 @@ Web owner: `web/src/DeskScreen.tsx`, `web/src/deskRoom.ts`, `web/src/components/
 While Settings › Labs › Desk is on, the sidebar's Desk row sits on its own line between the Overview row and the `미션` row, with the warning mark while a session Desk started asks the operator, and is drawn selected while Desk is in front; with the switch off there is no row.
 While Desk is in front, pressing an agent's row in the sidebar, in a project's tree or in the 태스크 tab, opens that session beside Desk instead of bringing its tab forward, and the row is drawn selected with a hint saying it is open beside Desk; ⌘-click (Ctrl-click on Windows and Linux) brings its tab forward as on any other screen.
 Every other way to an agent (an ⌥ number, a notification, another computer's show) brings its tab forward whatever screen is in front.
+⌘E (Ctrl+E off macOS by the app's rule) in Desk's room is what it is in a work tab, the session panel being Desk's right side: it closes the session open beside Desk, as its `✕` does and the tab panel with it, and pressed again opens the session just closed beside Desk, as a sidebar row's press does; with no session closed during this visit of the room it does nothing and only the log says so (`closed` in `web/src/deskRoom.ts`, the web's memory alone, since the core keeps no open session and the room still starts with the right side closed; operator decision 2026-11-25).
 What the room beside Desk holds and how it opens and closes is `docs/desk.md`'s.
 
 ## Hide AI: the Hide AI tool

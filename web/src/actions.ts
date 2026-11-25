@@ -785,8 +785,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the keyboard into their active area.
    */
   const toggleLane = () => {
-    // Desk's room has no lane: ⌘E means nothing there (PRD desk-2-ui D-13).
-    if (ui().screen?.kind === "desk") return diagnostic("toggle_lane: Desk's room has no lane");
+    // In Desk's room the right side is the session panel: ⌘E closes it and, pressed again, opens the session just
+    // closed (operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing).
+    if (ui().screen?.kind === "desk") {
+      const room = ui().deskRoom;
+      if (room.session) return ui().setDeskRoom(closeDeskSession);
+      if (!room.closed) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
+      const pane = room.closed;
+      return ui().setDeskRoom((now) => openDeskSession(now, pane));
+    }
     // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
     // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
     const pairView = workspaceViewOf(rest());

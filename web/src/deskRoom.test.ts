@@ -70,7 +70,7 @@ describe("Desk's room", () => {
   it("closes the tab panel when another session opens beside Desk, and keeps it for the same one (D-14, B25)", () => {
     const room = openTab(openSession(DESK_ROOM_CLOSED, "p1"), mission);
     expect(openSession(room, "p1").panel).not.toBeNull();
-    expect(openSession(room, "p2")).toEqual({ session: "p2", panel: null, answer: 0 });
+    expect(openSession(room, "p2")).toEqual({ session: "p2", panel: null, closed: null, answer: 0 });
   });
 
   it("asks for the input box once per 답하기", () => {
@@ -82,7 +82,7 @@ describe("Desk's room", () => {
   it("closes the tab panel alone on ✕, Escape or the dim, and both with the session panel's ✕ (B6, B21)", () => {
     const room = openTab(openSession(DESK_ROOM_CLOSED, "p1"), pr);
     expect(closePanel(room)).toEqual({ ...room, panel: null });
-    expect(closeSession(room)).toEqual({ ...room, session: null, panel: null });
+    expect(closeSession(room)).toEqual({ ...room, session: null, panel: null, closed: "p1" });
   });
 
   it("closes the panel with its last tab, the neighbour coming to the front", () => {

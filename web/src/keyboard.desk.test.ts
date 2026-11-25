@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.stubGlobal("HTMLTextAreaElement", class {});
   vi.stubGlobal("document", { ...events, visibilityState: "visible" });
   useShellStore.setState({ rest: null });
-  useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { session: "w1:p2", panel: null, answer: 0 } });
+  useUiStore.setState({ hint: null, cycle: null, overlay: "none", escapeLayers: [], workspaceDialog: null, pendingClose: null, pendingTrash: null, overviewOpen: false, screen: { kind: "desk" }, deskRoom: { session: "w1:p2", panel: null, closed: null, answer: 0 } });
   remove = installKeyboard(actions);
 });
 
@@ -101,5 +101,34 @@ describe("Desk with a session open beside it", () => {
     expect(closeCovering(actions)).toBe(false);
     actions.toggleOverview();
     expect(useUiStore.getState().overviewOpen || useUiStore.getState().screen?.kind === "main").toBe(true);
+  });
+});
+
+// Operator decision 2026-11-25: in Desk ⌘E is the work tab's right-lane toggle, the session panel being Desk's right side.
+describe("⌘E beside Desk", () => {
+  const room = () => useUiStore.getState().deskRoom;
+
+  it("closes the session panel, and the next ⌘E opens the same session again", () => {
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBe("w1:p2");
+  });
+
+  it("opens the session a ✕ or Escape just closed, and the one pressed last", () => {
+    actions.deskCloseSession();
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBe("w1:p2");
+    useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "w1:p3" }));
+    emit("keydown", "KeyE", { metaKey: true });
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBe("w1:p3");
+  });
+
+  it("does nothing while no session was closed during this visit of the room", () => {
+    useUiStore.setState({ deskRoom: { session: null, panel: null, closed: null, answer: 0 } });
+    emit("keydown", "KeyE", { metaKey: true });
+    expect(room().session).toBeNull();
+    expect(room().closed).toBeNull();
   });
 });
