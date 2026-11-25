@@ -196,7 +196,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - With the plan, show the verification table: one line for each finish line of a node (its `criteria`), so the operator sees before anything starts what will be checked, with which evidence and by whom.
   The columns are `확인할 것` (the behaviour or cell by its name), `증거` (a unit test, a real CLI journey, an isolated candidate app, the screen) and `누가` (a checker's agent kind, the worker, or `사람`); group the lines under their node's key and leave out the `check` and `ci` lines, which Hide adds and judges itself.
-  Write each criterion so it reads as one short row; the table is the criteria and checks shown, never a second list to keep in step with them, and a node whose rows will not stay short is cut again.
+  The table is the criteria and checks shown, never a second list to keep in step with them, so a node has at most the three rows its criteria allow.
+  Many behaviours to check do not make more nodes or more rows: group them by theme into those rows and name each cell inside its row's words; cut a node only on the usual four lines, never because its table is long.
   A row whose `누가` is `사람` is the node's `gate`: the operator looks while the agents go on, and it holds the node only as a start gate does.
   A row nothing here can run (no candidate app, no device) is written as `못 함` with its reason, never left out, so a gap in the checking is seen at the plan and not after a bug.
 
