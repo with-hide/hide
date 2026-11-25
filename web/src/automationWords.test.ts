@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInterfaceI18n } from "./i18n/instance";
-import { lastResult, lineTime, nextRunText, recentSpendText, recordText, scheduleText, spendText, whenText } from "./automationWords";
+import { lastResult, lineTime, lookText, nextRunText, onceText, untilText, recentSpendText, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
 import type { Automation, AutomationRecord } from "./snapshot";
 
 // PRD automations B3, B6, B20, B22: what the table, the detail and the phone
@@ -20,7 +20,7 @@ const run = (fields: Partial<Extract<AutomationRecord, { kind: "run" }>>): Autom
 function automation(fields: Partial<Automation>): Automation {
   return {
     id: "a1", name: "아침 이슈 정리", task: "새 이슈 정리", schedule: { kind: "daily", time: "09:00" }, reads_as: { kind: "daily", time: "09:00" },
-    next_run_at_unix_ms: null, agent: { kind: "claude" }, folder: { path: "/home/u/hide/automations/a", default: true, worktree: false }, running: false, unseen: 0, records: [], ...fields,
+    next_run_at_unix_ms: null, agent: { kind: "claude" }, folder: { path: "/home/u/hide/automations/a", default: true, worktree: false }, running: false, done: false, unseen: 0, records: [], ...fields,
   };
 }
 
@@ -94,5 +94,38 @@ describe("an automation's words", () => {
     const done = run({ number: 2, ended_at_unix_ms: NOW });
     expect(lastResult(automation({ records: [going, done] }))).toBe(done);
     expect(lastResult(automation({ records: [going] }))).toBeNull();
+  });
+});
+
+// mission-104 S-1, S-3, S-4: a once automation reads as its date with the
+// weekday, how far off it is, and, once its run ended, what that run left.
+describe("a once automation's words", () => {
+  const once = (date: string, time: string) => ({ kind: "once" as const, date, time });
+  /** `date time` in Seoul as an instant. */
+  const seoul = (date: string, time: string) => Date.parse(`${date}T${time}:00+09:00`);
+
+  it("reads its date with the weekday of that date, in each language's order", () => {
+    expect(onceText(once("2026-12-02", "09:00"), "ko", ko)).toBe("12-02(수) 09:00");
+    expect(onceText(once("2026-12-02", "09:00"), "en", en)).toBe("Wed 12-02 09:00");
+    expect(scheduleWithDate(once("2026-12-02", "09:00"), "ko", ko)).toBe("12-02(수) 09:00 · 한 번");
+    expect(scheduleText(once("2026-12-02", "09:00"), "ko", ko)).toBe("한 번");
+  });
+
+  it("counts calendar days a day or more ahead, and the clock closer than that", () => {
+    // Now is Thursday 23:30 in Seoul: a week ahead at 09:00 is 7 days off, though 6 days 9.5 hours by the clock.
+    expect(untilText(once("2026-11-26", "09:00"), seoul("2026-11-26", "09:00"), NOW, SEOUL, "ko", ko)).toBe("7일 뒤");
+    // The next morning's 00:30 is tomorrow by the calendar and an hour by the clock.
+    expect(untilText(once("2026-11-20", "00:30"), seoul("2026-11-20", "00:30"), NOW, SEOUL, "ko", ko)).toBe("1시간 뒤");
+    expect(untilText(once("2026-11-20", "23:30"), seoul("2026-11-20", "23:30"), NOW, SEOUL, "ko", ko)).toBe("1일 뒤");
+    expect(untilText(once("2026-11-19", "23:30"), NOW + 30_000, NOW, SEOUL, "ko", ko)).toBe("곧");
+    // A repeating schedule counts by the clock however far off: 1 day 18 hours floors to 1 day.
+    expect(untilText({ kind: "daily", time: "17:30" }, NOW + 42 * 3_600_000, NOW, SEOUL, "ko", ko)).toBe("1일 뒤");
+  });
+
+  it("reads a done once automation as done, and its run as it ended", () => {
+    expect(nextRunText({ ...automation({ schedule: once("2026-11-19", "09:00"), done: true }) }, NOW, SEOUL, "ko", ko)).toBe("끝남");
+    const ended = { state: "succeeded" as const, attempt: 1, started_at_unix_ms: NOW, ended_at_unix_ms: NOW + 4 * 60_000 };
+    expect(lookText(ended, "ko", ko)).toEqual({ tone: "ok", text: "끝남 · 4분" });
+    expect(lookText({ ...ended, state: "failed", reason: "automation_login_expired" }, "ko", ko)).toEqual({ tone: "failed", text: "실패 · 로그인 만료" });
   });
 });

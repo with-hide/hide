@@ -103,6 +103,27 @@ describe("Desk's room", () => {
     expect(useUiStore.getState().screen).toEqual({ kind: "main" });
   });
 
+  it("leaves the room on its head's 나가기 ✕ (feedback 1 D2)", async () => {
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([]));
+    await press("[data-desk-leave]");
+    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+  });
+
+  it("lands at the conversation's foot when Desk opens again, though the browser nudges the view as the replies fill in", async () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized.push(callback); } observe() {} unobserve() {} disconnect() {} });
+    await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
+    await render(desk([{ kind: "user", id: 1, text: "what runs now?", at_ms: 0, mentions: [] }]));
+    const box = document.body.querySelector<HTMLElement>("[data-desk-chat-scroll]")!;
+    // The replies' text fills in after Desk's layout pass: the content grows, and scroll anchoring moves the view down 1 px first.
+    Object.defineProperty(box, "scrollHeight", { configurable: true, value: 3072 });
+    Object.defineProperty(box, "clientHeight", { configurable: true, value: 600 });
+    await act(async () => { box.scrollTop = 1; box.dispatchEvent(new Event("scroll")); });
+    await act(async () => { for (const callback of resized) callback(); });
+    expect(box.scrollTop).toBe(3072);
+  });
+
   it("keeps a sent message in the box until the conversation shows it, so a refused one stays", async () => {
     useUiStore.setState({ deskDraft: { text: "ask @session(w1:p2 fixer)", mentions: [fixer] } });
     await render(desk([]));
@@ -233,7 +254,7 @@ describe("Desk's room", () => {
     expect(notice()).not.toContain("·");
   });
 
-  const reply = (id: number, words: string): DeskItem => ({ kind: "reply", id, agent: "claude", text: words, at_ms: 0, state: "stopped", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [] });
+  const reply = (id: number, words: string): DeskItem => ({ kind: "reply", id, agent: "claude", text: words, at_ms: 0, state: "stopped", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 }, mentions: [], missions: [] });
   const user = (id: number): DeskItem => ({ kind: "user", id, text: "실패해 보세요", at_ms: 0, mentions: [] });
 
   it("says a failed turn's reason once, in plain words and the failed colour, and drops an older 다시 시도 once a newer turn ran", async () => {
@@ -399,6 +420,24 @@ describe("Desk's room", () => {
     await press("[data-desk-output='/home/me/repo/new.md']");
     const front = useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
     expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
+  });
+
+  it("keeps one working line from the send to the turn's end, saying its step, and drops it while an approval waits (feedback 1 c3)", async () => {
+    await render(desk([]));
+    const line = () => document.body.querySelector("[data-working-line]")?.getAttribute("data-working-line") ?? null;
+    expect(line()).toBeNull();
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: 1 } }));
+    expect(line()).toBe("thinking");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: null } }));
+    expect(line()).toBe("answering");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: "files" } }));
+    expect(line()).toBe("files");
+    expect(document.body.querySelector("[data-working-line]")?.textContent).toContain("Reading files");
+    await show({ ...desk([]), approvals_waiting: 1 });
+    expect(line()).toBeNull();
+    await show(desk([]));
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: null } }));
+    expect(line()).toBeNull();
   });
 
   it("opens the checkout a project chip names", async () => {

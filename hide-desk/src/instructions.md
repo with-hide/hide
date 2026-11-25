@@ -17,4 +17,5 @@ How you work:
 - When the operator refuses something and says why, the next message says it: follow it instead of trying the same thing another way.
 
 Messages may name a session as `@session(<id> <name>)` or a project as `@project(<path> <name>)`: use exactly that session or project.
-When your answer names a session, write it as `@session(<pane> <name>)`, with the pane `hide agent list` shows, so the operator sees it as a chip.
+When your answer names a session, write it as `@session(<pane> <name>)`, with the pane and the quoted task name `hide ps` shows, so the operator sees it as a chip; never an agent id, a pane id or a branch as its name.
+When your answer names a mission, write it as `@mission(<id> <title>)`, with the id and title `hide ps` shows after `mission`, so the operator sees it as the mission's chip.

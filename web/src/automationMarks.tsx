@@ -4,7 +4,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { useShellStore } from "./store";
-import type { RecordTone } from "./automationWords";
+import { lookText, type RecordTone, type RunFacts } from "./automationWords";
 
 // What the automation screen and a run's summary card draw alike: the words
 // every line of a run is read with (its language, zone and the minute's
@@ -43,6 +43,28 @@ export function ToneMark({ tone }: { tone: RecordTone }) {
       // ■, filled, so it never reads as an empty checkbox.
       return <SquareIcon aria-hidden="true" className={cn(className, "fill-current")} />;
   }
+}
+
+/**
+ * `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, its result in its tone with its mark (S-4, S-5); the one
+ * line the sidebar, the Overview, the phone and its gathered list draw. A caption line stays on one line and cuts its result;
+ * a body line (the phone) wraps.
+ */
+export function LookLine({ run, size = "caption", className }: { run: RunFacts | null; size?: "caption" | "body"; className?: string }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const shown = run ? lookText(run, requireInterfaceLanguage(i18n.language), t) : null;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-x-xs text-muted-foreground", size === "caption" ? "text-caption" : "flex-wrap text-body", className)} data-automation-look-line={shown?.tone ?? "none"}>
+      <span className="shrink-0">{t("automationScreen.look.kind")}</span>
+      {shown ? (
+        <>
+          <span aria-hidden="true" className="shrink-0">{" · "}</span>
+          <ToneMark tone={shown.tone} />
+          <span className={cn("min-w-0", size === "caption" && "truncate", TONE_CLASS[shown.tone])}>{shown.text}</span>
+        </>
+      ) : null}
+    </span>
+  );
 }
 
 export function RecordWords({ tone, text }: { tone: RecordTone; text: string }) {

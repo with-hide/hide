@@ -87,31 +87,72 @@ pub fn refusal_message(command: &str, line: &str) -> String {
 /// reply's own byte cap bounds how many it can name, so no count cap leaves a
 /// later one as raw text.
 pub fn session_mentions(text: &str) -> Vec<(String, String)> {
-    const OPEN: &str = "@session(";
+    mentions(text, "@session(")
+}
+
+/// The missions a reply names as `@mission(<id> <title>)`, read as
+/// [`session_mentions`] reads sessions.
+pub fn mission_mentions(text: &str) -> Vec<(String, String)> {
+    mentions(text, "@mission(")
+}
+
+/// Each `<open><id> <name>)` in `text`, in order and once per id. The name
+/// may hold parentheses of its own, `(11-25)`, as long as they close; a
+/// token the line ends before it closes, or with no name, stays text.
+fn mentions(text: &str, open: &str) -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = Vec::new();
     let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        rest = &rest[start + OPEN.len()..];
-        let Some(end) = rest.find(')') else {
-            break;
+    while let Some(start) = rest.find(open) {
+        rest = &rest[start + open.len()..];
+        let Some(end) = closing(rest) else {
+            continue;
         };
         let inner = &rest[..end];
         rest = &rest[end + 1..];
-        let Some((pane, name)) = inner.trim().split_once(char::is_whitespace) else {
+        let Some((id, name)) = inner.trim().split_once(char::is_whitespace) else {
             continue;
         };
         let name = name.trim();
-        if name.is_empty() || found.iter().any(|(seen, _)| seen == pane) {
+        if name.is_empty() || found.iter().any(|(seen, _)| seen == id) {
             continue;
         }
-        found.push((pane.to_owned(), name.to_owned()));
+        found.push((id.to_owned(), name.to_owned()));
     }
     found
+}
+
+/// Where the parenthesis already open before `text` closes, on its line.
+fn closing(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, char) in text.char_indices() {
+        match char {
+            '\n' => return None,
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(at),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_s_missions_are_read_with_parentheses_in_their_titles() {
+        let text = "@mission(mission-63 결제 흐름 정리 (11-25)) runs; again \
+                    @mission(mission-63 결제 흐름 정리 (11-25)), @mission(mission-9) and \
+                    @mission(mission-7 open (one\nline) then @mission(mission-8 last)";
+        assert_eq!(
+            mission_mentions(text),
+            [
+                ("mission-63".to_owned(), "결제 흐름 정리 (11-25)".to_owned()),
+                ("mission-8".to_owned(), "last".to_owned()),
+            ]
+        );
+    }
 
     #[test]
     fn a_reply_s_session_names_are_read_once_each_in_order() {

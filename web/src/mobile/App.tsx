@@ -146,7 +146,7 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
   // The automations that stopped for a person and the missions that are their own item are lines of 내 차례 too (PRD automations D-12, B23).
-  const asks = usePhone((s) => s.automationAsks.length + s.missionAsks.length);
+  const asks = usePhone((s) => s.automationAsks.length + s.automationLooks.length + s.missionAsks.length);
   const scope = usePhone((s) => s.listScope);
   // A hosted phone paired with two computers or more chooses between all of them and this one (PRD device-connect-iroh B55).
   const hosts = useConnectableHosts();

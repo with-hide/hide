@@ -1237,6 +1237,7 @@ impl Runtime {
                 std::iter::once(crate::model::AgentGroupSnapshot {
                     id: None,
                     name: None,
+                    role: None,
                     tabs: view
                         .agent_layout
                         .tree
@@ -1249,6 +1250,7 @@ impl Runtime {
                     crate::model::AgentGroupSnapshot {
                         id: Some(g.id.clone()),
                         name: Some(g.name.clone()),
+                        role: g.role,
                         tabs: g
                             .layout
                             .tree

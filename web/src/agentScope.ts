@@ -42,6 +42,8 @@ export type AgentScope = {
   mission_asks?: string[];
   /** On the scope of the machine that runs them, the automations stopped for a person to fix, each its own Needs You line (PRD automations D-12, B23), oldest first; counted in `overview_needs_you` and `groups.needs_you` as a mission's own ask is. Absent when there are none. */
   automation_asks?: string[];
+  /** On the scope of the machine that runs them, the once automations whose last run ended and waits to be opened (mission-104), first ended first; each its own Needs You line, counted in `overview_needs_you` and `groups.needs_you` as `automation_asks` are. Absent when there are none. */
+  automation_looks?: string[];
   has_working: boolean;
   relations: Record<string, { issues: string[]; project_id: string; checkout_id: string; rows: { pane_id: string; occurrence: number; depth: number; tag: "here" | "parent" | null; caption_parent: string | null }[] }[]>;
   listed: { pane_id: string; device_id: string; device_label: string | null; remote: boolean; index: number }[];

@@ -141,7 +141,19 @@ function read(schedule: AutomationSchedule): Read {
       const time = `${match[2]!.padStart(2, "0")}:${match[1]!.padStart(2, "0")}`;
       return TIME.test(time) ? { ok: true, reads_as: { kind: match[3] === "*" ? "daily" : "weekdays", time } } : { ok: false, code: "schedule_cron_invalid" };
     }
+    case "once": {
+      // A once schedule reads as itself while its time is ahead, as the core's does (mission-104).
+      if (!TIME.test(schedule.time)) return { ok: false, code: "schedule_time_invalid" };
+      const at = onceAt(schedule);
+      if (Number.isNaN(at)) return { ok: false, code: "schedule_date_invalid" };
+      return at > Date.now() ? { ok: true, reads_as: schedule } : { ok: false, code: "schedule_once_past" };
+    }
   }
+}
+
+/** A once schedule's time on this machine's clock. */
+function onceAt(schedule: Extract<AutomationSchedule, { kind: "once" }>): number {
+  return new Date(`${schedule.date}T${schedule.time}:00`).getTime();
 }
 
 /** The next time `schedule` fires after `from`, in this machine's zone. */
@@ -177,6 +189,10 @@ function nextAfter(schedule: AutomationSchedule, from: number): number | null {
     case "cron": {
       const reading = read(schedule);
       return reading.ok && reading.reads_as.kind !== "cron" ? nextAfter(reading.reads_as, from) : null;
+    }
+    case "once": {
+      const when = onceAt(schedule);
+      return when > from ? when : null;
     }
   }
 }
@@ -352,7 +368,8 @@ function automation(model: AutomationModel): Automation {
     id: AUTOMATION_ID, name: made.name, task: made.task, schedule: made.schedule, reads_as: reading.ok ? reading.reads_as : made.schedule,
     next_run_at_unix_ms: made.paused ? null : made.next, agent: made.agent, folder: { path: made.folder, default: made.folder.startsWith(`${OWN_ROOT}/`), worktree: false },
     ...(made.paused ? { paused: { reason: "operator" as const, at_unix_ms: since(model, 1) } } : {}),
-    running: model.stage === 3, unseen: unseenOf(model), records: model.run ? [record(model, model.run)] : [],
+    // The practice's automations repeat (S-8), so none is ever a once automation done.
+    running: model.stage === 3, done: false, unseen: unseenOf(model), records: model.run ? [record(model, model.run)] : [],
   };
 }
 

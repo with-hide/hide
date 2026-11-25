@@ -1063,6 +1063,15 @@ test("the phone's automations tab lists, runs, pauses and turns on again, keeps 
     await expect(phone.locator('[data-phone-unreachable="true"]')).toHaveCount(0, { timeout: 30_000 }); // wait-ok: the phone reconnects to the restarted hided
     await expect(phone.locator("[data-phone-automation]")).toHaveCount(1);
     await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"]')).toHaveCount(0);
+
+    // mission-104 S-5: a once automation reads as its date with the clock, after the repeating one in the core's order.
+    const later = new Date(Date.now() + 30 * 24 * 3_600_000);
+    const date = `${later.getFullYear()}-${String(later.getMonth() + 1).padStart(2, "0")}-${String(later.getDate()).padStart(2, "0")}`;
+    await withControl(daemon, async (control) => {
+      control.send("automation_add", { name: "Check webhooks", task: "Read the webhook logs.", schedule: { kind: "once", date, time: "09:00" }, agent: { kind: "claude" } });
+    });
+    await expect(phone.locator("[data-phone-automation]")).toHaveCount(2);
+    await expect(phone.locator("[data-phone-automation]").nth(1).locator('[data-phone-automation-once="true"]')).toContainText(`${date.slice(5)} 09:00 · once`);
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();

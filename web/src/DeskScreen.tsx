@@ -9,7 +9,7 @@
 import { MapIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Actions } from "./actions";
-import { deskOn, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
+import { deskOn, deskPhase, holdsFoot, laneCards, sessionFacts, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskQueuedMessage, type DeskSessionRef } from "./desk";
 import { activeTab, closePanel, closeSide, closeTab, fileName, keepTab, openSession, outputNamed, showTab, tabKey, tabNames, type DeskTab } from "./deskRoom";
 import { DeskOutputView } from "./DeskOutputView";
 import { AreaEmpty } from "./AreaEmpty";
@@ -25,7 +25,7 @@ import { useElapsed } from "./components/elapsed";
 import { askIdentity, inputFailure, noticeText } from "./mobile/protocol";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
-import { leaveDesk } from "./keyboard";
+import { deskReturn, deskReturnWords, leaveDesk } from "./keyboard";
 import { keepSent, mentionAt, mentionTree, outgoing, pickMention, useComposerTray } from "./deskComposer";
 import { refusalText, stageDeskFiles } from "./attachments";
 import { DeskChat, DeskEmpty, type DeskChatActions, type DeskNoticeAction } from "./components/desk/desk-chat";
@@ -136,6 +136,8 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const turn = live?.started_at_ms ?? null;
   const answering = turn !== null;
   const liveText = live?.text ? live.text : null;
+  // The working line stands from the send to the turn's end, and goes while an approval card waits on the operator (feedback 1 c3).
+  const turnLine = useMemo(() => (answering && desk?.approvals_waiting === 0 ? { phase: deskPhase(live?.step, liveText), since: turn } : null), [answering, desk?.approvals_waiting, live?.step, liveText, turn]);
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
   // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
@@ -167,19 +169,32 @@ export function DeskScreen({ actions }: { actions: Actions }) {
     setNotice(refusalText(refusal.reason, t));
   }, [refusal, t]);
 
+  // The conversation keeps its foot in view while the operator reads there (`stick`), and stays where they
+  // scrolled otherwise. It follows sizes, not events: a reply's text fills its editor after this pass, a card
+  // grows, the box under it grows a line, and Desk opened again would otherwise show the conversation's top.
+  const empty = shown.length === 0 && !answering && queued.length === 0;
+  const drawn = desk !== null;
   useLayoutEffect(() => {
     const box = scroller.current;
-    if (box && stick.current) box.scrollTop = box.scrollHeight;
-  }, [shown, liveText, answering, queued]);
-  useEffect(() => {
-    const box = scroller.current;
     if (!box) return;
-    const follow = () => {
-      stick.current = box.scrollHeight - box.scrollTop - box.clientHeight < STICK_PX;
+    const pin = () => {
+      if (stick.current) box.scrollTop = box.scrollHeight;
     };
+    let last = box.scrollTop;
+    const follow = () => {
+      stick.current = holdsFoot(stick.current, last, box.scrollTop, box.scrollHeight - box.scrollTop - box.clientHeight, STICK_PX);
+      last = box.scrollTop;
+    };
+    pin();
     box.addEventListener("scroll", follow, { passive: true });
-    return () => box.removeEventListener("scroll", follow);
-  }, []);
+    const resized = new ResizeObserver(pin);
+    resized.observe(box);
+    for (const child of box.children) resized.observe(child);
+    return () => {
+      box.removeEventListener("scroll", follow);
+      resized.disconnect();
+    };
+  }, [empty, drawn]);
 
   useReadShownCards(scroller, jobs, actions.deskJobRead);
 
@@ -375,11 +390,11 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           actions={actions}
           room={room}
           chat={(
-            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} />} composer={composer} scrollRef={scroller}>
+            <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} onLeave={() => leaveDesk(actions)} leaveTo={deskReturnWords(deskReturn(useShellStore.getState().rest))} leaveChord={commandLabel("recent_area_tab") || null} />} composer={composer} scrollRef={scroller}>
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} working={turnLine} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}
@@ -606,6 +621,7 @@ function DeskSessionPanel({ paneId, actions, deskActions, room }: { paneId: stri
           onOutput={(output) => actions.deskOpen({ kind: "output", output })}
           onFiles={() => actions.deskToggleExplorer()}
           onTerminal={() => actions.deskTerminal()}
+          onOwnTab={() => actions.openListedAgent(paneId)}
           onClose={() => actions.deskCloseSession()}
         />
       }

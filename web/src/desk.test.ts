@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { agentPickable, approvalButtons, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -71,6 +71,25 @@ describe("a thread's lines (B25, B26)", () => {
   it("keeps a letter apart from the operator's own words by its origin", () => {
     const lines = threadLines([text("user_message_chunk", "내 말"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "편지" }, _meta: { hide: { origin: "letter" } } }]);
     expect(lines.map((line) => line.kind === "user" && line.origin)).toEqual(["operator", "letter"]);
+  });
+});
+
+describe("what the working line says (feedback 1 c3)", () => {
+  it("says Desk's running step, else answering once it wrote, else thinking", () => {
+    expect(deskPhase("files", "찾아보겠습니다.")).toBe("files");
+    expect(deskPhase(null, "찾아보겠습니다.")).toBe("answering");
+    expect(deskPhase(undefined, null)).toBe("thinking");
+  });
+
+  it("says a session's newest line: its words, its call's kind, a Hide part, or thinking", () => {
+    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, answer, parts: [], files: 0, commands: 0 });
+    const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, output: null, diffs: [], images: [], startedAtMs: null });
+    expect(threadPhase(undefined)).toBe("thinking");
+    expect(threadPhase(turn([tool("read")]))).toBe("files");
+    expect(threadPhase(turn([tool("edit")]))).toBe("editing");
+    expect(threadPhase(turn([tool("execute")]))).toBe("other");
+    expect(threadPhase(turn([tool("think")]))).toBe("thinking");
+    expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요" }]))).toBe("answering");
   });
 });
 
@@ -180,18 +199,35 @@ describe("a chip's session (D-86, B50)", () => {
   const rows = new Map([row("w1:p1", "agent-journey", { lineage_parent_pane_id: "w1:p0" }), row("w1:p0", "agent-14586", { mark: "turn", agent_kind: "claude" })].map((one) => [one.pane_id, one]));
   const cards = [job("named", "working", { pane_id: "w1:p1", title: "agent-journey" })];
 
-  it("reads a listed session's mark, card, time and parent from its row", () => {
-    const facts = sessionFacts(rows, cards, { name: "agent-journey", mark: null, agent_kind: null, pane_id: "w1:p1" });
-    expect(facts).toEqual({ listed: true, mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
+  it("reads a listed session's name, mark, card, time and parent from its row", () => {
+    const facts = sessionFacts(rows, cards, { name: "agent-47656", mark: null, agent_kind: null, pane_id: "w1:p1" });
+    expect(facts).toEqual({ listed: true, name: "agent-journey", mark: "going", agent_kind: "codex", card: cards[0], since: 1_000, parent: { name: "agent-14586", mark: "turn", agent_kind: "claude", pane_id: "w1:p0" } });
   });
 
   it("reads a session the sidebar no longer lists as gone, with no mark and no card", () => {
-    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, mark: null, agent_kind: null, card: null, since: null, parent: null });
+    expect(sessionFacts(rows, cards, { name: "m349", mark: "done", agent_kind: "claude", pane_id: "w1:gone" })).toEqual({ listed: false, name: null, mark: null, agent_kind: null, card: null, since: null, parent: null });
   });
 
   it("finds a session named only by its name, and leaves one no row carries to its own values", () => {
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.card).toBeNull();
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.listed).toBe(true);
     expect(sessionFacts(rows, cards, { name: "nobody", mark: null, agent_kind: null })).toBeNull();
+  });
+});
+
+describe("holdsFoot", () => {
+  it("keeps the foot when the browser nudges the view down while the content grows below it", () => {
+    // Scroll anchoring moved 3065 to 3066 as a reply grew by 314 px; the resize that pins the foot comes after.
+    expect(holdsFoot(true, 3065, 3066, 314, 48)).toBe(true);
+  });
+
+  it("lets go once the operator scrolls up, and holds again when they reach the foot", () => {
+    expect(holdsFoot(true, 3386, 2486, 900, 48)).toBe(false);
+    expect(holdsFoot(false, 2486, 2600, 786, 48)).toBe(false);
+    expect(holdsFoot(false, 2600, 3380, 6, 48)).toBe(true);
+  });
+
+  it("stays held when content shrinking under the foot pulls the view up", () => {
+    expect(holdsFoot(true, 3386, 3350, 0, 48)).toBe(true);
   });
 });

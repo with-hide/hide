@@ -3,7 +3,7 @@ import { hostLook, hostRepository, projectHost, pullHost, pullLabel } from "./co
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
-import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
@@ -28,7 +28,7 @@ import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
-import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { SidebarAutomationLookRow, SidebarAutomationRow, useEveryDeviceAutomationAsks, useEveryDeviceAutomationLooks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
@@ -72,6 +72,8 @@ import { PracticeInvite } from "./components/practice-invite";
 import { HerdrImportLine } from "./HerdrImport";
 import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
+import { deskReturn, deskReturnWords, pressDeskRow } from "./keyboard";
+import { GroupMark } from "./components/group-mark";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
@@ -173,7 +175,14 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            desk={deskShown ? { selected: deskSelected, asking: deskAsking, chord: null, onOpen: () => actions.openDesk() } : undefined}
+            desk={deskShown ? {
+              selected: deskSelected,
+              asking: deskAsking,
+              // In front, the row says where leaving goes and the chord that also leaves.
+              chord: deskSelected ? commandLabel("recent_area_tab") || null : null,
+              leaveTo: deskSelected ? deskReturnWords(deskReturn(useShellStore.getState().rest)) : null,
+              onOpen: () => pressDeskRow(actions),
+            } : undefined}
             missions={{ selected: missionsSelected, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
@@ -497,7 +506,8 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
   // Needs You lists every device's rows, the front device's first; the rest of the list is the front device's.
   const missionAsks = useEveryDeviceMissionAsks(frontId);
   const automationAsks = useEveryDeviceAutomationAsks(frontId);
-  const asks = useMemo(() => [...missionOwnAsks(missionAsks), ...automationOwnAsks(automationAsks)], [missionAsks, automationAsks]);
+  const automationLooks = useEveryDeviceAutomationLooks(frontId);
+  const asks = useMemo(() => [...missionOwnAsks(missionAsks), ...automationOwnAsks(automationAsks, automationLooks)], [missionAsks, automationAsks, automationLooks]);
   // It reads the devices and their connections alone, so it is read again only when those move.
   const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
   // A tool's cell raises nothing: its Needs You and Done would be the operator's (PRD hide-external-control B41).
@@ -701,7 +711,9 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
         <ul aria-labelledby={`raised-group-${row.group}`}>
           {row.asks.map((own) => (own.kind === "mission"
             ? <SidebarMissionRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
-            : <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
+            : own.kind === "automation"
+              ? <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
+              : <SidebarAutomationLookRow key={ownAskKey(own)} look={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
           ))}
           {row.agents.map((listed) => (
             <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />
@@ -1593,7 +1605,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
             and its briefcase where its rows' own column starts, so a collection never reads deeper than its rows. */}
         <div className="flex h-(--size-control-compact) min-w-0 items-center gap-xs rounded-sm pr-xs text-caption hover:bg-accent" style={{ paddingLeft: glyphColumn }}>
           <Button variant="text" size="inline" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)}>{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</Button>
-          <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></Button></Hint>
+          <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><GroupMark group={group} className={selected ? "text-foreground" : "text-muted-foreground"} /><span className="truncate">{name}</span></Button></Hint>
         </div>
         {open ? <ul className="mt-xxs"><CollectionRows checkout={checkout} deviceId={deviceId} collection={collection} inset={childInset} guideColumn={GROUP_GLYPH_COLUMN} guideSize="var(--size-icon-sm)" context={context} /></ul> : null}
       </li>;

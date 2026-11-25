@@ -1,5 +1,5 @@
 import type { PairedHost } from "./hosts";
-import { asksOf, gatheredOf, missionAsksOf, type GatheredAsk } from "./gather";
+import { asksOf, gatheredOf, looksOf, missionAsksOf, type GatheredAsk, type GatheredLook } from "./gather";
 import { refusalOf, type AgentGroup, type PhoneMission, type ServerFrame } from "./protocol";
 import { RelaySocket } from "./relaySocket";
 
@@ -16,6 +16,8 @@ export type Presence = {
   omitted?: number;
   /** Its automations that stopped for a person, from its last automations frame: more of 내 차례 in the gathered view. */
   asks?: GatheredAsk[];
+  /** Its once automations whose run ended, from its last automations frame: more of 내 차례 in the gathered view (mission-104 S-5). */
+  looks?: GatheredLook[];
   /** Its missions that are their own 내 차례 item, from its last missions frame, as the computer counts them: more of 내 차례 in the gathered view. */
   missions?: PhoneMission[];
 };
@@ -40,8 +42,9 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
     // The list, the automations and the missions arrive in separate frames; each keeps the others' last value.
     let listed: Pick<Presence, "needs" | "working" | "gathered" | "omitted"> = {};
     let asks: GatheredAsk[] | undefined;
+    let looks: GatheredLook[] | undefined;
     let missions: PhoneMission[] | undefined;
-    const tell = () => changed({ online: true, lastSeen, ...listed, ...(asks ? { asks } : {}), ...(missions ? { missions } : {}) });
+    const tell = () => changed({ online: true, lastSeen, ...listed, ...(asks ? { asks } : {}), ...(looks ? { looks } : {}), ...(missions ? { missions } : {}) });
     const ws = new RelaySocket(host, (protocol) => { denied = true; protocolMismatch = protocol; }, () => undefined);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ client_kind: "phone", token: host.credential }));
@@ -62,6 +65,7 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
         // Before its list, a computer is still connecting: its automations' and missions' asks wait for the list rather than stand alone.
         if (frame.type === "automations") {
           asks = asksOf(frame.items, frame.asks ?? []);
+          looks = looksOf(frame.items, frame.looks ?? []);
           if (listed.gathered) tell();
         }
         if (frame.type === "missions") {

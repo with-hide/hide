@@ -122,7 +122,7 @@ export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | 
  * With a `home` the row belongs to that screen: it is listed only while the operator has something to do,
  * `workspace_id` names the catalog Project whose home shows it and `turn` what that home waits for.
  */
-export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn };
+export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn; once?: boolean };
 
 /**
  * An external tool's work (PRD hide-external-control D-09, D-15): an agent the tool started, or one started under it.
@@ -3406,6 +3406,8 @@ export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };
 /** A session a conversation line names, drawn as a chip with its row's mark now (`null` once it has no row or the line is past the newest 64). */
 export type DeskSessionChip = { pane_id: string; name: string; agent_kind: string | null; mark: RowMark | null };
+/** A mission a reply names as `@mission(<id> <title>)`, read by the core: its id and the title the reply wrote. */
+export type DeskMissionMention = { id: string; title: string };
 
 export type DeskAgent = {
   id: DeskAgentId;
@@ -3430,7 +3432,7 @@ export type DeskItem =
   /** `attachments` are the files sent with it, each staged at `path` on the core's machine; absent when none. */
   | { kind: "user"; id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] }
   /** `thought_ms` and `steps` fold the turn into one line: `생각 8초 · 세션 4개 읽음`; `mentions` are the sessions its text names as `@session(<pane> <name>)`. */
-  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[] }
+  | { kind: "reply"; id: number; agent: DeskAgentId; text: string; at_ms: number; state: "done" | "stopped"; thought_ms: number | null; steps: DeskSteps; mentions: DeskSessionChip[]; missions: DeskMissionMention[] }
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   /**
@@ -3538,7 +3540,9 @@ export type AutomationSchedule =
   | { kind: "weekly"; days: AutomationWeekday[]; time: string }
   | { kind: "every_minutes"; minutes: number }
   | { kind: "every_hours"; hours: number; time: string }
-  | { kind: "cron"; expr: string };
+  | { kind: "cron"; expr: string }
+  /** Once, at `date` (`YYYY-MM-DD`) and `time` on the machine's wall clock (mission-104): it runs one time and is then done. */
+  | { kind: "once"; date: string; time: string };
 
 /** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
 export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
@@ -3602,7 +3606,7 @@ export type Automation = {
   schedule: AutomationSchedule;
   /** The choice it reads as. */
   reads_as: AutomationSchedule;
-  /** None while it is paused. */
+  /** None while it is paused, and for a once automation from the start of its run on. */
   next_run_at_unix_ms: number | null;
   agent: AutomationAgent;
   /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
@@ -3610,6 +3614,10 @@ export type Automation = {
   paused?: { reason: AutomationPauseReason; at_unix_ms: number };
   /** A run goes now: [지금 실행] is refused (B19). */
   running: boolean;
+  /** A once automation whose time ran: it runs no more on its own (mission-104); a run by hand still goes (`running` says so). */
+  done: boolean;
+  /** The run of a done once automation whose end waits in Needs You (`automation_looks`); its record carries the agent's `answer`. */
+  look_run?: number;
   unseen: number;
   /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
   recent_spend?: AutomationSpend & { runs: number };
@@ -3659,7 +3667,10 @@ export type DeskJobsSection = {
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
-export type DeskLive = { text: string | null; started_at_ms: number | null };
+/** One of `DeskSteps`' kinds, by its count's name there. */
+export type DeskStepKind = keyof DeskSteps;
+/** The turn under way: its reply so far, when it started, and what its newest tool call does while the agent has written nothing since. */
+export type DeskLive = { text: string | null; started_at_ms: number | null; step?: DeskStepKind | null };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
