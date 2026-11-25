@@ -2,7 +2,7 @@ import groovy.json.JsonSlurper
 
 apply plugin: 'com.android.application'
 
-// The app's own version, separate from the iOS app's (mobile/package.json): mobile/android/version.json.
+// The app's version, kept in mobile/android/version.json beside the iOS app's (mobile/package.json) and the same number (docs/BUILD.md).
 def appVersion = new JsonSlurper().parse(rootProject.file('version.json')).version
 if (!(appVersion ==~ /^[0-9]+\.[0-9]+\.[0-9]+$/)) {
     throw new GradleException("mobile/android/version.json must hold a version shaped X.Y.Z, not ${appVersion}")
