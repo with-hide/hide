@@ -861,6 +861,16 @@ mod tests {
 
     use super::*;
 
+    /// A node keeps a start's prompt file for as long as the start may take
+    /// to run its line, and drops it as finished after.
+    #[test]
+    fn a_prompt_file_is_in_use_for_exactly_a_starts_deadline() {
+        assert_eq!(
+            hide_node_link::protocol::PROMPT_FILE_IN_USE,
+            AGENT_START_DEADLINE
+        );
+    }
+
     /// A start as the core prepares it, from the parameters a test names.
     fn prepared(params: Value) -> PreparedStart {
         let text = |key: &str, default: &str| params[key].as_str().unwrap_or(default).to_owned();

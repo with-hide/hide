@@ -154,14 +154,20 @@ struct Shared {
     resumed: Mutex<Vec<crate::engine::ResumedPane>>,
 }
 
-/// A path as long as a prompt file's may be, for the bound a start line is
-/// prepared against (`prepare_start`): the node's state folder, which a
-/// home of an ordinary length holds, and the file's own name.
-const PROMPT_PATH_BOUND: &str = concat!(
-    "/0123456789012345678901234567890123456789012345678901234567890123456789",
-    "/0123456789012345678901234567890123456789012345678901234567890123456789",
-    "/.hide/state/prompt-files/start-012345678901234567890123"
-);
+/// A prompt file as long as a node's may name it, for the bound a start line
+/// is prepared against (`prepare_start`): its path in the node's state
+/// folder and the `hide` beside the node, each under a home of an ordinary
+/// length.
+fn prompt_file_bound() -> hide_node_link::protocol::PromptFileKept {
+    const HOME: &str = concat!(
+        "/0123456789012345678901234567890123456789012345678901234567890123456789",
+        "/0123456789012345678901234567890123456789012345678901234567890123456789",
+    );
+    hide_node_link::protocol::PromptFileKept {
+        path: format!("{HOME}/.hide/state/prompt-files/start-012345678901234567890123"),
+        exec: format!("{HOME}/.hide/host-helper/0123456789abcdef/hide.exe"),
+    }
+}
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
 /// holders.
@@ -2570,26 +2576,27 @@ impl<'g> Engine for OwnEngine<'g> {
         let kind = launch.launch.kind();
         let definition = agents::definition(&catalog, kind)
             .ok_or_else(|| format!("no agent definition names {kind}"))?;
-        let argv = launch
-            .launch
-            .line(agents::start_argv(
-                definition,
-                launch.launch.agent_file(launch.program.as_ref()),
-                crate::codex_launch::start_arguments(
-                    &definition.id,
-                    launch.codex_daemon,
-                    launch.args.clone(),
-                )?,
-            )?)?
-            .words;
+        let line = launch.launch.line(agents::start_argv(
+            definition,
+            launch.launch.agent_file(launch.program.as_ref()),
+            crate::codex_launch::start_arguments(
+                &definition.id,
+                launch.codex_daemon,
+                launch.args.clone(),
+            )?,
+        )?)?;
+        // A first input is read from a file by the node's `hide`, whose
+        // words are bounded by the state folder's.
+        let argv = match launch.prompt {
+            Some(_) => {
+                prompt_file::read_by_hide(line.words, line.attempt.is_some(), &prompt_file_bound())
+            }
+            None => line.words,
+        };
         // The longest of the shells' lines, so the start is bounded as the
-        // shell it meets will type it; a first input is read from a file
-        // whose path is bounded by the state folder's.
-        let line = shell_line::longest(|shell| match launch.prompt {
-            Some(_) => shell_line::command_with_prompt(&argv, PROMPT_PATH_BOUND, shell),
-            None => shell_line::command(&argv, shell),
-        })
-        .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
+        // shell it meets will type it.
+        let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
+            .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
         Ok(PreparedStart::new(launch, line))
     }
 
@@ -2640,13 +2647,20 @@ impl<'g> Engine for OwnEngine<'g> {
             .line(argv.clone())
             .map_err(|message| refused("agent_start_refused", message))?;
         // A first input is kept in a file of the pane's machine, which the
-        // line reads, so the text never crosses the shell's line editor.
+        // node's `hide` reads, so no shell reads the text.
         let staged = match launch.prompt.as_deref() {
             Some(prompt) => Some(self.stage_prompt(pane, &launch.name, prompt)?),
             None => None,
         };
         let typed = match &staged {
-            Some(staged) => shell_line::command_with_prompt(&line.words, &staged.path, shell),
+            Some(staged) => shell_line::command(
+                &prompt_file::read_by_hide(
+                    line.words.clone(),
+                    line.attempt.is_some(),
+                    &staged.kept,
+                ),
+                shell,
+            ),
             None => shell_line::command(&line.words, shell),
         };
         let Some(typed) = typed else {

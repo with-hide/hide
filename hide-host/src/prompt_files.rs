@@ -1,19 +1,36 @@
 //! The node's side of a start's first input (`Call::PromptFile`): one
 //! owner-only file per start in the state folder, which the start line reads
 //! and removes (docs/delivery.md, The input ladder). The core removes the
-//! file of a start that typed nothing (`Call::PromptFileRemove`); a line
-//! that never ran leaves its file, and past
-//! [`PROMPT_FILES_CAP`](hide_node_link::protocol::PROMPT_FILES_CAP) the
-//! oldest go before a new one is written.
+//! file of a start that typed nothing (`Call::PromptFileRemove`). A line that
+//! never ran leaves its file, which is finished once its start's deadline
+//! has passed ([`PROMPT_FILE_IN_USE`]): finished files go on every write and
+//! when a node starts ([`sweep`]), and with
+//! [`PROMPT_FILES_CAP`] files still in use a write is refused, never one in
+//! use dropped, whose line would then read nothing.
 
 use std::path::{Path, PathBuf};
 
-use hide_node_link::protocol::{PROMPT_FILE_MAX_BYTES, PROMPT_FILES_CAP, valid_prompt_start};
+use hide_node_link::protocol::{
+    PROMPT_FILE_IN_USE, PROMPT_FILE_MAX_BYTES, PROMPT_FILES_CAP, PromptFileKept, valid_prompt_start,
+};
 use hide_platform::fs::{Access, atomic, private};
+
+/// Writes `text` as the prompt file of `start` under `env`'s state folder
+/// and answers its path in the wire spelling with the `hide` beside the node
+/// that reads it.
+pub fn write(env: &crate::serve::Env, start: &str, text: &str) -> Result<PromptFileKept, String> {
+    let exec = env
+        .program
+        .as_deref()
+        .ok_or_else(|| "This node does not know its own program.".to_owned())
+        .and_then(crate::profiles::exec_command)?;
+    let path = write_file(env.state.as_deref(), start, text)?;
+    Ok(PromptFileKept { path, exec })
+}
 
 /// Writes `text` as the prompt file of `start` under the state folder
 /// `state` and answers its path in the wire spelling.
-pub fn write(state: Option<&Path>, start: &str, text: &str) -> Result<String, String> {
+fn write_file(state: Option<&Path>, start: &str, text: &str) -> Result<String, String> {
     let folder = folder(state)?;
     if !valid_prompt_start(start) {
         return Err("Invalid prompt file name.".to_owned());
@@ -55,61 +72,142 @@ fn folder(state: Option<&Path>) -> Result<PathBuf, String> {
         .ok_or_else(|| "This machine has no state folder for prompt files.".to_owned())
 }
 
-/// Removes the oldest files until one more fits under the cap; the file of
-/// `start` itself is replaced, so it takes no room.
+/// Removes the finished prompt files under the state folder `state`, as a
+/// node does when it starts; a folder not there yet holds none.
+pub fn sweep(state: Option<&Path>) {
+    let Ok(folder) = folder(state) else { return };
+    if let Err(cause) = drop_finished(&folder, std::time::SystemTime::now()) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "prompt_files", "kind": "prompt_files.sweep_failed", "cause": cause,
+            })
+        );
+    }
+}
+
+/// Drops the finished files, then refuses when the ones still in use leave
+/// no room for one more; the file of `start` itself is replaced, so it
+/// takes no room.
 fn make_room(folder: &Path, start: &str) -> Result<(), String> {
-    let mut kept = std::fs::read_dir(folder)
-        .map_err(|error| format!("The prompt folder could not be read: {error}"))?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name() != start)
-        .filter_map(|entry| {
-            let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
-            Some((modified, entry.path()))
-        })
-        .collect::<Vec<_>>();
-    kept.sort();
-    let over = (kept.len() + 1).saturating_sub(PROMPT_FILES_CAP);
-    for (_, path) in kept.into_iter().take(over) {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("An old prompt file could not be removed: {error}")),
-        }
+    let in_use = drop_finished(folder, std::time::SystemTime::now())?
+        .into_iter()
+        .filter(|name| name != start)
+        .count();
+    if in_use >= PROMPT_FILES_CAP {
+        return Err(format!(
+            "{in_use} starts on this machine are still waiting to read their first input; try again once they have started."
+        ));
     }
     Ok(())
+}
+
+/// Removes each file in `folder` last written longer than
+/// [`PROMPT_FILE_IN_USE`] before `now` and answers the names of the others.
+fn drop_finished(folder: &Path, now: std::time::SystemTime) -> Result<Vec<String>, String> {
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("The prompt folder could not be read: {error}")),
+    };
+    let mut in_use = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("The prompt folder could not be read: {error}"))?;
+        let modified = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .map_err(|error| format!("A prompt file could not be read: {error}"))?;
+        let finished = now
+            .duration_since(modified)
+            .is_ok_and(|age| age > PROMPT_FILE_IN_USE);
+        if !finished {
+            in_use.push(entry.file_name().to_string_lossy().into_owned());
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "A finished prompt file could not be removed: {error}"
+                ));
+            }
+        }
+    }
+    Ok(in_use)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Sets `path`'s last write `age` before now.
+    fn aged(path: &Path, age: std::time::Duration) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
     #[test]
-    fn a_prompt_file_is_private_replaced_by_its_start_and_capped_oldest_first() {
+    fn a_prompt_file_is_private_and_replaced_by_its_start() {
         let root = tempfile::tempdir().unwrap();
         let state = Some(root.path());
         let text = "한글 첫 지시\u{2028}둘째 줄";
-        let path = write(state, "start-1", text).unwrap();
+        let path = write_file(state, "start-1", text).unwrap();
         let path = hide_platform::path::from_wire(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         assert!(private::is_private(&path).unwrap());
-        write(state, "start-1", "again").unwrap();
+        write_file(state, "start-1", "again").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "again");
-        for n in 2..=PROMPT_FILES_CAP + 3 {
-            write(state, &format!("start-{n}"), "x").unwrap();
-        }
+        remove(state, "start-1").unwrap();
+        remove(state, "start-1").unwrap();
+        assert!(!path.exists());
+        assert!(write_file(state, "../out", "x").is_err());
+        assert!(write_file(None, "start-1", "x").is_err());
+    }
+
+    /// Past the cap, finished files go first; a file still in use is never
+    /// dropped, so with the cap in use a new start is refused instead.
+    #[test]
+    fn the_cap_drops_finished_files_and_refuses_rather_than_drop_one_in_use() {
+        let root = tempfile::tempdir().unwrap();
+        let state = Some(root.path());
         let folder = hide_kit::layout::prompt_files(root.path());
-        assert_eq!(
-            std::fs::read_dir(&folder).unwrap().count(),
-            PROMPT_FILES_CAP
-        );
-        assert!(
-            folder
-                .join(format!("start-{}", PROMPT_FILES_CAP + 3))
-                .exists()
-        );
-        remove(state, "start-2").unwrap();
-        remove(state, "start-2").unwrap();
-        assert!(write(state, "../out", "x").is_err());
-        assert!(write(None, "start-1", "x").is_err());
+        let finished = PROMPT_FILE_IN_USE + std::time::Duration::from_secs(1);
+        for n in 0..PROMPT_FILES_CAP + 4 {
+            let path = write_file(state, &format!("old-{n}"), "x");
+            // Each finished once written, so the next write drops it.
+            aged(
+                &hide_platform::path::from_wire(&path.unwrap()).unwrap(),
+                finished,
+            );
+        }
+        for n in 0..PROMPT_FILES_CAP - 1 {
+            write_file(state, &format!("live-{n}"), "x").unwrap();
+        }
+        let names = || {
+            let mut names = std::fs::read_dir(&folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        // Every finished file went; the ones in use stay.
+        assert!(names().iter().all(|name| name.starts_with("live-")));
+        assert_eq!(names().len(), PROMPT_FILES_CAP - 1);
+        // One more fits; the next is refused, and nothing in use is dropped.
+        write_file(state, "live-last", "x").unwrap();
+        let before = names();
+        assert!(write_file(state, "one-too-many", "x").is_err());
+        assert_eq!(names(), before);
+        // Its own file is replaced, so a start writing again still fits.
+        write_file(state, "live-0", "again").unwrap();
+        // A node's start drops what finished while it was down.
+        aged(&folder.join("live-1"), finished);
+        sweep(state);
+        assert!(!folder.join("live-1").exists());
+        assert_eq!(names().len(), PROMPT_FILES_CAP - 1);
     }
 }

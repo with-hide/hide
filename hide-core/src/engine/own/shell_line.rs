@@ -34,35 +34,6 @@ pub(super) fn shell_of(name: Option<&str>, windows: bool) -> Option<Syntax> {
     }
 }
 
-/// `argv` and then the text of the prompt file at `prompt` as its last word
-/// (`Syntax::file_word`), one command line `shell` reads, with no Enter: a
-/// start's first input reaches the program from a file of the pane's
-/// machine, never as typed text the shell's locale could change. In
-/// PowerShell a script runs in the shell with the text as it is, anything
-/// else as one process whose Windows command line ends with the text quoted
-/// as one word, as [`powershell_script`] starts a program.
-pub(super) fn command_with_prompt(argv: &[String], prompt: &str, shell: Syntax) -> Option<String> {
-    let (program, args) = argv.split_first()?;
-    let text = shell.file_word(prompt);
-    Some(match shell {
-        Syntax::Posix => format!("{} {text}", command(argv, shell)?),
-        Syntax::PowerShell => {
-            let (script, _) = powershell_parts(program, args);
-            let command_line = args
-                .iter()
-                .map(|arg| format!("{} ", hide_shell::quote::windows_argument(arg)))
-                .collect::<String>();
-            format!(
-                "if({script}){{& {program} {powershell_args} {text}}}else{{Start-Process -FilePath {program} -ArgumentList ({command_line} + {quoted}) -NoNewWindow -Wait}}",
-                program = powershell_quote(program),
-                powershell_args = powershell_args(args),
-                command_line = Syntax::PowerShell.single_quoted(&command_line),
-                quoted = hide_shell::quote::powershell_windows_argument(&text),
-            )
-        }
-    })
-}
-
 /// `argv` as one command line `shell` reads, with no Enter.
 pub(super) fn command(argv: &[String], shell: Syntax) -> Option<String> {
     let (program, args) = argv.split_first()?;

@@ -240,6 +240,9 @@ fn serve_in(
         ai: Arc::default(),
         ..env
     };
+    // A start's prompt file left by a line that never ran, from before this
+    // node started, is finished.
+    crate::prompt_files::sweep(env.state.as_deref());
     let env = match services.worktree_facts {
         Some(folder) => Env {
             worktrees: Arc::new(worktrees::Measured::kept_in(folder)),
@@ -864,6 +867,10 @@ pub struct Env {
     /// The node's pane holders, once it runs them for the core's own engine
     /// (`Call::Pane`, `Call::PaneWatch`).
     pub panes: crate::pane_holders::PaneSlot,
+    /// The node's own program, whose `hide` beside it runs a start that a
+    /// profile or a first input rides (`hide agent exec`): the running
+    /// executable, or a test's stand-in.
+    pub program: Option<PathBuf>,
 }
 
 /// How this node runs a Hide AI backend's profile: as a start of it runs
@@ -1008,6 +1015,7 @@ impl Env {
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             panes: Default::default(),
+            program: std::env::current_exe().ok(),
         }
     }
 
@@ -1025,6 +1033,7 @@ impl Env {
             worktrees: Arc::default(),
             state: None,
             panes: Default::default(),
+            program: std::env::current_exe().ok(),
         }
     }
 
@@ -1454,11 +1463,9 @@ pub fn handle_with_progress(
                 .map_err(|reason| HostError::new(ErrorCode::InvalidPath, reason))?,
         ),
         Call::AgentInstalled { name } => to_value(agent_start_form(Path::new(&name))),
-        Call::PromptFile { start, text } => {
-            crate::prompt_files::write(env.state.as_deref(), &start, &text)
-                .map(Value::from)
-                .map_err(|reason| HostError::new(ErrorCode::Io, reason))
-        }
+        Call::PromptFile { start, text } => crate::prompt_files::write(env, &start, &text)
+            .and_then(|written| serde_json::to_value(written).map_err(|error| error.to_string()))
+            .map_err(|reason| HostError::new(ErrorCode::Io, reason)),
         Call::PromptFileRemove { start } => {
             crate::prompt_files::remove(env.state.as_deref(), &start)
                 .map(|()| Value::Null)

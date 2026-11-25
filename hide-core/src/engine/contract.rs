@@ -30,7 +30,12 @@ const WAIT: Wait = Wait::Each(Duration::from_secs(10));
 const SHOWN_WITHIN: Duration = Duration::from_secs(30);
 /// How long a start may take to reach its program, the start wait a spawn
 /// gives an agent's screen.
+#[cfg(windows)]
 const START_WITHIN: Duration = crate::agent_start::AGENT_START_DEADLINE;
+/// How long one shell has to run a typed start in the per-shell tests,
+/// well inside the harness's 120 s bound for a test.
+#[cfg(unix)]
+const SHELL_START_WITHIN: Duration = Duration::from_secs(30);
 
 /// A command line for the engine's default shell that prints `word-42`,
 /// spelled so that the line itself does not contain what it prints.
@@ -457,11 +462,17 @@ fn built_node_and_holders(
         PaneShell::Fixed(shell),
     ));
     (
-        Arc::new(
-            hide_node::Local::new(Some(home.to_owned()))
+        Arc::new({
+            let node = hide_node::Local::new(Some(home.to_owned()))
                 .keeping_feedback_in(state_dir.to_owned())
-                .with_panes(panes),
-        ),
+                .with_panes(panes);
+            // A start with a first input runs the `hide` beside the node's
+            // program (`hide agent exec --prompt-file`): the built one.
+            match std::env::var_os("HIDE_TEST_HIDE_BIN") {
+                Some(hide) => node.with_program(PathBuf::from(hide).with_file_name("hided")),
+                None => node,
+            }
+        }),
         terminals.service,
         holders,
     )
@@ -1294,26 +1305,59 @@ fn launched_input_reaches_npms_program(shell: &str) {
 
 /// A first input launched as a start's argument reaches the program whole
 /// from a shell in glibc's `C` locale, whose line editor turns each
-/// non-ASCII byte it reads into `?` (with-hide/hide#2900): the line holds
-/// only the path of the file the pane's node keeps the input in, so a
-/// Korean brief of many lines arrives as given, and the file is gone once
-/// read. Each shell the lane gives (`HIDE_TEST_ZSH_BIN`, `HIDE_TEST_BASH_BIN`,
-/// `HIDE_TEST_FISH_BIN`) and `/bin/sh` runs the pane, with `LC_ALL=C`.
+/// non-ASCII byte it reads into `?` (with-hide/hide#2900): the line runs the
+/// node's `hide` (`HIDE_TEST_HIDE_BIN`) with the path of the file the node
+/// keeps the input in and needs no syntax of the shell's own, so a Korean
+/// brief arrives as given in every shell, and the file is gone once read.
+/// One test per shell the lane gives (`HIDE_TEST_ZSH_BIN`,
+/// `HIDE_TEST_BASH_BIN`, `HIDE_TEST_FISH_BIN`, `HIDE_TEST_TCSH_BIN`,
+/// `HIDE_TEST_CSH_BIN`) and `/bin/sh`, each pane with `LC_ALL=C`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and zsh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_ZSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_zsh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_ZSH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and bash: HIDE_TEST_HOLDER_BIN, HIDE_TEST_BASH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_bash() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_BASH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and fish: HIDE_TEST_HOLDER_BIN, HIDE_TEST_FISH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_fish() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_FISH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and tcsh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_TCSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_tcsh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_TCSH_BIN"));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder and BSD csh: HIDE_TEST_HOLDER_BIN, HIDE_TEST_CSH_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_csh() {
+    launched_input_reaches_the_program_in(shell_named("HIDE_TEST_CSH_BIN"));
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
-fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_shell() {
-    let shells = [
-        "HIDE_TEST_ZSH_BIN",
-        "HIDE_TEST_BASH_BIN",
-        "HIDE_TEST_FISH_BIN",
-    ]
-    .into_iter()
-    .filter_map(std::env::var_os)
-    .chain(std::iter::once("/bin/sh".into()));
-    for shell in shells {
-        launched_input_reaches_the_program_in(shell);
-    }
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_sh() {
+    launched_input_reaches_the_program_in("/bin/sh".into());
+}
+
+/// The shell the lane names in `variable`.
+#[cfg(unix)]
+fn shell_named(variable: &str) -> std::ffi::OsString {
+    std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell"))
 }
 
 #[cfg(unix)]
@@ -1326,8 +1370,15 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
         }
     }
     let named = shell.to_string_lossy().into_owned();
+    assert!(
+        std::env::var_os("HIDE_TEST_HIDE_BIN").is_some(),
+        "the start runs the node's hide: set HIDE_TEST_HIDE_BIN (scripts/prepare-ignored-tests.sh)"
+    );
     let running = Running(BuiltHolders::start_in(vec![shell]));
     let built = &running.0;
+    // A zsh whose home holds no startup file opens its new-user menu on
+    // Debian and Ubuntu, which would take the typed start as its answer.
+    std::fs::write(built.home.join(".zshrc"), "").unwrap();
     let engine = &built.engine;
     engine.set_agent_definitions(std::sync::Arc::new(
         hide_agent_adapter::definition::Catalog::read(Vec::new()),
@@ -1385,9 +1436,19 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
     engine
         .start_agent(WAIT, &start)
         .unwrap_or_else(|error| panic!("{named} takes the start: {error:?}"));
-    until_within("the program records its arguments", START_WITHIN, || {
-        written.exists()
-    });
+    // Well inside the harness's own bound, so a shell that never runs the
+    // start is named, with what its pane shows.
+    until_within_showing(
+        &format!("{named} runs the start"),
+        SHELL_START_WITHIN,
+        || written.exists(),
+        || {
+            engine
+                .read_pane(WAIT, &pane, "visible", 40)
+                .map(|read| read.text)
+                .unwrap_or_default()
+        },
+    );
     let given: Vec<String> = std::fs::read(&written)
         .unwrap()
         .split(|byte| *byte == 0)
@@ -1981,11 +2042,23 @@ fn until(what: &str, done: impl Fn() -> bool) {
     until_within(what, SHOWN_WITHIN, done);
 }
 
-#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until_within(what: &str, within: Duration, done: impl Fn() -> bool) {
+    until_within_showing(what, within, done, String::new);
+}
+
+/// [`until_within`], naming in its failure what `shown` reads then.
+#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
+fn until_within_showing(
+    what: &str,
+    within: Duration,
+    done: impl Fn() -> bool,
+    shown: impl Fn() -> String,
+) {
     let deadline = Instant::now() + within;
     while !done() {
-        assert!(Instant::now() < deadline, "{what} never happened");
+        if Instant::now() >= deadline {
+            panic!("{what} never happened; it shows:\n{}", shown());
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }

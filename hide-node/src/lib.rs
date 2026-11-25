@@ -105,6 +105,14 @@ impl Local {
         self
     }
 
+    /// The node's `hide` is the one beside `program` rather than beside the
+    /// running executable: a test's node, in a test binary with no `hide`
+    /// beside it, names the built one.
+    pub fn with_program(mut self, program: std::path::PathBuf) -> Self {
+        self.env.program = Some(program);
+        self
+    }
+
     /// The node answers for an account whose panes start `shell`, rather
     /// than the one this process's environment names.
     pub fn with_shell(mut self, shell: hide_host::shell_integration::UserShell) -> Self {
