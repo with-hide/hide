@@ -396,3 +396,32 @@ html[data-view-drag="row-resize"] * {
     animation-name: none;
   }
 }
+
+/*
+ * The working line's word (`WorkingLine`, feedback 1 c3): a light band
+ * crosses it about every 3 s; the time beside it stays still, and reduced
+ * motion shows the plain muted word.
+ */
+.working-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 40%, var(--color-foreground) 50%, var(--color-muted-foreground) 60%) 100% 0 / 300% 100% no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: working-sweep 3s linear infinite;
+}
+@keyframes working-sweep {
+  0% {
+    background-position: 100% 0;
+  }
+  35%,
+  100% {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-shimmer {
+    animation: none;
+    background: none;
+    color: var(--color-muted-foreground);
+  }
+}

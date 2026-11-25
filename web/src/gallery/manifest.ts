@@ -14,7 +14,7 @@ export const GALLERY = {
   "Toggle Group": ["Default", "Hover", "Focus", "Disabled", "Extra Small"],
   "Slider": ["Default", "Focus", "Disabled"],
   "Tabs": ["Default", "Hover", "Focus", "Disabled"],
-  "Badge": ["Default", "Secondary", "Destructive", "Outline", "Warning"],
+  "Badge": ["Default", "Secondary", "Destructive", "Outline", "Warning", "Success"],
   "Kbd": ["Default", "Group"],
   "Separator": ["Horizontal", "Vertical"],
   "Dropdown Menu": ["Closed", "Open", "Highlighted", "Disabled Item", "Destructive Item"],

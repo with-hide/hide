@@ -15,13 +15,21 @@ import { DeskMark } from "./desk-entry";
 /** One arrow key on a focused edge moves it this many pixels, as the lane's divider does. */
 const EDGE_STEP = 32;
 
-/** The chat column's head: Desk's own mark and name, and `＋ 새 대화` (B10; Doop ①). */
-export function DeskChatHead({ onNewConversation }: { onNewConversation: () => void }) {
+/**
+ * The chat column's head: Desk's own mark and name, `＋ 새 대화` (B10; Doop
+ * ①) and at its right end `나가기 ✕` (feedback 1 D2), which goes back to the
+ * tab in front before Desk (`leaveTo`), as `leaveChord` does.
+ */
+export function DeskChatHead({ onNewConversation, onLeave, leaveTo = null, leaveChord = null }: { onNewConversation: () => void; onLeave: () => void; leaveTo?: string | null; leaveChord?: string | null }) {
   const { t } = useInterfaceTranslation();
+  const hint = [t("desk.leave.hint"), leaveTo ? t("desk.leave.to", { place: leaveTo }) : null].filter(Boolean).join(" · ");
   return (
     <>
       <span className="flex flex-1 items-center gap-xs font-semibold text-foreground"><DeskMark />{t("desk.name")}</span>
       <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-new-conversation="true" onClick={onNewConversation}><PlusIcon />{t("desk.newConversation")}</Button>
+      <Hint label={hint} shortcut={leaveChord ?? undefined}>
+        <Button variant="ghost" size="sm" aria-label={`${t("desk.leave")} · ${hint}`} className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-leave="true" onClick={onLeave}>{t("desk.leave")}<XIcon /></Button>
+      </Hint>
     </>
   );
 }

@@ -13,7 +13,9 @@ export const useGroupName = create<{ intent: GroupNameIntent | null; open: (inte
 export function groupNameProblem(name: string, groups: readonly AgentGroup[], id: string | null): "groups.invalidName" | "groups.duplicateName" | "groups.limit" | null {
   const trimmed = name.trim();
   if ([...trimmed].length === 0 || [...trimmed].length > 80 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(name)) return "groups.invalidName";
-  if (groups.some((group) => group.id !== id && group.name === trimmed)) return "groups.duplicateName";
+  // A reserved group (Desk's) never clashes with the operator's names, and theirs never with it.
+  const role = groups.find((group) => group.id === id)?.role ?? null;
+  if (groups.some((group) => group.id !== id && (group.role ?? null) === (id === null ? null : role) && group.name === trimmed)) return "groups.duplicateName";
   if (id === null && groups.filter((group) => group.id !== null).length >= 32) return "groups.limit";
   return null;
 }

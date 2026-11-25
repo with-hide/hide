@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
-import { closeCovering, installKeyboard } from "./keyboard";
+import { closeCovering, installKeyboard, pressDeskRow } from "./keyboard";
 import type { AgentRow, DeskSection, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -19,8 +19,8 @@ let sequence: number;
 let remove: (() => void) | undefined;
 const actions = createActions(() => true);
 
-function emit(type: string, key: string, modifiers: { metaKey?: boolean; altKey?: boolean } = {}) {
-  const event = { key, code: key === "Alt" ? "AltLeft" : key, metaKey: modifiers.metaKey ?? false, altKey: modifiers.altKey ?? false, ctrlKey: false, shiftKey: false, isComposing: false, keyCode: 0, target: null, preventDefault() {}, stopPropagation() {} } as unknown as KeyboardEvent;
+function emit(type: string, key: string, modifiers: { metaKey?: boolean; altKey?: boolean; ctrlKey?: boolean } = {}) {
+  const event = { key, code: key === "Alt" ? "AltLeft" : key, metaKey: modifiers.metaKey ?? false, altKey: modifiers.altKey ?? false, ctrlKey: modifiers.ctrlKey ?? false, shiftKey: false, isComposing: false, keyCode: 0, target: null, preventDefault() {}, stopPropagation() {} } as unknown as KeyboardEvent;
   for (const listener of listeners.get(type) ?? []) listener(event);
 }
 
@@ -171,5 +171,22 @@ describe("⌘E beside Desk", () => {
     emit("keydown", "KeyE", { metaKey: true });
     expect(room().session).toBeNull();
     expect(room().closed).toBeNull();
+  });
+});
+
+// Feedback 1 D2: ⌃⇥ in Desk's room and a press on the sidebar's Desk row while
+// Desk is in front leave Desk as its head's `나가기 ✕` does; with no panel
+// used before Desk, All projects takes its place.
+describe("leaving Desk", () => {
+  it("leaves on the recent-tab chord pressed in Desk's room", () => {
+    emit("keydown", "Tab", { ctrlKey: true });
+    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+  });
+
+  it("leaves on the Desk row's press while Desk is in front, and opens Desk on it otherwise", () => {
+    pressDeskRow(actions);
+    expect(useUiStore.getState().screen).toEqual({ kind: "main" });
+    pressDeskRow(actions);
+    expect(useUiStore.getState().screen?.kind).toBe("desk");
   });
 });

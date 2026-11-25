@@ -27,7 +27,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, DESK_PERMISSION_LEVELS, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermissions, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, DESK_PERMISSION_LEVELS, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermissions, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -112,7 +112,7 @@ function SceneSidebar({ jobs, selected }: { jobs: readonly DeskJob[]; selected: 
 
 /** The chat column's head, as a scene sets it. */
 function ChatHead() {
-  return <DeskChatHead onNewConversation={noop} />;
+  return <DeskChatHead onNewConversation={noop} onLeave={noop} leaveTo="herdr-ide › Windows 파일 링크 버그" leaveChord="⌃⇥" />;
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
@@ -160,7 +160,7 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, ou
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
   const question = sessionQuestion(job, null);
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onClose={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
     <ThreadView
       job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
@@ -204,9 +204,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean; queued?: DeskQueuedMessage[] } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} queued={options.queued ?? []} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -220,7 +220,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "s2":
-      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { thinking: true, selectedJob: "gallery" })} />;
+      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { working: "sessions", selectedJob: "gallery" })} />;
       break;
     case "s2b":
       body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} />;
@@ -234,7 +234,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const thread = galleryThread();
       const items: DeskItem[] = [
         { kind: "user", id: 1, text: "갤러리 캡처 라이트·다크로 비교해줘", at_ms: now, mentions: [] },
-        { kind: "reply", mentions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
+        { kind: "reply", mentions: [], missions: [], agent: "claude", id: 2, text: "갤러리 비교를 새 스레드로 띄웠어요.", at_ms: now, state: "done", thought_ms: null, steps: { sessions: 0, files: 0, letters: 0, starts: 0, other: 0 } },
         { kind: "job", id: 3, job_id: "gallery" },
       ];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}

@@ -131,6 +131,7 @@ struct Agent {
 
 #[derive(Deserialize)]
 struct Mission {
+    id: String,
     title: String,
     role: String,
 }
@@ -278,7 +279,10 @@ fn agent_text(agent: &Agent) -> String {
         text.push_str(&format!("  \"{label}\""));
     }
     if let Some(mission) = &agent.mission {
-        text.push_str(&format!("  mission \"{}\" {}", mission.title, mission.role));
+        text.push_str(&format!(
+            "  mission {} \"{}\" {}",
+            mission.id, mission.title, mission.role
+        ));
     }
     if let Some(observer) = &agent.watched_by {
         text.push_str(&format!("  (watched by {observer})"));
@@ -573,6 +577,22 @@ mod tests {
         let text = draw(&read(&kept).unwrap());
         assert!(
             text.contains("tab web\n      ├─ w3:p1  grandchild"),
+            "{text}"
+        );
+    }
+
+    /// Desk's instructions ask its agent to name a mission by the id `hide ps`
+    /// prints after `mission`, so the text keeps that shape.
+    #[test]
+    fn an_agent_in_a_mission_prints_the_mission_s_id_title_and_its_role() {
+        let mut value = fixture();
+        value["panes"][0]["agent"]["mission"] =
+            json!({"id": "mission-63", "title": "결제 흐름 정리 (11-25)", "role": "conductor"});
+        let text = draw(&read(&value).unwrap());
+        assert!(
+            text.contains(
+                "w1:p1  lead [agent-1]  claude  going  \"lead task\"  mission mission-63 \"결제 흐름 정리 (11-25)\" conductor\n"
+            ),
             "{text}"
         );
     }

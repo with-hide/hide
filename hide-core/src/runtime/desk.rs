@@ -129,6 +129,8 @@ struct Turn {
     started_at_ms: u64,
     first_text_at_ms: Option<u64>,
     steps: crate::model::DeskSteps,
+    /// What its newest tool call does, until the agent writes again.
+    now: Option<crate::model::DeskStepKind>,
 }
 
 /// A card waiting for the operator, and how to answer the agent.
@@ -735,6 +737,7 @@ impl Runtime {
             started_at_ms: crate::links::now_ms(),
             first_text_at_ms: None,
             steps: Default::default(),
+            now: None,
         });
         let resume = self
             .desk
@@ -1169,6 +1172,10 @@ impl Runtime {
                     mark: None,
                 })
                 .collect();
+            let missions = hide_desk::mission_mentions(&turn.text)
+                .into_iter()
+                .map(|(id, title)| crate::model::DeskMissionMention { id, title })
+                .collect();
             self.desk.stored.conversation.push(DeskItem::Reply {
                 id,
                 agent: turn.agent,
@@ -1184,6 +1191,7 @@ impl Runtime {
                     .map(|at| at.saturating_sub(turn.started_at_ms)),
                 steps: turn.steps,
                 mentions,
+                missions,
             });
             // The sessions it names get their cards (D-86).
             self.compose_desk_jobs();
@@ -1360,6 +1368,18 @@ impl Runtime {
                 } else {
                     turn.text.push_str(&text);
                 }
+                self.compose_desk_live();
+                return true;
+            }
+            Report::Step { tag, step } => {
+                let Some(turn) = self.desk.turn.as_mut().filter(|turn| turn.tag == tag) else {
+                    return false;
+                };
+                let now = step.map(Into::into);
+                if turn.now == now {
+                    return false;
+                }
+                turn.now = now;
                 self.compose_desk_live();
                 return true;
             }
@@ -1711,6 +1731,7 @@ impl Runtime {
         self.snapshot.desk_live = Some(Arc::new(DeskLiveSnapshot {
             text: turn.map(|turn| turn.text.clone()),
             started_at_ms: turn.map(|turn| turn.started_at_ms),
+            step: turn.and_then(|turn| turn.now),
         }));
     }
 }
@@ -2310,6 +2331,37 @@ mod tests {
         let live = runtime.snapshot.desk_live.as_ref().unwrap();
         assert_eq!(live.text.as_deref(), Some("two sessions"));
         assert!(live.started_at_ms.is_some());
+        assert_eq!(live.step, None);
+        // The step the worker tells shows until it tells another or none.
+        let step = |runtime: &Runtime| runtime.snapshot.desk_live.as_ref().unwrap().step;
+        let files = Some(hide_desk::permission::Step::Files);
+        assert!(runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: files,
+        }));
+        assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Files));
+        assert!(!runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: files,
+        }));
+        assert!(!runtime.desk_report(Report::Step {
+            tag: send.tag + 1,
+            step: Some(hide_desk::permission::Step::Letter),
+        }));
+        assert!(runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: None,
+        }));
+        assert_eq!(step(&runtime), None);
+        runtime.desk_report(Report::Text {
+            tag: send.tag,
+            text: " in @mission(mission-63 결제 흐름 정리 (11-25)).".into(),
+        });
+        runtime.desk_report(Report::Step {
+            tag: send.tag,
+            step: Some(hide_desk::permission::Step::Letter),
+        });
+        assert_eq!(step(&runtime), Some(crate::model::DeskStepKind::Letters));
         runtime.desk_report(Report::Steps {
             tag: send.tag,
             steps: vec![
@@ -2330,15 +2382,27 @@ mod tests {
             state: DeskReplyState::Done,
             thought_ms,
             steps,
+            missions,
             ..
         }) = desk.conversation.items.last()
         else {
             panic!("no reply");
         };
-        assert_eq!(text, "two sessions");
+        assert_eq!(
+            text,
+            "two sessions in @mission(mission-63 결제 흐름 정리 (11-25))."
+        );
+        assert_eq!(
+            missions,
+            &[crate::model::DeskMissionMention {
+                id: "mission-63".into(),
+                title: "결제 흐름 정리 (11-25)".into(),
+            }]
+        );
         assert!(thought_ms.is_some());
         assert_eq!((steps.sessions, steps.letters), (2, 1));
-        assert_eq!(runtime.snapshot.desk_live.as_ref().unwrap().text, None);
+        let live = runtime.snapshot.desk_live.as_ref().unwrap();
+        assert_eq!((live.text.as_deref(), live.step), (None, None));
     }
 
     #[test]
