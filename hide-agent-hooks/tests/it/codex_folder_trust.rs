@@ -74,6 +74,7 @@ impl Fixture {
 
     fn trust(&self) -> Result<(), String> {
         folder_trust::trust_worktree(Agent::Codex, self.home.path(), &self.tree, self.tools())
+            .map(drop)
             .map_err(|failure| failure.message())
     }
 

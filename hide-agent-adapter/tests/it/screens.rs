@@ -56,6 +56,24 @@ fn every_captured_screen_reads_as_the_state_the_operator_saw() {
                 .evaluate(Input::screen(&text))
                 .map_or(State::Idle, |detection| detection.state);
             assert_eq!(state, expected, "{id}/{name}");
+            // A capture of the agent's question whether to trust a folder is
+            // read by the rule that says it is that question, which is what
+            // Hide's folder trust contract reads (docs/agent-hooks.md).
+            if name.starts_with("blocked-trust-folder") {
+                let rule = rules
+                    .evaluate(Input::screen(&text))
+                    .map(|detection| detection.rule.to_owned());
+                let asks = rules
+                    .rules()
+                    .iter()
+                    .find(|each| Some(&each.id) == rule.as_ref())
+                    .and_then(|each| each.asks);
+                assert_eq!(
+                    asks,
+                    Some(hide_screen_rules::Asks::FolderTrust),
+                    "{id}/{name}: read by {rule:?}"
+                );
+            }
             checked += 1;
         }
     }

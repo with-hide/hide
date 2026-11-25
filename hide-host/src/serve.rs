@@ -1504,12 +1504,9 @@ pub fn handle_with_progress(
         } => {
             use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&kind)
-                .and_then(|adapter| adapter.start)
-                .and_then(Agent::of)
-                .ok_or_else(|| {
-                    HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
-                })?;
+            let agent = Agent::of_kind(&kind).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
+            })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
             let account = match &profile {
@@ -1536,7 +1533,23 @@ pub fn handle_with_progress(
             // trust for the folders Hide starts agents in).
             if trusted {
                 let automations = hide_kit::layout::automations_home(home);
-                folder_trust::trust_started_folder(agent, at, folder, &automations, tools)
+                folder_trust::trust_started_folder(agent, at, folder, &automations, tools).map(
+                    |added| {
+                        // The operator's own answer for the folder, "Do not
+                        // trust" included, stays as it is; the start goes on
+                        // as it would without Hide.
+                        if added == folder_trust::Added::Present {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "component": "node",
+                                    "kind": "agent_trust.operator_decides",
+                                    "agent": kind,
+                                })
+                            );
+                        }
+                    },
+                )
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
