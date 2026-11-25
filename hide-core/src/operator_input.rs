@@ -616,9 +616,11 @@ impl Rows {
     /// The command the last approval dialog on `screen` asks for, when the
     /// dialog draws it as a one-line command: the dialog is the one the
     /// ask's first row (its lowest, highlighted or not) closes, found by the
-    /// nearest `slot.title` above that row; under the title, the first line
-    /// that begins with `slot.separator`, then the command, past its indent
-    /// only, then that same separator line again. A command behind a border
+    /// nearest `slot.title` above that row; under the title, either the first
+    /// line that begins with `slot.separator`, then the command, past its
+    /// indent only, then that same separator line again, or the lowest line
+    /// that begins with `slot.prompt`, with only blank lines before the row.
+    /// A command behind a border
     /// or a gutter (`│`), as an agent draws one of more lines, and a dialog
     /// of any other shape are `None`, so the shape is read before anything
     /// on it is taken for the command's text.
@@ -637,11 +639,25 @@ impl Rows {
             )
         })?;
         let title = lines[..row].iter().rposition(|line| *line == slot.title)?;
+        if let Some(prompt) = &slot.prompt {
+            // The command is the lowest line under the title that begins with
+            // the prompt, and nothing but blank lines stands between it and
+            // the row: a command the screen wraps puts text there.
+            let at = title
+                + 1
+                + lines[title + 1..row]
+                    .iter()
+                    .rposition(|line| line.starts_with(prompt.as_str()))?;
+            let command = lines[at].strip_prefix(prompt.as_str())?.trim();
+            return (lines[at + 1..row].iter().all(|line| line.is_empty()) && !command.is_empty())
+                .then_some(command);
+        }
+        let separator = slot.separator.as_deref()?;
         let opens = title
             + 1
             + lines[title + 1..row]
                 .iter()
-                .position(|line| line.starts_with(slot.separator.as_str()))?;
+                .position(|line| line.starts_with(separator))?;
         match lines[opens..row] {
             [separator, command, closes, ..]
                 if closes == separator
@@ -694,12 +710,14 @@ pub fn choice_screen(agent_kind: &str, ask: Ask, choice: &str, labels: &[String]
     }
 }
 
-/// Whether the agent's permission names no command, since it records a call
-/// only once it is allowed (`unnamed` in its key table).
-pub fn unnamed_permission(agent_kind: &str) -> bool {
+/// Whether the agent's permission is named by its hook, since the agent
+/// records a call only once it is allowed (`by_hook` in its key table): the
+/// card's command is the one its permission request hook gave, and no screen
+/// check is made of it.
+pub fn permission_by_hook(agent_kind: &str) -> bool {
     answer_table(agent_kind)
         .and_then(|answer| answer.permission.as_ref())
-        .is_some_and(|permission| permission.unnamed)
+        .is_some_and(|permission| permission.by_hook)
 }
 
 /// Whether `key` acts on the highlighted row, or moves it: every key but
@@ -1380,6 +1398,41 @@ mod tests {
         assert!(!antigravity.shows(
             "Requesting permission for:\n   touch a\n\nRun this command?\n> 1. Yes, run command",
             Some(0)
+        ));
+    }
+
+    /// Codex draws the command on its own `$ ` line under its title, with only
+    /// blank lines before the rows: a command the card names is typed on only
+    /// while that line holds the same command, never on another dialog, a
+    /// wrapped command, a line of another prompt or a row with no dialog.
+    #[test]
+    fn codexs_command_is_read_from_its_dollar_line_alone() {
+        let codex = choice_screen("codex", Ask::Permission, "allow", &[]).showing("cargo test");
+        let dialog = |body: &str| {
+            format!(
+                "Would you like to run the following command?\n\nEnvironment: local\n\n{body}\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)\n"
+            )
+        };
+        assert!(codex.shows(&dialog("Reason: why\n\n$ cargo test"), None));
+        assert!(codex.shows(&dialog("$ cargo test"), Some(0)));
+        assert!(!codex.shows(&dialog("$ cargo test --all"), None));
+        assert!(!codex.shows(&dialog("$ cargo"), None));
+        assert!(!codex.shows(&dialog("# cargo test"), None));
+        assert!(!codex.shows(&dialog("$ cargo test\n   --all"), None));
+        assert!(!codex.shows(&dialog("Reason: $ cargo test"), None));
+        assert!(!codex.shows("› 1. Yes, proceed (y)\n", None));
+        // The dialog of an edit has another title and draws no command line.
+        assert!(!codex.shows(
+            "Would you like to make the following edits?\n\n$ cargo test\n\n› 1. Yes, proceed (y)\n",
+            None
+        ));
+        // An earlier dialog's command above the title is not this one's.
+        assert!(!codex.shows(
+            &format!(
+                "$ cargo test\n\n{}",
+                dialog("Reason: why").replace("run the following command", "run the next command")
+            ),
+            None
         ));
     }
 

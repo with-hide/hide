@@ -2905,3 +2905,129 @@ fn waiting_explorer_changes_are_dropped_when_the_checkout_in_front_changes() {
     );
     assert_eq!(f.diagnostics("explorer.queue_dropped"), 1);
 }
+
+/// A file a View shows changed on disk (`file_conflict` `follow`): a tab
+/// with no edit of its own shows the file as it is now, a tab with a draft
+/// keeps the draft, a draft typed while the read ran is kept too, and a file
+/// removed since raises nothing on the screen.
+#[test]
+fn a_followed_change_on_disk_replaces_only_a_tab_that_holds_nothing_of_its_own() {
+    let f = Fixture::new();
+    f.open_and_wait("a.txt");
+    let tab_id = Runtime::file_tab_id(WORKSPACE, &f.checkout, &f.path("a.txt"));
+    let follow = || {
+        f.dispatch(
+            "file_conflict",
+            serde_json::json!({"tab_id": tab_id, "action": "follow"}),
+        );
+    };
+
+    std::fs::write(f.root.join("a.txt"), "written by an agent\n").unwrap();
+    follow();
+    f.wait_for_document("a.txt", "the followed read", |document| {
+        document.contents_utf8.as_deref() == Some("written by an agent\n")
+    });
+    let followed = f.document("a.txt").unwrap();
+    assert!(!followed.dirty);
+    assert_eq!(
+        followed.revision.as_deref(),
+        Some(hide_node_link::document::revision_of(b"written by an agent\n").as_str()),
+        "the next save is checked against the file as it is now"
+    );
+
+    f.dispatch(
+        "file_draft",
+        serde_json::json!({"tab_id": tab_id, "contents_utf8": "the operator's draft\n"}),
+    );
+    std::fs::write(f.root.join("a.txt"), "written again\n").unwrap();
+    let reads = f.device.reads().len();
+    follow();
+    assert_eq!(
+        f.device.reads().len(),
+        reads,
+        "a tab with a draft reads nothing"
+    );
+    assert_eq!(
+        f.document("a.txt").unwrap().contents_utf8.as_deref(),
+        Some("the operator's draft\n")
+    );
+
+    let f = Fixture::new();
+    f.open_and_wait("a.txt");
+    let tab_id = Runtime::file_tab_id(WORKSPACE, &f.checkout, &f.path("a.txt"));
+    std::fs::write(f.root.join("a.txt"), "written by an agent\n").unwrap();
+    f.device.hold_read("a.txt");
+    f.dispatch(
+        "file_conflict",
+        serde_json::json!({"tab_id": tab_id, "action": "follow"}),
+    );
+    f.wait("the followed read to wait", |runtime| {
+        runtime.document_opens.contains_key(&tab_id)
+    });
+    f.dispatch(
+        "file_draft",
+        serde_json::json!({"tab_id": tab_id, "contents_utf8": "typed while it read\n"}),
+    );
+    f.device.release_read("a.txt");
+    f.wait("the followed read to land", |runtime| {
+        !runtime.document_opens.contains_key(&tab_id)
+    });
+    assert_eq!(
+        f.document("a.txt").unwrap().contents_utf8.as_deref(),
+        Some("typed while it read\n"),
+        "a draft typed while the read ran is kept"
+    );
+
+    // The operator's save while a followed read runs is sent, not refused
+    // as a save during a reload: it meets the change on disk as a conflict,
+    // and the read's late answer changes nothing.
+    let f = Fixture::new();
+    f.open_and_wait("a.txt");
+    let tab_id = Runtime::file_tab_id(WORKSPACE, &f.checkout, &f.path("a.txt"));
+    std::fs::write(f.root.join("a.txt"), "written by an agent\n").unwrap();
+    f.device.hold_read("a.txt");
+    f.dispatch(
+        "file_conflict",
+        serde_json::json!({"tab_id": tab_id, "action": "follow"}),
+    );
+    f.wait("the followed read to wait", |runtime| {
+        runtime.document_opens.contains_key(&tab_id)
+    });
+    f.save("a.txt", "saved over it\n");
+    assert_ne!(f.last_error().as_deref(), Some("file.save_during_reload"));
+    f.wait_for_document("a.txt", "the save to meet the change", |document| {
+        document.conflict.is_some()
+    });
+    f.device.release_read("a.txt");
+    f.wait("the late read to be dropped", |runtime| {
+        runtime
+            .snapshot
+            .status
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == "file.open_dropped")
+    });
+    assert_eq!(
+        f.document("a.txt").unwrap().contents_utf8.as_deref(),
+        Some("saved over it\n")
+    );
+
+    let f = Fixture::new();
+    f.open_and_wait("a.txt");
+    let tab_id = Runtime::file_tab_id(WORKSPACE, &f.checkout, &f.path("a.txt"));
+    let before = f.document("a.txt").unwrap();
+    std::fs::remove_file(f.root.join("a.txt")).unwrap();
+    f.dispatch(
+        "file_conflict",
+        serde_json::json!({"tab_id": tab_id, "action": "follow"}),
+    );
+    f.wait("the failed read to land", |runtime| {
+        !runtime.document_opens.contains_key(&tab_id)
+    });
+    assert_eq!(
+        f.document("a.txt"),
+        Some(before),
+        "the tab keeps what it shows"
+    );
+    assert_eq!(f.last_error(), None, "nothing reaches the screen");
+}

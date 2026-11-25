@@ -3,7 +3,7 @@ import { pullLabel } from "../../codeHost";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askedIn, namedMention, threadTurns } from "../../desk";
+import { askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
@@ -19,6 +19,7 @@ import { Hint } from "../ui/tooltip";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import { sentWords, type ComposerTray } from "../../deskComposer";
 import { DeskMissionChip } from "./desk-job-card";
+import { WorkingLine } from "./working-line";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
 import { ThreadAsks } from "./thread-asks";
@@ -297,7 +298,7 @@ function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; l
       {turn.user ? <UserLine line={turn.user} handed={handed} copy={words.copy} actions={actions} /> : null}
       {turn.work.length ? (
         <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
-          {[live ? t("desk.turn.working") : t("desk.turn.work"), ...counts].join(" · ")}
+          {[t("desk.turn.work"), ...counts].join(" · ")}
           <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>
       ) : null}
@@ -391,8 +392,10 @@ function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions
  * line. A session asleep with no card any more (its sleep closed its pane,
  * B43) keeps its record above the foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, foot = null, onTerminal, onReachTop, ...actions }: {
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
   job: DeskJob | null;
+  /** When the session's running turn started (its row's last prompt), for the working line's time. */
+  workingSince?: number | null;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */
   reading?: boolean;
@@ -455,6 +458,8 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit?.id ?? null} actions={actions} />)}
           </ol>
         )}
+        {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
+        {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
       </div>
       {asks.length ? <div className="shrink-0 px-sm pt-xs"><ThreadAsks asks={asks} onGo={goTo} /></div> : null}

@@ -23,7 +23,7 @@ import {
 import { useEscapeLayer, useReturnFocus } from "./ui/layer";
 import { menuContent } from "./ui/menu-styles";
 import { useInterfaceTranslation } from "../i18n/client";
-import { menuGroupSymbols, menuSymbols, type MenuPresentation, type MenuGroup } from "./menu-symbols";
+import { menuGroupSymbols, menuSymbols, type MenuPresentation, type MenuGroup, type MenuSymbol } from "./menu-symbols";
 import { Hint } from "./ui/tooltip";
 
 export type MenuEntry<Id extends string = string> = MenuPresentation & {
@@ -40,7 +40,7 @@ export type MenuEntry<Id extends string = string> = MenuPresentation & {
   /** Nested destination actions, rendered with the same menu and keyboard behavior. */
   children?: MenuEntry<Id>[];
   /** One choice out of several: the entry opens a submenu of radio items and picking one selects that choice's id. */
-  choices?: { id: Id; label: string; checked: boolean }[];
+  choices?: { id: Id; label: string; checked: boolean; icon?: MenuSymbol }[];
 };
 
 const entryBounds = "max-h-(--radix-dropdown-menu-content-available-height) max-w-[calc(100vw-var(--spacing-md))]";
@@ -66,6 +66,7 @@ function FlatEntryItems<Id extends string>({ items, onSelect, parts, withIcons =
                 <DropdownMenuRadioGroup value={item.choices.find((choice) => choice.checked)?.id ?? ""} onValueChange={(value) => onSelect(value as Id)}>
                   {item.choices.map((choice) => (
                     <DropdownMenuRadioItem key={choice.id} value={choice.id} data-menu-item={choice.id}>
+                      {choice.icon ? <MenuSymbolSlot name={choice.icon} reserved={false} /> : null}
                       <span data-menu-label="">{choice.label}</span>
                     </DropdownMenuRadioItem>
                   ))}
@@ -110,7 +111,7 @@ function NestedEntryMenu<Id extends string>({ item, onSelect, parts, withIcons }
 function MenuSymbolSlot({ name, reserved, destructive }: { name?: MenuPresentation["icon"]; reserved: boolean; destructive?: boolean }) {
   if (!name) return reserved ? <span aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null;
   const Icon = menuSymbols[name];
-  return <Icon aria-hidden="true" data-menu-icon={name} className={cn("size-(--size-icon) shrink-0", destructive && "text-destructive")} />;
+  return <Icon aria-hidden="true" data-menu-icon={name} className={cn("size-(--size-icon) shrink-0", name === "desk" && "fill-current", destructive && "text-destructive")} />;
 }
 
 /** Only the visual grouping changes: callers keep one flat, checked command list. */

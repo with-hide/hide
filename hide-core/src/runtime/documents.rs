@@ -92,6 +92,10 @@ pub(super) struct OpenRequest {
     preview: bool,
     /// Replaces the open tab's document (Reload) instead of adding a tab.
     reload: bool,
+    /// A reload the file's change on disk asked for, not the operator: it
+    /// replaces the document only while the tab still holds no edit, save
+    /// or conflict of its own, and a failed read is logged, not shown.
+    follow: bool,
     reveal: Option<PendingReveal>,
     /// A View display's file read back after a restart, or retried
     /// (`view_areas.rs`): it joins the editor without taking the screen, the
@@ -392,6 +396,7 @@ impl Runtime {
                 path: request.path.clone(),
                 preview: request.preview,
                 reload: request.reload,
+                follow: request.reload && request.follow,
                 reveal: request.reveal,
                 restore: request.restore,
                 placements,
@@ -404,6 +409,7 @@ impl Runtime {
             "device": root.device_id,
             "generation": generation,
             "reload": request.reload,
+            "follow": request.reload && request.follow,
         }));
         let path = request.path;
         // A runtime without a worker context has no shared mutex to hold, so
@@ -517,6 +523,19 @@ impl Runtime {
             Ok(opened) => opened,
             // A View display's file read back after a restart, or retried:
             // its tab says why, and nothing else moves (S6 B20).
+            // The file changed on disk and could not be read again, often
+            // because it was removed: the tab keeps what it shows, and
+            // nothing reaches the screen the operator could act on.
+            Err(failure) if request.follow => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "documents",
+                    "kind": "file.follow_failed",
+                    "tab": tab_id,
+                    "generation": generation,
+                    "message": failure.message(),
+                }));
+                return true;
+            }
             Err(failure) if request.restore => {
                 self.insert_unavailable_file_tab(
                     &request.workspace_id,
@@ -607,6 +626,9 @@ impl Runtime {
                     place,
                 }),
             );
+            return true;
+        }
+        if request.follow && open && !self.follows_disk(tab_id, &document) {
             return true;
         }
         if request.reload && open {
@@ -715,9 +737,7 @@ impl Runtime {
         // A save in flight owns the tab's revision until its answer is
         // settled; a reload landing first would take the slot with it and
         // let the save's revision describe the reloaded text (PRD S5.5 B13).
-        if self.document_saves.get(tab_id).is_some_and(|slot| {
-            slot.running || slot.checking || slot.unsettled.is_some() || slot.queued.is_some()
-        }) {
+        if self.save_in_flight(tab_id) {
             self.set_error(
                 "file.reload_busy",
                 format!(
@@ -733,6 +753,7 @@ impl Runtime {
                 root,
                 channel,
                 OpenRequestFields {
+                    follow: false,
                     workspace_id: tab.workspace_id,
                     checkout_id: tab.checkout_id,
                     path: tab.path,
@@ -746,6 +767,100 @@ impl Runtime {
             Err(message) => self.set_error("file.reload_failed", message, true),
         }
         true
+    }
+
+    /// The file a tab shows changed on disk (`file_changed`): a tab that
+    /// holds no edit, save or conflict of its own reads it again and shows
+    /// it as it is now; any other keeps its draft, whose next save meets the
+    /// change as a conflict. An explicit Reload already under way is left to
+    /// finish, and a follow under way is started again for the newer write.
+    pub(super) fn follow_document(&mut self, tab_id: &str) -> bool {
+        let Some(tab) = self
+            .snapshot
+            .editor
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id && tab.unavailable_reason.is_none())
+            .cloned()
+        else {
+            return false;
+        };
+        let reloading = self
+            .document_opens
+            .get(tab_id)
+            .is_some_and(|open| !open.follow);
+        if reloading || !self.holds_nothing_of_its_own(tab_id) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "documents",
+                "kind": "file.follow_kept",
+                "tab": tab_id,
+                "reloading": reloading,
+            }));
+            return false;
+        }
+        match self.document_source(&tab.workspace_id, &tab.checkout_id) {
+            Ok((root, channel)) => self.start_document_open(
+                root,
+                channel,
+                OpenRequestFields {
+                    workspace_id: tab.workspace_id,
+                    checkout_id: tab.checkout_id,
+                    path: tab.path,
+                    preview: false,
+                    reload: true,
+                    follow: true,
+                    reveal: None,
+                    restore: false,
+                    placement: None,
+                },
+            ),
+            Err(message) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "documents",
+                    "kind": "file.follow_failed",
+                    "tab": tab_id,
+                    "message": message,
+                }));
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether a save of the tab has not come to a known answer yet: it
+    /// runs, waits behind one, is read back, or lost its answer.
+    fn save_in_flight(&self, tab_id: &str) -> bool {
+        self.document_saves.get(tab_id).is_some_and(|slot| {
+            slot.running || slot.checking || slot.unsettled.is_some() || slot.queued.is_some()
+        })
+    }
+
+    /// Whether the tab holds no edit, save or conflict that a read of its
+    /// file would replace.
+    pub(super) fn holds_nothing_of_its_own(&self, tab_id: &str) -> bool {
+        self.editor_documents.get(tab_id).is_some_and(|document| {
+            !document.dirty && document.conflict.is_none() && document.save.is_none()
+        }) && !self.save_in_flight(tab_id)
+    }
+
+    /// Whether a followed read replaces the tab's document: the tab still
+    /// holds nothing of its own, and the file says something else now.
+    pub(super) fn follows_disk(&self, tab_id: &str, read: &EditorDocumentSnapshot) -> bool {
+        let Some(current) = self.editor_documents.get(tab_id) else {
+            return false;
+        };
+        let changed = current.revision != read.revision
+            || current.contents_utf8 != read.contents_utf8
+            || current.document_kind != read.document_kind
+            || current.readonly_reason != read.readonly_reason;
+        let follows = changed && self.holds_nothing_of_its_own(tab_id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "documents",
+            "kind": if follows { "file.followed" } else { "file.follow_kept" },
+            "tab": tab_id,
+            "changed": changed,
+        }));
+        follows
     }
 
     /// Keep Editing: the draft stays and is now judged against what the file
@@ -796,6 +911,17 @@ impl Runtime {
         if let Err(message) = files::check_editable(document, "the draft was preserved") {
             self.set_error("file.save_rejected", message, false);
             return true;
+        }
+        // A read that only followed the file's change on disk gives way to
+        // the operator's save: it would keep the draft anyway, and its late
+        // answer finds no request and is dropped.
+        if self
+            .document_opens
+            .get(&tab_id)
+            .is_some_and(|open| open.follow)
+        {
+            self.document_opens.remove(&tab_id);
+            self.sync_opening_snapshot();
         }
         // The operator asked for the file's text in place of the draft; a
         // save sent now would race the reload for which text the tab keeps.
@@ -1335,6 +1461,8 @@ pub(super) struct OpenRequestFields {
     pub(super) path: String,
     pub(super) preview: bool,
     pub(super) reload: bool,
+    /// See `OpenRequest::follow`; only a reload follows.
+    pub(super) follow: bool,
     pub(super) reveal: Option<PendingReveal>,
     pub(super) restore: bool,
     pub(super) placement: Option<ViewPlacement>,

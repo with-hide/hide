@@ -766,7 +766,9 @@ pub fn ownership_of(agent: &SidebarAgentSnapshot) -> Ownership {
     } else if let Some(home) = agent.hide_ai.as_ref().filter(|mark| mark.home.is_some()) {
         Ownership::HideAi {
             operator_turn: home.turn.is_some(),
-            look_calls: home.home.is_some_and(|home| home.calls_on_look()),
+            // A once automation's run calls by its end instead
+            // (mission-104 O-4).
+            look_calls: home.home.is_some_and(|home| home.calls_on_look()) && !home.once,
         }
     } else if tool_keeps(agent) {
         Ownership::Tool

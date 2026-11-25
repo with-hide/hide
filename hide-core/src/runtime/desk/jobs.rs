@@ -976,9 +976,10 @@ impl Runtime {
         card
     }
 
-    /// What a card reads from its session's sidebar row: its mark, its ask,
-    /// its line, its pull requests and its 결과물 (B24), the facts the row
-    /// itself shows.
+    /// What a card reads from its session's sidebar row: its name, its mark,
+    /// its ask, its line, its pull requests and its 결과물 (B24), the facts
+    /// the row itself shows. Its name is the row's, never the spawn's
+    /// `--name`, so a card and a chip call a session what the sidebar does.
     fn desk_card_from_row(
         &self,
         card: &mut crate::model::DeskJobSnapshot,
@@ -986,6 +987,7 @@ impl Runtime {
         index: &CardIndex<'_>,
     ) {
         use crate::model::{AgentStatusCode, DeskAskKind};
+        card.title.clone_from(&row.identity_label);
         card.mark = Some(row.mark);
         card.mark_read = row.state.mark_tone.read;
         card.read = !row.unread;
@@ -1479,12 +1481,9 @@ fn output_kind(display: &crate::view_layout::Display) -> crate::model::DeskOutpu
     }
 }
 
-/// The group each checkout's Desk sessions sit in (B20).
-pub(crate) const DESK_GROUP: &str = "◆ Desk";
-
 impl Runtime {
     /// Follows Desk's jobs as a publish moves their rows: a new session's
-    /// tab goes into its checkout's `◆ Desk` group once, the operator's
+    /// tab goes into its checkout's reserved Desk group once, the operator's
     /// close, move out of the group and typing are remembered, a watch
     /// follows each, a freed place starts the next in the queue, and the
     /// section is sent again only when a card moved.
@@ -1787,7 +1786,7 @@ impl Runtime {
     }
 
     /// The checkout path and tab holding `pane` on this machine, and whether
-    /// that tab is in the `◆ Desk` group (`None` while it is in no group).
+    /// that tab is in the reserved Desk group (`None` while it is in no group).
     fn desk_tab_group(&self, pane: &str) -> Option<(String, String, Option<bool>)> {
         let (checkout_id, tab) = self.checkout_tab_holding_pane(pane)?;
         let path = self
@@ -1804,16 +1803,13 @@ impl Runtime {
             .get(self.node.as_str(), &path)?;
         let group = view.agent_tab_group(&tab)?;
         let desk = view
-            .agent_groups
-            .items
-            .iter()
-            .find(|item| item.name == DESK_GROUP)
+            .reserved_agent_group(crate::agent_groups::GroupRole::Desk)
             .map(|item| item.id.as_str());
         let in_desk = group.map(|group| Some(group) == desk);
         Some((path, tab, in_desk))
     }
 
-    /// Puts the tab in its checkout's `◆ Desk` group, made when missing,
+    /// Puts the tab in its checkout's reserved Desk group, made when missing,
     /// without changing the screen in front (B20): the group in front stays,
     /// unless the tab is the one it shows, which the front then follows into
     /// the group rather than leaving the screen to another tab or to none.
@@ -1825,26 +1821,18 @@ impl Runtime {
         let view = store.views.entry(&key.0, &key.1);
         let selected = view.agent_groups.selected.clone();
         let shown = view.selected_agent_layout().active() == Some(tab);
-        let group = match view
-            .agent_groups
-            .items
-            .iter()
-            .find(|item| item.name == DESK_GROUP)
-        {
-            Some(item) => item.id.clone(),
-            None => match view.create_agent_group(DESK_GROUP) {
-                Ok(id) => id,
-                Err(error) => {
-                    view.agent_groups.selected = selected;
-                    crate::diagnostic!(json!({
-                        "component": "desk",
-                        "kind": "desk.group_refused",
-                        "checkout": path,
-                        "error": format!("{error:?}"),
-                    }));
-                    return false;
-                }
-            },
+        let group = match view.ensure_reserved_agent_group(crate::agent_groups::GroupRole::Desk) {
+            Ok(id) => id,
+            Err(error) => {
+                view.agent_groups.selected = selected;
+                crate::diagnostic!(json!({
+                    "component": "desk",
+                    "kind": "desk.group_refused",
+                    "checkout": path,
+                    "error": format!("{error:?}"),
+                }));
+                return false;
+            }
         };
         let moved = view
             .move_agent_to_group(tab, Some(&group), super::super::unix_milliseconds())
@@ -2449,6 +2437,7 @@ mod tests {
                 agent_kind: None,
                 mark: None,
             }],
+            missions: Vec::new(),
         });
         runtime.compose_desk();
         let chips = |runtime: &Runtime| {
@@ -2486,8 +2475,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = desk(root.path(), 2, &[]);
         runtime.start_test_desk();
+        // Each row named as the sidebar names it, not as the reply did.
         runtime.snapshot.navigator.agents = (1..=20)
-            .map(|n| row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" }))
+            .map(|n| {
+                let mut row = row(&format!("p{n}"), if n == 7 { "blocked" } else { "working" });
+                row.identity_label = format!("task {n}");
+                row
+            })
             .collect();
         // Twenty listed sessions and one the sidebar no longer lists.
         let text: String = (1..=21)
@@ -2512,6 +2506,7 @@ mod tests {
             thought_ms: None,
             steps: Default::default(),
             mentions,
+            missions: Vec::new(),
         });
         runtime.compose_desk_jobs();
 
@@ -2523,6 +2518,13 @@ mod tests {
             .collect();
         let listed: Vec<String> = (1..=20).map(|n| format!("p{n}")).collect();
         assert_eq!(panes, listed);
+        let titles: Vec<&str> = section
+            .named
+            .iter()
+            .map(|card| card.title.as_str())
+            .collect();
+        let named: Vec<String> = (1..=20).map(|n| format!("task {n}")).collect();
+        assert_eq!(titles, named);
         let asking = section
             .named
             .iter()

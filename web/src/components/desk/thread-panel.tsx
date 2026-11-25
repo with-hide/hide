@@ -134,6 +134,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
       {head}
       <ThreadView
         job={job}
+        workingSince={rows.find((row) => row.pane_id === paneId)?.last_prompt_at_unix_ms ?? null}
         lines={screen.lines}
         reading={thread === null || screen.reading}
         failure={screen.failure}

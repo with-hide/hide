@@ -452,6 +452,11 @@ impl TurnReader {
         self.tag
     }
 
+    /// Whether the running turn made the tool call `id`.
+    pub fn made(&self, id: &str) -> bool {
+        self.tag.is_some() && self.calls.iter().any(|call| call == id)
+    }
+
     /// A prompt for `tag` went out; `from`, read from [`Arrivals::next`]
     /// just before it, is the first arrival it owns.
     pub fn start(&mut self, tag: u64, from: u64) {

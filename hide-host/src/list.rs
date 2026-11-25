@@ -173,16 +173,18 @@ fn read_link_text(_folder: &Dir, _name: &str) -> std::io::Result<std::path::Path
 
 /// Refuses a listing request whose folder is a file, with the code a caller
 /// maps to `not_a_directory`.
-/// The most folders one stamp request names: the Explorer watch cap, the same
+/// The most paths one stamp request names: the Explorer watch cap, the same
 /// on this machine (`hided/src/watch.rs`) and on a device.
 pub const MAX_STAMPED_FOLDERS: usize = 64;
 
-/// A fingerprint of each folder's own entry, for a device Explorer's watch
-/// (PRD S5.5 B43): which directory the path names and when its list of names
-/// last changed, so a changed stamp means the folder is worth listing again.
-/// Each folder is opened from the root handle, so a path that leaves the
-/// checkout or no longer names a folder is `None` rather than an error that
-/// would hide the other folders' answers.
+/// A fingerprint of each path's own entry, for the Explorer's watch (PRD
+/// S5.5 B43) and the shown files' watch: for a folder, which directory the
+/// path names and when its list of names last changed, so a changed stamp
+/// means the folder is worth listing again; for a regular file, which file
+/// the path names, when it was last written and its size, so a changed stamp
+/// means the file is worth reading again. Each path is opened from the root
+/// handle, so a path that leaves the checkout or names neither is `None`
+/// rather than an error that would hide the other paths' answers.
 pub fn stamps(dir: &Dir, folders: &[String]) -> HostResult<Vec<Option<String>>> {
     if folders.len() > MAX_STAMPED_FOLDERS {
         return Err(HostError::new(
@@ -199,12 +201,22 @@ pub fn stamps(dir: &Dir, folders: &[String]) -> HostResult<Vec<Option<String>>> 
             } else {
                 dir.open_dir(&relative)
             };
-            Ok(opened
-                .and_then(|folder| folder.dir_metadata())
+            if let Ok(metadata) = opened.and_then(|folder| folder.dir_metadata()) {
+                return Ok(folder_stamp(&metadata));
+            }
+            Ok(dir
+                .metadata(&relative)
                 .ok()
-                .and_then(|metadata| folder_stamp(&metadata)))
+                .filter(cap_std::fs::Metadata::is_file)
+                .and_then(|metadata| file_stamp(&metadata)))
         })
         .collect()
+}
+
+/// A regular file's stamp: its folder stamp and its size, since a write
+/// within the clock's resolution can leave the modification time alone.
+fn file_stamp(metadata: &cap_std::fs::Metadata) -> Option<String> {
+    Some(format!("{}:{}", folder_stamp(metadata)?, metadata.len()))
 }
 
 fn folder_stamp(metadata: &cap_std::fs::Metadata) -> Option<String> {

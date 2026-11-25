@@ -63,6 +63,7 @@ fn started(runtime: &mut Runtime, pane: &str, session: &str, folder: Option<&str
                 .collect(),
         ),
         refused: None,
+        asked: None,
     };
     runtime
         .ingest_hook_status(crate::node::TEST_NODE, pane, &report)
@@ -334,6 +335,7 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, "p2", &status)

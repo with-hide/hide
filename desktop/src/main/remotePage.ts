@@ -4,6 +4,7 @@
 // load is fetched from, so each is tested on its own.
 
 import type { BrowserRect } from "../../../web/src/host";
+import { readDisplayPreferences, type DisplayPreferences } from "../../../web/src/displayPreferences";
 import type { RemotePlace, RemoteWork, RemoteWorkResult } from "../../../web/src/remoteView";
 
 /** The page's own scheme: `hide-remote://<device>/`, one origin per machine. */
@@ -39,8 +40,12 @@ const KEY = /^[0-9a-f]{64}$/;
  * a page one host loaded never reaches a host that later took the same
  * device id (security pre-review S1).
  */
-/** `name`: what this window calls the machine, which its page names itself by; null when the shell gave none. */
-export type ShowRequest = { device: string; key: string; rect: BrowserRect; name: string | null } | null;
+/**
+ * `name`: what this window calls the machine, which its page names itself by;
+ * null when the shell gave none. `display`: this window's View menu choices,
+ * which its page draws with; null when the shell gave none it knows.
+ */
+export type ShowRequest = { device: string; key: string; rect: BrowserRect; name: string | null; display: DisplayPreferences | null } | null;
 
 /** The longest machine name a show carries, as a pairing keeps one. */
 const MAX_NAME_CHARS = 128;
@@ -49,7 +54,7 @@ const MAX_NAME_CHARS = 128;
 export function parseShow(value: unknown): ShowRequest | undefined {
   if (value === null) return null;
   if (typeof value !== "object") return undefined;
-  const { device, key, rect, name } = value as Record<string, unknown>;
+  const { device, key, rect, name, display } = value as Record<string, unknown>;
   if (typeof device !== "string" || !DEVICE.test(device)) return undefined;
   if (typeof key !== "string" || !KEY.test(key)) return undefined;
   if (typeof rect !== "object" || rect === null) return undefined;
@@ -59,7 +64,7 @@ export function parseShow(value: unknown): ShowRequest | undefined {
   if ((width as number) < 0 || (height as number) < 0) return undefined;
   // A name that is no short line is left out; the page then names itself as its own machine does.
   const named = typeof name === "string" && name.trim() !== "" && Array.from(name).length <= MAX_NAME_CHARS && !/\p{Cc}/u.test(name) ? name : null;
-  return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number }, name: named };
+  return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number }, name: named, display: readDisplayPreferences(display) };
 }
 
 /** The longest path, pane, model or profile name an ask carries. */

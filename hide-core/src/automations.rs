@@ -12,17 +12,24 @@
 //! core was off runs once when it is back, under one line that counts what
 //! was missed (D-15). Records are capped per automation (D-18, engineering
 //! 15): past the cap the oldest finished one goes, never a run that is open.
+//!
+//! A once automation (mission-104) has one time: once its run for that time
+//! ended it is done ([`Automation::done`]), keeps its records, and its last
+//! run that ended waits in the operator's Needs You until they open it
+//! ([`Automation::look_run`]).
 
 pub(crate) mod schedule;
 
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
-pub use schedule::{Clock, Meaning, Schedule, Weekday};
+pub use schedule::{Asked, Clock, Day, FromNow, Meaning, ONCE_HORIZON_DAYS, Schedule, Weekday};
 
 /// Records kept per automation (D-18): runs, skips and missed lines.
 pub const RECORD_CAP: usize = 50;
-/// Automations one core keeps; a create past it is refused (engineering 15).
+/// Automations one core keeps (engineering 15): a create at it drops the
+/// done once automation that ended first, and is refused only when none is
+/// done (mission-104 O-5).
 pub const AUTOMATION_CAP: usize = 100;
 /// Attempts one run makes before it ends failed (D-17).
 pub const MAX_ATTEMPTS: u32 = 3;
@@ -462,6 +469,12 @@ pub struct Automation {
     pub records: Vec<Entry>,
     #[serde(default)]
     pub next_run_number: u64,
+    /// The run of a once automation whose end waits in the operator's Needs
+    /// You until they open it (mission-104 O-4): the last one that ended,
+    /// whatever its result. Kept in the book, so it outlasts the run's
+    /// terminal and a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_run: Option<u64>,
 }
 
 /// What the clock asks of an automation whose time came.
@@ -506,6 +519,53 @@ impl Automation {
         self.paused.is_none()
     }
 
+    /// Whether a record of it is in use: a run going or closing, or a
+    /// conversation opened again, which the cap never drops (B28).
+    pub fn in_use(&self) -> bool {
+        self.records.iter().any(Entry::held)
+    }
+
+    /// A once automation whose one time came and whose run for it ended
+    /// (mission-104 O-3): it never runs again on schedule. A manual run of
+    /// it going leaves it done; a new time from an edit makes it wait again.
+    pub fn done(&self) -> bool {
+        self.schedule.is_once()
+            && self.on()
+            && self.next_due_unix_ms.is_none()
+            && !self
+                .active_run()
+                .is_some_and(|run| run.trigger != Trigger::Manual)
+    }
+
+    /// Whether it still has a time to come or a run to finish: what keeps
+    /// the daemon from its idle exit (D-19). A done once automation with no
+    /// run going has neither.
+    pub fn waits(&self) -> bool {
+        (self.on() && (self.next_due_unix_ms.is_some() || !self.schedule.is_once()))
+            || self.active_run().is_some()
+    }
+
+    /// Its next time after the clock or the zone moved: a repeating
+    /// schedule's next one from `now`; a once automation's one time in
+    /// `zone` while it waits, even one now past, which then runs as missed,
+    /// and none once its time was taken, so a done one never runs again.
+    pub fn next_time(&self, now: u64, zone: &TimeZone) -> Option<u64> {
+        if self.schedule.is_once() {
+            return self
+                .next_due_unix_ms
+                .and_then(|_| self.schedule.once_at(zone));
+        }
+        self.schedule.next_after(now, zone)
+    }
+
+    /// When it was done: the end of its newest run, or when it was made.
+    pub fn done_at(&self) -> u64 {
+        self.runs()
+            .filter_map(|run| run.ended_at_unix_ms)
+            .max()
+            .unwrap_or(self.created_at_unix_ms)
+    }
+
     /// Finished runs the operator has not looked at (B1, B14).
     pub fn unseen(&self) -> usize {
         self.runs()
@@ -516,12 +576,14 @@ impl Automation {
     /// Takes the time that came, if one did by `now`, and moves the next one
     /// past `now`. One time noticed on time runs as itself; anything else,
     /// several times, or one noticed late, is a missed line and one run for
-    /// all of them (D-15).
+    /// all of them (D-15). A once automation's time, once taken, leaves it
+    /// none, whatever its wall time reads as in `zone` (mission-104 review S1).
     pub fn take_due(&mut self, now: u64, zone: &TimeZone, notice: Notice) -> Option<Due> {
         let first = self.next_due_unix_ms.filter(|due| *due <= now)?;
+        let once = self.schedule.is_once();
         let mut last = first;
         let mut count = 1u32;
-        while count < MISSED_COUNT_CAP {
+        while !once && count < MISSED_COUNT_CAP {
             match self.schedule.next_after(last, zone) {
                 Some(next) if next <= now => {
                     last = next;
@@ -530,7 +592,11 @@ impl Automation {
                 _ => break,
             }
         }
-        self.next_due_unix_ms = self.schedule.next_after(now, zone);
+        self.next_due_unix_ms = if once {
+            None
+        } else {
+            self.schedule.next_after(now, zone)
+        };
         let on_time = count == 1 && now.saturating_sub(first) <= LATE_MS;
         let missed = (!on_time).then_some(Entry::Missed {
             first_unix_ms: first,
@@ -568,11 +634,14 @@ impl Automation {
     }
 
     /// Adds a record, dropping the oldest ones past the cap that nothing
-    /// holds (B28).
+    /// holds (B28): the run that waits in Needs You is held too.
     pub fn push(&mut self, entry: Entry) {
         self.records.push(entry);
+        let look = self.look_run;
         while self.records.len() > RECORD_CAP {
-            let Some(oldest) = self.records.iter().position(|entry| !entry.held()) else {
+            let Some(oldest) = self.records.iter().position(|entry| {
+                !entry.held() && entry.run().is_none_or(|run| Some(run.number) != look)
+            }) else {
                 break;
             };
             self.records.remove(oldest);
@@ -761,7 +830,7 @@ pub fn answer_paragraph(text: &str) -> Option<String> {
 pub struct Draft {
     pub name: String,
     pub task: String,
-    pub schedule: Schedule,
+    pub schedule: Asked,
     pub agent: AgentChoice,
     /// A project's folder on this machine; none works in the automation's
     /// own folder (D-08).
@@ -796,7 +865,7 @@ pub struct Changes {
     #[serde(default)]
     pub task: Option<String>,
     #[serde(default)]
-    pub schedule: Option<Schedule>,
+    pub schedule: Option<Asked>,
     #[serde(default)]
     pub agent: Option<AgentChoice>,
     /// `Some(None)` moves it to its own folder.
@@ -874,6 +943,14 @@ pub enum Call {
     Seen {
         id: String,
     },
+    /// The operator opened a once automation's ended run where the
+    /// automation screen cannot say it shows it, on the phone: its line in
+    /// Needs You goes, if that run is still the one it names (mission-104
+    /// review m6).
+    LookSeen {
+        id: String,
+        run: u64,
+    },
     List,
     Show {
         id: String,
@@ -881,7 +958,7 @@ pub enum Call {
     /// What a schedule reads as and when it runs next, and the own folder
     /// an automation of `name` works in, for the form (B5, B6).
     Preview {
-        schedule: Schedule,
+        schedule: Asked,
         #[serde(default)]
         name: String,
     },
@@ -991,10 +1068,23 @@ impl Stored {
             .position(|automation| automation.id == id)
     }
 
-    /// Whether any automation is on, which keeps the daemon from its idle
-    /// exit (D-19).
+    /// Whether any automation still has a time to come, which keeps the
+    /// daemon from its idle exit (D-19).
     pub fn any_on(&self) -> bool {
-        self.automations.iter().any(Automation::on)
+        self.automations.iter().any(Automation::waits)
+    }
+
+    /// The done once automation a create at the cap drops (mission-104
+    /// O-5): one the operator opened before one that waits in Needs You,
+    /// then the one done first; never one in use (a manual run going, a
+    /// conversation opened again), so none when every done one is.
+    pub fn oldest_done(&self) -> Option<usize> {
+        self.automations
+            .iter()
+            .enumerate()
+            .filter(|(_, automation)| automation.done() && !automation.in_use())
+            .min_by_key(|(_, automation)| (automation.look_run.is_some(), automation.done_at()))
+            .map(|(index, _)| index)
     }
 
     /// Adds what a run leaves to close on `machine`, `now`: to the run's
@@ -1079,7 +1169,8 @@ pub struct AutomationSnapshot {
     pub schedule: Schedule,
     /// The choice it reads as (B6).
     pub reads_as: Schedule,
-    /// None while it is paused.
+    /// None while it is paused, and for a once automation once its run
+    /// started.
     pub next_run_at_unix_ms: Option<u64>,
     pub agent: AgentChoice,
     pub folder: Folder,
@@ -1087,6 +1178,14 @@ pub struct AutomationSnapshot {
     pub paused: Option<Pause>,
     /// A run goes now: [지금 실행] is refused (B19).
     pub running: bool,
+    /// A once automation whose one time came and whose run for it ended: it
+    /// never runs again on schedule (mission-104 O-3, `Automation::done`).
+    pub done: bool,
+    /// The run whose end waits in the operator's Needs You until a window
+    /// shows it (mission-104 O-4): the scope's `automation_looks` names the
+    /// automation, and the run carries its answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look_run: Option<u64>,
     pub unseen: usize,
     /// What the runs its records keep spent together, and how many of them
     /// the ledger read (B39); absent while it read none.
@@ -1153,8 +1252,9 @@ pub struct RunSnapshot {
     pub spend: Option<Spend>,
     /// The agent's last answer, one paragraph, while a window shows the run:
     /// the run screen's summary beside a terminal whose agent opened nothing
-    /// (operator decision 2026-11-21). Only a shown run carries it, so the
-    /// section does not grow by a paragraph for each of its runs.
+    /// (operator decision 2026-11-21); and on the run whose end waits in
+    /// Needs You (`look_run`), whose line quotes it. Only those carry it, so
+    /// the section does not grow by a paragraph for each of its runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
     /// What the run's agent opened for the operator, newest first, while a
@@ -1198,6 +1298,8 @@ impl AutomationsSnapshot {
                 folder: automation.folder.clone(),
                 paused: automation.paused,
                 running: automation.active_run().is_some(),
+                done: automation.done(),
+                look_run: automation.look_run,
                 unseen: automation.unseen(),
                 recent_spend: automation.runs().filter_map(|run| run.spend).fold(
                     None,
@@ -1230,9 +1332,10 @@ impl AutomationsSnapshot {
                             branch: run.branch.clone(),
                             seen: run.seen,
                             spend: run.spend,
-                            answer: shown(&automation.id, run.number)
-                                .then(|| run.answer.clone())
-                                .flatten(),
+                            answer: (shown(&automation.id, run.number)
+                                || automation.look_run == Some(run.number))
+                            .then(|| run.answer.clone())
+                            .flatten(),
                             results: if shown(&automation.id, run.number) {
                                 run.results
                                     .iter()
@@ -1456,6 +1559,7 @@ mod tests {
             created_at_unix_ms: now,
             records: Vec::new(),
             next_run_number: 0,
+            look_run: None,
         }
     }
 
@@ -1894,6 +1998,88 @@ mod tests {
         let kept = labels(&read.automations[0], number);
         assert_eq!(kept.len(), RESULT_CAP);
         assert_eq!(kept[0], "f5");
+    }
+
+    fn once(date: &str, time: &str) -> Schedule {
+        Schedule::Once {
+            date: Day::parse(date).unwrap(),
+            time: Clock::parse(time).unwrap(),
+        }
+    }
+
+    /// mission-104 O-2, O-3: a once automation's time is handed over once
+    /// and leaves no next time; a zone the machine moves to keeps a waiting
+    /// one at its wall time there, even one that is past then, which runs
+    /// as missed, and never gives a done one a time again.
+    #[test]
+    fn a_once_time_is_handed_over_once_and_a_zone_move_never_brings_a_done_one_back() {
+        let zone = seoul();
+        let made = at("2026-11-25T08:00");
+        let mut automation = automation(once("2026-12-02", "09:00"), made);
+        assert_eq!(automation.next_due_unix_ms, Some(at("2026-12-02T09:00")));
+        assert!(!automation.done() && automation.waits());
+        let due = automation
+            .take_due(at("2026-12-02T09:00:01"), &zone, Notice::OnTick)
+            .unwrap();
+        assert_eq!(
+            (due.due_unix_ms, due.missed),
+            (at("2026-12-02T09:00"), None)
+        );
+        assert_eq!(automation.next_due_unix_ms, None);
+        automation.new_run(Trigger::Scheduled, Some(due.due_unix_ms), due.due_unix_ms);
+        assert!(!automation.done(), "its run goes");
+        automation.records.clear();
+        assert!(automation.done() && !automation.waits());
+
+        // West of Seoul, 09:00 on that day is still to come: a done one
+        // stays done.
+        let new_york = TimeZone::get("America/New_York").unwrap();
+        assert_eq!(
+            automation.next_time(at("2026-12-02T09:30"), &new_york),
+            None
+        );
+
+        // A waiting one keeps its wall time in the new zone, even past.
+        let mut waiting = self::automation(once("2026-12-02", "09:00"), made);
+        let utc = TimeZone::UTC;
+        let moved = waiting.next_time(at("2026-12-02T20:00"), &utc).unwrap();
+        assert_eq!(moved, once("2026-12-02", "09:00").once_at(&utc).unwrap());
+        waiting.next_due_unix_ms = Some(moved);
+        let late = waiting
+            .take_due(moved + 3 * HOUR, &utc, Notice::OnTick)
+            .unwrap();
+        assert!(matches!(late.missed, Some(Entry::Missed { count: 1, .. })));
+    }
+
+    /// mission-104 O-7: a book with no once automation is written as an
+    /// older build wrote it, so that build still reads it; one with a once
+    /// automation names the kind an older build refuses.
+    #[test]
+    fn a_book_with_no_once_automation_writes_nothing_an_older_build_refuses() {
+        let now = at("2026-11-19T09:00");
+        let mut repeating = automation(daily("09:00"), now);
+        let number = repeating.new_run(Trigger::Scheduled, Some(now), now);
+        repeating.run_mut(number).unwrap().state = RunState::Succeeded;
+        let book = Stored {
+            automations: vec![repeating],
+            ..Stored::default()
+        };
+        let written = String::from_utf8(encode(&book).unwrap()).unwrap();
+        for new in ["look_run", "once", "done"] {
+            assert!(!written.contains(new), "{new} in {written}");
+        }
+        let mut with_once = automation(once("2026-12-02", "09:00"), now);
+        with_once.look_run = Some(1);
+        let written = String::from_utf8(
+            encode(&Stored {
+                automations: vec![with_once.clone()],
+                ..Stored::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(written.contains(r#""kind": "once""#), "{written}");
+        assert_eq!(decode(written.as_bytes()).unwrap().automations, [with_once]);
     }
 
     #[test]

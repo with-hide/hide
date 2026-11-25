@@ -503,6 +503,10 @@ pub struct AgentGroupSnapshot {
     pub id: Option<String>,
     pub name: Option<String>,
     pub tabs: Vec<String>,
+    /// A reserved group's role (`desk`), which the screens draw with that
+    /// surface's own mark; absent on the operator's own groups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::agent_groups::GroupRole>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -566,6 +570,34 @@ pub struct ViewSplitSnapshot {
     pub ratio: f32,
     pub first: Box<ViewNodeSnapshot>,
     pub second: Box<ViewNodeSnapshot>,
+}
+
+impl WorkspaceViewSnapshot {
+    /// The files its View areas show, each once, in the order the areas lie:
+    /// what the shown files' watch in hided stamps (`hided/src/watch.rs`).
+    pub fn file_paths(&self) -> Vec<&str> {
+        let mut paths: Vec<&str> = Vec::new();
+        let mut nodes = vec![&self.layout.root];
+        while let Some(node) = nodes.pop() {
+            match node {
+                ViewNodeSnapshot::Area(area) => {
+                    for display in &area.displays {
+                        if display.kind == crate::view_layout::DisplayKind::File
+                            && !display.path.is_empty()
+                            && !paths.contains(&display.path.as_str())
+                        {
+                            paths.push(&display.path);
+                        }
+                    }
+                }
+                ViewNodeSnapshot::Split(split) => {
+                    nodes.push(&split.second);
+                    nodes.push(&split.first);
+                }
+            }
+        }
+        paths
+    }
 }
 
 /// One display: which document it shows and whether it can show it now.
@@ -1056,6 +1088,12 @@ pub struct HideAiSnapshot {
     /// itself asks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<HomeTurn>,
+    /// The run of a once automation (mission-104 O-4): its end stands in
+    /// Needs You on the automation's own line (`automation_looks`), so a
+    /// View its agent opened does not call the operator too; the screen
+    /// marks its badge with a clock, not the repeat arrow.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
 }
 
 /// An external tool's work on a row (PRD hide-external-control D-09, D-15).
@@ -2262,6 +2300,12 @@ pub struct SidebarAgentSnapshot {
     /// state. Missing source content remains absent rather than inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the permission request the agent waits on asks to run, as its
+    /// hook named it (`HookAsked`), for an agent whose session names no call
+    /// until it is allowed (Codex): the phone's card shows it. Absent while
+    /// the agent waits on nothing a hook named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked: Option<hide_node_link::panes::HookAsked>,
     /// What the core asks on this row for the agent, when the question is
     /// the core's and not the agent's own; the row then draws no sentence
     /// of its own and every surface words the subject.

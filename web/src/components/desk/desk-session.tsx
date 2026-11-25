@@ -1,4 +1,4 @@
-import { CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { useMemo, useRef } from "react";
 import type { Actions } from "../../actions";
 import type { DeskJob } from "../../desk";
@@ -27,7 +27,7 @@ import { StatusMark } from "../status-mark";
  * B47; Doop H 다 and H2 1, operator decision 2026-11-25). One line is the
  * session as the pane head draws it: its status, its agent, its ancestors
  * (each opening that session beside Desk), its work name as the sidebar row
- * names it, the children chip on a parent, then `파일` and `터미널` as icons
+ * names it, the children chip on a parent, then ↗ to its own tab, `파일` and `터미널` as icons
  * (the terminal hidden while it sleeps), the pane's menu and `✕`. A quiet
  * second line stands only when there is something to know: the machine when
  * it is another device (this machine is never named), a device that is not
@@ -35,7 +35,7 @@ import { StatusMark } from "../status-mark";
  * or the one it works a node of by its number and name, and its plan as the
  * pane's plan chip. What it made and its PRs are on the shelf below.
  */
-export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab, onClose }: {
   paneId: string;
   /** The session's work name, kept by the panel when its row and card are gone. */
   title: string;
@@ -54,6 +54,8 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   deskActions: Actions;
   onFiles: () => void;
   onTerminal: () => void;
+  /** ↗, `원래 화면에서 보기` in its hint (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
+  onOwnTab: () => void;
   onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -78,6 +80,12 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           </Hint>
         </nav>
         {sleeping ? null : <PaneHeadChildren paneId={paneId} actions={deskActions} />}
+        {sleeping ? null : (
+          // Its words live in its hint: at the panel's first width the head keeps its room for the session's path and name.
+          <Hint label={`${t("desk.room.openOwn")} · ${t("desk.room.openOwnHint")}`}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.openOwn")} data-desk-session-own-tab="true" onClick={onOwnTab}><ArrowUpRightIcon /></Button>
+          </Hint>
+        )}
         <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
           <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.files")} aria-pressed={explorerOpen} className={cn(tool, explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}><FolderIcon /></Button>
         </Hint>

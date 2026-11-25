@@ -86,6 +86,11 @@ struct SessionFact {
     /// the main turn's `Stop`).
     #[serde(skip)]
     waiting: Vec<String>,
+    /// What the permission request of the session's last report asks to run,
+    /// when it named it: the session's next report of any kind replaces it, so
+    /// it is the dialog's until the next hook event and nothing after.
+    #[serde(skip)]
+    asked: Option<hide_node_link::panes::HookAsked>,
     /// The engine state when `waiting` was last laid on the agent: a
     /// session read under a later state that finds a call's result ends
     /// its approval (a refusal in the dialog sends no hook event).
@@ -361,6 +366,11 @@ impl HookFacts {
         }) {
             return Err("hook_waiting_invalid");
         }
+        if report.asked.as_ref().is_some_and(|asked| {
+            asked.command.len() > hide_agent_hooks::report::ASKED_COMMAND_LIMIT
+        }) {
+            return Err("hook_asked_invalid");
+        }
         if report.account.as_ref().is_some_and(|account| {
             account.len() > hide_agent_hooks::account::REPORTED_VARIABLES
                 || account.iter().any(|(name, value)| {
@@ -414,6 +424,7 @@ impl HookFacts {
                 busy: false,
                 turn_seq: None,
                 waiting: Vec::new(),
+                asked: None,
                 waiting_seq: None,
                 refused: None,
                 account: None,
@@ -439,7 +450,12 @@ impl HookFacts {
             // A resumed or compacted session has no turn running yet.
             fact.turn = None;
             fact.waiting.clear();
+            fact.asked = None;
         }
+        // Every report is a hook event of the session, and an approval's
+        // end sends none that is certain (a patch allowed or a command refused
+        // in the dialog), so the next event of any kind ends the command.
+        fact.asked.clone_from(&report.asked);
         if let Some(waiting) = &report.waiting
             && *waiting != fact.waiting
         {
@@ -542,6 +558,7 @@ impl HookFacts {
             agent.hook = None;
             agent.hook_refused = None;
             agent.hook_question = false;
+            agent.hook_asked = None;
             let Some(pane) = agent.pane_id.clone().or_else(|| agent.id.clone()) else {
                 continue;
             };
@@ -585,6 +602,15 @@ impl HookFacts {
             // session read words it while it holds for the engine's state, and
             // between that state's change and its read the row stays a question
             // rather than turning into an approval (`axes::native_user_turn`).
+            // Only an agent whose key table says its command comes from the
+            // hook (`by_hook`) has it on the row: no other card reads it.
+            agent.hook_asked = fact.asked.clone().filter(|_| {
+                agent.hook == Some(HookTurn::Waiting)
+                    && agent
+                        .agent
+                        .as_deref()
+                        .is_some_and(crate::operator_input::permission_by_hook)
+            });
             agent.hook_question = !fact.waiting.is_empty()
                 && fact
                     .waiting
@@ -800,6 +826,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             busy: matches!(record.turn, Some(HookTurn::Working | HookTurn::Waiting)),
             turn_seq: None,
             waiting: Vec::new(),
+            asked: None,
             waiting_seq: None,
             account: None,
             account_start: 0,
@@ -867,6 +894,7 @@ mod tests {
             waiting: None,
             account: None,
             refused: None,
+            asked: None,
         }
     }
 
@@ -983,6 +1011,127 @@ mod tests {
         facts.record("w1:p1", &ended, 130).unwrap();
         facts.record("w1:p1", &asking("call-1"), 140).unwrap();
         assert_eq!(refused_at(&mut facts), (Some(HookTurn::Waiting), None));
+    }
+
+    /// The command a permission request asks to run stands on an agent whose
+    /// key table says its hook names it, while its hook says the turn waits,
+    /// and ends with the session's next report of any kind: a patch allowed
+    /// or a command refused in the dialog sends none that is certain.
+    #[test]
+    fn the_command_a_request_asks_to_run_ends_with_the_sessions_next_report() {
+        use hide_node_link::panes::HookAsked;
+        let codex = |session: &str, turn: Option<HookTurn>, command: Option<&str>| {
+            let mut said = report(Some(session), turn);
+            "codex".clone_into(&mut said.runtime);
+            said.asked = command.and_then(HookAsked::of);
+            said
+        };
+        // The agent's row as the pane's engine lists it, bound to `session`.
+        let laid = |facts: &mut HookFacts, agent: &str, session: &str| {
+            let mut read = payload(session);
+            read.agents[0].agent = Some(agent.to_owned());
+            lay(facts, &mut read);
+            (
+                read.agents[0].hook,
+                read.agents[0]
+                    .hook_asked
+                    .as_ref()
+                    .map(|asked| asked.command.clone()),
+            )
+        };
+        let waiting = |command: &str| (Some(HookTurn::Waiting), Some(command.to_owned()));
+        let mut facts = HookFacts::default();
+        let ask = |facts: &mut HookFacts, command: &str, at| {
+            facts
+                .record(
+                    "w1:p1",
+                    &codex("s-1", Some(HookTurn::Waiting), Some(command)),
+                    at,
+                )
+                .unwrap();
+        };
+        ask(&mut facts, "cargo test", 10);
+        assert_eq!(laid(&mut facts, "codex", "s-1"), waiting("cargo test"));
+        // The next request replaces it, and one that names none ends it.
+        ask(&mut facts, "git push", 20);
+        assert_eq!(laid(&mut facts, "codex", "s-1"), waiting("git push"));
+        facts
+            .record("w1:p1", &codex("s-1", Some(HookTurn::Waiting), None), 30)
+            .unwrap();
+        assert_eq!(
+            laid(&mut facts, "codex", "s-1"),
+            (Some(HookTurn::Waiting), None)
+        );
+        // A refused or allowed command is followed by a report that says no
+        // turn (a count), one that says the turn goes on, or an interrupt.
+        for (next, after) in [
+            (codex("s-1", None, None), Some(HookTurn::Waiting)),
+            (
+                codex("s-1", Some(HookTurn::Working), None),
+                Some(HookTurn::Working),
+            ),
+            (
+                codex("s-1", Some(HookTurn::Idle), None),
+                Some(HookTurn::Idle),
+            ),
+            (
+                codex("s-1", Some(HookTurn::Done), None),
+                Some(HookTurn::Done),
+            ),
+        ] {
+            ask(&mut facts, "rm -r build", 40);
+            facts.record("w1:p1", &next, 50).unwrap();
+            assert_eq!(laid(&mut facts, "codex", "s-1"), (after, None));
+        }
+        // A session start ends it too, whatever the start carries.
+        ask(&mut facts, "rm -r build", 60);
+        let mut start = codex("s-1", None, Some("rm -r build"));
+        start.session_start = true;
+        facts.record("w1:p1", &start, 70).unwrap();
+        assert_eq!(laid(&mut facts, "codex", "s-1"), (None, None));
+        // Two sessions kept in one pane each have their own, and a report of
+        // one ends only its own.
+        ask(&mut facts, "make a", 80);
+        facts
+            .record(
+                "w1:p1",
+                &codex("s-2", Some(HookTurn::Waiting), Some("make b")),
+                90,
+            )
+            .unwrap();
+        assert_eq!(laid(&mut facts, "codex", "s-1"), waiting("make a"));
+        assert_eq!(laid(&mut facts, "codex", "s-2"), waiting("make b"));
+        facts
+            .record("w1:p1", &codex("s-2", Some(HookTurn::Working), None), 100)
+            .unwrap();
+        assert_eq!(laid(&mut facts, "codex", "s-1"), waiting("make a"));
+        assert_eq!(laid(&mut facts, "codex", "s-2").1, None);
+        // An agent whose table does not say its hook names the command has
+        // none on its row, though the report carried one.
+        let mut claude = report(Some("s-1"), Some(HookTurn::Waiting));
+        claude.asked = HookAsked::of("rm -rf build");
+        let mut other = HookFacts::default();
+        other.record("w1:p1", &claude, 10).unwrap();
+        assert_eq!(
+            laid(&mut other, "claude", "s-1"),
+            (Some(HookTurn::Waiting), None)
+        );
+        // A pane that restarts, listed no more, loses its facts and the command.
+        let mut gone: SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [], "panes": []})).unwrap();
+        lay(&mut facts, &mut gone);
+        assert_eq!(laid(&mut facts, "codex", "s-1"), (None, None));
+        // A command past the report's limit is refused, never kept whole.
+        let mut oversize = codex("s-1", Some(HookTurn::Waiting), None);
+        oversize.asked = Some(HookAsked {
+            command: "x".repeat(hide_agent_hooks::report::ASKED_COMMAND_LIMIT + 1),
+            cut: false,
+            patch: false,
+        });
+        assert_eq!(
+            facts.record("w1:p1", &oversize, 110).unwrap_err(),
+            "hook_asked_invalid"
+        );
     }
 
     /// A device's engine goes with its link and the next link's engine counts

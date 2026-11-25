@@ -1215,6 +1215,7 @@ impl Runtime {
                     root,
                     channel,
                     OpenRequestFields {
+                        follow: false,
                         workspace_id: workspace_id.to_owned(),
                         checkout_id: checkout_id.to_owned(),
                         path: path.to_owned(),
@@ -2906,6 +2907,7 @@ impl Runtime {
                         root,
                         channel,
                         OpenRequestFields {
+                            follow: false,
                             workspace_id,
                             checkout_id,
                             path: display.path,
@@ -2998,6 +3000,7 @@ impl Runtime {
                             root,
                             channel,
                             OpenRequestFields {
+                                follow: false,
                                 workspace_id: workspace_id.clone(),
                                 checkout_id: checkout_id.clone(),
                                 path: path.clone(),

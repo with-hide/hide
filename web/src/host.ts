@@ -10,6 +10,7 @@
 import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
+import type { DisplayPreferences } from "./displayPreferences";
 import type { RemoteWork, RemoteWorkResult } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
@@ -361,9 +362,10 @@ export type RemoteScreensBridge = {
    * (B63); a screen whose page could not load loads again when shown. `key`
    * is the key the machine is paired under now: a page loaded under another
    * key is closed and the machine's page loaded anew. `name` is what this
-   * window calls the machine, which its page names itself by.
+   * window calls the machine, which its page names itself by, and `display`
+   * this window's View menu choices, which its page draws with.
    */
-  show(view: { device: string; key: string; rect: BrowserRect; name?: string | null } | null): void;
+  show(view: { device: string; key: string; rect: BrowserRect; name?: string | null; display?: DisplayPreferences } | null): void;
   /**
    * The operator's ask of that machine's screen (PRD device-connect-iroh
    * D-73, D-78): its work to show, or a start to make there. Made as the

@@ -89,7 +89,7 @@ describe("the session panel's head (Doop H 다, operator decision 2026-11-25)", 
     const actions = createActions(() => true);
     await act(async () => root.render(
       <TooltipProvider>
-        <SessionHead paneId="w1:p2" title="끊긴 뒤 로그인 고치기" job={{ ...job("working"), agent_id: agentId }} row={row} pane={null} machine={machine} disconnected={disconnected} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onClose={noop} />
+        <SessionHead paneId="w1:p2" title="끊긴 뒤 로그인 고치기" job={{ ...job("working"), agent_id: agentId }} row={row} pane={null} machine={machine} disconnected={disconnected} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
       </TooltipProvider>,
     ));
     return container;
