@@ -100,7 +100,9 @@ impl Runtime {
     /// under the lock, so the screen is told once the lock is let go.
     pub(in crate::runtime) fn desk_queued_after(&self) -> Option<crate::delivery::worker::After> {
         let notifier = self.desk.handle.as_ref()?.notifier.clone();
-        Some(Box::new(move |_: &Result<Value, String>| notifier.notify()))
+        Some(Box::new(move |_: &mut Result<Value, String>| {
+            notifier.notify()
+        }))
     }
 
     /// Its place in the queue, from 1, while it waits.
@@ -186,9 +188,8 @@ impl Runtime {
                 command: spawn @ AgentCommand::Spawn { parent: None, .. },
             } => {
                 let spawn = spawn.clone();
-                return Some(Box::new(move |result: &Result<Value, String>| {
-                    let result = result.clone();
-                    handle.apply(move |runtime| runtime.desk_spawn_answered(spawn, result));
+                return Some(Box::new(move |result: &mut Result<Value, String>| {
+                    handle.apply(|runtime| runtime.desk_spawn_answered(spawn, result));
                 }));
             }
             Command::Send {
@@ -225,7 +226,7 @@ impl Runtime {
             }
             _ => return None,
         };
-        Some(Box::new(move |result: &Result<Value, String>| {
+        Some(Box::new(move |result: &mut Result<Value, String>| {
             let Ok(answer) = result else {
                 return;
             };
@@ -240,8 +241,13 @@ impl Runtime {
     /// Desk's own spawn answered: its card line, or a failed card that
     /// `다시 시도` puts back in the queue (B22, B23). One refused only
     /// because another start held this machine's start line started
-    /// nothing, so it waits first in the queue rather than fail.
-    fn desk_spawn_answered(&mut self, spawn: AgentCommand, result: Result<Value, String>) -> bool {
+    /// nothing, so it waits first in the queue rather than fail, and its
+    /// asker reads that it waits, as a spawn the queue admitted reads.
+    fn desk_spawn_answered(
+        &mut self,
+        spawn: AgentCommand,
+        result: &mut Result<Value, String>,
+    ) -> bool {
         let AgentCommand::Spawn { intent, .. } = &spawn else {
             return false;
         };
@@ -249,7 +255,8 @@ impl Runtime {
         let queue = &mut self.desk.stored.queue;
         queue.retain(|job| job.intent != intent || job.state == QueuedState::Waiting);
         let mut queued = false;
-        if let Err(code) = result {
+        if let Err(code) = &*result {
+            let code = code.clone();
             let busy = code == SPAWN_BUSY;
             if queue.len() >= MAX_QUEUE
                 && let Some(ended) = queue.iter().position(|job| {
@@ -286,6 +293,9 @@ impl Runtime {
                 "intent": intent,
                 "code": code,
             }));
+            if queued {
+                *result = Ok(queued_answer(&intent, 1));
+            }
         } else if let Some(turn) = self.desk.turn.as_mut() {
             turn.steps.count(hide_desk::permission::Step::Start);
         }
@@ -1933,7 +1943,7 @@ impl Runtime {
     /// A start of Desk's that answered `code`, as its spawn's answer comes
     /// back to Desk.
     pub(in crate::runtime) fn fail_test_desk_start(&mut self, spawn: AgentCommand, code: &str) {
-        self.desk_spawn_answered(spawn, Err(code.into()));
+        self.desk_spawn_answered(spawn, &mut Err(code.into()));
     }
 }
 
@@ -2230,7 +2240,13 @@ mod tests {
         let mut runtime = desk(root.path(), 3, &["a"]);
         runtime.start_test_desk();
         assert_eq!(admit(&mut runtime, "b"), None);
-        runtime.desk_spawn_answered(spawn_command("b", None), Err("spawn_busy".into()));
+        let mut answer = Err(SPAWN_BUSY.into());
+        runtime.desk_spawn_answered(spawn_command("b", None), &mut answer);
+        let answer = answer.expect("a busy spawn the queue took reads as queued");
+        assert_eq!(
+            (answer["queued"].as_bool(), answer["position"].as_u64()),
+            (Some(true), Some(1))
+        );
         assert_eq!(card(&runtime, "b").state, DeskJobState::Starting);
         assert_eq!(runtime.desk.launched, ["intent-b"]);
         assert_eq!(admit(&mut runtime, "c").unwrap()["position"], 1);
@@ -2296,9 +2312,9 @@ mod tests {
         let mut runtime = desk(root.path(), 2, &["a"]);
         runtime.desk_spawn_answered(
             spawn_command("b", Some("mini")),
-            Err("machine_unavailable".into()),
+            &mut Err("machine_unavailable".into()),
         );
-        runtime.desk_spawn_answered(spawn_command("c", None), Err("spawn_refused".into()));
+        runtime.desk_spawn_answered(spawn_command("c", None), &mut Err("spawn_refused".into()));
         let b = card(&runtime, "b");
         assert_eq!(
             (b.state, b.reason),
@@ -2576,7 +2592,7 @@ mod tests {
             (DeskJobState::Queued, Some(1))
         );
         assert_eq!(told.load(Ordering::SeqCst), 0, "told after the lock");
-        runtime.desk_queued_after().expect("Desk's handle")(&Ok(answer));
+        runtime.desk_queued_after().expect("Desk's handle")(&mut Ok(answer));
         assert_eq!(told.load(Ordering::SeqCst), 1);
     }
 
@@ -2598,8 +2614,11 @@ mod tests {
                 _ => None,
             })
             .expect("a Send order");
-        runtime.desk_spawn_answered(spawn_command("a", None), Ok(json!({"id": "agent-1"})));
-        runtime.desk_spawn_answered(spawn_command("b", None), Err("parent_unavailable".into()));
+        runtime.desk_spawn_answered(spawn_command("a", None), &mut Ok(json!({"id": "agent-1"})));
+        runtime.desk_spawn_answered(
+            spawn_command("b", None),
+            &mut Err("parent_unavailable".into()),
+        );
         runtime.desk_report(Report::Text {
             tag,
             text: "one started".into(),
