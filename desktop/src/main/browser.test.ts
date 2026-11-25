@@ -1046,7 +1046,7 @@ describe("a file page's links (issue 2894)", () => {
   /** A host with one file page loaded off screen, its route answered as hided answers it. */
   async function filePage(workspace: string, source: string, route: string) {
     let nextId = 0;
-    const made: (EventEmitter & { setWindowOpenHandler: ReturnType<typeof vi.fn> })[] = [];
+    const made: (EventEmitter & { setWindowOpenHandler: ReturnType<typeof vi.fn>; loadURL: ReturnType<typeof vi.fn> })[] = [];
     nativeView.make = () => {
       const contents = Object.assign(new EventEmitter(), {
         id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "", close: vi.fn(),
@@ -1072,8 +1072,8 @@ describe("a file page's links (issue 2894)", () => {
       ipc.get(BROWSER_SYNC_CHANNEL)!({}, { workspace: null, displays: [], retained, inventoried: true });
     sync([]);
     sync([{ workspace, id: "preview", area_id: "shelf", url: source, load: 2 }]);
-    await vi.waitFor(() => expect(resolve).toHaveBeenCalledOnce());
-    await new Promise((done) => setTimeout(done, 0));
+    // Ready once the host applied the route: it loads the route's address.
+    await vi.waitFor(() => expect(made[0]?.loadURL).toHaveBeenCalledWith(route));
     const contents = made[0]!;
     const opened = () => send.mock.calls.filter(([channel, event]) => channel === BROWSER_EVENT_CHANNEL && (event as { kind: string }).kind === "open").map(([, event]) => event);
     const navigate = (url: string) => {
