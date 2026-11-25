@@ -1235,7 +1235,7 @@ fn launched_input_reaches_npms_program(shell: &str) {
                 .pane_processes(WAIT, &pane)
                 .is_ok_and(|processes| processes.shell_holds_terminal())
         });
-        let words = crate::start_prompt::launched("codex", &[], input, true, Some(&form))
+        let words = crate::start_prompt::launched("codex", &[], input, Some(&form))
             .expect("the start carries the input")
             .expect("Codex declares a launch");
         let start = engine

@@ -577,10 +577,9 @@ fn launch_prompt(
     kind: &str,
     args: &[String],
     brief: &str,
-    here: bool,
     form: Option<&StartForm>,
 ) -> Option<Vec<String>> {
-    crate::start_prompt::launched(kind, args, brief, here, form)
+    crate::start_prompt::launched(kind, args, brief, form)
         .map_err(|refusal| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
@@ -603,7 +602,6 @@ fn launch_prompt(
 fn brief_words(
     reserved: &SpawnRecord,
     start_args: &[String],
-    here: bool,
     form: Option<&StartForm>,
 ) -> Result<Option<Vec<String>>, String> {
     let Some(brief) = reserved.brief.as_deref() else {
@@ -625,7 +623,7 @@ fn brief_words(
     if reserved.brief_phase() != super::BriefPhase::NotTyped {
         return Ok(None);
     }
-    Ok(launch_prompt(&reserved.kind, start_args, brief, here, form))
+    Ok(launch_prompt(&reserved.kind, start_args, brief, form))
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
@@ -1963,7 +1961,7 @@ fn spawn(
                 .brief_input
                 .as_ref()
                 .is_some_and(|input| input.route == SendRoute::Launch);
-            let words = brief_words(&reserved, &start_args, !on_device, form.as_ref())?;
+            let words = brief_words(&reserved, &start_args, form.as_ref())?;
             let carried = words.clone();
             if let Some(words) = words {
                 if !launched_before {
@@ -3023,7 +3021,6 @@ mod tests {
             super::brief_words(
                 &record("opencode", Some("launch"), &["--prompt=-go"]),
                 &[],
-                true,
                 by_name,
             ),
             Ok(Some(vec!["--prompt=-go".to_owned()]))
@@ -3031,47 +3028,37 @@ mod tests {
         // An earlier build's launched record has no words: its start gave
         // the brief as carried, and nothing is asked.
         assert_eq!(
-            super::brief_words(&record("codex", Some("launch"), &[]), &[], true, by_name),
+            super::brief_words(&record("codex", Some("launch"), &[]), &[], by_name),
             Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
         );
         assert_eq!(
             super::brief_words(
                 &record("codex", Some("launch"), &[]),
                 &["--".into(), "mine".into()],
-                true,
                 by_name,
             ),
             Err("brief_launch_unrecorded".to_owned())
         );
         // A brief that was typed is never launched by a later start.
         assert_eq!(
-            super::brief_words(&record("codex", Some("typed"), &[]), &[], true, by_name),
+            super::brief_words(&record("codex", Some("typed"), &[]), &[], by_name),
             Ok(None)
         );
-        // Only a fresh start decides: here it launches as its node starts
-        // the program, by its name or its file, and a device's start, and a
-        // program Windows runs through cmd.exe, is typed.
-        assert_eq!(
-            super::brief_words(&record("codex", None, &[]), &[], false, by_name),
-            Ok(None)
-        );
+        // Only a fresh start decides: it launches as the pane's node, this
+        // machine's or a device's, starts the program, by its name or its
+        // file, and a program Windows runs through cmd.exe is typed.
         let direct = StartForm::Direct {
             program: "C:/node/node.exe".into(),
             leading: vec!["C:/npm/node_modules/@openai/codex/bin/codex.js".into()],
         };
         for form in [by_name, Some(&direct)] {
             assert_eq!(
-                super::brief_words(&record("codex", None, &[]), &[], true, form),
+                super::brief_words(&record("codex", None, &[]), &[], form),
                 Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
             );
         }
         assert_eq!(
-            super::brief_words(
-                &record("codex", None, &[]),
-                &[],
-                true,
-                Some(&StartForm::Batch)
-            ),
+            super::brief_words(&record("codex", None, &[]), &[], Some(&StartForm::Batch)),
             Ok(None)
         );
     }

@@ -1412,8 +1412,6 @@ fn start_task_agent(
                 launch_engine,
                 reader.as_deref().or(agent_node),
                 pane_node.as_deref(),
-                // Only a start on this machine has an install check here.
-                agent_node.is_some(),
                 id,
                 start,
                 held.hold(),
@@ -1445,16 +1443,7 @@ fn launch_with_prompt(
     id: u64,
     start: PendingAgentStart,
 ) -> TaskAgentOutcome {
-    launch_with_prompt_checked(
-        engine,
-        agent_node,
-        agent_node,
-        agent_node.is_some(),
-        id,
-        start,
-        None,
-        &|| Ok(()),
-    )
+    launch_with_prompt_checked(engine, agent_node, agent_node, id, start, None, &|| Ok(()))
 }
 
 #[allow(clippy::too_many_arguments)] // the task/pane launch identity plus its effect admission
@@ -1462,7 +1451,6 @@ fn launch_with_prompt_checked(
     engine: &dyn Engine,
     agent_node: Option<&dyn crate::node_access::NodeLink>,
     pane_node: Option<&dyn crate::node_access::NodeLink>,
-    here: bool,
     id: u64,
     start: PendingAgentStart,
     hold: Option<crate::launch::holds::Hold>,
@@ -1517,7 +1505,6 @@ fn launch_with_prompt_checked(
         engine,
         agent_node,
         pane_node,
-        here,
         id,
         &pane_id,
         shell,
@@ -1606,7 +1593,6 @@ fn launch_agent(
     engine: &dyn Engine,
     agent_node: Option<&dyn crate::node_access::NodeLink>,
     pane_node: Option<&dyn crate::node_access::NodeLink>,
-    here: bool,
     id: u64,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
@@ -1636,7 +1622,8 @@ fn launch_agent(
     // an agent that can never appear; say so before asking it. A device's
     // PATH is not this machine's, so there its engine answers for it. Asked
     // before every start: how the node starts the program now is what the
-    // start names and whether its first input can ride it.
+    // start names and whether its first input can ride it, asked of the
+    // node that runs the pane: a device's for a device's pane.
     // The node looks up the program the engine types for the agent (its
     // definition's first executable), which is not always the kind's name.
     let program = crate::start_prompt::program_of(engine, kind);
@@ -1657,13 +1644,23 @@ fn launch_agent(
                 ));
             }
         }
+    } else if let Some(node) = pane_node {
+        form = crate::start_prompt::start_form(node, &program, AGENT_CHECK_TIMEOUT).unwrap_or_else(
+            |error| {
+                crate::diagnostic!(json!({
+                    "component": "task", "kind": "start.form_unread", "task": id,
+                    "pane_id": pane_id, "program": program, "cause": error.to_string(),
+                }));
+                None
+            },
+        );
     }
     // The first prompt is typed once the agent's screen takes input, and
     // rides the start only in a cell the journey proves
     // (`start_prompt::launched`, docs/delivery.md, The input ladder).
     let mut typed = None;
     if let Some(prompt) = prompt {
-        match crate::start_prompt::launched(kind, &args, prompt, here, form.as_ref()) {
+        match crate::start_prompt::launched(kind, &args, prompt, form.as_ref()) {
             Ok(Some(words)) => args.extend(words),
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
@@ -4635,7 +4632,6 @@ mod tests {
                 &*server,
                 Some(&node),
                 Some(&node),
-                true,
                 7,
                 make(),
                 None,
@@ -4760,16 +4756,8 @@ mod tests {
         // A device start: no agent node (its engine answers for its PATH), a
         // pane node that is the device's.
         let server = server(vec![shell_ready(), started()]);
-        let outcome = launch_with_prompt_checked(
-            &*server,
-            None,
-            Some(&node),
-            false,
-            7,
-            make(),
-            None,
-            &|| Ok(()),
-        );
+        let outcome =
+            launch_with_prompt_checked(&*server, None, Some(&node), 7, make(), None, &|| Ok(()));
         assert!(
             matches!(outcome, TaskAgentOutcome::Started(_)),
             "{outcome:?}"
@@ -4785,7 +4773,7 @@ mod tests {
         // With no pane node the start refuses before the engine is asked.
         let server = self::server(vec![]);
         let TaskAgentOutcome::Failed(reason) =
-            launch_with_prompt_checked(&*server, None, None, false, 7, make(), None, &|| Ok(()))
+            launch_with_prompt_checked(&*server, None, None, 7, make(), None, &|| Ok(()))
         else {
             panic!("a start without the pane's machine went ahead")
         };
@@ -5201,11 +5189,11 @@ mod tests {
         }
     }
 
-    /// A device's start, which no journey cell proves, carries no first
-    /// prompt: the agent starts without it and the prompt is typed once,
-    /// whole, after its screen takes input.
+    /// A start whose machine did not say how the program starts, no node to
+    /// ask, carries no first prompt: the agent starts without it and the
+    /// prompt is typed once, whole, after its screen takes input.
     #[test]
-    fn a_first_prompt_to_a_device_start_is_typed_after_the_screen() {
+    fn a_first_prompt_to_a_start_no_node_answered_is_typed_after_the_screen() {
         let mut replies = vec![shell_ready(), started()];
         replies.extend(typed_replies("codex"));
         let server = server(replies);
