@@ -270,7 +270,9 @@ An empty group creates its first draft when a start is requested.
 Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with `Start with terminal` always visible under that start flow as a text button with a terminal icon, quieter than Start.
 Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab.
-Existing starts that add a pane to a live tab retain their progress, failure and recovery form; New tab remains the tab bar's creation entry point.
+A tab whose pane is alive always shows that pane, whatever its start's receipt says, so a question the agent stops on (a folder-trust screen, a login) is answered in its terminal.
+A start of a live tab that is still being confirmed, whose first prompt Hide could not confirm, or whose agent failed is reported by the start notice, with Retry and Show terminal, and by the tab's status, never by a start form over the terminal; the start form appears only where there is no pane, in a draft or an empty group.
+New tab remains the tab bar's creation entry point.
 Starting in an enlarged pane returns that tab to its split layout and keeps its existing terminals running.
 While a start is being confirmed its temporary terminal occupies the existing reservation and does not appear as another tab.
 The internal creation label is never shown as a pane or tab name and is not copied into a reopened terminal.

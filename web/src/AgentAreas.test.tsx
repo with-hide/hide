@@ -23,7 +23,7 @@ afterAll(() => browserCanvas.restore());
 const pane: PaneRow = { id: "p1", device_id: "local", device_pane_id: "p1", engine_label: "p1", terminal_title: null, cwd: "/fixture", status_code: "approval", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null };
 const tab: Tab = { id: "t1", workspace_id: "project", checkout_id: "checkout", label: "Claude", empty: false, delegated: false, panes: [pane], sidebar: { number: 1, manual_name: null, named_by_operator: false, focused_pane_id: "p1" } };
 // The start that filled draft `draft-1` with the live tab `t1`, whose pane p1 runs.
-const started: AgentStartReceipt = { request_id: "start-1", group_id: null, area_id: "a1", draft_tab_id: "draft-1", live_tab_id: "t1", pane_id: "p1", add_pane: false, state: "ready", agent_kind: "claude", agent_phase: "started" };
+const started: AgentStartReceipt = { request_id: "request-1", group_id: null, area_id: "a1", draft_tab_id: "draft-1", live_tab_id: "t1", pane_id: "p1", add_pane: false, state: "ready", agent_kind: "claude", agent_phase: "started" };
 
 let root: Root;
 let container: HTMLDivElement;
@@ -35,7 +35,7 @@ beforeEach(() => {
   // The area tree lays its areas out in the size it measures; jsdom measures none.
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
-  for (const [name, value] of [["--size-tab-preferred", "180px"], ["--size-tab-title-min", "104px"], ["--size-tab-selected-max", "240px"], ["--size-tab-icon-identity", "40px"], ["--size-control-sm", "24px"]] as const) document.documentElement.style.setProperty(name, value);
+  for (const [name, value] of [["--size-tab-preferred", "180"], ["--size-tab-title-min", "104"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "40"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
   useInlineStarts.setState({ drafts: {}, retired: new Set() });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
@@ -54,7 +54,7 @@ const show = async (receipt: AgentStartReceipt) => {
   await act(async () => root.render(<TooltipProvider><InlineStartHost /><AgentAreas checkout={checkout} actions={createActions(() => true)} /></TooltipProvider>));
 };
 
-// with-hide/hide#2927: a device's Claude stood on its folder-trust question, so
+// with-hide/hide issue 2927: a device's Claude stood on its folder-trust question, so
 // its first prompt was never confirmed and the start form covered the terminal
 // the operator had to answer it in. A tab whose pane is alive shows that pane
 // whatever its start's receipt says.
