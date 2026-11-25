@@ -2472,9 +2472,7 @@ impl Runtime {
         }
 
         if changed {
-            if !self.ai_settings.as_ref().is_some_and(|settings| {
-                settings.enabled && settings.chosen && settings.agent_summary
-            }) {
+            if !self.agent_summary() {
                 self.drop_missed_backlog();
             }
             self.refresh_background_ai();
@@ -2487,9 +2485,7 @@ impl Runtime {
     /// B47). A turn that is not asked is not lost: the row shows the session's
     /// own text and the label is made once this is true again.
     pub(crate) fn agent_summary(&self) -> bool {
-        self.ai_settings
-            .as_ref()
-            .is_some_and(|settings| settings.agent_summary && self.ai_active())
+        super::backlog::summaries_on(self.ai_settings.as_ref())
     }
 
     /// Whether the usage limit holds Hide AI's label requests back. It asks

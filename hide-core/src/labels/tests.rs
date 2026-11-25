@@ -4034,11 +4034,14 @@ fn a_usage_pause_keeps_every_label_shown_and_asks_nothing_until_it_ends() {
     worker.tick(Instant::now());
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 1, "nothing is asked while paused");
+    assert!(
+        !shown(&worker, &next).unwrap().blocked,
+        "a turn the pause left unjudged carries no earlier turn's block"
+    );
 
     assert!(worker.set_paused(false, Instant::now()));
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 2, "the current turn, once");
-    assert!(!shown(&worker, &next).unwrap().blocked);
 }
 
 /// D-19: a transcript that starts over is judged again against the submits

@@ -287,9 +287,7 @@ impl Runtime {
                     self.links_work.search_generation,
                     payload.query,
                     payload.options,
-                    self.ai_settings.as_ref().is_some_and(|settings| {
-                        settings.enabled && settings.chosen && settings.agent_summary
-                    }),
+                    super::backlog::summaries_on(self.ai_settings.as_ref()),
                     presence,
                 ),
                 None => {

@@ -523,8 +523,8 @@ pub(crate) struct LabelWorker {
     /// rows stand on what they find.
     summaries: bool,
     /// Hide AI's usage-limit pause: no analysis is asked for while it holds,
-    /// but every label already made stays laid, so a pause or its end never
-    /// changes what a row shows (docs/AI_PROVIDERS.md, The usage limit).
+    /// but no label already made is taken off a row (docs/AI_PROVIDERS.md,
+    /// The usage limit).
     paused: bool,
     /// Since when analyses are asked ([`Self::asks`]).
     summaries_on_since: u64,
@@ -1218,11 +1218,10 @@ impl LabelWorker {
     }
 
     /// Takes what the core says labels follow: the operator's agent-summary
-    /// switch (see [`Self::set_summaries`]), Hide AI's usage-limit pause (see
-    /// [`Self::set_paused`]) and the output language of the requests made
-    /// from now on; a label already shown keeps the language it was asked in
-    /// (D-09). One call, so a caller cannot hand one without the others.
-    /// Returns whether what the projection shows changed.
+    /// switch, Hide AI's usage-limit pause and the output language of the
+    /// requests made from now on; a label already shown keeps the language
+    /// it was asked in (D-09). One call, so a caller cannot hand one without
+    /// the others. Returns whether what the projection shows changed.
     pub(crate) fn follow_core(
         &mut self,
         summaries: bool,
@@ -1231,35 +1230,37 @@ impl LabelWorker {
         now: Instant,
     ) -> bool {
         self.language = language;
-        let shown = self.set_summaries(summaries, now);
-        self.set_paused(paused, now) | shown
+        self.follow_switches(summaries, paused, now)
     }
 
-    /// Takes the operator's agent-summary switch. Off takes every AI field
-    /// off the rows and asks nothing ([`Self::follow_asks`]); on shows the
-    /// stored labels again. Returns whether what the projection shows
-    /// changed.
+    /// Takes the operator's agent-summary switch alone; see
+    /// [`Self::follow_switches`].
+    #[cfg(test)]
     pub(crate) fn set_summaries(&mut self, on: bool, now: Instant) -> bool {
-        if self.summaries == on {
-            return false;
-        }
-        let asked = self.asks();
-        self.summaries = on;
-        self.follow_asks(asked, now);
-        true
+        self.follow_switches(on, self.paused, now)
     }
 
-    /// Takes Hide AI's usage-limit pause. It stops the asking only
-    /// ([`Self::follow_asks`]): the labels already made stay on the rows, so
-    /// a row the operator read does not change while nothing happened to
-    /// its agent. Returns whether the notices the projection carries moved.
+    /// Takes Hide AI's usage-limit pause alone; see
+    /// [`Self::follow_switches`].
+    #[cfg(test)]
     pub(crate) fn set_paused(&mut self, paused: bool, now: Instant) -> bool {
-        if self.paused == paused {
-            return false;
-        }
+        self.follow_switches(self.summaries, paused, now)
+    }
+
+    /// Takes the switch and the pause together, then lets the asking follow
+    /// them once, so a switch turned on in the same call a pause starts asks
+    /// nothing. The switch off takes every AI field off the rows and on lays
+    /// the stored labels again; the pause stops the asking only
+    /// ([`Self::follow_asks`]), so the labels already made stay on the rows
+    /// and a row the operator read does not change while its agent does
+    /// nothing. Returns whether the rows' AI fields or the asking moved, the
+    /// asking stopping settling the notices owed.
+    fn follow_switches(&mut self, summaries: bool, paused: bool, now: Instant) -> bool {
         let asked = self.asks();
+        let shown = self.summaries != summaries;
+        self.summaries = summaries;
         self.paused = paused;
-        self.follow_asks(asked, now)
+        self.follow_asks(asked, now) | shown
     }
 
     /// Whether analyses are asked: summaries are on and Hide AI is not
@@ -1474,7 +1475,6 @@ impl LabelWorker {
         if self.read_in_flight.is_some() || self.metadata_in_flight {
             return;
         }
-        let asks = self.asks();
         let next = self
             .panes
             .iter()
@@ -1491,15 +1491,16 @@ impl LabelWorker {
             record.is_some_and(|record| record.read_reference.as_ref() == Some(&reference));
         // An in-memory reader appends after the checkpoint; a reader that
         // lost its events (a restart) starts at the last human record, and a
-        // new file starts at its beginning. While labels are made, a pane
-        // with no goal yet starts at the beginning too: its context is the
-        // operator's requests from the first one on, and the first lies
-        // before the last human record.
+        // new file starts at its beginning. While summaries are on, a usage
+        // pause included (its end asks this pane), a pane with no goal yet
+        // starts at the beginning too: its context is the operator's
+        // requests from the first one on, and the first lies before the
+        // last human record.
         let checkpoint = if !same_file {
             None
         } else if pane.events_loaded {
             record.and_then(|record| record.checkpoint.clone())
-        } else if asks && record.is_some_and(PaneRecord::needs_initial_context) {
+        } else if self.summaries && record.is_some_and(PaneRecord::needs_initial_context) {
             None
         } else {
             record.and_then(|record| record.anchor.clone())
