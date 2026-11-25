@@ -37,7 +37,7 @@ use crate::model::{
 };
 use hide_desk::permission::{self, Ask, Irreversible};
 use hide_desk::session::{Choice, Choices, OpenError};
-use worker::{Order, Report, TurnOutcome};
+use worker::{Order, Report, TurnEnd, TurnOutcome};
 
 /// A mention's id or name; a longer one is refused with its message.
 const MAX_MENTION_BYTES: usize = 1024;
@@ -532,6 +532,28 @@ impl Runtime {
         let message = self.desk.stored.queued.remove(0);
         self.desk_start_turn(agent, message.text.clone(), message.text, message.mentions);
         true
+    }
+
+    fn desk_turn_tag(&self) -> Option<u64> {
+        self.desk.turn.as_ref().map(|turn| turn.tag)
+    }
+
+    /// The turn under way ends as `outcome` says: requests the agent made
+    /// in it end with it, and so do the archives its cards allowed once.
+    fn desk_close_turn(&mut self, outcome: TurnOutcome) {
+        self.close_approvals();
+        self.desk.archive_grants.clear();
+        match outcome {
+            TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
+            TurnOutcome::Cancelled | TurnOutcome::Ended => {
+                self.finish_turn(DeskReplyState::Stopped);
+            }
+            TurnOutcome::Failed(reason) => {
+                self.finish_turn(DeskReplyState::Stopped);
+                let agent = self.selected_agent();
+                self.push_notice(DeskNotice::TurnFailed, agent, reason);
+            }
+        }
     }
 
     /// The message of the turn under way, which the agent never took, goes
@@ -1139,12 +1161,20 @@ impl Runtime {
                 }
                 self.save_desk();
             }
-            Report::OpenFailed { adapter, error } => {
-                // The agent never took the message: it goes back first in
-                // line, and `held` keeps it there until the operator sends
-                // again or restarts.
+            Report::OpenFailed {
+                adapter,
+                error,
+                turn,
+            } => {
+                // The agent never took the turn's message: it goes back first
+                // in line and the turn ends, and `held` keeps the line until
+                // the operator sends again or restarts. A turn started since,
+                // by `다시 시작` or a new conversation, is not this one.
                 self.desk.held = true;
-                self.desk_requeue_untaken();
+                if turn.is_some() && self.desk_turn_tag() == turn {
+                    self.desk_requeue_untaken();
+                    self.desk_close_turn(TurnOutcome::Cancelled);
+                }
                 if error == OpenError::Login {
                     self.desk.sign_in_refused.insert(adapter);
                 }
@@ -1238,19 +1268,7 @@ impl Runtime {
                 if self.desk.turn.as_ref().is_none_or(|turn| turn.tag != tag) {
                     return false;
                 }
-                // Requests the agent made in the turn end with it, and so do
-                // the archives its cards allowed once.
-                self.close_approvals();
-                self.desk.archive_grants.clear();
-                match outcome {
-                    TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
-                    TurnOutcome::Cancelled => self.finish_turn(DeskReplyState::Stopped),
-                    TurnOutcome::Failed(reason) => {
-                        self.finish_turn(DeskReplyState::Stopped);
-                        let agent = self.selected_agent();
-                        self.push_notice(DeskNotice::TurnFailed, agent, reason);
-                    }
-                }
+                self.desk_close_turn(outcome);
                 if self.desk.host.open {
                     self.desk.host.state = Some(DeskHostState::Ready);
                 }
@@ -1343,15 +1361,17 @@ impl Runtime {
                 detail,
                 turn,
             } => {
-                self.close_approvals();
-                self.forget_allowances();
-                // The turn the process ended under ends with it. A turn
-                // started since, as `다시 시작` starts the next queued
+                // The turn that ends with the process ends as the report says.
+                // A turn started since, as `다시 시작` starts the next queued
                 // message beside the old process's end, is not that
                 // process's: the worker sends it to the next one.
-                if turn.is_some() && self.desk.turn.as_ref().map(|running| running.tag) == turn {
-                    self.finish_turn(DeskReplyState::Stopped);
+                if let Some(TurnEnd { tag, outcome }) = turn
+                    && self.desk_turn_tag() == Some(tag)
+                {
+                    self.desk_close_turn(outcome);
                 }
+                self.close_approvals();
+                self.forget_allowances();
                 if unexpected {
                     self.desk.host = Host {
                         state: Some(DeskHostState::Stopped),
