@@ -275,6 +275,14 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>) -> Result<Launch, String> {
         // The Pi Hide found on the account's `PATH`, which pi-acp starts.
         env.push(("PI_ACP_PI_COMMAND".into(), own_cli()?.into()));
     }
+    if adapter.key() == AgentId::Codex {
+        // codex-acp starts in a preset of its own, never in what the
+        // account's `config.toml` sets; `workspace-write` is the Codex CLI's
+        // own default (asks before leaving the workspace or using the
+        // network, the operator answering), where codex-acp's default has a
+        // model answer instead (docs/INSTALL.md, Desk's Codex).
+        env.push(("INITIAL_AGENT_MODE".into(), "workspace-write".into()));
+    }
     let mut account: Vec<(OsString, OsString)> = paths
         .account
         .unwrap_or_default()
@@ -416,7 +424,7 @@ mod tests {
     /// D-92: nothing Desk adds makes an agent ask, so each starts as the
     /// operator's terminal starts it, with the account's own settings.
     #[test]
-    fn every_agent_starts_its_plain_acp_mode_with_the_account_s_settings() {
+    fn every_agent_starts_with_the_account_s_settings_and_codex_in_its_cli_default() {
         let desk = Path::new("/state/desk");
         let account = [
             (
@@ -465,7 +473,10 @@ mod tests {
             value(&codex, "CODEX_HOME").unwrap(),
             OsString::from("/home/me/.codex")
         );
-        assert!(value(&codex, "INITIAL_AGENT_MODE").is_none());
+        assert_eq!(
+            value(&codex, "INITIAL_AGENT_MODE").unwrap(),
+            OsString::from("workspace-write")
+        );
 
         // Without its CLI the agent does not start.
         assert!(launch(AdapterId::ANTIGRAVITY, &paths(desk, None)).is_err());
