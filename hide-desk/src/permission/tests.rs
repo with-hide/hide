@@ -1021,6 +1021,9 @@ fn every_card_names_its_folder_and_a_hide_line_reads_as_the_hide_row() {
     );
     assert_eq!(edit(&["notes.md"]).as_deref(), Some(WORK));
     assert_eq!(edit(&["/a/x", "/b/y"]).as_deref(), Some("/"));
+    // A Windows drive's root, read by the wire's spelling on every system.
+    assert_eq!(edit(&["C:/a/x", "C:/b/y"]).as_deref(), Some("C:/"));
+    assert_eq!(edit(&["C:/a/x", "D:/a/y"]), None);
     // A path Hide cannot name leaves the folder out rather than guess.
     assert_eq!(edit(&["$HOME/x"]), None);
 

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::super::Runtime;
 use crate::agent_state::RowMark;
-use crate::coordination::Command as AgentCommand;
+use crate::coordination::{Command as AgentCommand, SPAWN_BUSY};
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
 use crate::model::{DeskJobState, SidebarAgentSnapshot};
@@ -251,12 +251,6 @@ impl Runtime {
         let mut queued = false;
         if let Err(code) = result {
             let busy = code == SPAWN_BUSY;
-            crate::diagnostic!(json!({
-                "component": "desk",
-                "kind": if busy { "desk.spawn_queued_busy" } else { "desk.spawn_failed" },
-                "intent": intent,
-                "code": code,
-            }));
             if queue.len() >= MAX_QUEUE
                 && let Some(ended) = queue.iter().position(|job| {
                     matches!(job.state, QueuedState::Cancelled | QueuedState::Failed)
@@ -274,7 +268,7 @@ impl Runtime {
                     } else {
                         QueuedState::Failed
                     },
-                    code: (!busy).then_some(code),
+                    code: (!busy).then(|| code.clone()),
                 };
                 if busy {
                     // Asked before every spawn queued since, so first.
@@ -284,6 +278,14 @@ impl Runtime {
                     queue.push(job);
                 }
             }
+            // A busy spawn the full queue could not take is logged failed,
+            // as it is: nothing will start it.
+            crate::diagnostic!(json!({
+                "component": "desk",
+                "kind": if queued { "desk.spawn_queued_busy" } else { "desk.spawn_failed" },
+                "intent": intent,
+                "code": code,
+            }));
         } else if let Some(turn) = self.desk.turn.as_mut() {
             turn.steps.count(hide_desk::permission::Step::Start);
         }
@@ -440,19 +442,20 @@ impl Runtime {
             .name("hide-core-desk-start".into())
             .spawn(move || {
                 let result = crate::coordination::run(client, authority, actor, command);
-                // Another start held this machine's start line, and this one
-                // started nothing: it waits for that start to let the line
-                // go, then asks again from the queue with a fresh authority.
-                let busy = matches!(&result, Err(code) if code == SPAWN_BUSY);
-                if busy && crate::coordination::wait_for_spawn_line() {
-                    handle.apply(|runtime| runtime.desk_queued_busy(&intent));
-                } else {
-                    handle.apply(|runtime| runtime.desk_queued_started(&intent, result));
-                }
+                let started = after_start(result, crate::coordination::wait_for_spawn_line);
+                handle.apply(|runtime| runtime.desk_queued_answered(&intent, started));
             });
         match spawned {
             Ok(_) => Launch::Started,
             Err(_) => Launch::Failed,
+        }
+    }
+
+    /// A queued start's thread answered.
+    fn desk_queued_answered(&mut self, intent: &str, started: Started) -> bool {
+        match started {
+            Started::LineFreed => self.desk_queued_busy(intent),
+            Started::Answered(result) => self.desk_queued_started(intent, result),
         }
     }
 
@@ -517,9 +520,24 @@ enum Launch {
     Failed,
 }
 
-/// The answer of a start that found another start holding this machine's
-/// start line, and so started nothing.
-const SPAWN_BUSY: &str = "spawn_busy";
+/// What a queued start's thread hands back to the queue.
+#[derive(Debug, PartialEq)]
+enum Started {
+    /// Another start held this machine's start line, nothing was started,
+    /// and that start has since let the line go: it is asked again.
+    LineFreed,
+    Answered(Result<Value, String>),
+}
+
+/// What a queued start's answer is for the queue: a busy line is waited
+/// out with `wait` (off the runtime's lock), never the job's failure; a line
+/// a panicked start poisoned refuses every start, so its answer stands.
+fn after_start(result: Result<Value, String>, wait: impl FnOnce() -> bool) -> Started {
+    match result {
+        Err(code) if code == SPAWN_BUSY && wait() => Started::LineFreed,
+        answer => Started::Answered(answer),
+    }
+}
 
 /// A watch Desk asked for one of its sessions: whether an ask runs now,
 /// and how many were refused.
@@ -2230,10 +2248,38 @@ mod tests {
         admit(&mut runtime, "c").expect("queued");
         raise_cap(&mut runtime, 2);
         assert_eq!(runtime.desk.launched, ["intent-b"]);
-        assert!(runtime.desk_queued_busy("intent-b"));
+        let busy = after_start(Err(SPAWN_BUSY.into()), || true);
+        assert!(runtime.desk_queued_answered("intent-b", busy));
         assert_eq!(runtime.desk.launched, ["intent-b", "intent-b"]);
         assert_eq!(card(&runtime, "b").state, DeskJobState::Starting);
         assert_eq!(card(&runtime, "c").queue_position, Some(1));
+    }
+
+    /// A busy start line is waited out and the job asked again; a line a
+    /// panicked start poisoned, or any other refusal, is the start's answer.
+    #[test]
+    fn a_busy_line_is_waited_out_and_any_other_answer_stands() {
+        assert_eq!(
+            after_start(Err(SPAWN_BUSY.into()), || true),
+            Started::LineFreed
+        );
+        assert_eq!(
+            after_start(Err(SPAWN_BUSY.into()), || false),
+            Started::Answered(Err(SPAWN_BUSY.into()))
+        );
+        let waited = std::cell::Cell::new(false);
+        assert_eq!(
+            after_start(Err("branch_in_use".into()), || {
+                waited.set(true);
+                true
+            }),
+            Started::Answered(Err("branch_in_use".into()))
+        );
+        assert!(!waited.get(), "only a busy line is waited for");
+        assert_eq!(
+            after_start(Ok(json!({"id": "child"})), || true),
+            Started::Answered(Ok(json!({"id": "child"})))
+        );
     }
 
     #[test]
