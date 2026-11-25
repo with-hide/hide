@@ -340,6 +340,11 @@ const renderers: Renderers = {
         Hide could not tell whether the close finished.
       </GalleryToast>
     ),
+    "Skill Ask": () => (
+      <GalleryToast level="important" actions={<Button variant="text" size="inline">확인하기</Button>}>
+        스킬 설치 요청: structure-check
+      </GalleryToast>
+    ),
     "Long Korean": () => (
       <GalleryToast level="important" actions={<Button variant="text" size="inline" className="text-destructive">저장 안 함</Button>}>
         notes-for-the-quarterly-planning-review.md 파일에 저장하지 않은 변경이 있어서 마지막 보기를 닫지 않았어요. 저장하거나 저장 안 함을 눌러 닫으세요.

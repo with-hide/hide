@@ -892,6 +892,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         user_turn,
         ask_subject: None,
         laid_since_unix_ms: None,
+        laid_lead: None,
         blocked_since_unix_ms: None,
         laid_more: 0,
         laid_asks: BTreeSet::new(),

@@ -1714,6 +1714,9 @@ fn own_node(
     service: &Arc<Service>,
 ) -> Result<hide_node::Local, String> {
     let home = core_home(options)?;
+    // A start's prompt file left by a line that never ran, from before this
+    // daemon started, is finished.
+    hide_host::prompt_files::sweep(Some(state_dir));
     let mut node = hide_node::Local::new(Some(home.clone()))
         // What the node measured of each repository's worktrees outlives
         // the daemon, in the core's state folder.

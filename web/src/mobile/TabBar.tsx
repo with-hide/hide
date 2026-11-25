@@ -4,7 +4,7 @@
 // count in `useBadges`; the bar is drawn on the lists only, never over a
 // detail.
 
-import { FlagIcon, GitPullRequestIcon, ListIcon, RepeatIcon, SettingsIcon, type LucideIcon } from "lucide-react";
+import { GitPullRequestIcon, ListIcon, RepeatIcon, SettingsIcon, WaypointsIcon, type LucideIcon } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { MessageKey } from "../i18n/catalogs";
@@ -14,7 +14,7 @@ import { setTab, usePhone, type PhoneTab } from "./store";
 
 export const PHONE_TABS: readonly { id: PhoneTab; icon: LucideIcon; label: MessageKey }[] = [
   { id: "agents", icon: ListIcon, label: "mobile.tab.agents" },
-  { id: "missions", icon: FlagIcon, label: "mobile.tab.missions" },
+  { id: "missions", icon: WaypointsIcon, label: "mobile.tab.missions" },
   { id: "automations", icon: RepeatIcon, label: "mobile.tab.automations" },
   { id: "prs", icon: GitPullRequestIcon, label: "mobile.tab.prs" },
   { id: "settings", icon: SettingsIcon, label: "mobile.tab.settings" },

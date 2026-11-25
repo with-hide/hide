@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, fileLink, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseSync, parseTarget, popupBounds, protocolOf, remoteRequest, routed, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -814,7 +814,7 @@ export class BrowserViews {
         callback({ cancel: true });
         return;
       }
-      if (page?.route && isFileAddress(page.route.url) && isFileAddress(page.route.source_url)) {
+      if (page?.route && !routed(page.route) && isFileAddress(page.route.source_url)) {
         this.localPageRequest(pageSession, page, details, callback);
         return;
       }
@@ -1040,9 +1040,15 @@ export class BrowserViews {
         this.fileRefused(page, "navigation");
         return;
       }
-      if (page.route && isFileAddress(page.route.source_url) && remoteRequest(page.route, url).cancel) {
+      const link = fileLink(page.route, url);
+      if (link === "refuse") {
         event.preventDefault();
         this.log.event("browser.navigation_refused", { reason: "remote_file_boundary" });
+        return;
+      }
+      if (link === "beside") {
+        event.preventDefault();
+        this.emit({ kind: "open", workspace: page.workspace, id: page.id, url });
         return;
       }
       if (loadable(url)) return;
@@ -1076,8 +1082,15 @@ export class BrowserViews {
       this.fileRefused(page, "popup");
       return { action: "deny" };
     }
-    if (page.route && isFileAddress(page.route.source_url) && remoteRequest(page.route, url).cancel) {
+    const link = fileLink(page.route, url);
+    if (link === "refuse") {
       this.log.event("browser.window_open_refused", { reason: "remote_file_boundary" });
+      return { action: "deny" };
+    }
+    // A local file page's web address, a sized popup's too, is a display
+    // beside it: the file partition holds no web page.
+    if (link === "beside") {
+      this.emit({ kind: "open", workspace: page.workspace, id: page.id, url });
       return { action: "deny" };
     }
     if (!loadable(url)) {
@@ -1269,7 +1282,7 @@ export class BrowserViews {
 
   private sourceAddress(page: Page, raw: string): string {
     const route = page.route;
-    if (!route || route.url === route.source_url) return raw;
+    if (!route || !routed(route)) return raw;
     if (raw === route.url) return route.source_url;
     try {
       const address = new URL(raw);
@@ -1520,14 +1533,6 @@ function requester(url: string, t: TFunction<"translation">): string {
     if (origin !== "null") return origin;
   } catch { /* falls through */ }
   return t("native.browser.thisPage");
-}
-
-function protocolOf(url: string): string {
-  try {
-    return new URL(url).protocol;
-  } catch {
-    return "unparsable";
-  }
 }
 
 function menuHas(items: readonly MenuItem[], accelerator: string): boolean {

@@ -1283,7 +1283,8 @@ pub enum RemoveOutcome {
 pub struct RemoveReport {
     pub components: Vec<(ComponentId, RemoveOutcome)>,
     /// What removing took off for the agents: each guidance hook
-    /// (`hook:<agent>`) and each skill folder (`skill:<folder>`).
+    /// (`hook:<agent>`), each skill folder (`skill:<folder>`) and each
+    /// agent's folder trust (`trust:<writer>`).
     #[serde(default)]
     pub agents: Vec<(String, RemoveOutcome)>,
 }

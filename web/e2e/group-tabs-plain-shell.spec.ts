@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { agentIn, checkoutAt, sendKeys, withControl } from "./daemon-actions";
-import { startFixture, type AgentFixture } from "./engine-fixture";
+import { paneArguments, startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureLoginShellPath } from "./platform-fixture";
 import { enterWorkspace, sendEvent } from "./wire";
@@ -92,9 +92,11 @@ async function typesInto(page: Page, daemon: Daemon, pane: string, suffix = "INP
   expect(output).toContain("fixture $ ");
 }
 
-async function agentRunning(page: Page, daemon: Daemon, engine: AgentFixture, pane: string, prompt: string) {
+async function agentRunning(daemon: Daemon, engine: AgentFixture, pane: string, prompt: string) {
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.agent_kind === "claude" || undefined, `a Claude agent in ${pane}`, 30_000));
-  await expect.poll(async () => paneText(page, pane), { timeout: 30_000 }).toContain(prompt);
+  // The prompt reaches the agent as its last argument, read from a file by the start line, so it is read from the
+  // arguments the stand-in was given rather than from the line the shell echoes.
+  await expect.poll(() => paneArguments(engine.root, pane).at(-1)?.at(-1), { timeout: 30_000 }).toBe(prompt);
 }
 
 async function open(page: Page, daemon: Daemon) {
@@ -184,7 +186,7 @@ for (const scenario of [
       await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
       await expect(stripTabs(page)).toHaveAttribute("data-tab", tab);
       const added = (await page.locator("[data-pane-view]").evaluateAll(panes => panes.map(pane => pane.getAttribute("data-pane-view")!))).find(id => id !== pane)!;
-      await agentRunning(page, daemon, engine, added, prompt);
+      await agentRunning(daemon, engine, added, prompt);
       expect(await shellIdentity(daemon, pane)).toEqual(actual);
       expect((await tabsHeld(engine, daemon)).sort()).toEqual(originalTabs.sort());
       await typesInto(page, daemon, pane, "AFTER_AGENT_ADD");
@@ -204,7 +206,7 @@ for (const scenario of [
         await expect(page.locator("[data-pane-view]")).toHaveCount(1);
         await expect(selector(page)).toContainText("First plain agent");
         const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-        await agentRunning(page, daemon, engine, first, firstPrompt);
+        await agentRunning(daemon, engine, first, firstPrompt);
         expect(await tabsHeld(engine, daemon)).toHaveLength(originalTabs.length + 1);
         await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === first)).toMatchObject({
           state: "ready",

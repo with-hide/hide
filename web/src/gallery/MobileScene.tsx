@@ -48,7 +48,7 @@ function fixture(state: string): MobileState {
 const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, host: { consent: "this_machine", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 1, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "macos aarch64", helper_path: null } };
 const MINI: Peer = { key: "b".repeat(64), device_id: "mac-mini", name: "Mac mini", opens: "active", opened_by: "active", connected: true, path: "direct", reason: null, update: null };
 
-/** Settings › Devices with its phones on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-list-cut`, `phone-gathered`, `phone-add-hint`, `phone-devices`, `phone-missions`, `phone-missions-cut`, `phone-mission`, `phone-mission-views`, `phone-prs`, `phone-pr`, `phone-pr-agent`, `phone-pr-merge`, `phone-pr-delegate`, `phone-looks` and the `phone-look-*` viewers; `offline=1` dims the 볼 것 ones). */
+/** Settings › Devices with its phones on the desktop, and beside it the phone's own screens (`state=phone-add`, `phone-list`, `phone-list-cut`, `phone-gathered`, `phone-add-hint`, `phone-devices`, `phone-missions`, `phone-missions-cut`, `phone-mission`, `phone-mission-views`, `phone-prs`, `phone-pr`, `phone-pr-agent`, `phone-pr-merge`, `phone-pr-delegate`, `phone-looks` and the `phone-look-*` viewers; `offline=1` dims the 볼 것 ones). */
 export function MobileScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "connected";
   if (PHONE_SCENES.includes(state)) {

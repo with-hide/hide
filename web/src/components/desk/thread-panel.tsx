@@ -6,6 +6,7 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import type { MessageKey } from "../../i18n/catalogs";
 import { allAgents } from "../../paneAgents";
 import { keepSent, useComposerTray } from "../../deskComposer";
+import { useSessionThread } from "../../sessionThread";
 import { useShellStore } from "../../store";
 import { threadInputHeld, threadScreen } from "../../threadView";
 import type { ReactNode } from "react";
@@ -44,13 +45,7 @@ export function ThreadPanel({ job, paneId = job?.pane_id ?? null, actions, menti
   onTerminal: () => void;
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
-  const latest = useRef(actions);
-  latest.current = actions;
-  useEffect(() => {
-    if (!paneId) return;
-    latest.current.openThread(paneId);
-    return () => latest.current.closeThread();
-  }, [paneId]);
+  useSessionThread(actions, paneId);
 
   // The core holds one thread; until it holds this pane's, this one is still being read.
   const thread = useShellStore((s) => (paneId && s.sessionThread?.pane_id === paneId ? s.sessionThread : null));

@@ -244,7 +244,7 @@ const RECEIPTS_PER_READ: usize = 64;
 /// A receipt line names item ids, revisions and a 64-character tag; a longer
 /// line is not one Hide wrote.
 const RECEIPT_LINE_LIMIT_BYTES: usize = 4 * 1024;
-const RECEIPT_MARKER: &str = "<hide-memory-receipt ";
+pub(crate) const RECEIPT_MARKER: &str = "<hide-memory-receipt ";
 /// The line that says which of its open questions a prompt gave the agent
 /// (docs/agent-hooks.md, What the hook returns and reports back): read back
 /// the way a Memory receipt is, so only a question that reached the model

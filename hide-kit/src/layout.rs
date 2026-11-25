@@ -445,6 +445,14 @@ pub fn terminal_attachments(state_dir: &Path) -> PathBuf {
     state_dir.join("terminal-attachments")
 }
 
+/// The first input of an agent start on this machine's panes, one
+/// owner-only file per start, which its start line reads and removes so the
+/// text never crosses the pane's shell as typed text; its owner is that
+/// node's `hide_host::prompt_files`.
+pub fn prompt_files(state_dir: &Path) -> PathBuf {
+    state_dir.join("prompt-files")
+}
+
 /// Where a device's terminal attachments were staged over SSH before its
 /// link carried them. Its node only removes the files there that have
 /// outlived their 24 hours, and the folder once it is empty.

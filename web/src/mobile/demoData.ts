@@ -402,7 +402,10 @@ export function prsFrame(t: T, state: DemoState): ServerFrame {
 /** What the start sheet lists: the sample checkout, and the agents the sample Mac has. */
 export function startCatalog(): StartCatalog {
   return {
-    targets: [{ id: "demo-main", device_id: DEMO_DEVICE, place: "demo · main", device_label: null, connected: true }],
+    // The sample project's branches its agents work on, its main checkout first.
+    targets: ["main", "fix/review", "perf", "site", "notes"].map((branch, index) => ({
+      id: `demo-${index}`, device_id: DEMO_DEVICE, place: `demo · ${branch}`, project: "demo", project_id: "demo", branch, main: index === 0, device_label: null, connected: true,
+    })),
     core_platform: "macos aarch64",
     // The sample Mac has two of the agents the app knows, and Claude lists its model aliases.
     kinds: PROVIDER_KINDS.filter((id) => id === "claude" || id === "codex").map((id) => ({ id, models: id === "claude" ? ["opus", "sonnet", "haiku"] : [] })),

@@ -3,10 +3,8 @@
 // the words for each refusal, named by catalog key. Pure, so every rule is
 // tested without a socket.
 
-import type { TFunction } from "i18next";
 import type { Notice, StartCatalog, StartKind, StartKindEntry, StartTarget } from "./protocol";
-import { PROVIDER_KINDS, providerLabel } from "../agentPicker";
-import { systemMachineKey } from "../screenMachine";
+import { PROVIDER_KINDS, providerLabel, takesModel } from "../agentPicker";
 
 /** The longest instruction hided starts an agent with (hided/src/mobile/start.rs MAX_PROMPT_CHARS). */
 export const MAX_START_CHARS = 4000;
@@ -21,6 +19,8 @@ export const NO_CHOICE: StartChoice = { target: null, kind: null, model: undefin
 
 export type StartSelection = {
   target: StartTarget | null;
+  /** The project `target` belongs to, whose checkouts the branch list offers. */
+  project: StartProject | null;
   kind: StartKind;
   /** The catalog id sent, or "" for the CLI's own default. */
   model: string;
@@ -37,25 +37,52 @@ export function startProblem(text: string): "empty" | "too_long" | "control_char
   return null;
 }
 
+/** One project of the sheet's project list: its checkouts, the main one first, then the rest as the catalog lists them. */
+export type StartProject = { key: string; label: string; targets: StartTarget[] };
+
+/** One device's projects in the project list; `label` null is the core's own machine, which the phone names from `core_platform`. */
+export type StartDevice = { deviceId: string; label: string | null; connected: boolean; projects: StartProject[] };
+
 /**
- * The sheet's target label: the device, then the place on it. A registered
- * device's name and a place are data; the core's own machine is named here,
- * as its system calls it (`core_platform`).
+ * The project list (docs/UI_BEHAVIOR.md, The phone app): the targets gathered
+ * into each device's projects, in the order the catalog lists them, which is
+ * the core's own machine first. A Mac that predates `project` names none, so
+ * each of its targets is a project of its own, named by its place.
  */
-export function targetText(t: TFunction<"translation">, target: StartTarget, corePlatform: string | null): string {
-  return `${target.device_label ?? t(systemMachineKey(corePlatform ?? ""))} · ${target.place}`;
+export function startDevices(catalog: StartCatalog | null): StartDevice[] {
+  const devices: StartDevice[] = [];
+  const projects = new Map<string, StartProject>();
+  for (const target of catalog?.targets ?? []) {
+    let device = devices.find((candidate) => candidate.deviceId === target.device_id);
+    if (!device) {
+      device = { deviceId: target.device_id, label: target.device_label, connected: target.connected, projects: [] };
+      devices.push(device);
+    }
+    const key = `${target.device_id}\u0000${target.project_id ?? target.id}`;
+    let project = projects.get(key);
+    if (!project) {
+      project = { key, label: target.project ?? target.place, targets: [] };
+      projects.set(key, project);
+      device.projects.push(project);
+    }
+    if (target.main) project.targets.unshift(target);
+    else project.targets.push(target);
+  }
+  return devices;
 }
 
-/** What the sheet shows selected: the first target until the operator picks (none when no device has a project), the remembered kind and model until then. */
+/** What the sheet shows selected: the first project's main checkout until the operator picks (none when no device has a project), the remembered kind and model until then. */
 export function selectionOf(catalog: StartCatalog | null, choice: StartChoice): StartSelection {
-  const targets = catalog?.targets ?? [];
-  const target = targets.find((candidate) => candidate.id === choice.target) ?? targets[0] ?? null;
+  const projects = startDevices(catalog).flatMap((device) => device.projects);
+  const project = projects.find((candidate) => candidate.targets.some((target) => target.id === choice.target)) ?? projects[0] ?? null;
+  const target = project?.targets.find((candidate) => candidate.id === choice.target) ?? project?.targets[0] ?? null;
   const kind = choice.kind ?? catalog?.remembered.kind ?? START_KINDS[0]?.id;
   if (!kind) throw new Error("No start adapter declared");
   const entry = catalog?.kinds.find((candidate) => candidate.id === kind) ?? null;
   const wanted = choice.model ?? catalog?.remembered.models[kind] ?? "";
   // A remembered model the catalog does not list is still the one sent: the CLI decides, never a quiet swap (B32).
-  return { target, kind, model: wanted, entry };
+  // A kind whose start takes no model sends none, as the desktop's panel does.
+  return { target, project, kind, model: takesModel(kind) ? wanted : "", entry };
 }
 
 /** The model menu is disabled while the catalog has none; it then shows the remembered model or the default. */

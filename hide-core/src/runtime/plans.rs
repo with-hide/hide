@@ -78,6 +78,10 @@ pub(crate) struct PlanRuntime {
     /// once `input.undelivered` has logged it. Bounded by the unconfirmed
     /// inputs.
     pub(crate) input_undelivered: std::collections::BTreeSet<String>,
+    /// Typed input past its record wait with no verdict, by input id, with
+    /// the typing `input.waiting` logged it for, so it is logged once per
+    /// typing (`typed::overdue_wait`). Bounded by the unconfirmed inputs.
+    pub(crate) input_waiting: BTreeMap<String, u8>,
     /// Each unconfirmed input's fresh session read, asked once per typing
     /// before the input is judged unconfirmed: the typing and when it was
     /// asked. Bounded by the unconfirmed inputs.
@@ -1094,6 +1098,7 @@ impl Runtime {
                 agent.user_turn = None;
                 agent.ask_subject = None;
                 agent.laid_since_unix_ms = None;
+                agent.laid_lead = None;
                 agent.laid_more = 0;
                 agent.laid_asks.clear();
                 agent.demand = laid.demand;
@@ -1156,11 +1161,16 @@ impl Runtime {
                 agent.held_asks = mine.iter().map(|(.., id)| id.clone()).collect();
                 continue;
             }
-            let Some((asked, since, subject, _)) = mine.first() else {
+            let Some((asked, since, subject, lead)) = mine.first() else {
                 continue;
             };
-            let (asked, since, subject, more) =
-                (asked.clone(), *since, subject.clone(), mine.len() - 1);
+            let (asked, since, subject, lead, more) = (
+                asked.clone(),
+                *since,
+                subject.clone(),
+                lead.clone(),
+                mine.len() - 1,
+            );
             // The question holds the row as a native one does; it carries
             // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
@@ -1179,6 +1189,7 @@ impl Runtime {
             agent.user_turn = Some(turn);
             agent.ask_subject = Some(subject);
             agent.laid_since_unix_ms = Some(since);
+            agent.laid_lead = Some(lead);
             agent.laid_more = more;
             agent.laid_asks = mine.iter().map(|(.., id)| id.clone()).collect();
             crate::agent_state::derive_from_axes(agent);

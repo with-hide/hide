@@ -8,6 +8,7 @@ import { HostList } from "./HostList";
 import { HOSTS_KEY } from "./hosts";
 import type { AgentGroup, PhoneAgent, PhoneDevice } from "./protocol";
 import { applyFrame, patch, usePhone } from "./store";
+import { openDetail } from "./connection";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 const initial = usePhone.getState();
@@ -108,6 +109,29 @@ describe("a parent's children on the list", () => {
   });
 });
 
+describe("the children chip on an agent's detail", () => {
+  it("leads the state strip, opens the children in a sheet, and a child's row there opens that child", async () => {
+    const parent = agent("p", { children: kids(2), descendants: { asking: 0, working: 2, done: 0 }, line: { text: "Reviewing", mode: "news", tone: "subtle" } });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      await act(async () => openDetail({ device_id: "local", pane_id: "p" }));
+      const strip = container.querySelector("[data-phone-status-strip]")!;
+      const chip = strip.querySelector<HTMLElement>('[data-phone-children-toggle="local|p"]')!;
+      // It leads the strip, where the desktop pane header's turn row draws it.
+      expect(strip.firstElementChild).toBe(chip);
+      expect(chip.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => chip.click());
+      const sheet = document.querySelector('[data-phone-children-sheet="local|p"]')!;
+      expect(panes(sheet as HTMLElement, '[data-phone-children="local|p"]')).toEqual(["local|c0", "local|c1"]);
+      await act(async () => sheet.querySelector<HTMLElement>('[data-phone-agent="local|c1"]')!.click());
+      expect(usePhone.getState().detail?.key).toEqual({ device_id: "local", pane_id: "c1" });
+      expect(document.querySelector("[data-phone-children-sheet]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+});
+
 describe("a chip with nothing hung under its row", () => {
   it("counts the descendants it still has, and draws no chevron when it opens nothing", async () => {
     // A second-level row whose children the list folded flat: no children here, only how many and in which state.
@@ -186,31 +210,44 @@ describe("the device sheet", () => {
     return <HostList t={t} machines={machines} activeRoom={"a".repeat(43)} active={{ online: true, lastSeen: null, needs: 3, working: 9 }} />;
   }
 
-  it("draws the devices the Mac reaches under its row, the unconnected one dimmed, and says no pairing is needed", async () => {
+  it("draws the devices the Mac reaches on a rail under its row, compact and dimmed while not connected, with one short line", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const room = "a".repeat(43);
     localStorage.setItem(HOSTS_KEY, JSON.stringify([{ room, name: "MacBook Pro", noiseKey: "b".repeat(43), credential: "credential", protocol: 2, lastSeen: null }]));
     const machines: PhoneDevice[] = [
       { device_id: "local", label: null, local: true, connected: true, needs_you: 3, working: 9 },
-      { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3 },
+      { device_id: "mini", label: "Mac mini", connected: true, needs_you: 1, working: 3, link: "ssh" },
+      { device_id: "ubuntu", label: "Ubuntu", connected: true, needs_you: 0, working: 0, link: "wsl" },
+      // A Mac before `link`, and a paired computer: neither wears a mark.
       { device_id: "old", label: "Old box", connected: false, needs_you: 0, working: 0 },
+      { device_id: "imac", label: "iMac", connected: true, needs_you: 0, working: 1, link: "peer" },
     ];
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(async () => root.render(<Sheet machines={machines} />));
     try {
       const reached = container.querySelector('[data-phone-devices="true"]')!;
-      expect(reached.textContent).toContain("Devices connected through this Mac");
       const mini = reached.querySelector('[data-phone-device-row="mini"]')!;
       expect(mini.textContent).toContain("Mac mini");
-      expect(mini.textContent).toContain("Needs you 1 · Working 3");
+      expect(mini.querySelector("[data-phone-device-link]")?.textContent).toBe("SSH");
+      expect(mini.querySelector("[data-phone-counts]")?.getAttribute("data-phone-counts")).toBe("1:3");
+      expect(mini.querySelector("[data-phone-counts] .sr-only")?.textContent).toBe("Needs you 1 · Working 3");
+      expect(reached.querySelector('[data-phone-device-row="ubuntu"] [data-phone-device-link]')?.textContent).toBe("WSL");
+      expect(reached.querySelector('[data-phone-device-row="imac"] [data-phone-device-link]')).toBeNull();
       const old = reached.querySelector('[data-phone-device-row="old"]')!;
       expect(old.getAttribute("data-connected")).toBe("false");
       expect(old.className).toContain("opacity-(--opacity-dimmed)");
-      expect(old.textContent).not.toContain("Needs you");
-      expect(reached.textContent).toContain("Mac mini, Old box agents appear in the list with a chip");
-      // The Mac's own row says it is the one being viewed.
-      expect(container.textContent).toContain("Connected · Viewing now");
+      expect(old.querySelector("[data-phone-device-link]")).toBeNull();
+      expect(old.querySelector("[data-phone-counts]")).toBeNull();
+      expect(reached.textContent).toContain("Shown through this Mac. Their agents appear in the list too.");
+      // The Mac's own row is the one being viewed: outlined, its words say so, and its counts sit at the right of the same line.
+      const mac = container.querySelector('[data-phone-host="true"]')!;
+      expect(mac.getAttribute("data-phone-host-viewing")).toBe("true");
+      expect(mac.textContent).toContain("Viewing now");
+      expect(mac.querySelector("[data-phone-counts]")?.getAttribute("data-phone-counts")).toBe("3:9");
+      // Removing moved off the row: no button on it but the row itself.
+      expect(container.querySelectorAll('button[aria-label="Remove device"]')).toHaveLength(0);
+      expect(container.querySelector("[data-phone-add]")?.textContent).toBe("Add device");
     } finally {
       await act(async () => root.unmount());
     }

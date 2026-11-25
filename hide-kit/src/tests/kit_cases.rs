@@ -458,6 +458,35 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
     );
 }
 
+/// Qwen Code has no hook or plugin whose removal would take its trust with
+/// it: removing the machine takes out every writer's entries all the same,
+/// and leaves the operator's (with-hide/hide#2917).
+#[test]
+fn removing_the_machine_takes_out_the_folder_trust_of_an_agent_with_no_hook_of_its_own() {
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let fixture = Fixture::new();
+    apply(&fixture.target, &Scope::automatic());
+    let settings = Agent::QwenCode.settings_path(fixture.home());
+    let operator = "{\n  \"/elsewhere\": \"TRUST_FOLDER\"\n}\n";
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, operator).unwrap();
+    let tree = fixture.root.join("repo-qwen");
+    std::fs::create_dir_all(tree.join(".git")).unwrap();
+    folder_trust::trust_worktree(Agent::QwenCode, fixture.home(), &tree, Tools::none()).unwrap();
+    assert_ne!(std::fs::read_to_string(&settings).unwrap(), operator);
+
+    let removed = remove(&fixture.target);
+
+    assert!(
+        removed
+            .agents
+            .iter()
+            .any(|(name, outcome)| name == "trust:qwen" && *outcome == RemoveOutcome::Removed),
+        "{removed:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), operator);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn the_kit_runs_nothing_from_a_folder_another_account_can_change() {

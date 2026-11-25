@@ -5,7 +5,7 @@
 // draws it and keeps only which parents and folds this phone opened.
 
 import { pullLabel } from "../codeHost";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
 import { chipWords, missionStalled, missionToneOf } from "../missions";
@@ -25,7 +25,8 @@ import { actOnSleepingSession, openDetail } from "./connection";
 import type { GatheredRow } from "./gather";
 import { hostLink } from "./hosts";
 import { humanTurnText } from "../humanTurn";
-import { AgentStatusMark, AgentTitle, DeviceTag, PhoneHumanTurn, PlaceParts } from "./parts";
+import { AgentStatusMark, AgentTitle, DeviceTag, PhoneChip, PhoneHumanTurn, PlaceParts } from "./parts";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
 import { ROW_INSET, TwoLineRow } from "./layout";
 import { TreeChipFace } from "../components/tree-chip";
 import { keyTag, type AgentGroup, type GroupRow, type PhoneAgent, type PhoneSleepingSession } from "./protocol";
@@ -82,42 +83,81 @@ export function FoldButton({ label, note, onOpen, ...rest }: { label: string; no
  * is its parent's.
  */
 function AgentItem({ agent, nested = false }: { agent: PhoneAgent; nested?: boolean }) {
-  const { t } = useInterfaceTranslation();
   const tag = keyTag(agent);
-  const kids = agent.children ?? [];
-  const more = agent.more_children ?? [];
-  const subagents = subagentsOf(agent);
-  const opens = kids.length + more.length + (agent.subagents ?? 0) > 0;
+  const opens = opensChildren(agent);
   const open = usePhone((s) => s.childrenOpen[tag]) ?? agent.children_open === true;
-  const foldKeyOf = foldKey.children(tag);
-  const moreOpened = usePhone((s) => s.foldsOpen[foldKeyOf] === true);
   return (
     <li data-phone-item={tag}>
       {/* Only the row itself dims: its children keep their own state. */}
       <div className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined} data-phone-row={tag}>
-        <AgentRow agent={agent} nested={nested} chip={<TreeChip agent={agent} open={open} onToggle={opens ? () => setChildrenOpen(agent, !open) : null} />} />
+        <AgentRow agent={agent} nested={nested} chip={<TreeChip agent={agent} open={open} onPress={opens ? () => setChildrenOpen(agent, !open) : null} />} />
         <PhoneHumanTurn agent={agent} inset={`${ROW_INSET} pb-md`} />
       </div>
-      {opens && open ? (
-        <ul className="ml-[calc(var(--size-agent-mark)/2)] border-l border-border pl-md" data-phone-children={tag}>
-          {[...kids, ...(moreOpened ? more : [])].map((child) => <AgentItem key={keyTag(child)} agent={child} nested />)}
-          {more.length > 0 && !moreOpened ? (
-            <li><FoldButton label={t("mobile.more", { count: more.length })} note={null} data-phone-fold={foldKeyOf} onOpen={() => openFold(foldKeyOf)} /></li>
-          ) : null}
-          {subagents.rows.map((row) => <li key={row.id} data-phone-subagent={row.id}><SubagentLine row={row} size="body" /></li>)}
-          {subagents.more > 0 ? <li data-phone-subagent-more=""><SubagentMoreLine count={subagents.more} listed={subagents.rows.length} size="body" /></li> : null}
-        </ul>
-      ) : null}
+      {opens && open ? <ChildrenList agent={agent} rail /> : null}
     </li>
   );
 }
 
 /**
- * The desktop pane header's children chip at the head of a parent's second line (`≡ ● 2 · • 3 ⌄`, operator decision 2026-11-22,
- * D): the first child's mark, how many children, the subagents after a dot. It opens or closes the children and the subagents
- * (B2), and its name spells out every count; a parent whose children the list cannot open shows the chip with nothing to press.
+ * What works under an agent: its children as rows (the first five, the rest behind `더 보기 N`), then its subagents as dimmed
+ * lines. The list hangs it under the parent's row on a rail; the detail's children chip opens it in a sheet.
  */
-function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean; onToggle: (() => void) | null }) {
+function ChildrenList({ agent, rail }: { agent: PhoneAgent; rail: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const tag = keyTag(agent);
+  const kids = agent.children ?? [];
+  const more = agent.more_children ?? [];
+  const subagents = subagentsOf(agent);
+  const foldKeyOf = foldKey.children(tag);
+  const moreOpened = usePhone((s) => s.foldsOpen[foldKeyOf] === true);
+  return (
+    <ul className={rail ? "ml-[calc(var(--size-agent-mark)/2)] border-l border-border pl-md" : undefined} data-phone-children={tag}>
+      {[...kids, ...(moreOpened ? more : [])].map((child) => <AgentItem key={keyTag(child)} agent={child} nested />)}
+      {more.length > 0 && !moreOpened ? (
+        <li><FoldButton label={t("mobile.more", { count: more.length })} note={null} data-phone-fold={foldKeyOf} onOpen={() => openFold(foldKeyOf)} /></li>
+      ) : null}
+      {subagents.rows.map((row) => <li key={row.id} data-phone-subagent={row.id}><SubagentLine row={row} size="body" /></li>)}
+      {subagents.more > 0 ? <li data-phone-subagent-more=""><SubagentMoreLine count={subagents.more} listed={subagents.rows.length} size="body" /></li> : null}
+    </ul>
+  );
+}
+
+/** Whether an agent has anything the children chip can open: children listed under it, or subagents. */
+function opensChildren(agent: PhoneAgent): boolean {
+  return (agent.children?.length ?? 0) + (agent.more_children?.length ?? 0) + (agent.subagents ?? 0) > 0;
+}
+
+/**
+ * The children chip at the head of the detail's state strip, where the desktop pane header's turn row draws it: pressed, it
+ * opens the agent's children and subagents in a sheet from the bottom, as the desktop chip opens its tree, and a child's row
+ * there opens that child's detail. A detail opened on another agent draws a new chip, so the sheet never outlives its agent.
+ */
+export function DetailChildrenChip({ agent }: { agent: PhoneAgent }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const listed = (agent.children?.length ?? 0) + (agent.more_children?.length ?? 0);
+  const title = listed > 0 ? t("agentSessions.tree.children", { count: listed }) : t("agents.subagents.working", { count: agent.subagents ?? 0 });
+  return (
+    <>
+      <TreeChip agent={agent} open={open} onPress={opensChildren(agent) ? () => setOpen(true) : null} />
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-children-sheet={keyTag(agent)}>
+          <SheetTitle className="text-headline">{title}</SheetTitle>
+          <SheetDescription className="sr-only">{agent.title}</SheetDescription>
+          <ChildrenList agent={agent} rail={false} />
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
+
+/**
+ * The desktop pane header's children chip at the head of a parent's second line (`≡ ● 2 · • 3 ⌄`, operator decision 2026-11-22,
+ * D), on the list's row and the detail's state strip alike: the first child's mark, how many children, the subagents after a dot.
+ * It opens the children and the subagents (B2), under the row or in the detail's sheet, and its name spells out every count; a
+ * parent whose children the phone cannot open shows the chip with nothing to press.
+ */
+function TreeChip({ agent, open, onPress }: { agent: PhoneAgent; open: boolean; onPress: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const kids = agent.children ?? [];
   const listed = kids.length + (agent.more_children?.length ?? 0);
@@ -135,11 +175,11 @@ function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean;
     subagents > 0 ? t("agents.subagents.working", { count: subagents }) : null,
   ].filter(Boolean).join(" · ");
   const face = (
-    <span className={cn("flex items-center gap-xxs rounded-full border bg-secondary px-sm py-xxs font-normal text-subtle-foreground", counts?.asking ? "border-warning/60" : "border-transparent")}>
-      <TreeChipFace mark={first ? <StatusMark mark={first.mark} human={first.human_turn != null} data-phone-tree-mark={first.mark} /> : null} count={count} subagents={subagents} icon="size-(--size-icon-sm)" chevron={onToggle !== null} />
-    </span>
+    <PhoneChip raised={!!counts?.asking} className="text-subtle-foreground">
+      <TreeChipFace mark={first ? <StatusMark mark={first.mark} human={first.human_turn != null} data-phone-tree-mark={first.mark} /> : null} count={count} subagents={subagents} icon="size-(--size-icon-sm)" chevron={onPress !== null} />
+    </PhoneChip>
   );
-  if (!onToggle) return <span role="img" aria-label={label} className="flex shrink-0" data-phone-tree-chip={keyTag(agent)}>{face}</span>;
+  if (!onPress) return <span role="img" aria-label={label} className="flex shrink-0" data-phone-tree-chip={keyTag(agent)}>{face}</span>;
   return (
     <Button
       variant="ghost"
@@ -147,7 +187,7 @@ function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean;
       aria-expanded={open}
       className="pointer-events-auto -my-sm h-auto min-h-(--size-touch-target) shrink-0 px-none py-none text-body hover:bg-transparent"
       data-phone-children-toggle={keyTag(agent)}
-      onClick={onToggle}
+      onClick={onPress}
     >
       {face}
     </Button>
@@ -185,9 +225,9 @@ function RowMarks({ links }: { links: AgentLinks }) {
         return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />{parts.label}</span>;
       })() : null}
       {links.missions.map(({ mission, turn }) => (
-        <span key={mission.id} className={cn("flex items-center gap-xxs rounded-xs bg-secondary px-xs", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} data-phone-row-mission={mission.id}>
+        <PhoneChip key={mission.id} className={TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))]} data-phone-row-mission={mission.id}>
           <MissionChipFace turn={turn} delay={false} status={mission.status} counts={chipWords(mission).counts} icon="size-(--size-icon)" />
-        </span>
+        </PhoneChip>
       ))}
     </span>
   );

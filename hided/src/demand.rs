@@ -214,6 +214,94 @@ impl DeskFileHolds {
     }
 }
 
+/// Which windows show the core's one session thread, and how many panels of
+/// each (`session_thread_open`, `session_thread_close`). One window closing
+/// its panel must not empty another's, and a window that reloads, crashes or
+/// loses its socket says nothing, so the daemon counts each connection's holds
+/// and tells the core to close only when the last one is let go or leaves.
+/// The core holds one thread: another pane's open replaces it, and the holds
+/// on the replaced one with it, so they can never close the new thread. A
+/// tool draws no thread and holds none; its close closes the thread.
+#[derive(Default)]
+pub struct ThreadHolds {
+    held: Mutex<HeldThread>,
+}
+
+#[derive(Default)]
+struct HeldThread {
+    pane: Option<String>,
+    windows: HashMap<u64, usize>,
+}
+
+impl ThreadHolds {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HeldThread> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A window (`Some(connection)`) or a tool (`None`) opens `pane`'s
+    /// thread. `dispatch` hands the open to the core while the holds are
+    /// still locked, so the holds kept and the order the core hears agree; a
+    /// refused dispatch changes nothing.
+    pub fn open(
+        &self,
+        window: Option<u64>,
+        pane: &str,
+        dispatch: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut held = self.lock();
+        dispatch()?;
+        if held.pane.as_deref() != Some(pane) {
+            held.pane = Some(pane.to_owned());
+            held.windows.clear();
+        }
+        if let Some(connection) = window {
+            *held.windows.entry(connection).or_default() += 1;
+        }
+        Ok(())
+    }
+
+    /// A window lets go of one hold (`Some(connection)`), or a tool closes
+    /// the thread (`None`). The core hears the close, through `dispatch`
+    /// under the lock, only when no window holds the thread any more.
+    /// Returns whether it was told.
+    pub fn close(
+        &self,
+        window: Option<u64>,
+        dispatch: impl FnOnce() -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let mut held = self.lock();
+        if let Some(connection) = window
+            && let Some(holds) = held.windows.get_mut(&connection)
+        {
+            *holds -= 1;
+            if *holds == 0 {
+                held.windows.remove(&connection);
+            }
+        }
+        if !held.windows.is_empty() {
+            return Ok(false);
+        }
+        dispatch()?;
+        *held = HeldThread::default();
+        Ok(true)
+    }
+
+    /// Drops the holds of a closed connection; when they were the last, the
+    /// thread is closed through `close`, called under the lock. Returns
+    /// whether it was.
+    pub fn release(&self, connection: u64, close: impl FnOnce()) -> bool {
+        let mut held = self.lock();
+        if held.windows.remove(&connection).is_none() || !held.windows.is_empty() {
+            return false;
+        }
+        *held = HeldThread::default();
+        close();
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +312,59 @@ mod tests {
             device_id: "device-a".into(),
             task_key: key.into(),
         }
+    }
+
+    #[test]
+    fn a_session_thread_closes_only_when_the_last_window_showing_it_lets_go_or_leaves() {
+        let ok = || Ok(());
+        let holds = ThreadHolds::default();
+        let mut closed = 0;
+
+        // Two windows show the thread: one leaving keeps it for the other.
+        holds.open(Some(1), "w1:p1", ok).unwrap();
+        holds.open(Some(2), "w1:p1", ok).unwrap();
+        assert!(!holds.release(1, || closed += 1), "another window shows it");
+        assert!(holds.release(2, || closed += 1), "the last window left");
+        assert!(!holds.release(2, || closed += 1), "closed once");
+        assert_eq!(closed, 1);
+
+        // Two panels of one window: closing one keeps the other's.
+        holds.open(Some(3), "w1:p1", ok).unwrap();
+        holds.open(Some(3), "w1:p1", ok).unwrap();
+        assert_eq!(holds.close(Some(3), ok), Ok(false));
+        assert_eq!(holds.close(Some(3), ok), Ok(true));
+
+        // One window's panel closing does not empty another window's.
+        holds.open(Some(4), "w1:p1", ok).unwrap();
+        holds.open(Some(5), "w1:p1", ok).unwrap();
+        assert_eq!(holds.close(Some(4), ok), Ok(false));
+        assert!(holds.release(5, || closed += 1));
+        assert_eq!(closed, 2);
+
+        // Another pane's open replaces the thread: the replaced pane's
+        // window leaving does not close the new one.
+        holds.open(Some(6), "w1:p1", ok).unwrap();
+        holds.open(Some(7), "w1:p2", ok).unwrap();
+        assert!(!holds.release(6, || closed += 1));
+        assert_eq!(holds.close(Some(6), ok), Ok(false), "it holds nothing now");
+        assert!(holds.release(7, || closed += 1));
+        assert_eq!(closed, 3);
+
+        // A tool holds nothing, and its close reaches the core.
+        holds.open(None, "w1:p1", ok).unwrap();
+        assert!(!holds.release(8, || closed += 1));
+        assert_eq!(holds.close(None, ok), Ok(true));
+
+        // A refused dispatch keeps the holds it had.
+        holds.open(Some(9), "w1:p1", ok).unwrap();
+        assert!(
+            holds
+                .open(Some(10), "w1:p1", || Err("full".into()))
+                .is_err()
+        );
+        assert!(!holds.release(10, || closed += 1));
+        assert!(holds.release(9, || closed += 1));
+        assert_eq!(closed, 4);
     }
 
     #[test]

@@ -143,6 +143,9 @@ pub struct AppState {
     pub origin_holds: Arc<crate::demand::OriginHolds>,
     /// The files each window's Desk room holds (`desk_files`).
     pub desk_files: Arc<crate::demand::DeskFileHolds>,
+    /// Which windows show the core's session thread; the last to let go or
+    /// leave closes it.
+    pub thread_holds: Arc<crate::demand::ThreadHolds>,
     /// What Settings > About reads about this daemon, sent once after
     /// a handshake. No token, no environment beyond the paths it names.
     pub daemon_info: Arc<Value>,
@@ -3104,6 +3107,27 @@ fn handle_client_text(
             }
             return Ok(ClientAction::Replies(Vec::new()));
         }
+        // A window that shows the core's session thread holds it; the
+        // thread closes when the last hold is let go or its window leaves
+        // without a close (a reload, a crash, a lost socket), so its file
+        // looks do not outlive the screens. A tool draws no thread and holds
+        // none.
+        Some(kind @ ("session_thread_open" | "session_thread_close")) => {
+            let window = (client != Client::Tool).then_some(connection);
+            let bytes =
+                serde_json::to_vec(&event).map_err(|error| format!("event encode: {error}"))?;
+            let dispatch = || state.core.dispatch(bytes);
+            if kind == "session_thread_open" {
+                let pane = event
+                    .pointer("/payload/pane_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                state.thread_holds.open(window, pane, dispatch)?;
+            } else {
+                state.thread_holds.close(window, dispatch)?;
+            }
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some("open_external") => {
             // This token-authenticated socket can be reached through an SSH
             // tunnel. The browser cannot prove it is on the daemon's host,
@@ -5932,6 +5956,20 @@ pub(crate) fn renderers_drawn(state: &AppState, attached: bool) {
     dispatch_ui_attached(&state.core, attached);
 }
 
+/// Closes the session thread whose last window left without closing it.
+fn close_session_thread(core: &CoreHandle, connection: u64) {
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "session_thread_close",
+        "payload": {},
+    });
+    let failed = core.dispatch(event.to_string().into_bytes()).err();
+    eprintln!(
+        "{}",
+        json!({"component": "hided", "kind": "session_thread.closed_with_connection", "connection": connection, "failed": failed})
+    );
+}
+
 /// Tells the core whether any window draws its snapshot.
 fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
     let event = json!({
@@ -6037,6 +6075,9 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.desk_files.release(connection, |open, close| {
         dispatch_desk_file(&state.core, connection, open, close)
     });
+    state
+        .thread_holds
+        .release(connection, || close_session_thread(&state.core, connection));
     let remaining = state
         .clients
         .fetch_sub(1, Ordering::SeqCst)
