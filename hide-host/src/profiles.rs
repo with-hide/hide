@@ -240,8 +240,7 @@ pub fn install(env: &Env, id: ProfileId) -> HostResult<ProfileList> {
 /// or that this node cannot start is refused with a reason that names it.
 /// Only a node that keeps no profiles, or a file it cannot read, fails.
 pub fn launch(env: &Env, kind: &str, id: &ProfileId) -> HostResult<ProfileLaunch> {
-    let own = std::env::current_exe().ok();
-    launch_beside(env, kind, id, own.as_deref())
+    launch_beside(env, kind, id, env.program.as_deref())
 }
 
 /// A profile as a start of it runs on this machine now: the profile as the
@@ -498,7 +497,7 @@ fn program_start(program: &str) -> Result<ProfileProgram, String> {
 
 /// The `hide` beside the node's own program `own`, which runs a profile's
 /// start (`hide agent exec`): the node and it come from one build.
-fn exec_command(own: &Path) -> Result<String, String> {
+pub(crate) fn exec_command(own: &Path) -> Result<String, String> {
     let exec = own.with_file_name(format!("hide{}", std::env::consts::EXE_SUFFIX));
     hide_platform::programs::runnable(&exec, None)?;
     exec.into_os_string()

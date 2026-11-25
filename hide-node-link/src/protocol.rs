@@ -455,7 +455,44 @@ use crate::error::HostError;
 /// 102 reads the core's ping as a request it cannot read and keeps a link
 /// whose core went silent, holding its pane ownership, so it is refused at
 /// Hello and upgraded with its core.
-pub const PROTOCOL_VERSION: u32 = 103;
+/// 104: a start's first input reaches the agent through a private file of
+/// the pane's node (`PromptFile`, `PromptFileRemove`), which the start line
+/// reads, so the text never crosses the pane's shell; a node on 103 does not
+/// know the calls, so it is refused at Hello and upgraded with its core.
+pub const PROTOCOL_VERSION: u32 = 104;
+
+/// The longest text a prompt file holds ([`Call::PromptFile`]): a start's
+/// first input, `hide-core`'s 64 KiB with room to spare.
+pub const PROMPT_FILE_MAX_BYTES: usize = 160 * 1024;
+
+/// The most prompt files a node keeps in use: a start's line removes its own
+/// once read, the core removes one whose start typed nothing, and a file
+/// past [`PROMPT_FILE_IN_USE`] is finished and dropped first; with this many
+/// still in use, a new one is refused rather than one in use dropped.
+pub const PROMPT_FILES_CAP: usize = 32;
+
+/// How long a prompt file counts as its start's own: a start that has not
+/// run its line by then has ended (`hide-core`'s `AGENT_START_DEADLINE`, which
+/// a test holds equal), so its file is finished and the node drops it.
+pub const PROMPT_FILE_IN_USE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A prompt file a node keeps ([`Call::PromptFile`]): its path, and the
+/// `hide` beside the node, whose `agent exec --prompt-file` the start line
+/// runs to read it, so no shell reads the text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptFileKept {
+    pub path: String,
+    pub exec: String,
+}
+
+/// Whether `start` can name a prompt file: 1 to 64 ASCII letters, digits,
+/// `-` or `_`, so it stays one file in the node's folder.
+pub fn valid_prompt_start(start: &str) -> bool {
+    (1..=64).contains(&start.len())
+        && start
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1129,6 +1166,23 @@ pub enum Call {
     AgentInstalled {
         name: String,
     },
+    /// Writes `text`, the first input of the start `start`, to a private
+    /// file of this node's state folder and answers its path and the `hide`
+    /// beside the node ([`PromptFileKept`]); the start line runs that `hide`,
+    /// which reads the file and removes it, so the input never crosses the
+    /// shell as typed text, whose locale could change it (docs/delivery.md,
+    /// The input ladder). The same `start` writes the same file again. Finished
+    /// files ([`PROMPT_FILE_IN_USE`]) are dropped first, and with
+    /// [`PROMPT_FILES_CAP`] still in use the call is refused.
+    PromptFile {
+        start: String,
+        text: String,
+    },
+    /// Removes the prompt file of `start`, for a start that typed nothing;
+    /// one already gone is not an error.
+    PromptFileRemove {
+        start: String,
+    },
     /// What agy's index holds in `cwd` before Hide types `/fork` into a
     /// pane that resumed `source`, an [`AntigravityForkMark`]
     /// (`hide_session::antigravity::fork_mark`).
@@ -1548,6 +1602,8 @@ impl Call {
             | Self::Git { .. }
             | Self::TerminateGroup { .. }
             | Self::AgentInstalled { .. }
+            | Self::PromptFile { .. }
+            | Self::PromptFileRemove { .. }
             | Self::AntigravityForkMark { .. }
             | Self::AntigravityFork { .. }
             | Self::OpenCodeFork { .. }

@@ -768,6 +768,141 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
     })
 }
 
+/// A spawn's brief rides the agent's start as its launch prompt, on a
+/// device and on this machine by the one decision (`docs/delivery.md`, The
+/// input ladder), and reaches the agent byte for byte from a file of the
+/// pane's machine: the accounts run in the locale the test runner gives,
+/// `C` under `scripts/verify-cargo.sh`, where a Linux line editor turned
+/// each non-ASCII byte of a typed start line into `?` (with-hide/hide#2900).
+/// The stand-in starts with the Korean brief as its last argument, nothing
+/// is typed for it, no prompt file is left, and the agent's own record of
+/// its first prompt confirms it.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_spawns_brief_rides_the_agents_start_on_a_device_and_here() -> Result<()> {
+    Fixture::journey(|fixture| {
+        fixture.agent_ready_on_device("claude-code", ".claude")?;
+        // Korean over many lines, a few KB, as the issue's brief was.
+        let brief = (1..=40)
+            .map(|line| format!("{line}번째 줄: 시작하는 에이전트의 첫 지시입니다."))
+            .collect::<Vec<_>>()
+            .join("\n");
+        briefed_start(fixture, &brief, true)?;
+        briefed_start(fixture, &brief, false)
+    })
+}
+
+/// Spawns an agent with `brief` from the local agent's pane, on the device
+/// or on this machine, and checks what
+/// [`a_spawns_brief_rides_the_agents_start_on_a_device_and_here`] says.
+fn briefed_start(fixture: &mut Fixture, brief: &str, on_device: bool) -> Result<()> {
+    let (name, session) = if on_device {
+        ("remote-briefed", "fixture-briefed-remote")
+    } else {
+        ("local-briefed", "fixture-briefed-local")
+    };
+    let intent = format!("spawn-{name}");
+    let project = fixture.commit_project(on_device)?;
+    let machine = if on_device { "--machine remote " } else { "" };
+    let spawn = format!(
+        "{} agent spawn --parent here {machine}--name {name} --intent {intent} --kind claude --repo {} --branch {name} --brief {}",
+        quote(&fixture.hide),
+        quote(&project),
+        quote(brief)
+    );
+    let home = if on_device {
+        fixture.remote.environment.home.clone()
+    } else {
+        fixture.local.environment.home.clone()
+    };
+    let before = fixture::ready_panes(&home)?;
+    // The spawn waits for its agent's session, which the stand-in reports
+    // only when asked: the new pane reports it from its own account while
+    // the caller's pane still runs the spawn.
+    let agent = if on_device {
+        &fixture.remote
+    } else {
+        &fixture.local
+    };
+    let finished = AtomicBool::new(false);
+    let (answer, spawned) = std::thread::scope(|scope| {
+        let reporter = scope.spawn(|| -> Result<Option<String>> {
+            let pane = wait_for("the spawned agent's pane", || {
+                if finished.load(Ordering::Relaxed) {
+                    return Ok(Some(None));
+                }
+                Ok(fixture::ready_panes(&home)?
+                    .into_iter()
+                    .find(|pane| !before.contains(pane))
+                    .map(Some))
+            })?;
+            if let Some(pane) = &pane {
+                agent.report_session(&agent.core_pane(pane), session)?;
+            }
+            Ok(pane)
+        });
+        let answer = fixture.local.run_in_pane(&spawn);
+        finished.store(true, Ordering::Relaxed);
+        let reported = reporter
+            .join()
+            .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
+        Ok::<_, anyhow::Error>((answer?, reported?))
+    })?;
+    ensure!(
+        answer.status == 0,
+        "spawn refused: {} {}",
+        answer.stdout,
+        answer.stderr
+    );
+    let spawned = spawned.context("the spawned agent's pane")?;
+    let screen_pane = agent.core_pane(&spawned);
+    // The start carried the brief, its line breaks as U+2028, after `--`,
+    // byte for byte from the file its machine kept, and the file is gone.
+    let argv = fixture::started_with(&home, &spawned)?.context("the stand-in's arguments")?;
+    let carried = brief.replace('\n', "\u{2028}");
+    ensure!(
+        argv.ends_with(&["--".to_owned(), carried]),
+        "the start did not carry the brief whole: {argv:?}"
+    );
+    let account = if on_device {
+        &fixture.remote.environment
+    } else {
+        &fixture.local.environment
+    };
+    let left = fixture::prompt_files(account)?;
+    ensure!(left.is_empty(), "the start left its prompt file: {left:?}");
+    let record = |ledger: &hide_core::delivery::ledger::Ledger| -> Result<Value> {
+        Ok(serde_json::to_value(
+            ledger
+                .spawns
+                .iter()
+                .find(|record| record.intent == intent)
+                .context("spawn receipt")?,
+        )?)
+    };
+    let saved = record(&fixture.ledger()?)?;
+    ensure!(
+        saved["brief_input"]["route"] == "launch" && saved["brief_input"]["attempts"] == 1,
+        "the brief was not sent as the start's launch prompt: {}",
+        saved["brief_input"]
+    );
+    // The agent's first turn records the brief as Claude Code does, with its
+    // line breaks, which confirms it.
+    let agent = if on_device {
+        &fixture.remote
+    } else {
+        &fixture.local
+    };
+    agent.run_in(&screen_pane, &hook(&agent.hooks, session, brief))?;
+    wait_for("the launched brief confirmed by its record", || {
+        let saved = record(&fixture.ledger()?)?;
+        Ok(saved["brief_input"]["confirmed_at_unix_ms"]
+            .is_u64()
+            .then_some(()))
+    })?;
+    Ok(())
+}
+
 /// How many lines of the daemon's diagnostic log at `state` are of `kind`.
 fn logged(state: &std::path::Path, kind: &str) -> Result<usize> {
     let path = state.join("Logs/core.jsonl");

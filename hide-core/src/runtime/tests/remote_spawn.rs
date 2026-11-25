@@ -24,6 +24,12 @@ const WORKTREE: &str = "/srv/repo.worktrees/topic";
 struct Node {
     repository: AtomicBool,
     installed: AtomicBool,
+    /// Whether the node answers that it starts the agent through a batch
+    /// file Hide cannot read as npm's launcher, a start whose first input
+    /// is typed (`start_prompt::launched`): the tests of the typed rung on a
+    /// device. Otherwise it starts the agent by its name, and a brief rides
+    /// the start.
+    typed_start: AtomicBool,
     /// Whether the node writes the shell integration, so its panes run
     /// Hide's launch of zsh.
     integrated: AtomicBool,
@@ -60,7 +66,9 @@ impl NodeLink for Node {
             Call::AgentInstalled { name } => {
                 assert!(matches!(name.as_str(), "codex" | "claude"), "{name}");
                 // How the device starts it, or null when it is not there.
-                if self.installed.load(Ordering::SeqCst) {
+                if self.typed_start.load(Ordering::SeqCst) {
+                    json!("batch")
+                } else if self.installed.load(Ordering::SeqCst) {
                     json!("program")
                 } else {
                     Value::Null
@@ -366,6 +374,7 @@ fn spawner() -> Spawner {
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
         installed: AtomicBool::new(true),
+        typed_start: AtomicBool::new(false),
         integrated: AtomicBool::new(false),
         trusted: Mutex::new(Vec::new()),
         trust_fails: AtomicBool::new(false),
@@ -1463,6 +1472,7 @@ impl Drop for ShellWait {
 #[test]
 fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
     let spawner = spawner();
+    spawner.node.typed_start.store(true, Ordering::SeqCst);
     let _wait = AnswerWait::set(Duration::from_millis(300));
     let asked = std::time::Instant::now();
     let answer = crate::coordination::run(
@@ -2468,6 +2478,7 @@ fn a_child_whose_screen_asks_before_its_session_says_so() {
 #[test]
 fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent_was_bound() {
     let spawner = spawner();
+    spawner.node.typed_start.store(true, Ordering::SeqCst);
     // Only the first call is answered on a short clock, so the refusal it
     // must give is not waited out on the product's 60 s device budget. The
     // call that completes the spawn waits on the engine's own answer, so it
@@ -2542,6 +2553,7 @@ fn intent_letters(spawner: &Spawner, intent: &str) -> Vec<ledger::Letter> {
 #[test]
 fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without_typing() {
     let spawner = spawner();
+    spawner.node.typed_start.store(true, Ordering::SeqCst);
     // Only the first call is answered on a short clock, so the refusal it
     // must give is not waited out on the product's 60 s device budget. The
     // call that completes the spawn waits on the engine's own answer, so it
@@ -2623,6 +2635,7 @@ fn a_briefs_record_after_its_parent_ended_is_kept_by_the_store() {
     };
 
     let done = spawner();
+    done.node.typed_start.store(true, Ordering::SeqCst);
     done.screen.store(SCREEN_READY, Ordering::SeqCst);
     done.spawn_briefed("done", "reply JOURNEY-4")
         .expect("the spawn completes");
@@ -2640,6 +2653,7 @@ fn a_briefs_record_after_its_parent_ended_is_kept_by_the_store() {
     drop(done);
 
     let early = spawner();
+    early.node.typed_start.store(true, Ordering::SeqCst);
     let _wait = AnswerWait::set(Duration::from_millis(300));
     *early.session.lock().unwrap() = None;
     early.screen.store(SCREEN_ASKING, Ordering::SeqCst);
@@ -2695,6 +2709,7 @@ fn end_parent(spawner: &Spawner) {
 #[test]
 fn a_spawn_whose_agent_ended_before_its_brief_says_so_and_types_nothing() {
     let spawner = spawner();
+    spawner.node.typed_start.store(true, Ordering::SeqCst);
     let _wait = AnswerWait::set(Duration::from_millis(300));
     *spawner.session.lock().unwrap() = None;
     spawner.screen.store(SCREEN_ENDED, Ordering::SeqCst);
@@ -2733,6 +2748,7 @@ fn an_ended_wait_says_what_became_of_the_spawns_brief() {
     };
 
     let asked = spawner();
+    asked.node.typed_start.store(true, Ordering::SeqCst);
     let _wait = AnswerWait::set(Duration::from_millis(300));
     *asked.session.lock().unwrap() = None;
     asked.screen.store(SCREEN_ASKING, Ordering::SeqCst);
@@ -2745,6 +2761,7 @@ fn an_ended_wait_says_what_became_of_the_spawns_brief() {
     drop(asked);
 
     let typed = spawner();
+    typed.node.typed_start.store(true, Ordering::SeqCst);
     *typed.session.lock().unwrap() = None;
     typed.screen.store(SCREEN_READY, Ordering::SeqCst);
     assert_eq!(

@@ -80,11 +80,73 @@ pub(super) enum Reread {
     Wait,
 }
 
+/// Typed input past its record wait with no verdict, logged once per typing
+/// as `input.waiting` with why it still waits (`typed::overdue_wait`).
+struct Overdue {
+    input: InputKind,
+    id: String,
+    attempt: u8,
+    pane_id: Option<String>,
+    agent: String,
+    reason: &'static str,
+    waited_ms: u64,
+    /// The engine's word for the pane and whether its read is stale, when
+    /// the pane is observed.
+    status: Option<(String, bool)>,
+}
+
+impl Overdue {
+    #[allow(clippy::too_many_arguments)] // the input, where it went and why it waits
+    fn of(
+        input: InputKind,
+        id: &str,
+        typed_input: &TypedInput,
+        pane_id: Option<&str>,
+        agent: &str,
+        observation: Option<&Observation>,
+        reason: &'static str,
+        now: u64,
+    ) -> Self {
+        Self {
+            input,
+            id: id.to_owned(),
+            attempt: typed_input.attempts,
+            pane_id: pane_id.map(str::to_owned),
+            agent: agent.to_owned(),
+            reason,
+            waited_ms: now.saturating_sub(typed_input.typed_at_unix_ms),
+            status: observation
+                .map(|observation| (observation.status.clone(), observation.telemetry_stale)),
+        }
+    }
+
+    fn log(&self) {
+        let (key, input) = match self.input {
+            InputKind::Brief => ("spawn", "brief"),
+            InputKind::Letter => ("letter", "letter"),
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "delivery", "kind": "input.waiting", "input": input, key: self.id,
+            "pane_id": self.pane_id, "agent": self.agent, "attempt": self.attempt,
+            "reason": self.reason, "waited_ms": self.waited_ms,
+            "status": self.status.as_ref().map(|(status, _)| status),
+            "stale": self.status.as_ref().map(|(_, stale)| stale),
+        }));
+    }
+}
+
 /// An input shown to the operator: the pane whose row shows it, since when,
 /// what it says, and the brief's spawn or the letter it is.
 pub(crate) type InputAsk = (String, u64, AskSubject, String);
 
 impl Runtime {
+    /// Whether the `input.waiting` line of this typing (`attempt`) of the
+    /// input `id` is logged already: checked before one is built, so an
+    /// input that waits long costs the doorbell's pass no copy.
+    fn waiting_logged(&self, id: &str, attempt: u8) -> bool {
+        self.plans.input_waiting.get(id) == Some(&attempt)
+    }
+
     /// The pane a spawn's agent was started in, as the delivery observations
     /// key it: bare on this machine, in full on a device.
     pub(super) fn spawn_pane_id(&self, spawn: &SpawnRecord) -> Option<String> {
@@ -167,6 +229,10 @@ impl Runtime {
         let mut verdicts = BTreeMap::new();
         let mut turn_started = Vec::new();
         let mut spent = Vec::new();
+        // Input past its record wait with no verdict, and every typed input
+        // still unconfirmed, which keeps its `input.waiting` line logged.
+        let mut overdue = Vec::new();
+        let mut awaiting: BTreeMap<&str, u8> = BTreeMap::new();
         let unconfirmed: BTreeMap<&str, u8> = ledger
             .spawns
             .iter()
@@ -189,7 +255,22 @@ impl Runtime {
             ) else {
                 continue;
             };
+            awaiting.insert(&spawn.id, input.attempts);
             let Some(observation) = self.spawn_observation(spawn) else {
+                if let Some(reason) = typed::overdue_wait(input, None, now)
+                    .filter(|_| !self.waiting_logged(&spawn.id, input.attempts))
+                {
+                    overdue.push(Overdue::of(
+                        InputKind::Brief,
+                        &spawn.id,
+                        input,
+                        self.spawn_pane_id(spawn).as_deref(),
+                        &spawn.kind,
+                        None,
+                        reason,
+                        now,
+                    ));
+                }
                 continue;
             };
             // An agent whose prompt hook reports no digest records the brief
@@ -266,6 +347,20 @@ impl Runtime {
             }
             let standing = typed::standing(input, Some(observation), now);
             self.note_verdict(&mut verdicts, &spawn.id, input.attempts, standing);
+            if let Some(reason) = typed::overdue_wait(input, Some(observation), now)
+                .filter(|_| !self.waiting_logged(&spawn.id, input.attempts))
+            {
+                overdue.push(Overdue::of(
+                    InputKind::Brief,
+                    &spawn.id,
+                    input,
+                    Some(&observation.actor.pane_id),
+                    &spawn.kind,
+                    Some(observation),
+                    reason,
+                    now,
+                ));
+            }
             match standing {
                 Standing::Unconfirmed { .. } => {}
                 // Nothing moves until the turn is laid: the reread asked and
@@ -345,14 +440,31 @@ impl Runtime {
             }
         }
         for letter in &ledger.letters {
+            let Some(input) = letter.typed_input() else {
+                continue;
+            };
+            if input.confirmed_at_unix_ms.is_none() {
+                awaiting.insert(&letter.id, input.attempts);
+            }
             let Some(observation) = self
                 .delivery_observations
                 .get(&letter.recipient.pane_id)
                 .filter(|observation| observation.actor.same_identity(&letter.recipient))
             else {
-                continue;
-            };
-            let Some(input) = letter.typed_input() else {
+                if let Some(reason) = typed::overdue_wait(&input, None, now)
+                    .filter(|_| !self.waiting_logged(&letter.id, input.attempts))
+                {
+                    overdue.push(Overdue::of(
+                        InputKind::Letter,
+                        &letter.id,
+                        &input,
+                        Some(&letter.recipient.pane_id),
+                        &letter.recipient.kind,
+                        None,
+                        reason,
+                        now,
+                    ));
+                }
                 continue;
             };
             if self.bell_line_recorded(letter) {
@@ -366,6 +478,20 @@ impl Runtime {
             }
             let standing = typed::standing(&input, Some(observation), now);
             self.note_verdict(&mut verdicts, &letter.id, input.attempts, standing);
+            if let Some(reason) = typed::overdue_wait(&input, Some(observation), now)
+                .filter(|_| !self.waiting_logged(&letter.id, input.attempts))
+            {
+                overdue.push(Overdue::of(
+                    InputKind::Letter,
+                    &letter.id,
+                    &input,
+                    Some(&observation.actor.pane_id),
+                    &letter.recipient.kind,
+                    Some(observation),
+                    reason,
+                    now,
+                ));
+            }
             match standing {
                 Standing::Unconfirmed { .. } => {}
                 Standing::Unsettled => {
@@ -428,6 +554,14 @@ impl Runtime {
         self.plans.input_reread.retain(|id, _| open.contains(id));
         self.plans.input_held.retain(|id, _| open.contains(id));
         self.plans.input_undelivered.retain(|id| open.contains(id));
+        self.plans
+            .input_waiting
+            .retain(|id, typing| awaiting.get(id.as_str()) == Some(typing));
+        // Built only for a typing not logged yet (`waiting_logged`).
+        for wait in overdue {
+            wait.log();
+            self.plans.input_waiting.insert(wait.id, wait.attempt);
+        }
         for (id, pane, kind, attempts) in spent {
             if self.plans.input_undelivered.insert(id.clone()) {
                 crate::diagnostic!(serde_json::json!({

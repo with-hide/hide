@@ -563,6 +563,7 @@ pub(crate) fn start_agent(
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
+    prompt: Option<String>,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Started, NotStarted> {
     start_agent_checked(
@@ -577,6 +578,7 @@ pub(crate) fn start_agent(
         args,
         codex_daemon,
         program,
+        prompt,
         check,
     )
     .map_err(|error| {
@@ -661,6 +663,7 @@ pub(crate) fn start_agent_checked(
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
+    prompt: Option<String>,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Started, crate::agent_start::StartError> {
     let profile = launch.record();
@@ -673,6 +676,7 @@ pub(crate) fn start_agent_checked(
             codex_daemon,
             wakes: false,
             program,
+            prompt,
         })
         .map_err(|detail| crate::agent_start::StartError::NotStarted {
             reason: "agent_start.failed".into(),

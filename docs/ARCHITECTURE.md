@@ -1893,11 +1893,13 @@ An agent that comes back (a wake in its pane or dormant, a fork, a pane's Reopen
 It runs with the runtime lock released, on the thread that makes the start; a spawn, a fork and a closed tab's or pane's reopen ask it before they make a pane or touch one, so a refused profile leaves no pane behind and a reopen keeps its shell with the refusal as its one notice.
 
 The built-in default starts as every agent always has: its line is the agent's program and arguments, nothing is asked of the machine, and no account variable is set (B29).
+A start whose first input rides it as the launch prompt is the one exception to the bare line, under the built-in default and any other profile alike: the node keeps the input in a private file (`Call::PromptFile`, which answers the file's path and the `hide` beside the node), and the line runs that `hide` with the file (`agent exec --prompt-file <path> -- <program> <arguments>...`), which reads the file, removes it and hands its text to the program as its last argument, so no shell reads the text ([delivery.md](delivery.md#the-input-ladder)).
+Such a start with no profile asks the node nothing more: the executor finds the program on its shell's `PATH` as the shell would have and hands the pane to it as below, and a file that is not there or cannot be read ends the start with why, never with an empty argument.
 Any other profile is asked of the node of the machine that runs the pane (`ProfileLaunch`), so an edit counts from the next start (D-11) and a start of a profile its machine no longer has is refused by name (B20).
 Its start line runs the `hide` beside that node, which the node names, with the start's attempt and the agent's own words, nothing of the profile:
 
 ```text
-<hide> agent exec --attempt <16 hex> -- <agent's program> <arguments>...
+<hide> agent exec --attempt <16 hex> [--prompt-file <path>] -- <agent's program> <arguments>...
 ```
 
 The attempt keeps which profile the start was checked with and at which `version` (`launch::ExecAttempt`), and the executor asks for the rest just before it runs: `HookCommand::AgentExec` with `profile`, answered only while that attempt runs in the pane and has no `ready` (`Engine::exec_attempt`), from the profile as its machine has it then (`launch::exec_start`: `ProfileLaunch` again, asked by the daemon off the owner thread, `ExecAsk`) and only at that version.
