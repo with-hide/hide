@@ -36,11 +36,6 @@ impl DeskHost {
             places: DeskPlaces {
                 adapters: hide_kit::layout::desk_adapters(home),
                 desk: hide_kit::layout::desk_dir(state_dir),
-                codex_home: hide_kit::layout::desk_codex_home(state_dir),
-                codex_sign_in: hide_desk::codex::operator_sign_in(
-                    home,
-                    hide_platform::host::variable,
-                ),
                 hide_dir,
             },
         }

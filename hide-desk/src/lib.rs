@@ -1,11 +1,9 @@
 //! Desk's agent boundary (PRD Desk 1차): the ACP client that talks to the
-//! agent the operator chose, the adapters and how each is held in its ask
-//! mode, their installation, and what Hide answers when the agent asks to
-//! run something. It keeps no state of its own: the core's Desk owns the
+//! agent the operator chose, the adapters and how each starts, their
+//! installation, and how Hide reads what the agent asks to run. It keeps no state of its own: the core's Desk owns the
 //! conversation, the choices and the one [`host::Host`] it runs.
 
 pub mod adapter;
-pub mod codex;
 pub mod host;
 pub mod install;
 pub mod permission;
@@ -16,8 +14,9 @@ pub use adapter::AdapterId;
 
 /// What the Desk agent is told before the operator's first message in a
 /// session: its role, that it acts through the `hide` CLI, and to answer in
-/// the operator's language. It is code-owned: Desk reads none of the
-/// operator's own agent instructions, settings or skills (PRD Desk D-53).
+/// the operator's language. It is code-owned and comes on top of the agent's
+/// own setup, which Desk starts as the operator's terminal does (PRD Desk
+/// D-92).
 pub const INSTRUCTIONS: &str = include_str!("instructions.md");
 
 /// Where the operator's Settings › Labs › Desk put each task's work (PRD Desk

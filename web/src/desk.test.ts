@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, approvalButtons, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -137,18 +137,25 @@ describe("an asking thread's question (D-75)", () => {
   });
 });
 
-describe("the agents a permission row cannot hold (D-82)", () => {
-  const agent = (id: DeskAgent["id"], label: string, state: DeskAgent["state"], always_runs: DeskAgent["always_runs"]): DeskAgent => ({ id, label, state, detail: null, signed_in: true, always_runs, login_command: "", models: [], efforts: [] });
+describe("a waiting card's buttons (D-92, frame A2 가)", () => {
+  const option = (id: string, kind: DeskOption["kind"], name = id): DeskOption => ({ id, kind, name });
+  const read = (options: DeskOption[]) => approvalButtons(options).map(({ option: one, word }) => [one.id, word]);
 
-  it("names each choosable agent whose own setup runs the row unasked, in the list's order", () => {
-    const agents = [agent("claude", "Claude Code", "ready", []), agent("codex", "Codex", "ready", ["read"]), agent("omp", "omp", "cli_missing", ["read"]), agent("grok", "Grok", "no_ask_mode", ["read"]), agent("agy", "Antigravity", "off", ["read"])];
-    expect(agentsRunningUnasked(agents, "read")).toEqual(["Codex", "omp"]);
-    expect(agentsRunningUnasked(agents, "shell")).toEqual([]);
+  it("keeps every answer the agent offers, reject first, then its own others, 항상 허용 and 한 번 허용 last, in the agent's order within each", () => {
+    expect(read([option("yes", "allow_once"), option("always", "allow_always"), option("no", "reject_once")])).toEqual([["no", "reject"], ["always", "allow_always"], ["yes", "allow_once"]]);
+    expect(read([option("yes", "allow_once"), option("ask", "other"), option("never", "reject_always")])).toEqual([["never", "reject"], ["ask", null], ["yes", "allow_once"]]);
+    expect(read([])).toEqual([]);
+  });
+
+  it("labels answers that would read the same word by the agent's own names instead", () => {
+    expect(read([option("auto", "allow_always"), option("edits", "allow_always"), option("once", "allow_once"), option("no", "reject_once"), option("never", "reject_always")])).toEqual([
+      ["no", null], ["never", null], ["auto", null], ["edits", null], ["once", "allow_once"],
+    ]);
   });
 });
 
 describe("an agent in Desk's bar (D-79, D-81, B44)", () => {
-  const agent = (state: DeskAgent["state"], signed_in: boolean | null): DeskAgent => ({ id: "codex", label: "Codex", state, detail: null, signed_in, always_runs: ["read"], login_command: "codex login", models: [], efforts: [] });
+  const agent = (state: DeskAgent["state"], signed_in: boolean | null): DeskAgent => ({ id: "codex", label: "Codex", state, detail: null, signed_in, login_command: "codex login", models: [], efforts: [] });
 
   it("says a ready agent's sign-in as Settings reads it, and nothing while that is unread", () => {
     expect(deskAgentWord(agent("ready", true))).toBe("signed_in");
@@ -159,11 +166,9 @@ describe("an agent in Desk's bar (D-79, D-81, B44)", () => {
   it("says the state of one not ready, whatever its sign-in, so a downloaded adapter never reads as signed in", () => {
     expect(deskAgentWord(agent("preparing", true))).toBe("preparing");
     expect(deskAgentWord(agent("install_failed", true))).toBe("install_failed");
-    expect(deskAgentWord(agent("no_ask_mode", true))).toBe("no_ask_mode");
   });
 
-  it("cannot be given an agent Hide cannot hold to asking or one switched off, and can be given one signed out", () => {
-    expect(agentPickable(agent("no_ask_mode", true))).toBe(false);
+  it("cannot be given an agent switched off, and can be given one signed out", () => {
     expect(agentPickable(agent("off", true))).toBe(false);
     expect(agentPickable(agent("ready", false))).toBe(true);
     expect(agentPickable(agent("preparing", null))).toBe(true);

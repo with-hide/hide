@@ -271,64 +271,19 @@ fn desk_archive(runtime: &mut Runtime) -> Result<serde_json::Value, String> {
         .map(|(answer, _)| answer)
 }
 
-/// The card Desk's last request made.
-fn desk_card(runtime: &Runtime) -> crate::model::DeskItem {
-    runtime
-        .snapshot
-        .desk
-        .as_ref()
-        .unwrap()
-        .conversation
-        .items
-        .last()
-        .cloned()
-        .expect("a card")
-}
-
+/// D-92: what Desk runs the operator allowed under Desk's box, so the
+/// archive's own confirmation is not asked again, a working session's
+/// included.
 #[test]
-fn desk_archives_a_working_session_only_once_the_operator_allows_its_card() {
-    use hide_desk::permission::{Ask, Irreversible};
+fn desk_archives_a_working_session_without_the_archive_s_confirmation() {
     let mut runtime = archive_runtime(&[("w1:p3", "working")]);
     register_root(&mut runtime);
     runtime.open_test_desk(8);
-    assert!(runtime.desk_session_working("agent-1"));
-
-    // Run without asking, as an agent whose request skipped the card would.
-    assert_eq!(
-        desk_archive(&mut runtime),
-        Err("archive_confirmation_required".to_owned())
-    );
-    assert!(record(&runtime).is_none());
-
-    assert!(runtime.desk_test_permission("hide agent archive agent-1"));
-    let crate::model::DeskItem::Approval {
-        id, asks, subject, ..
-    } = desk_card(&runtime)
-    else {
-        panic!("a card")
-    };
-    assert_eq!(asks, [Ask::Irreversible(Irreversible::EndWorkingSession)]);
-    assert_eq!(subject, runtime.desk_session_title("agent-1"));
-    send(
-        &mut runtime,
-        "desk_approval",
-        serde_json::json!({"id": id, "answer": "once"}),
-    );
     assert_eq!(
         desk_archive(&mut runtime),
         Ok(serde_json::json!({"archived": "agent-1", "pane_id": "w1:p1"}))
     );
     assert_eq!(record(&runtime).unwrap().1.phase, ArchivePhase::Closing);
-}
-
-#[test]
-fn desk_archives_an_idle_session_without_a_card() {
-    let mut runtime = archive_runtime(&[]);
-    register_root(&mut runtime);
-    runtime.open_test_desk(8);
-    assert!(!runtime.desk_session_working("agent-1"));
-    assert!(!runtime.desk_test_permission("hide agent archive agent-1"));
-    assert!(desk_archive(&mut runtime).is_ok());
 }
 
 #[test]

@@ -1,5 +1,4 @@
-//! The ACP session on a Desk process: open or resume it in its ask mode,
-//! prompt, cancel, choose a model or effort, and read what the agent sends
+//! The ACP session on a Desk process: open or resume it, prompt, cancel, choose a model or effort, and read what the agent sends
 //! back (ACP v1).
 
 use std::path::Path;
@@ -9,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::adapter::{AdapterId, AskMode, FailedTurnMark};
+use crate::adapter::FailedTurnMark;
 use crate::rpc::{CallError, Connection, Incoming, Sink};
 
 /// How long a control request may take: a first `session/new` starts the
@@ -51,8 +50,6 @@ pub struct Opened {
 pub enum OpenError {
     /// The agent needs the operator signed in (B6).
     Login,
-    /// The ask mode could not be confirmed: the session is not used (D-53).
-    AskModeUnconfirmed(String),
     Failed(String),
 }
 
@@ -66,14 +63,11 @@ impl OpenError {
 }
 
 /// Opens a session in `cwd`: loads `resume` when the agent can, else starts
-/// a new one, then puts it in the adapter's ask mode. Pi's mode is proven by
-/// its extension's marker, which `adapter::pi_extension_loaded` checks once the session exists; an agent that starts in it needs nothing more.
+/// a new one, in the agent's own mode (D-92).
 pub fn open(
     connection: &Connection,
-    adapter: AdapterId,
     cwd: &Path,
     resume: Option<&str>,
-    pi_ready: &dyn Fn() -> Result<(), String>,
 ) -> Result<Opened, OpenError> {
     let initialized = connection
         .call(
@@ -90,10 +84,7 @@ pub fn open(
         .pointer("/agentCapabilities/loadSession")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let mut params = json!({"cwd": cwd, "mcpServers": []});
-    if let Some(meta) = adapter.session_meta() {
-        params["_meta"] = meta;
-    }
+    let params = json!({"cwd": cwd, "mcpServers": []});
     let mut resume_failed = resume.is_some() && !can_load;
     let mut opened = None;
     if let Some(session_id) = resume.filter(|_| can_load) {
@@ -122,28 +113,6 @@ pub fn open(
             (session_id, answer, false)
         }
     };
-    match adapter.ask_mode() {
-        Some(AskMode::SetMode(mode)) => {
-            connection
-                .call(
-                    "session/set_mode",
-                    json!({"sessionId": session_id, "modeId": mode}),
-                    CONTROL_TIMEOUT,
-                )
-                .map_err(|error| {
-                    OpenError::AskModeUnconfirmed(format!("set_mode {mode}: {error}"))
-                })?;
-        }
-        Some(AskMode::PiExtension) => pi_ready().map_err(OpenError::AskModeUnconfirmed)?,
-        // Held by how the process started (`adapter::launch`).
-        Some(AskMode::AtStart) => {}
-        None => {
-            return Err(OpenError::AskModeUnconfirmed(format!(
-                "{} has no ask mode Desk can hold",
-                adapter.label()
-            )));
-        }
-    }
     Ok(Opened {
         session_id,
         resumed,
@@ -293,8 +262,6 @@ pub enum Update {
         id: String,
         call: Value,
     },
-    /// The session's mode moved.
-    Mode(String),
     /// The model or effort lists or values moved.
     Choices(Choices),
     /// The session's own facts moved (`session_info_update`): its title, or
@@ -327,10 +294,6 @@ pub fn read_update(params: &Value) -> Update {
                 id: id.to_owned(),
                 call: update.clone(),
             }),
-        Some("current_mode_update") => update
-            .get("currentModeId")
-            .and_then(Value::as_str)
-            .map_or(Update::Other, |mode| Update::Mode(mode.to_owned())),
         Some("config_option_update") => Update::Choices(choices(update)),
         Some("session_info_update") => Update::Info(update.clone()),
         _ => Update::Other,
@@ -372,7 +335,7 @@ impl ReplyBlocks {
                 self.open = None;
                 None
             }
-            Update::Mode(_) | Update::Choices(_) | Update::Info(_) | Update::Other => None,
+            Update::Choices(_) | Update::Info(_) | Update::Other => None,
         }
     }
 }
@@ -530,6 +493,7 @@ pub fn stop_reason(answer: &Value) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::AdapterId;
 
     #[test]
     fn model_and_effort_choices_are_read_by_category() {

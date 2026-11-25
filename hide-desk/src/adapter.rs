@@ -1,82 +1,34 @@
-//! The agents Desk can talk to and how each is held in its ask mode (PRD
-//! Desk D-53, D-79).
+//! The agents Desk can talk to and how each starts (PRD Desk D-79, D-92).
 //!
 //! The list is Hide's catalog (`hide_agent_adapter::ADAPTERS`, the agents
 //! Hide can start), each named by its agent name, so an agent the catalog
-//! gains is Desk's once its ACP route and ask mode are declared here; the
-//! match below is exhaustive, so a new agent cannot be added without that
-//! decision. Each speaks ACP one of two ways:
+//! gains is Desk's once its ACP route is declared here; the match below is
+//! exhaustive, so a new agent cannot be added without that decision. Each
+//! speaks ACP one of two ways:
 //! - its vendor's adapter, an npm package pinned with every dependency's
 //!   integrity in `contracts/desk-adapters/<id>/` and run by the account's
 //!   Node (Claude Code, Codex, Pi), installed when Desk is turned on;
 //! - its own CLI's ACP mode (`opencode acp`, `omp --mode acp`, `agy acp`,
 //!   `grok agent stdio`), which needs nothing installed.
 //!
-//! None reads the operator's automatic approvals:
-//! - Claude starts with no settings sources (the operator's allow rules,
-//!   default mode and hooks are not read; the sign-in lives in the system
-//!   keychain, not in settings), bypass refused, every Bash call, read and
-//!   search held by an ask rule, and the session put in `default` mode
-//!   before any prompt.
-//! - Codex starts its session in `read-only`, where its sandbox lets a
-//!   command that changes nothing run and asks before every write, network
-//!   use or command outside it, with Desk's own `CODEX_HOME`
-//!   ([`crate::codex`]): none of the operator's Codex setup, the operator's
-//!   own sign-in linked in, and no rule that lets a command out of the
-//!   sandbox without asking.
-//! - Pi asks for nothing on its own, so Desk loads its own extension
-//!   (`pi_desk.js`) into the Pi process the adapter starts: every tool call
-//!   waits for Hide. The extension writes a marker naming its process when
-//!   it loads, which is Hide's proof the gate is there.
-//! - OpenCode reads an inline configuration above the operator's own
-//!   (`OPENCODE_CONFIG_CONTENT`), which Desk sets to ask before every tool
-//!   but reading and searching files; measured on OpenCode 2.0.29 over an
-//!   operator configuration that allows everything.
-//! - omp runs with `--approval-mode always-ask`, which approves read-only
-//!   tools alone, and without discovered extensions, skills or rules;
-//!   measured on omp 18.7.0.
-//! - Antigravity's ACP server asks before every command and change on its
-//!   own; measured on agy 1.4.12.
-//! - Grok has none Desk can hold: its ACP mode starts in the automatic mode
-//!   the operator's own setup chooses, where Grok's model approves commands
-//!   itself (measured on Grok 1.0.70: a project's `ask` rules, its default
-//!   mode variable and an agent profile left it running a command unasked),
-//!   and only a Grok home of Desk's own changes that, which would leave
-//!   Grok's sign-in apart from the operator's (D-81).
-//!
-//! Hide answers each request from Settings › Labs › Desk › 권한
-//! ([`crate::permission`]); what an agent runs without asking whatever a
-//! row says is declared by [`AdapterId::always_runs`] and shown on that row.
+//! Each starts as it does in the operator's terminal (D-92): in its own
+//! default mode, with the operator's own settings, sign-in, instructions and
+//! extensions, and nothing Desk adds to make it ask. What it asks reaches
+//! Hide as a permission request, which the operator's choice under Desk's
+//! box answers ([`crate::permission`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use hide_agent_adapter::{ADAPTERS, AgentAdapter, AgentId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Value, json};
-
-use crate::permission::Row;
+use serde_json::Value;
 
 /// One of the catalog's agents Desk speaks ACP with, named on the wire and in
 /// Desk's store by its agent name (`claude`, `codex`, `pi`, `opencode`,
 /// `omp`, `agy`, `grok`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AdapterId(AgentId);
-
-/// The confirm title Desk's Pi extension sends, which Hide reads as its own.
-pub const PI_CONFIRM_TITLE: &str = "hide-desk.permission";
-/// Desk's Pi extension.
-pub const PI_EXTENSION: &str = include_str!("pi_desk.js");
-/// What Pi loads from the operator's own setup and Desk keeps out: skills,
-/// `AGENTS.md`/`CLAUDE.md`, discovered extensions, prompt templates and MCP
-/// servers. Desk's extension, named with `-e`, still loads.
-const PI_ISOLATION: &str =
-    "--no-skills --no-context-files --no-extensions --no-prompt-templates --no-mcp";
-
-/// OpenCode's permissions in Desk: every tool asks but reading, listing and
-/// searching files, whatever the operator's own configuration allows.
-const OPENCODE_PERMISSIONS: &str =
-    r#"{"permission":{"*":"ask","read":"allow","list":"allow","glob":"allow","grep":"allow"}}"#;
 
 /// One adapter's pinned package.
 pub struct Pin {
@@ -95,18 +47,6 @@ pub enum Route {
     Package(Pin),
     /// Its own CLI (the catalog's executable), with these arguments.
     Native(&'static [&'static str]),
-}
-
-/// How an adapter's session is put in its ask mode once it exists.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AskMode {
-    /// `session/set_mode` to this mode, and the answer must not be an error.
-    SetMode(&'static str),
-    /// Desk's Pi extension, proven by its marker.
-    PiExtension,
-    /// The process starts in it: the arguments or configuration Desk starts
-    /// it with ([`launch`]).
-    AtStart,
 }
 
 impl AdapterId {
@@ -166,33 +106,6 @@ impl AdapterId {
         }
     }
 
-    /// How the session is held in its ask mode; `None` for an agent Desk
-    /// cannot hold in one, which is listed and never started (D-53).
-    pub fn ask_mode(self) -> Option<AskMode> {
-        match self.0 {
-            AgentId::ClaudeCode => Some(AskMode::SetMode("default")),
-            AgentId::Codex => Some(AskMode::SetMode("read-only")),
-            AgentId::Pi => Some(AskMode::PiExtension),
-            AgentId::OpenCode | AgentId::Omp | AgentId::Antigravity => Some(AskMode::AtStart),
-            AgentId::Grok | AgentId::Cursor => None,
-        }
-    }
-
-    /// The rows of Settings › Labs › Desk › 권한 this agent runs without asking,
-    /// whatever the row says (D-82): what it runs there never reaches Hide,
-    /// so the row shows it. Codex reads inside its read-only sandbox, which
-    /// asks only to leave it; OpenCode's configuration, omp's mode and
-    /// Antigravity's server let reads and searches run alone. An agent with
-    /// no ask mode never starts, so it has none.
-    pub fn always_runs(self) -> &'static [Row] {
-        match self.0 {
-            AgentId::Codex | AgentId::OpenCode | AgentId::Omp | AgentId::Antigravity => {
-                &[Row::Read]
-            }
-            AgentId::ClaudeCode | AgentId::Pi | AgentId::Grok | AgentId::Cursor => &[],
-        }
-    }
-
     /// The agent's own CLI the process starts, which the operator installs:
     /// the program itself for an agent with its own ACP mode, and Pi's,
     /// which its adapter starts. Claude's and Codex's adapters carry theirs.
@@ -217,23 +130,6 @@ impl AdapterId {
             AgentId::Antigravity => "agy",
             AgentId::Grok => "grok login",
             AgentId::Cursor => "cursor-agent login",
-        }
-    }
-
-    /// `_meta` for `session/new` and `session/load`. Bash, reads and
-    /// searches always ask, so each reaches Hide's table (D-82); edits ask
-    /// in `default` mode on their own. Claude's own plan mode is denied:
-    /// entering it needs no permission and leaves the ask mode, which ends
-    /// the session as one that cannot ask (D-53), and leaving it offers
-    /// modes that ask less.
-    pub fn session_meta(self) -> Option<Value> {
-        match self.0 {
-            AgentId::ClaudeCode => Some(json!({"claudeCode": {"options": {
-                "settingSources": [],
-                "allowDangerouslySkipPermissions": false,
-                "settings": {"permissions": {"ask": CLAUDE_ASKS, "deny": ["EnterPlanMode"]}},
-            }}})),
-            _ => None,
         }
     }
 
@@ -268,10 +164,6 @@ impl FailedTurnMark {
     }
 }
 
-/// The Claude tools held by an ask rule: what Claude would otherwise run
-/// without asking in `default` mode.
-const CLAUDE_ASKS: [&str; 4] = ["Bash", "Read", "Glob", "Grep"];
-
 /// How the agent `key` speaks ACP, or `None` when Desk does not speak it.
 fn route(key: AgentId) -> Option<Route> {
     Some(match key {
@@ -297,15 +189,7 @@ fn route(key: AgentId) -> Option<Route> {
             lock: include_str!("../../contracts/desk-adapters/pi/package-lock.json"),
         }),
         AgentId::OpenCode => Route::Native(&["acp"]),
-        AgentId::Omp => Route::Native(&[
-            "--mode",
-            "acp",
-            "--approval-mode",
-            "always-ask",
-            "--no-extensions",
-            "--no-skills",
-            "--no-rules",
-        ]),
+        AgentId::Omp => Route::Native(&["--mode", "acp"]),
         AgentId::Antigravity => Route::Native(&["acp"]),
         AgentId::Grok => Route::Native(&["agent", "--no-leader", "stdio"]),
         // Retired: Hide starts no Cursor.
@@ -343,19 +227,14 @@ pub struct Paths<'a> {
     /// (`hide_platform::programs::account_environment`), which an agent the
     /// operator starts in a pane has: a provider key its own configuration
     /// reads (OpenCode's `{env:…}`, `ANTHROPIC_API_KEY`), its settings
-    /// folder. A pane's identity and Hide's own variables in it are left out
-    /// ([`crate::host::from_account`]), and Desk's own variables win over it.
+    /// folder (`CODEX_HOME`). A pane's identity and Hide's own variables in
+    /// it are left out ([`crate::host::from_account`]), and Desk's own
+    /// variables win over it.
     pub account: Option<&'a [(OsString, OsString)]>,
-    /// Desk's own folder for this process: its working folder and Pi's
-    /// launcher, extension and marker.
+    /// Desk's own folder, which holds the process's working folder.
     pub desk: &'a Path,
     /// The Workspace capability reference the `hide` CLI presents.
     pub capability: &'a Path,
-    /// Desk's own `CODEX_HOME` (`hide_kit::layout::desk_codex_home`).
-    pub codex_home: &'a Path,
-    /// The operator's own Codex sign-in ([`crate::codex::operator_sign_in`]),
-    /// or why it has none.
-    pub codex_sign_in: Result<&'a Path, &'a str>,
 }
 
 /// The program, arguments and environment one Desk process starts with.
@@ -367,31 +246,6 @@ pub struct Launch {
     /// environment, then Desk's own, each named once.
     pub env: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
-    /// Files to write before the start (Pi's launcher and extension,
-    /// Codex's configuration and rules).
-    pub files: Vec<(PathBuf, String, bool)>,
-    /// Links to make before the start, each `(target, link)`: Codex's
-    /// sign-in, which stays the operator's own.
-    pub links: Vec<(PathBuf, PathBuf)>,
-    /// The marker Pi's extension writes when it loads.
-    pub pi_marker: Option<PathBuf>,
-}
-
-/// Whether Pi's Desk extension loaded in the Desk process's tree: its
-/// marker names a pid under `host`, the process Desk started.
-pub fn pi_extension_loaded(marker: Option<&Path>, host: u32) -> Result<(), String> {
-    let marker = marker.ok_or("no marker was asked for")?;
-    let text = std::fs::read_to_string(marker)
-        .map_err(|error| format!("the extension's marker is missing: {error}"))?;
-    let pid: u32 = text
-        .trim()
-        .parse()
-        .map_err(|_| "the extension's marker names no process".to_owned())?;
-    if hide_platform::process::descends_from(pid, host) {
-        Ok(())
-    } else {
-        Err("the extension loaded in another process".into())
-    }
 }
 
 /// Desk's working folder: no checkout, so no project's settings or
@@ -400,12 +254,9 @@ pub fn work_dir(desk: &Path) -> PathBuf {
     desk.join("work")
 }
 
-/// How `adapter`'s Desk process starts. Refused for an agent Desk cannot
-/// hold in an ask mode, and when a piece its route needs is not given.
-pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Launch, String> {
-    if adapter.ask_mode().is_none() {
-        return Err(format!("{} cannot be held in an ask mode", adapter.label()));
-    }
+/// How `adapter`'s Desk process starts. Refused when a piece its route needs
+/// is not given.
+pub fn launch(adapter: AdapterId, paths: &Paths<'_>) -> Result<Launch, String> {
     let mut search = OsString::from(paths.hide_dir.as_os_str());
     if let Some(account) = paths.search.filter(|path| !path.is_empty()) {
         search.push(if cfg!(windows) { ";" } else { ":" });
@@ -415,57 +266,14 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Laun
         ("PATH".into(), search),
         ("HIDE_CAP_REF".into(), paths.capability.into()),
     ];
-    let mut files = Vec::new();
-    let mut links = Vec::new();
-    let mut pi_marker = None;
     let own_cli = || {
         paths
             .own_cli
             .ok_or_else(|| format!("{} is not given", adapter.own_cli().unwrap_or("the CLI")))
     };
-    match adapter.key() {
-        AgentId::Codex => {
-            env.push(("INITIAL_AGENT_MODE".into(), "read-only".into()));
-            env.push(crate::codex::home_variable(paths.codex_home));
-            files.extend(crate::codex::files(paths.codex_home));
-            let sign_in = paths
-                .codex_sign_in
-                .map_err(|reason| format!("Codex's sign-in cannot be found: {reason}"))?;
-            links.push(crate::codex::sign_in_link(sign_in, paths.codex_home));
-        }
-        AgentId::Pi => {
-            let extension = paths.desk.join("pi-desk.js");
-            let marker = paths.desk.join(format!("pi-ready-{nonce}"));
-            let (launcher, body) = if cfg!(windows) {
-                (
-                    paths.desk.join("pi-desk.cmd"),
-                    format!(
-                        "@\"%HIDE_DESK_PI%\" -e \"%HIDE_DESK_PI_EXTENSION%\" {PI_ISOLATION} %*\r\n"
-                    ),
-                )
-            } else {
-                (
-                    paths.desk.join("pi-desk"),
-                    format!(
-                        "#!/bin/sh\nexec \"$HIDE_DESK_PI\" -e \"$HIDE_DESK_PI_EXTENSION\" {PI_ISOLATION} \"$@\"\n"
-                    ),
-                )
-            };
-            files.push((extension.clone(), PI_EXTENSION.to_owned(), false));
-            files.push((launcher.clone(), body, true));
-            env.push(("PI_ACP_PI_COMMAND".into(), launcher.into()));
-            env.push(("HIDE_DESK_PI_EXTENSION".into(), extension.into()));
-            env.push(("HIDE_DESK_PI_READY".into(), marker.clone().into()));
-            env.push(("HIDE_DESK_PI".into(), own_cli()?.into()));
-            pi_marker = Some(marker);
-        }
-        AgentId::OpenCode => {
-            env.push((
-                "OPENCODE_CONFIG_CONTENT".into(),
-                OPENCODE_PERMISSIONS.into(),
-            ));
-        }
-        _ => {}
+    if adapter.key() == AgentId::Pi {
+        // The Pi Hide found on the account's `PATH`, which pi-acp starts.
+        env.push(("PI_ACP_PI_COMMAND".into(), own_cli()?.into()));
     }
     let mut account: Vec<(OsString, OsString)> = paths
         .account
@@ -496,15 +304,13 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Laun
         args,
         env,
         cwd: work_dir(paths.desk),
-        files,
-        links,
-        pi_marker,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn desk_speaks_with_every_agent_the_catalog_can_start_by_its_engine_kind() {
@@ -553,54 +359,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_read_row_names_each_agent_whose_own_setup_lets_reads_run_unasked() {
-        // OpenCode: what Desk's configuration allows unasked is what the row
-        // says it runs.
-        let config: Value = serde_json::from_str(OPENCODE_PERMISSIONS).unwrap();
-        let unasked: Vec<&str> = config["permission"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .filter(|(_, answer)| *answer == "allow")
-            .map(|(tool, _)| tool.as_str())
-            .collect();
-        assert_eq!(unasked, ["read", "list", "glob", "grep"]);
-        assert_eq!(AdapterId::OPENCODE.always_runs(), [Row::Read]);
-        // Codex reads in its read-only sandbox without asking.
-        assert_eq!(
-            AdapterId::CODEX.ask_mode(),
-            Some(AskMode::SetMode("read-only"))
-        );
-        assert_eq!(AdapterId::CODEX.always_runs(), [Row::Read]);
-        // Claude's reads and searches ask, and Pi's extension holds every
-        // tool call, so the table holds for both.
-        assert!(
-            ["Read", "Glob", "Grep"]
-                .iter()
-                .all(|tool| CLAUDE_ASKS.contains(tool))
-        );
-        assert_eq!(AdapterId::CLAUDE.always_runs(), []);
-        assert_eq!(AdapterId::PI.always_runs(), []);
-    }
-
-    #[test]
-    fn claude_starts_without_the_operator_s_settings_and_with_bash_and_reads_held() {
-        let meta = AdapterId::CLAUDE.session_meta().unwrap();
-        let options = &meta["claudeCode"]["options"];
-        assert_eq!(options["settingSources"], json!([]));
-        assert_eq!(options["allowDangerouslySkipPermissions"], json!(false));
-        assert_eq!(
-            options["settings"]["permissions"]["ask"],
-            json!(["Bash", "Read", "Glob", "Grep"])
-        );
-        assert_eq!(
-            options["settings"]["permissions"]["deny"],
-            json!(["EnterPlanMode"])
-        );
-    }
-
-    fn paths<'a>(desk: &'a Path, home: &'a Path, account: Option<&'a OsString>) -> Paths<'a> {
+    fn paths<'a>(desk: &'a Path, account: Option<&'a OsString>) -> Paths<'a> {
         Paths {
             package: None,
             own_cli: None,
@@ -609,8 +368,6 @@ mod tests {
             account: None,
             desk,
             capability: Path::new("/state/pane-capabilities/desk.json"),
-            codex_home: home,
-            codex_sign_in: Ok(Path::new("/home/me/.codex/auth.json")),
         }
     }
 
@@ -623,9 +380,8 @@ mod tests {
     }
 
     #[test]
-    fn hide_comes_first_on_the_path_and_no_pane_is_named() {
+    fn hide_comes_first_on_the_path_and_pi_acp_starts_the_pi_hide_found() {
         let desk = Path::new("/state/desk");
-        let home = desk.join("codex");
         let account = OsString::from("/usr/bin:/bin");
         let package = Path::new("/a/node_modules/pi-acp");
         let launch = launch(
@@ -633,9 +389,8 @@ mod tests {
             &Paths {
                 package: Some((package, Path::new("/usr/local/bin/node"))),
                 own_cli: Some(Path::new("/usr/local/bin/pi")),
-                ..paths(desk, &home, Some(&account))
+                ..paths(desk, Some(&account))
             },
-            "n1",
         )
         .unwrap();
         let separator = if cfg!(windows) { ";" } else { ":" };
@@ -646,8 +401,11 @@ mod tests {
             ))
         );
         assert!(value(&launch, "HERDR_PANE_ID").is_none());
+        assert_eq!(
+            value(&launch, "PI_ACP_PI_COMMAND").unwrap(),
+            OsString::from("/usr/local/bin/pi")
+        );
         assert_eq!(launch.cwd, desk.join("work"));
-        assert_eq!(launch.pi_marker, Some(desk.join("pi-ready-n1")));
         assert_eq!(launch.program, Path::new("/usr/local/bin/node"));
         assert_eq!(
             launch.args,
@@ -655,108 +413,61 @@ mod tests {
         );
     }
 
+    /// D-92: nothing Desk adds makes an agent ask, so each starts as the
+    /// operator's terminal starts it, with the account's own settings.
     #[test]
-    fn codex_runs_with_desk_s_own_codex_home_and_the_operator_s_sign_in() {
+    fn every_agent_starts_its_plain_acp_mode_with_the_account_s_settings() {
         let desk = Path::new("/state/desk");
-        let home = desk.join("codex");
-        let launch = launch(
+        let account = [
+            (
+                OsString::from("CODEX_HOME"),
+                OsString::from("/home/me/.codex"),
+            ),
+            (OsString::from("HIDE_PANE_ID"), OsString::from("p1")),
+        ];
+        for (adapter, cli, args) in [
+            (AdapterId::OPENCODE, "/opt/bin/opencode", &["acp"][..]),
+            (AdapterId::OMP, "/opt/bin/omp", &["--mode", "acp"][..]),
+            (AdapterId::ANTIGRAVITY, "/opt/bin/agy", &["acp"][..]),
+            (
+                AdapterId::GROK,
+                "/opt/bin/grok",
+                &["agent", "--no-leader", "stdio"][..],
+            ),
+        ] {
+            let launched = launch(
+                adapter,
+                &Paths {
+                    own_cli: Some(Path::new(cli)),
+                    account: Some(&account),
+                    ..paths(desk, None)
+                },
+            )
+            .unwrap();
+            assert_eq!(launched.program, Path::new(cli), "{adapter:?}");
+            assert_eq!(launched.args, args, "{adapter:?}");
+            let names: Vec<&OsString> = launched.env.iter().map(|(name, _)| name).collect();
+            assert_eq!(names, ["CODEX_HOME", "PATH", "HIDE_CAP_REF"], "{adapter:?}");
+        }
+        let codex = launch(
             AdapterId::CODEX,
             &Paths {
                 package: Some((
                     Path::new("/a/node_modules/@agentclientprotocol/codex-acp"),
                     Path::new("/usr/local/bin/node"),
                 )),
-                ..paths(desk, &home, None)
+                account: Some(&account),
+                ..paths(desk, None)
             },
-            "n1",
         )
         .unwrap();
-        assert!(
-            launch
-                .env
-                .contains(&(OsString::from("CODEX_HOME"), home.clone().into_os_string()))
-        );
-        let written: Vec<&Path> = launch
-            .files
-            .iter()
-            .map(|(path, ..)| path.as_path())
-            .collect();
         assert_eq!(
-            written,
-            [
-                home.join("config.toml").as_path(),
-                home.join("rules").join("hide-desk.rules").as_path()
-            ]
+            value(&codex, "CODEX_HOME").unwrap(),
+            OsString::from("/home/me/.codex")
         );
-        assert_eq!(
-            launch.links,
-            [(
-                PathBuf::from("/home/me/.codex/auth.json"),
-                home.join("auth.json")
-            )]
-        );
-    }
-
-    #[test]
-    fn an_agent_with_its_own_acp_mode_starts_its_cli_held_to_ask() {
-        let desk = Path::new("/state/desk");
-        let home = desk.join("codex");
-        let opencode = launch(
-            AdapterId::OPENCODE,
-            &Paths {
-                own_cli: Some(Path::new("/opt/bin/opencode")),
-                ..paths(desk, &home, None)
-            },
-            "n1",
-        )
-        .unwrap();
-        assert_eq!(opencode.program, Path::new("/opt/bin/opencode"));
-        assert_eq!(opencode.args, [OsString::from("acp")]);
-        let config: Value = serde_json::from_str(
-            value(&opencode, "OPENCODE_CONFIG_CONTENT")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(config["permission"]["*"], "ask");
-        assert_eq!(config["permission"]["read"], "allow");
-
-        let omp = launch(
-            AdapterId::OMP,
-            &Paths {
-                own_cli: Some(Path::new("/opt/bin/omp")),
-                ..paths(desk, &home, None)
-            },
-            "n1",
-        )
-        .unwrap();
-        let args: Vec<&str> = omp.args.iter().map(|arg| arg.to_str().unwrap()).collect();
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--approval-mode", "always-ask"])
-        );
-        assert!(args.windows(2).any(|pair| pair == ["--mode", "acp"]));
+        assert!(value(&codex, "INITIAL_AGENT_MODE").is_none());
 
         // Without its CLI the agent does not start.
-        assert!(launch(AdapterId::ANTIGRAVITY, &paths(desk, &home, None), "n1").is_err());
-    }
-
-    #[test]
-    fn an_agent_desk_cannot_hold_in_an_ask_mode_never_starts() {
-        let desk = Path::new("/state/desk");
-        let home = desk.join("codex");
-        assert_eq!(AdapterId::GROK.ask_mode(), None);
-        assert!(
-            launch(
-                AdapterId::GROK,
-                &Paths {
-                    own_cli: Some(Path::new("/opt/bin/grok")),
-                    ..paths(desk, &home, None)
-                },
-                "n1",
-            )
-            .is_err()
-        );
+        assert!(launch(AdapterId::ANTIGRAVITY, &paths(desk, None)).is_err());
     }
 }

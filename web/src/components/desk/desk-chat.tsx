@@ -1,8 +1,8 @@
 import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskPermissionLevel, DeskJob, DeskMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
-import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention } from "../../desk";
+import type { ApprovalWord, DeskAgent, DeskApproval, DeskItem, DeskJob, DeskMention, DeskNoticeKind, DeskOption, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import { approvalButtons, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, namedMention, rejects } from "../../desk";
 import { sentAttachment } from "../../deskComposer";
 import { useInterfaceTranslation } from "../../i18n/client";
 import type { DeskAttachment } from "../../snapshot";
@@ -154,10 +154,8 @@ const NOTICE: Record<Extract<DeskItem, { kind: "notice" }>["notice"], MessageKey
   preparing: "desk.notice.preparing",
   install_failed: "desk.notice.install_failed",
   login_needed: "desk.notice.login_needed",
-  blocked: "desk.notice.blocked",
   host_stopped: "desk.notice.host_stopped",
   resume_failed: "desk.notice.resume_failed",
-  no_ask_mode: "desk.notice.no_ask_mode",
   turn_failed: "desk.notice.turn_failed",
   attachments_gone: "desk.notice.attachments_gone",
 };
@@ -167,7 +165,6 @@ export type DeskNoticeAction = "retry" | "restart" | "reinstall";
 /** The one action that answers a notice, from its kind. */
 const NOTICE_ACTION: Partial<Record<DeskNoticeKind, DeskNoticeAction>> = {
   install_failed: "reinstall",
-  blocked: "retry",
   host_stopped: "restart",
   login_needed: "restart",
   turn_failed: "retry",
@@ -199,8 +196,8 @@ export function DeskNotice({ item, reason = failureReason(item.detail, null), se
   const { t } = useInterfaceTranslation();
   const turn = item.notice === "turn_failed";
   // The failed colour is the failed turn's alone, as Doop's DeskNotice draws it; a stopped host is neutral words, as its `stopped`.
-  const tone = turn ? "text-destructive" : item.notice === "blocked" || item.notice === "install_failed" ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground";
-  const failed = turn || item.notice === "blocked" || item.notice === "install_failed";
+  const tone = turn ? "text-destructive" : item.notice === "install_failed" ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground";
+  const failed = turn || item.notice === "install_failed";
   // The notice that stopped a held line always offers the restart that frees it, whatever its kind.
   const action = settled ? undefined : NOTICE_ACTION[item.notice] ?? (restartable ? "restart" : undefined);
   const key = turn && reason ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
@@ -237,35 +234,6 @@ const APPROVAL_CARD: Record<DeskApproval["card"], MessageKey> = {
   other: "desk.approval.card.other",
 };
 
-/** The card's kind in the words of the permission row it reads as: a `hide` line is `hide 명령`, not a shell command. */
-function cardLabel(item: DeskApproval): MessageKey {
-  return item.row === "hide" ? "desk.settings.permissions.hide" : APPROVAL_CARD[item.card];
-}
-
-const IRREVERSIBLE_WHY: Record<DeskIrreversible, MessageKey> = {
-  end_working_session: "desk.approval.why.endWorkingSession",
-  force_push: "desk.approval.why.forcePush",
-  delete_remote: "desk.approval.why.deleteRemote",
-  delete_outside: "desk.approval.why.deleteOutside",
-  overwrite_outside: "desk.approval.why.overwriteOutside",
-  unreadable: "desk.approval.why.unreadable",
-};
-
-/** The line under a card that says the level it asks under: what cannot be undone asks at every level, a row asks because of the level chosen. */
-const ALWAYS_NOTE: Record<DeskPermissionLevel | "mixed", MessageKey> = {
-  ask_all: "desk.approval.note.always.ask_all",
-  ask_changes: "desk.approval.note.always.ask_changes",
-  auto: "desk.approval.note.always.auto",
-  mixed: "desk.approval.note.always.mixed",
-};
-const ROW_NOTE: Record<DeskPermissionLevel | "mixed", MessageKey | null> = {
-  ask_all: "desk.approval.note.row.ask_all",
-  ask_changes: "desk.approval.note.row.ask_changes",
-  // A card asked before the level became 알아서 waits as it was asked.
-  auto: null,
-  mixed: "desk.approval.note.row.mixed",
-};
-
 /**
  * The command on a card, folded to two lines when it is longer, with `전체
  * 보기` that shows it whole and `접기` that folds it again.
@@ -300,60 +268,66 @@ function ApprovalCommand({ command }: { command: string }) {
   );
 }
 
-const ANSWERED: Record<Exclude<DeskApproval["state"], "waiting">, MessageKey> = {
-  allowed: "desk.approval.allowed",
-  allowed_conversation: "desk.approval.allowedConversation",
-  rejected: "desk.approval.rejected",
-  closed: "desk.approval.closed",
+/** The answered line's words: what was pressed, by the kind of the agent's option it was. */
+function answeredWord(item: DeskApproval): MessageKey {
+  switch (item.state) {
+    case "allowed":
+      return item.chosen === "allow_once" ? "desk.approval.allowed" : item.chosen === "allow_always" ? "desk.approval.allowedAlways" : "desk.approval.allowedPlain";
+    case "rejected":
+      return item.refusal ? "desk.approval.rejectedWithLine" : "desk.approval.rejected";
+    case "closed":
+    case "waiting":
+      return "desk.approval.closed";
+  }
+}
+
+const BUTTON_WORD: Record<ApprovalWord, MessageKey> = {
+  reject: "desk.approval.reject",
+  allow_always: "desk.approval.allowAlways",
+  allow_once: "desk.approval.allow",
 };
 
 /**
- * Hide asking before Desk's agent does something (D-52, D-82, D-83, D-75):
+ * What Desk's agent asks to run, waiting for the operator (D-92, frame A2 가):
  * the one `!` card without an agent mark, since it is Desk's own. It comes
- * for a row of Settings › Labs › Desk › 권한 set to 묻기, or for an irreversible
- * kind, which says so in its title and names what it is about. The command on
- * one grey block, folded to two lines when longer, the folder, Desk's reason,
- * the level it asks under at the foot's start, and grey answers, none the
- * default: `거절…` opens one line whose words go to Desk, `이 대화에서 계속
- * 허용` stops asking that row until the conversation ends and is not offered
- * on a card that always asks, `한 번 허용` runs this call. Once answered it
- * folds to one dim line: how it was answered and the command's start.
+ * under `에이전트대로` for each request the agent makes, and under `다 허용`
+ * only for one with no allow-once answer. The command on one grey block,
+ * folded to two lines when longer, the folder, Desk's reason when it gave
+ * one, and the agent's own answers as grey buttons, none the default
+ * (`approvalButtons`): `거절…` opens one line whose words go to Desk with the
+ * refusal, `항상 허용` and `한 번 허용` go to the agent as its own options, so
+ * what the agent keeps allowed is the agent's, as in the terminal. Every
+ * button names the agent's own option on hover. Once answered it folds to one
+ * dim line: how it was answered and the command's start.
  */
-export function DeskApprovalCard({ item, level = "auto", onAnswer, defaultRefusal }: { item: DeskApproval; /** The level under Desk's box, null for a table set row by row. */ level?: DeskPermissionLevel | null; onAnswer: (answer: DeskApprovalAnswer, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
+export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: DeskApproval; /** The agent's option pressed, with `거절…`'s line for a refusal. */ onAnswer: (option: string, text?: string) => void; /** Opens with `거절…`'s line already open and holding these words, for the gallery. */ defaultRefusal?: string }) {
   const { t } = useInterfaceTranslation();
-  const [refusing, setRefusing] = useState(defaultRefusal !== undefined);
+  const buttons = approvalButtons(item.options);
+  const firstReject = buttons.find(({ option }) => rejects(option))?.option ?? null;
+  const [refusing, setRefusing] = useState<DeskOption | null>(defaultRefusal !== undefined ? firstReject : null);
   const [line, setLine] = useState(defaultRefusal ?? "");
   if (item.state !== "waiting") {
-    const answered = item.state === "rejected" && item.refusal ? t("desk.approval.rejectedWithLine") : t(ANSWERED[item.state]);
     const Icon = APPROVAL_ICON[item.card];
     return (
-      <p className="flex min-w-0 items-center gap-xs text-micro text-muted-foreground" title={item.command} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-answered={item.state}>
+      <p className="flex min-w-0 items-center gap-xs text-micro text-muted-foreground" title={item.command} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-answered={item.state} data-desk-approval-chosen={item.chosen ?? undefined}>
         <Icon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" data-desk-approval-card={item.card} />
-        <span className="shrink-0">{answered}</span>
+        <span className="shrink-0">{t(answeredWord(item))}</span>
         <span aria-hidden="true">·</span>
         <span className="min-w-0 truncate font-mono">{item.command}</span>
       </p>
     );
   }
-  const irreversible = approvalIrreversible(item);
-  const note = irreversible.length > 0 ? ALWAYS_NOTE[level ?? "mixed"] : ROW_NOTE[level ?? "mixed"];
-  const refuse = () => onAnswer("reject", line.trim() || undefined);
+  const refuse = (option: DeskOption) => onAnswer(option.id, line.trim() || undefined);
   return (
-    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(cardLabel(item))} data-desk-item="approval" data-desk-approval={item.state} data-desk-approval-irreversible={irreversible.length > 0 ? "true" : undefined}>
+    <section className="flex min-w-0 flex-col gap-xs rounded-lg border border-border px-md py-sm" aria-label={t(APPROVAL_CARD[item.card])} data-desk-item="approval" data-desk-approval={item.state}>
       <p className="flex min-w-0 items-center gap-sm">
         <StatusMark mark="turn" />
-        <span className="font-medium text-foreground">{t(irreversible.length > 0 ? "desk.approval.irreversibleTitle" : "desk.approval.title")}</span>
-        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(cardLabel(item))}</span>
+        <span className="font-medium text-foreground">{t("desk.approval.title")}</span>
+        <span className="-ml-xs min-w-0 truncate text-caption text-muted-foreground">{t(APPROVAL_CARD[item.card])}</span>
       </p>
       {/* What follows the title starts where the title does, so the card reads as one item under its mark. */}
       <div className="flex min-w-0 flex-col gap-xs pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]">
       <ApprovalCommand command={item.command} />
-      {irreversible.map(({ kind, subject }) => (
-        <p key={kind} className="flex min-w-0 items-baseline gap-xs text-caption text-subtle-foreground" data-desk-approval-why={kind}>
-          <span className="shrink-0">{t(IRREVERSIBLE_WHY[kind])}</span>
-          {subject ? <><span aria-hidden="true">·</span><span className="min-w-0 truncate" title={subject}>{subject}</span></> : null}
-        </p>
-      ))}
       {item.folder ? (
         <p className="flex min-w-0 items-baseline gap-xs text-micro text-muted-foreground">
           <span className="shrink-0">{t("desk.approval.folder")}</span>
@@ -373,28 +347,30 @@ export function DeskApprovalCard({ item, level = "auto", onAnswer, defaultRefusa
             onChange={(event) => setLine(event.target.value)}
             onKeyDown={(event) => {
               if (composingKey(event)) return;
-              if (event.key === "Enter") { event.preventDefault(); refuse(); }
-              else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setRefusing(false); setLine(""); }
+              if (event.key === "Enter") { event.preventDefault(); refuse(refusing); }
+              else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setRefusing(null); setLine(""); }
             }}
           />
           <div className="flex flex-wrap items-center justify-end gap-xs">
-            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_plain" onClick={() => onAnswer("reject")}>{t("desk.approval.rejectPlain")}</Button>
-            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_send" onClick={refuse}>{t("desk.approval.rejectSend")}<CornerDownLeftIcon aria-hidden="true" /></Button>
+            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_plain" onClick={() => onAnswer(refusing.id)}>{t("desk.approval.rejectPlain")}</Button>
+            <Button variant="secondary" size="sm" data-desk-approval-answer="reject_send" onClick={() => refuse(refusing)}>{t("desk.approval.rejectSend")}<CornerDownLeftIcon aria-hidden="true" /></Button>
           </div>
         </div>
-      ) : (
+      ) : buttons.length > 0 ? (
         <div className="flex flex-wrap items-center justify-end gap-xs pt-xxs">
-          {note ? (
-            <span className="mr-auto flex min-w-0 items-center gap-xxs text-micro text-muted-foreground" data-desk-approval-level={level ?? "mixed"}>
-              <ShieldIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-              {t(note)}
-            </span>
-          ) : null}
-          <Button variant="secondary" size="sm" data-desk-approval-answer="reject" onClick={() => setRefusing(true)}>{t("desk.approval.reject")}</Button>
-          {irreversible.length === 0 ? <Button variant="secondary" size="sm" data-desk-approval-answer="conversation" onClick={() => onAnswer("conversation")}>{t("desk.approval.allowConversation")}</Button> : null}
-          <Button variant="secondary" size="sm" data-desk-approval-answer="once" onClick={() => onAnswer("once")}>{t("desk.approval.allow")}</Button>
+          {buttons.map(({ option, word }) => {
+            const label = word ? t(BUTTON_WORD[word]) : option.name;
+            // The button keeps its own word as its name; the hint adds the agent's own name for the option when the word is Hide's.
+            return (
+              <Hint key={option.id} label={option.name} active={word !== null}>
+                <Button variant="secondary" size="sm" aria-label={label} data-desk-approval-option={option.id} data-desk-approval-kind={option.kind} onClick={() => (rejects(option) ? setRefusing(option) : onAnswer(option.id))}>
+                  {label}
+                </Button>
+              </Hint>
+            );
+          })}
         </div>
-      )}
+      ) : null}
       </div>
     </section>
   );
@@ -423,7 +399,8 @@ export function DeskHandedLine({ session, handed, line, read, onOpen }: { sessio
 }
 
 export type DeskChatActions = DeskJobCardActions & {
-  onApproval: (id: number, answer: DeskApprovalAnswer, text?: string) => void;
+  /** The agent's option pressed on card `id`, with `거절…`'s line for a refusal. */
+  onApproval: (id: number, option: string, text?: string) => void;
   onQueuedRemove: (id: number) => void;
   onNoticeAction: (action: DeskNoticeAction, notice: Extract<DeskItem, { kind: "notice" }>) => void;
   onCopy: (text: string) => void;
@@ -469,10 +446,8 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `thinking`
  * shows until it starts.
  */
-export function DeskChat({ items, jobs, agents, level = "auto", queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
-  /** The level under Desk's box, which a waiting card says it asks under; null for a table set row by row. */
-  level?: DeskPermissionLevel | null;
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
@@ -499,8 +474,8 @@ export function DeskChat({ items, jobs, agents, level = "auto", queued = [], hel
             : item.kind === "reply" ? <div className="flex min-w-0 flex-col gap-xs"><DeskReplySteps thoughtMs={item.thought_ms} steps={item.steps} /><DeskReply text={item.text} stopped={item.state === "stopped" && !failsAfter(items, index)} mentions={replyMentions(item)} onMention={actions.onMention} /></div>
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
-            : item.kind === "approval" ? <DeskApprovalCard item={item} level={level} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
-            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(option, text) => actions.onApproval(item.id, option, text)} />
+            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && item.notice === "turn_failed") || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>

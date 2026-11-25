@@ -3388,23 +3388,19 @@ export type ProjectSuggestions = {
 /** An agent Desk talks to over ACP, by its kind name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
 export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp" | "agy";
 /** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
-export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
+export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
-export type DeskApprovalState = "waiting" | "allowed" | "allowed_conversation" | "rejected" | "closed";
-/** A Settings › Labs › Desk › 권한 row (D-82): `desk_permission_row`. */
-export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
-/** `desk_permission_answer`: 바로 or 묻기. */
-export type DeskPermissionAnswer = "run" | "ask";
-export type DeskPermissions = Record<DeskPermissionRow, DeskPermissionAnswer>;
-/** `desk_irreversible`: what always asks, whatever the rows say. */
-export type DeskIrreversible = "end_working_session" | "force_push" | "delete_remote" | "delete_outside" | "overwrite_outside" | "unreadable";
-/** A card's answer as `desk_approval` sends it (D-83): 한 번 허용, 이 대화에서 계속 허용, 거절. */
-export type DeskApprovalAnswer = "once" | "conversation" | "reject";
-/** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
-export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
+/** `desk_approval_state`: how a card was answered; `chosen` on the card says which kind of the agent's options was pressed. */
+export type DeskApprovalState = "waiting" | "allowed" | "rejected" | "closed";
+/** `desk_permission` (D-92): under Desk's box, `allow_all` (the default) answers every request with the agent's allow-once option, `agent` shows each request the agent makes as a card. */
+export type DeskPermission = "allow_all" | "agent";
+/** `desk_option_kind`: the kind ACP gives one of the agent's own options. */
+export type DeskOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always" | "other";
+/** One of the agent's own answers to a request, in the agent's order: `desk_approval` sends its `id` back. */
+export type DeskOption = { id: string; kind: DeskOptionKind; name: string };
 /** A message sent while a reply was being written, waiting for the turn before it whole: its words, chips and files (`attachments`, absent when it has none); `desk_queued_remove` takes it out, and none is in `items` until its turn starts. */
 export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[]; attachments?: DeskAttachment[] };
-export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed" | "attachments_gone";
+export type DeskNotice = "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "turn_failed" | "attachments_gone";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
 export type DeskMention = { kind: "session" | "project"; id: string; name: string };
@@ -3421,8 +3417,6 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
-  /** The rows of Settings › Labs › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
-  always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
   efforts: DeskChoice[];
@@ -3440,12 +3434,13 @@ export type DeskItem =
   | { kind: "switch"; id: number; from: DeskAgentId | null; to: DeskAgentId; carried: "all" | "trimmed" | "none" }
   | { kind: "model"; id: number; model: string | null; effort: string | null }
   /**
-   * A call Hide asked the operator about (D-83). `subject` is the session an
-   * archive ends or the path a deletion reaches; `refusal` is the line the
-   * operator sent with 거절.
+   * A request the agent made that waits for the operator (D-92): `options`
+   * are the agent's own answers in its order, `chosen` the kind of the one
+   * pressed (null on a card kept from before it was sent), and `refusal` the
+   * line the operator sent with 거절.
    */
-  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; /** The row of Settings › Labs › Desk › 권한 the request reads as, whose name is the card's kind; none on a card kept from before it was sent. */ row?: DeskPermissionRow | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
-  /** `detail` is the install's last line, the sign-in command for `login_needed`, the blocked call, or the agent's own reason for `turn_failed` when it gave one. */
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; options: DeskOption[]; state: DeskApprovalState; chosen: DeskOptionKind | null; refusal: string | null }
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
   | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean; agent_kind: string | null; mark: RowMark | null }
@@ -3649,7 +3644,7 @@ export type DeskSection = {
   conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
-  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
+  settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; /** How Desk answers its agent's requests, chosen under Desk's box (D-92). */ permission: DeskPermission };
   /** The panels' widths the core keeps (PRD desk-2-ui B23); which session, panel and tab show is the window's. */
   lane: DeskLane;
 };

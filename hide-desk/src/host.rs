@@ -129,15 +129,6 @@ impl Host {
     /// agent sends that no call waits for.
     pub fn start(launch: &Launch, sink: Sink) -> std::io::Result<Self> {
         std::fs::create_dir_all(&launch.cwd)?;
-        for (path, body, executable) in &launch.files {
-            write_file(path, body, *executable)?;
-        }
-        for (target, link) in &launch.links {
-            if let Some(parent) = link.parent() {
-                hide_platform::fs::private::create_dir_all(parent)?;
-            }
-            hide_platform::fs::link::replace_link(target, link)?;
-        }
         let mut command = Command::new(&launch.program);
         command
             .args(&launch.args)
@@ -257,18 +248,6 @@ fn drain(mut stderr: impl Read, tail: &Tail) {
             }
         }
     }
-}
-
-fn write_file(path: &std::path::Path, body: &str, executable: bool) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let access = if executable {
-        hide_platform::fs::Access::PrivateExecutable
-    } else {
-        hide_platform::fs::Access::Private
-    };
-    hide_platform::fs::atomic::write_file(path, body.as_bytes(), access).map(|_| ())
 }
 
 /// A variable kept by name, for a test to check what the child sees.

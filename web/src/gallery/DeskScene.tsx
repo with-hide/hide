@@ -27,7 +27,7 @@ import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { Separator } from "../components/ui/separator";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, DESK_PERMISSION_LEVELS, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermissions, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskPermission, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
 import { keepSent, mentionTree, type ComposerTray, type TrayFile } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -38,7 +38,7 @@ import { useShellStore } from "../store";
 import type { SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
-  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_UNREADABLE_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, menuSessions,
+  AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_CARD, PLAN_EXIT_OPTIONS, WAITING_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, MENTIONS, MENU_PROJECTS, menuSessions,
   mentionItems, missionItems, OUTPUTS, PICTURES, RECORD_THREAD, SESSION_VIEWS, SESSIONS, stateItems, statusItems, storyJobs, switchedItems, WORKER_THREAD,
 } from "./deskSceneData";
 
@@ -53,8 +53,8 @@ export const DESK_SCENES = [
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
   { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
-  { state: "permissions", label: "권한 단계: 알아서 ⌄ 메뉴를 연 모습 (피드백 1, A)" },
-  { state: "permissions-mixed", label: "권한 단계: 설정에서 줄마다 정함 (피드백 1, A)" },
+  { state: "permissions", label: "권한: 다 허용 ⌄ 메뉴를 연 모습 (피드백 1, A2)" },
+  { state: "permissions-agent", label: "권한: 에이전트대로를 고른 뒤 (피드백 1, A2)" },
   { state: "mention", label: "@ 메뉴: 부모만, 물어보는 자식은 펼침 (B18, B48)" },
   { state: "mention-open", label: "@ 메뉴: ▾ 하위 펼침 (B48)" },
   { state: "mention-search", label: "@리뷰: 부모 먼저, 그다음 하위 세션 (B48)" },
@@ -66,10 +66,10 @@ export const DESK_SCENES = [
   { state: "pane", label: "터미널로 ⌘J, 나도 참여 중 (B35, B36)" },
   { state: "mission", label: "미션: 지도 + 워커 스레드 (B34)" },
   { state: "outputs", label: "결과물 기준 (B30)" },
-  { state: "chat-states", label: "채팅 상태: 승인 답 (이 대화에서 계속 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
+  { state: "chat-states", label: "채팅 상태: 승인 답 (항상 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
-  { state: "settings", label: "Settings › Labs › Desk, 권한의 파일 수정을 묻기로 (B4, B19, B21, B46)" },
+  { state: "settings", label: "Settings › Labs › Desk (B4, B19, B21)" },
   { state: "settings-off", label: "Settings › Labs › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
 
@@ -116,12 +116,12 @@ function ChatHead() {
 }
 
 /** Desk's composer with its bar in the box's foot, as a scene sets them. */
-function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [], permissions = DESK_PERMISSION_LEVELS.auto }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | "permissions" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[]; permissions?: DeskPermissions }) {
+function ChatComposer({ agents = AGENTS, selection, menuOpen = null, value = "", mentions = [], answering = false, mention = null, files = [], permission = "allow_all" }: { agents?: DeskAgent[]; selection: DeskSelection; menuOpen?: "agent" | "permissions" | null; value?: string; mentions?: DeskMention[]; answering?: boolean; mention?: ReactNode; files?: TrayFile[]; permission?: DeskPermission }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState(value);
   return (
     <DeskComposer value={text} draft={{ text, mentions }} label={t("desk.composer.label")} placeholder={t("desk.composer.placeholder")} tray={sceneTray(files)} answering={answering} focused={mention !== null} menu={mention} menuOpen={mention !== null} onChange={setText} onSend={noop} onStop={noop}>
-      <DeskPermissionMenu permissions={permissions} open={menuOpen === "permissions" ? true : undefined} onLevel={noop} onPerRow={noop} />
+      <DeskPermissionMenu permission={permission} agent={agents.find((agent) => agent.id === selection.agent)?.label ?? null} open={menuOpen === "permissions" ? true : undefined} onPermission={noop} />
       <Separator orientation="vertical" className="mx-xxs data-[orientation=vertical]:h-(--size-icon)" />
       <DeskAgentBar agents={agents} selection={selection} open={menuOpen === "agent" ? "agent" : null} onAgent={noop} onModel={noop} onEffort={noop} onAgentSettings={noop} />
     </DeskComposer>
@@ -264,8 +264,8 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "permissions":
       body = <Room chat={chat(switchedItems(now), <ChatComposer selection={CLAUDE} menuOpen="permissions" />)} />;
       break;
-    case "permissions-mixed":
-      body = <Room chat={chat(switchedItems(now), <ChatComposer selection={CLAUDE} permissions={{ ...DESK_PERMISSION_LEVELS.auto, edit: "ask" }} />)} />;
+    case "permissions-agent":
+      body = <Room chat={chat(switchedItems(now), <ChatComposer selection={CLAUDE} permission="agent" />)} />;
       break;
     case "mention":
     case "mention-open":
@@ -371,7 +371,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "settings-off":
       sidebar = null;
       // On, one row set to 묻기 so both answers show; off is every default, 바로 on each row.
-      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: state === "settings" ? "ask" : "run" } }} agents={AGENTS} onChange={noop} /></div>;
+      body = <div className="w-(--size-settings-sheet-w) max-w-full p-xl"><DeskSettingsTab settings={{ enabled: state === "settings", default_agent: "claude", location: "desk", cap: 8, permission: "allow_all" }} agents={AGENTS} onChange={noop} /></div>;
       break;
   }
   return (
@@ -402,14 +402,14 @@ function CardStates() {
         ))}
         <h3 className="pt-sm text-micro text-muted-foreground">기존 세션에 맡김 (상태가 안 바뀜: 상자 없음)</h3>
         <DeskHandedLine session={SESSIONS.recordNow} handed line="갤러리 숫자 줄인 거 다크에서도 확인해줘" read onOpen={noop} />
-        <h3 className="pt-sm text-micro text-muted-foreground">에이전트 바꿈 · 막힘 · Desk 자신의 승인 (로고 없는 유일한 ! 카드) · 답한 승인</h3>
+        <h3 className="pt-sm text-micro text-muted-foreground">에이전트 바꿈 · Desk 자신의 승인 (로고 없는 유일한 ! 카드) · 답한 승인</h3>
         <DeskChat items={cardSceneItems()} jobs={{}} agents={AGENTS} {...CHAT_ACTIONS} />
         <h3 className="pt-sm text-micro text-muted-foreground">거절… 을 누르면 (한 줄은 Desk에게, 비우면 그냥 거절)</h3>
-        <DeskApprovalCard item={{ ...IRREVERSIBLE_CARD, id: 56 }} onAnswer={noop} defaultRefusal="대신 끝날 때까지 기다렸다가 보관해줘" />
-        <h3 className="pt-sm text-micro text-muted-foreground">긴 명령은 두 줄로 접힘 · 늘 묻는 일엔 이 대화에서 계속 허용이 없음 (피드백 1, A)</h3>
-        <DeskApprovalCard item={LONG_UNREADABLE_CARD} level="auto" onAnswer={noop} />
-        <h3 className="pt-sm text-micro text-muted-foreground">고칠 땐 묻기에서 셸 명령 카드</h3>
-        <DeskApprovalCard item={{ ...LONG_UNREADABLE_CARD, id: 58, command: "pnpm --dir web test desk-chat", asks: [{ kind: "row", value: "shell" }], subject: null }} level="ask_changes" onAnswer={noop} />
+        <DeskApprovalCard item={{ ...WAITING_CARD, id: 56 }} onAnswer={noop} defaultRefusal="빌드 말고 타입 검사만 돌려줘" />
+        <h3 className="pt-sm text-micro text-muted-foreground">긴 명령은 두 줄로 접힘</h3>
+        <DeskApprovalCard item={LONG_CARD} onAnswer={noop} />
+        <h3 className="pt-sm text-micro text-muted-foreground">같은 종류의 답이 여럿이면 에이전트가 붙인 이름 그대로 (Claude의 플랜 모드 나가기)</h3>
+        <DeskApprovalCard item={{ ...WAITING_CARD, id: 58, card: "other", command: "ExitPlanMode", folder: null, options: PLAN_EXIT_OPTIONS }} onAnswer={noop} />
       </div>
     </div>
   );

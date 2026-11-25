@@ -8,9 +8,9 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskPermissions, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskItem, DeskOption, DeskOptionKind, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
 
-export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
+export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalState, DeskChoice, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOption, DeskOptionKind, DeskOutput, DeskOutputKind, DeskPermission, DeskQueuedMessage, DeskSteps } from "./snapshot";
 
 export type DeskSelection = DeskSection["selection"];
 
@@ -117,22 +117,44 @@ export function failureReason(detail: string | null, reply: string | null): stri
  */
 export const DESK_REFUSAL_MAX = 600;
 
+/** The word Hide puts on one kind of the agent's options; `other` has none and shows the agent's own name. */
+export type ApprovalWord = "reject" | "allow_always" | "allow_once";
+
+/** One button of a waiting card: the agent's option, and Hide's word for it, or null where the agent's own name labels it. */
+export type ApprovalButton = { option: DeskOption; word: ApprovalWord | null };
+
+const APPROVAL_WORD: Record<DeskOptionKind, ApprovalWord | null> = {
+  reject_once: "reject",
+  reject_always: "reject",
+  allow_always: "allow_always",
+  allow_once: "allow_once",
+  other: null,
+};
+
+/** Where each word stands on the card, left to right: `거절…`, the agent's own others, `항상 허용`, `한 번 허용` last (D-92, frame A2 가). */
+const BUTTON_ORDER: Record<ApprovalWord | "other", number> = { reject: 0, other: 1, allow_always: 2, allow_once: 3 };
+
 /**
- * The irreversible kinds a card asks about, in the core's order, each with
- * what it is about: the core names one subject, the first kind's that has
- * one (an archived session's title, a path outside every project it
- * deletes or overwrites).
+ * A waiting card's buttons (D-92): every option the agent offers, none left
+ * out, ordered by `BUTTON_ORDER` and in the agent's order within a word. A
+ * button reads Hide's word for its kind unless another option reads the same
+ * word, as Claude's several `항상 허용` ways out of plan mode do; then each of
+ * those reads the agent's own name, so they can be told apart.
  */
-export function approvalIrreversible(item: DeskApproval): { kind: DeskIrreversible; subject: string | null }[] {
-  let subject = item.subject;
-  return item.asks.flatMap((ask) => {
-    if (ask.kind !== "irreversible") return [];
-    const takes = ask.value === "end_working_session" || ask.value === "delete_outside" || ask.value === "overwrite_outside";
-    const own = takes ? subject : null;
-    if (takes) subject = null;
-    return [{ kind: ask.value, subject: own }];
-  });
+export function approvalButtons(options: readonly DeskOption[]): ApprovalButton[] {
+  const words = options.map((option) => APPROVAL_WORD[option.kind]);
+  return options
+    .map((option, index) => {
+      const word = words[index] ?? null;
+      const shared = word !== null && words.filter((other) => other === word).length > 1;
+      return { option, word: shared ? null : word, at: BUTTON_ORDER[word ?? "other"], index };
+    })
+    .sort((left, right) => left.at - right.at || left.index - right.index)
+    .map(({ option, word }) => ({ option, word }));
 }
+
+/** Whether pressing the option refuses the request, which opens `거절…`'s one line first. */
+export const rejects = (option: DeskOption) => option.kind === "reject_once" || option.kind === "reject_always";
 
 /** One View of a session, before Desk keeps only its outputs (B30). */
 export type SessionViewKind = "image" | "page" | "pr" | "markdown" | "pdf" | "html" | "code" | "diff" | "log" | "hide_ai";
@@ -381,36 +403,9 @@ export const markedMention = (mention: DeskMention) => `@${mention.kind}(${menti
 /** A mention as a session's own words say it. */
 export const namedMention = (mention: DeskMention) => `@${mention.name}`;
 
-/** An agent Desk cannot be given (B4, D-79): one that cannot ask before acting, or one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
+/** An agent Desk cannot be given (B4, D-79): one Settings › Agents switched off. One not ready or not signed in can be picked and says so (B6). */
 export function agentPickable(agent: DeskAgent): boolean {
-  return agent.state !== "no_ask_mode" && agent.state !== "off";
-}
-
-/** The agents a row of Settings › Labs › Desk › 권한 cannot hold (`always_runs`), named on that row; one that cannot be chosen is left out. */
-export function agentsRunningUnasked(agents: readonly DeskAgent[], row: DeskPermissionRow): string[] {
-  return agents.filter((agent) => agentPickable(agent) && agent.always_runs.includes(row)).map((agent) => agent.label);
-}
-
-/**
- * The three levels under Desk's box (feedback 1, frame A), each a setting of
- * the core's permission table: `다 묻기` runs only reading, `고칠 땐 묻기` also
- * `hide` commands, `알아서` (the table's default) every row. What cannot be
- * undone asks whatever the level, since the core never reads it from the table.
- */
-export const DESK_PERMISSION_LEVELS = {
-  ask_all: { hide: "ask", read: "run", shell: "ask", edit: "ask" },
-  ask_changes: { hide: "run", read: "run", shell: "ask", edit: "ask" },
-  auto: { hide: "run", read: "run", shell: "run", edit: "run" },
-} as const satisfies Record<string, DeskPermissions>;
-
-export type DeskPermissionLevel = keyof typeof DESK_PERMISSION_LEVELS;
-
-export const DESK_PERMISSION_LEVEL_ORDER: readonly DeskPermissionLevel[] = ["ask_all", "ask_changes", "auto"];
-
-/** The level a table is, or null for a mix no level matches (`줄마다 정함`), set row by row in Settings. */
-export function deskPermissionLevel(permissions: DeskPermissions): DeskPermissionLevel | null {
-  const rows = Object.keys(permissions) as DeskPermissionRow[];
-  return DESK_PERMISSION_LEVEL_ORDER.find((level) => rows.every((row) => DESK_PERMISSION_LEVELS[level][row] === permissions[row])) ?? null;
+  return agent.state !== "off";
 }
 
 /** What the agent bar says beside an agent (D-81, B44): a ready agent's sign-in as Settings › Agents reads it, nothing while that is unread; otherwise its state. */

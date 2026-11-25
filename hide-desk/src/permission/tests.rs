@@ -1,5 +1,6 @@
-//! The permission table and the irreversible set, read against the PRD's
-//! own examples (Desk D-82, D-83, B46, B47) and the agents' request shapes.
+//! How Hide reads what Desk's agent asks: the agents' own request shapes,
+//! the card they become, and the `hide` line Hide answers itself under
+//! 에이전트대로 (PRD Desk D-92).
 
 use super::*;
 use serde_json::json;
@@ -7,23 +8,6 @@ use serde_json::json;
 const HIDE: &str = "/Applications/hide.app/Contents/Resources/hide";
 const WORK: &str = "/state/desk/work";
 const PROJECT: &str = "/r/herdr-ide";
-
-/// The core's facts: one project, and the sessions that work now.
-struct Known {
-    working: &'static [&'static str],
-}
-
-impl Facts for Known {
-    fn working(&self, agent: &str) -> bool {
-        self.working.contains(&agent)
-    }
-
-    fn in_project(&self, path: &str) -> bool {
-        hide_platform::path::wire_relative(PROJECT, path).is_ok_and(|below| !below.is_root())
-    }
-}
-
-const NONE_WORKING: Known = Known { working: &[] };
 
 fn place() -> Place<'static> {
     Place {
@@ -33,353 +17,76 @@ fn place() -> Place<'static> {
     }
 }
 
-fn command(line: &str) -> Action {
-    Action::Command {
-        command: line.to_owned(),
-        folder: None,
-        reason: Some("Why it runs".to_owned()),
-    }
+fn is_hide_line(line: &str) -> bool {
+    hide_line(line, &place())
 }
 
-fn reading(line: &str) -> Reading {
-    classify(&command(line), &place())
-}
+const POSIX: &[Syntax] = &[Syntax::Posix];
+/// What Windows reads a line in, checked on every system.
+const WINDOWS: &[Syntax] = &[Syntax::Posix, Syntax::PowerShell];
 
-fn asks_with(line: &str, table: &Table, facts: &Known, allowed: &BTreeSet<Row>) -> Vec<Ask> {
-    decide(&reading(line), table, facts, allowed).asks
-}
-
-/// What a line asks under the default table, nothing allowed yet.
-fn asks(line: &str) -> Vec<Ask> {
-    asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new())
-}
-
-const ALL_ASK: Table = Table {
-    hide: Answer::Ask,
-    read: Answer::Ask,
-    shell: Answer::Ask,
-    edit: Answer::Ask,
-};
+/// A letter's body as agents write it with a heredoc, which only a POSIX
+/// shell reads.
+const HEREDOCS: [&str; 2] = [
+    "hide request send a --intent i --body \"$(cat <<'EOF'\nrun `cargo test` first\nEOF\n)\"",
+    "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF",
+];
 
 #[test]
-fn every_row_runs_until_the_operator_changes_it_and_an_old_store_reads_as_that() {
-    assert_eq!(Table::default(), serde_json::from_value(json!({})).unwrap());
-    let table: Table = serde_json::from_value(json!({"shell": "ask"})).unwrap();
-    assert_eq!(table.answer(Row::Shell), Answer::Ask);
-    for row in [Row::Hide, Row::Read, Row::Edit] {
-        assert_eq!(table.answer(row), Answer::Run, "{row:?}");
-    }
-    assert_eq!(
-        serde_json::to_value(Table::default()).unwrap(),
-        json!({"hide": "run", "read": "run", "shell": "run", "edit": "run"})
-    );
-}
-
-#[test]
-fn the_prd_s_hide_lines_run_without_a_card_by_default() {
-    // B46's examples, and the ones the mockup's old card showed.
-    for line in [
+fn a_line_of_hide_commands_and_what_only_reads_their_output_is_hide_s_to_answer() {
+    // B46's examples, the ones the old card showed, and the shapes agents
+    // write a letter's body in, in both shells Windows may run.
+    let lines = [
         "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id, .name] | @tsv'",
         "hide ps | head -c 3000",
         "hide agent read agent-18238 --lines 80 2>&1 | tail -60",
         "hide task show agent-18399",
         "hide agent list; echo ---; hide ps",
-        "hide agent list && hide ps | sort | grep -v ended",
-        "hide mission show mission-1",
-        "hide stop",
+        "hide agent list && hide ps | sort -k2 | grep -v ended",
+        "hide mission show mission-1 >/dev/null || true",
+        "hide agent archive agent-3",
         &format!("{HIDE} inbox"),
         "hide request send a --intent i --body \"$(cat notes.md)\"",
-        "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF",
         "hide request send a --intent i --body 'use `hide task` here'",
-    ] {
-        assert_eq!(reading(line).row, Row::Hide, "{line}");
-        assert_eq!(asks(line), [], "{line}");
+    ];
+    for line in &lines {
+        assert!(hide_line_in(line, &place(), POSIX), "{line}");
+        assert!(hide_line_in(line, &place(), WINDOWS), "{line}");
+    }
+    for line in HEREDOCS {
+        assert!(hide_line_in(line, &place(), POSIX), "{line}");
+        // PowerShell has no heredoc, so on Windows the agent asks.
+        assert!(!hide_line_in(line, &place(), WINDOWS), "{line}");
     }
 }
 
 #[test]
-fn a_hide_line_that_writes_or_runs_more_than_reads_is_another_shell_command() {
+fn a_line_that_writes_runs_another_program_or_names_another_hide_is_the_agent_s_to_ask() {
     for line in [
         "hide agent list > agents.json",
         "hide agent list | tee agents.json",
         "hide agent list; touch x",
+        "hide agent list | sh",
+        "hide agent list | xargs rm",
         "PATH=/tmp hide agent list",
+        "env hide agent list",
         "/tmp/hide agent list",
+        "./hide agent list",
         "hide() { touch x; }; hide agent list",
         "hide agent list | sort -o sorted.txt",
+        "hide agent list | sort -ro sorted.txt",
+        "hide agent list | sort --compress-program=sh",
+        "hide request send a --body \"$(rm -rf /tmp/x)\"",
+        "hide request send a --body \"`touch y`\"",
+        "if true; then hide ps; fi",
+        "printf -v PATH /tmp; hide ps",
+        // Nothing of Hide's runs.
+        "echo hi",
+        "cat notes.md",
+        "",
     ] {
-        assert_eq!(reading(line).row, Row::Shell, "{line}");
+        assert!(!is_hide_line(line), "{line}");
     }
-    let shell_asks = Table {
-        shell: Answer::Ask,
-        ..Table::default()
-    };
-    assert_eq!(
-        asks_with(
-            "hide agent list > /r/herdr-ide/agents.json",
-            &shell_asks,
-            &NONE_WORKING,
-            &BTreeSet::new()
-        ),
-        [Ask::Row(Row::Shell)]
-    );
-    assert_eq!(
-        asks_with(
-            "hide agent list | jq .",
-            &shell_asks,
-            &NONE_WORKING,
-            &BTreeSet::new()
-        ),
-        []
-    );
-}
-
-#[test]
-fn each_row_set_to_ask_asks_for_its_own_actions() {
-    let read = Action::Read {
-        what: "/r/herdr-ide/README.md".into(),
-    };
-    let edit = Action::Edit {
-        paths: vec!["/r/herdr-ide/web/src/App.tsx".into()],
-        delete: false,
-        reason: None,
-    };
-    let other = Action::Other {
-        title: "Fetch https://example.com".into(),
-        reason: None,
-    };
-    for (action, row) in [
-        (command("hide agent list"), Row::Hide),
-        (command("rg -n desk_spawn /r/herdr-ide"), Row::Read),
-        (command("cat README.md | wc -l"), Row::Read),
-        (command("git -C /r/herdr-ide log --oneline -5"), Row::Read),
-        (read, Row::Read),
-        (command("touch notes.md"), Row::Shell),
-        (command("git commit -m x"), Row::Shell),
-        (other, Row::Shell),
-        (edit, Row::Edit),
-    ] {
-        let reading = classify(&action, &place());
-        assert_eq!(reading.row, row, "{action:?}");
-        assert_eq!(
-            decide(&reading, &Table::default(), &NONE_WORKING, &BTreeSet::new()).asks,
-            [],
-            "{action:?}"
-        );
-        assert_eq!(
-            decide(&reading, &ALL_ASK, &NONE_WORKING, &BTreeSet::new()).asks,
-            [Ask::Row(row)],
-            "{action:?}"
-        );
-    }
-}
-
-#[test]
-fn archiving_a_working_session_always_asks_and_an_ended_one_follows_the_hide_row() {
-    let working = Known {
-        working: &["agent-3"],
-    };
-    let line = "hide agent archive agent-3";
-    let decision = decide(
-        &reading(line),
-        &Table::default(),
-        &working,
-        &BTreeSet::new(),
-    );
-    assert_eq!(
-        decision.asks,
-        [Ask::Irreversible(Irreversible::EndWorkingSession)]
-    );
-    assert_eq!(decision.sessions, ["agent-3"]);
-    assert_eq!(
-        asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new()),
-        []
-    );
-    let hide_asks = Table {
-        hide: Answer::Ask,
-        ..Table::default()
-    };
-    assert_eq!(
-        asks_with(line, &hide_asks, &NONE_WORKING, &BTreeSet::new()),
-        [Ask::Row(Row::Hide)]
-    );
-    // Closing panes through Herdr names no session Hide can check.
-    assert_eq!(
-        asks("herdr pane close w1:p2"),
-        [Ask::Irreversible(Irreversible::EndWorkingSession)]
-    );
-}
-
-#[test]
-fn a_push_that_overwrites_the_remote_always_asks() {
-    for line in [
-        "git push -f",
-        "git push --force origin desk/x",
-        "git push --force-with-lease=main origin main",
-        "git push origin +main",
-        "git -C /r/herdr-ide push -uf origin x",
-        "command git push --force-if-includes",
-        "echo $(git push -f)",
-    ] {
-        assert_eq!(
-            asks(line),
-            [Ask::Irreversible(Irreversible::ForcePush)],
-            "{line}"
-        );
-    }
-    for line in [
-        "git push origin main",
-        "git push -u origin desk/x",
-        "git push --no-force-with-lease origin x",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-}
-
-#[test]
-fn deleting_outside_every_project_always_asks() {
-    let outside = [Ask::Irreversible(Irreversible::DeleteOutside)];
-    for line in [
-        "rm -rf /tmp/build",
-        "rm -rf build",
-        "rm -rf /r/herdr-ide",
-        "rm -rf /r/herdr-ide/../other",
-        "rm -rf ~/notes",
-        "rm -rf $TARGET",
-        "rm -- -weird",
-        "find /tmp -name '*.log' -delete",
-        "xargs rm < list.txt",
-        "git -C /tmp/x clean -fdx",
-        "cd /tmp && rm -rf x",
-        "unlink /r/herdr-ide-other/x",
-    ] {
-        assert_eq!(asks(line), outside, "{line}");
-    }
-    for line in [
-        "rm -rf /r/herdr-ide/build",
-        "cd /r/herdr-ide && rm -rf target web/dist",
-        "find /r/herdr-ide -name '*.o' -exec rm {} +",
-        "git -C /r/herdr-ide clean -fdx",
-        "git clean -n",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-    let decision = decide(
-        &reading("rm /r/herdr-ide/a /tmp/b"),
-        &Table::default(),
-        &NONE_WORKING,
-        &BTreeSet::new(),
-    );
-    assert_eq!(decision.outside.as_deref(), Some("/tmp/b"));
-    let removed = Action::Edit {
-        paths: vec!["/etc/hosts".into()],
-        delete: true,
-        reason: None,
-    };
-    assert_eq!(
-        decide(
-            &classify(&removed, &place()),
-            &Table::default(),
-            &NONE_WORKING,
-            &BTreeSet::new()
-        )
-        .asks,
-        outside
-    );
-}
-
-#[test]
-fn a_folder_the_agent_names_is_where_relative_paths_are() {
-    let in_project = Action::Command {
-        command: "rm -rf build".into(),
-        folder: Some(PROJECT.into()),
-        reason: None,
-    };
-    assert_eq!(
-        decide(
-            &classify(&in_project, &place()),
-            &Table::default(),
-            &NONE_WORKING,
-            &BTreeSet::new()
-        )
-        .asks,
-        []
-    );
-}
-
-#[test]
-fn a_program_hide_cannot_read_always_asks() {
-    for line in [
-        "$CMD agent list",
-        "`echo rm` -rf /",
-        "eval \"$LINE\"",
-        "env -S 'rm -rf /' x",
-        "echo 'unclosed",
-    ] {
-        assert!(
-            asks(line).contains(&Ask::Irreversible(Irreversible::Unreadable)),
-            "{line}"
-        );
-    }
-    // A command inside a command is read, to a depth.
-    assert_eq!(
-        asks("bash -c \"sh -c 'git push -f'\""),
-        [Ask::Irreversible(Irreversible::ForcePush)]
-    );
-    let deep = (0..=MAX_DEPTH).fold("hide ps".to_owned(), |inner, _| {
-        format!("echo \"$({inner})\"")
-    });
-    assert!(asks(&deep).contains(&Ask::Irreversible(Irreversible::Unreadable)));
-}
-
-#[test]
-fn what_the_operator_allowed_in_this_conversation_stops_asking_that_row_only() {
-    let mut allowed = BTreeSet::new();
-    allowed.insert(Row::Shell);
-    assert_eq!(
-        asks_with("touch notes.md", &ALL_ASK, &NONE_WORKING, &allowed),
-        []
-    );
-    assert_eq!(
-        asks_with("hide agent list", &ALL_ASK, &NONE_WORKING, &allowed),
-        [Ask::Row(Row::Hide)]
-    );
-    // A row allowed does not cover the irreversible kinds.
-    assert_eq!(
-        asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed),
-        [Ask::Irreversible(Irreversible::ForcePush)]
-    );
-    // Every row allowed still asks what cannot be undone.
-    allowed.extend([Row::Hide, Row::Read, Row::Edit]);
-    assert_eq!(
-        asks_with("git push -f", &ALL_ASK, &NONE_WORKING, &allowed),
-        [Ask::Irreversible(Irreversible::ForcePush)]
-    );
-    assert_eq!(
-        asks_with("rm -rf /tmp/x", &Table::default(), &NONE_WORKING, &allowed),
-        [Ask::Irreversible(Irreversible::DeleteOutside)]
-    );
-}
-
-#[test]
-fn a_card_asks_irreversible_kinds_before_its_row() {
-    assert_eq!(
-        asks_with(
-            "rm -rf /tmp/x; git push -f",
-            &ALL_ASK,
-            &NONE_WORKING,
-            &BTreeSet::new()
-        ),
-        [
-            Ask::Irreversible(Irreversible::ForcePush),
-            Ask::Irreversible(Irreversible::DeleteOutside),
-            Ask::Row(Row::Shell),
-        ]
-    );
-    assert_eq!(
-        serde_json::to_value(Ask::Irreversible(Irreversible::EndWorkingSession)).unwrap(),
-        json!({"kind": "irreversible", "value": "end_working_session"})
-    );
 }
 
 #[test]
@@ -400,50 +107,94 @@ fn a_turns_tool_calls_count_as_sessions_read_letters_and_starts() {
     );
 }
 
-fn options() -> Value {
+/// claude-agent-acp 0.99.1's options for a Bash call (`withOptionalUpdate`
+/// in its `permissions/options/shared.js`), in its order.
+fn claude_options() -> Value {
     json!([
         {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
-        {"optionId": "allow-always", "name": "Always", "kind": "allow_always"},
+        {"optionId": "allow-with-updates", "name": "Yes, and don't ask again for npm run commands", "kind": "allow_always"},
         {"optionId": "reject", "name": "No", "kind": "reject_once"}
     ])
 }
 
 #[test]
-fn claude_s_requests_are_read_with_their_reason_files_and_reads() {
-    let bash = read_request(
-        AdapterId::CLAUDE,
-        &json!({"toolCall": {"toolCallId": "t1", "kind": "execute", "title": "ls -la",
-            "rawInput": {"command": "ls -la", "description": "Why it runs"}},
-            "options": options()}),
+fn a_request_keeps_the_agent_s_options_as_it_names_them_in_its_order() {
+    let request = read_request(
+        &json!({"toolCall": {"toolCallId": "t1", "kind": "execute", "title": "npm run build",
+            "rawInput": {"command": "npm run build", "description": "Build the web"}},
+            "options": claude_options()}),
         None,
     );
-    assert_eq!(bash.allow_once(), Some("allow-once"));
-    let reading = classify(readable(&bash).unwrap(), &place());
-    assert_eq!(reading.card.command, "ls -la");
-    assert_eq!(reading.card.reason.as_deref(), Some("Why it runs"));
+    assert_eq!(
+        request.choices,
+        [
+            Choice {
+                id: "allow-once".into(),
+                kind: ChoiceKind::AllowOnce,
+                name: "Yes".into()
+            },
+            Choice {
+                id: "allow-with-updates".into(),
+                kind: ChoiceKind::AllowAlways,
+                name: "Yes, and don't ask again for npm run commands".into()
+            },
+            Choice {
+                id: "reject".into(),
+                kind: ChoiceKind::RejectOnce,
+                name: "No".into()
+            },
+        ]
+    );
+    assert_eq!(request.allow_once(), Some("allow-once"));
+    let card = card(&request.action, &place());
+    assert_eq!(
+        (
+            card.kind,
+            card.command.as_str(),
+            card.folder.as_deref(),
+            card.reason.as_deref()
+        ),
+        (
+            CardKind::Command,
+            "npm run build",
+            Some(WORK),
+            Some("Build the web")
+        )
+    );
+    // On the wire, the kind a later agent may add reads as `other`.
+    let unknown: Choice =
+        serde_json::from_value(json!({"id": "x", "kind": "allow_session", "name": "Session"}))
+            .unwrap();
+    assert_eq!(unknown.kind, ChoiceKind::Other);
+    assert_eq!(
+        serde_json::to_value(&request.choices[1]).unwrap(),
+        json!({"id": "allow-with-updates", "kind": "allow_always",
+            "name": "Yes, and don't ask again for npm run commands"})
+    );
+}
+
+#[test]
+fn claude_s_reads_and_edits_are_read_with_their_files() {
     let read = read_request(
-        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t2", "kind": "read", "title": "Read",
-            "locations": [{"path": "/r/herdr-ide/README.md"}]}, "options": options()}),
+            "locations": [{"path": "/r/herdr-ide/README.md"}]}, "options": claude_options()}),
         None,
     );
     assert_eq!(
         read.action,
-        Some(Action::Read {
+        Action::Read {
             what: "/r/herdr-ide/README.md".into()
-        })
+        }
     );
     let edit = read_request(
-        AdapterId::CLAUDE,
         &json!({"toolCall": {"toolCallId": "t3", "kind": "edit", "title": "Edit",
             "rawInput": {"file_path": "/r/web/src/PaneHeader.tsx"}},
-            "options": options()}),
+            "options": claude_options()}),
         None,
     );
-    let reading = classify(readable(&edit).unwrap(), &place());
-    assert_eq!(reading.row, Row::Edit);
-    assert_eq!(reading.card.kind, CardKind::Edit);
-    assert_eq!(reading.card.command, "/r/web/src/PaneHeader.tsx");
+    let card = card(&edit.action, &place());
+    assert_eq!(card.kind, CardKind::Edit);
+    assert_eq!(card.command, "/r/web/src/PaneHeader.tsx");
 }
 
 #[test]
@@ -453,66 +204,39 @@ fn codex_s_request_is_read_with_the_call_it_announced() {
         "kind": "execute", "title": "touch x",
         "rawInput": {"command": ["/bin/zsh", "-lc", "touch x"], "cwd": "/r"}});
     let request = read_request(
-        AdapterId::CODEX,
         &json!({"toolCall": {"toolCallId": "exec-1", "kind": "execute", "status": "pending"},
             "options": [{"optionId": "allow_once", "kind": "allow_once"},
                         {"optionId": "cancel", "kind": "reject_once"}]}),
         Some(&announced),
     );
-    let reading = classify(readable(&request).unwrap(), &place());
-    assert_eq!(reading.card.command, "touch x");
-    assert_eq!(reading.card.folder.as_deref(), Some("/r"));
-    assert_eq!(reading.row, Row::Shell);
-    assert_eq!(request.reject(), Some("cancel"));
+    let card = card(&request.action, &place());
+    assert_eq!(card.command, "touch x");
+    assert_eq!(card.folder.as_deref(), Some("/r"));
+    assert_eq!(request.allow_once(), Some("allow_once"));
 }
 
 #[test]
-fn a_request_hide_cannot_read_does_not_run() {
+fn a_request_hide_can_tell_little_of_is_still_a_card_named_as_the_agent_named_it() {
     let bare = read_request(
-        AdapterId::CODEX,
-        &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute"}, "options": options()}),
+        &json!({"toolCall": {"toolCallId": "exec-2", "kind": "execute", "title": "Run command"},
+            "options": claude_options()}),
         None,
     );
-    assert_eq!(bare.action, None);
-    assert_eq!(readable(&bare), None);
-    let no_once = read_request(
-        AdapterId::CLAUDE,
-        &json!({"toolCall": {"toolCallId": "t", "kind": "read"},
+    assert_eq!(
+        bare.action,
+        Action::Other {
+            title: "Run command".into(),
+            reason: None
+        }
+    );
+    let untitled = read_request(
+        &json!({"toolCall": {"toolCallId": "t", "kind": "fetch"},
             "options": [{"optionId": "always", "kind": "allow_always"}]}),
         None,
     );
-    assert_eq!(readable(&no_once), None);
-}
-
-#[test]
-fn pi_s_confirm_from_desk_s_extension_is_read_and_another_is_not() {
-    let confirm = |title: &str, message: &str| {
-        read_request(
-            AdapterId::PI,
-            &json!({"toolCall": {"toolCallId": "pi-ui-1", "kind": "other", "title": title,
-                "rawInput": {"method": "confirm", "title": title, "message": message}},
-                "options": [{"optionId": "yes", "kind": "allow_once"},
-                            {"optionId": "no", "kind": "reject_once"}]}),
-            None,
-        )
-    };
-    let bash = confirm(
-        crate::adapter::PI_CONFIRM_TITLE,
-        r#"{"hide_desk":1,"tool":"bash","input":{"command":"hide agent list | jq ."}}"#,
-    );
-    assert_eq!(classify(readable(&bash).unwrap(), &place()).row, Row::Hide);
-    let read = confirm(
-        crate::adapter::PI_CONFIRM_TITLE,
-        r#"{"hide_desk":1,"tool":"read","input":{"path":"notes.md"}}"#,
-    );
-    assert_eq!(classify(readable(&read).unwrap(), &place()).row, Row::Read);
-    let write = confirm(
-        crate::adapter::PI_CONFIRM_TITLE,
-        r#"{"hide_desk":1,"tool":"write","input":{"path":"notes.md","content":"x"}}"#,
-    );
-    assert_eq!(classify(readable(&write).unwrap(), &place()).row, Row::Edit);
-    let other = confirm("Delete branch?", "yes or no");
-    assert_eq!(readable(&other), None);
+    assert_eq!(card(&untitled.action, &place()).command, "fetch");
+    // No allowance for this one call: under 다 허용 the operator chooses.
+    assert_eq!(untitled.allow_once(), None);
 }
 
 #[test]
@@ -521,28 +245,16 @@ fn each_agent_s_own_request_for_a_command_or_an_edit_becomes_a_card() {
     // `touch x` and for writing notes.txt, measured on 2026-10-31.
     let options = json!([{"optionId": "once", "kind": "allow_once"},
                          {"optionId": "reject", "kind": "reject_once"}]);
-    let card = |adapter: AdapterId, call: Value| {
-        let request = read_request(
-            adapter,
-            &json!({"toolCall": call, "options": options.clone()}),
-            None,
-        );
-        let action = readable(&request).unwrap_or_else(|| panic!("{adapter:?}"));
-        classify(action, &place()).card
+    let card_of = |call: Value| {
+        let request = read_request(&json!({"toolCall": call, "options": options.clone()}), None);
+        card(&request.action, &place())
     };
-    for (adapter, raw) in [
-        (
-            AdapterId::OPENCODE,
-            json!({"command": "touch x", "cwd": "/r"}),
-        ),
-        (AdapterId::OMP, json!({"command": "touch x"})),
-        (
-            AdapterId::ANTIGRAVITY,
-            json!({"CommandLine": "touch x", "IsDaemon": false}),
-        ),
+    for raw in [
+        json!({"command": "touch x", "cwd": "/r"}),
+        json!({"command": "touch x"}),
+        json!({"CommandLine": "touch x", "IsDaemon": false}),
     ] {
-        let card = card(
-            adapter,
+        let card = card_of(
             json!({"toolCallId": "c1", "kind": "execute", "title": "touch x", "rawInput": raw}),
         );
         assert_eq!(
@@ -550,651 +262,19 @@ fn each_agent_s_own_request_for_a_command_or_an_edit_becomes_a_card() {
             (CardKind::Command, "touch x")
         );
     }
-    for adapter in [AdapterId::OPENCODE, AdapterId::ANTIGRAVITY] {
-        let card = card(
-            adapter,
-            json!({"toolCallId": "e1", "kind": "edit", "title": "notes.txt",
-                "locations": [{"path": "/r/notes.txt"}], "rawInput": {"Path": "/r/notes.txt"}}),
-        );
-        assert_eq!(
-            (card.kind, card.command.as_str()),
-            (CardKind::Edit, "/r/notes.txt")
-        );
-    }
-}
-
-const UNREADABLE: Ask = Ask::Irreversible(Irreversible::Unreadable);
-const OUTSIDE: Ask = Ask::Irreversible(Irreversible::DeleteOutside);
-
-#[test]
-fn code_a_shell_or_an_interpreter_runs_that_hide_does_not_read_always_asks() {
-    for line in [
-        "printf '%s' 'rm -f /fixture/outside/victim' | sh",
-        "sh script.sh",
-        "bash -s < steps.sh",
-        "bash <<EOF\nrm -f /fixture/outside/victim\nEOF",
-        "python3 -c 'import shutil; shutil.rmtree(\"/fixture/outside\")'",
-        "python3.12 tool.py",
-        "node -e 'require(\"fs\").rmSync(\"/fixture/outside\", {recursive: true})'",
-        "hide ps | awk '{system(\"rm -f /fixture/outside/victim\")}'",
-        "fish -c 'rm (pwd)/victim'",
-        "xargs sh < list.txt",
-        r"find . -name '*.sh' -exec sh {} \;",
-        "source ./setup.sh",
-        "git -c core.pager='rm -f /fixture/outside/victim' log",
-        "git --exec-path=/fixture/bin status",
-    ] {
-        assert!(asks(line).contains(&UNREADABLE), "{line}");
-    }
-    // A shell line given to `-c` is read like any other.
-    assert_eq!(asks("sh -c 'rm -f /fixture/outside/victim'"), [OUTSIDE]);
-    assert_eq!(asks("bash -c 'hide ps | head'"), []);
-}
-
-#[test]
-fn what_a_heredoc_body_substitutes_is_read_unless_its_end_word_is_quoted() {
-    for line in [
-        "cat <<EOF\n$(rm -f /fixture/outside/victim)\nEOF",
-        "cat <<-EOF\n\t`rm -f /fixture/outside/victim`\n\tEOF",
-        "hide request send a --intent i --body-file - <<EOF\nnote $(rm -rf /fixture/outside)\nEOF",
-    ] {
-        assert_eq!(asks(line), [OUTSIDE], "{line}");
-    }
-    for line in [
-        "cat <<'EOF'\n$(rm -f /fixture/outside/victim)\nEOF",
-        "cat <<\"EOF\"\n`rm -f /fixture/outside/victim`\nEOF",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-    // On Windows a backslash makes any line one Hide cannot read.
-    let escaped: &[Ask] = if cfg!(windows) { &[UNREADABLE] } else { &[] };
-    for line in [
-        "cat <<\\EOF\n$(rm -f /fixture/outside/victim)\nEOF",
-        "cat <<EOF\nonly \\$(text) here\nEOF",
-    ] {
-        assert_eq!(asks(line), escaped, "{line}");
-    }
-}
-
-#[test]
-fn a_program_named_by_path_or_run_with_a_changed_environment_always_asks() {
-    for line in [
-        "/fixture/bin/cat README.md",
-        "./cat README.md",
-        "hide ps | /fixture/bin/cat",
-        "PATH=/fixture/bin cat README.md",
-        "export PATH=/fixture/bin; cat README.md",
-        "path=(/fixture/bin $path); cat README.md",
-        "for PATH in /fixture/bin; do cat README.md; done",
-        "env PATH=/fixture/bin hide ps",
-        "LESSOPEN='|rm -f /fixture/outside/victim %s' less README.md",
-        "hash -p /fixture/bin/cat cat; cat README.md",
-        "{rm,-f,/fixture/outside/victim}",
-        "alias cat='rm -f /fixture/outside/victim'; cat x",
-    ] {
-        assert!(
-            asks(line).contains(&UNREADABLE) || asks(line).contains(&OUTSIDE),
-            "{line}"
-        );
-    }
-    // A loop's own lowercase variable changes no program.
-    assert_eq!(
-        asks("for id in agent-1 agent-2; do hide agent read $id --lines 20; done"),
-        []
+    let card = card_of(
+        json!({"toolCallId": "e1", "kind": "edit", "title": "notes.txt",
+        "locations": [{"path": "/r/notes.txt"}], "rawInput": {"Path": "/r/notes.txt"}}),
     );
     assert_eq!(
-        reading("for id in agent-1 agent-2; do hide agent read $id; done").row,
-        Row::Hide
+        (card.kind, card.command.as_str()),
+        (CardKind::Edit, "/r/notes.txt")
     );
 }
 
 #[test]
-fn a_line_that_sets_a_variable_is_judged_by_the_command_it_runs() {
-    // The operator's "Desk keeps asking": a value the agent keeps in a
-    // variable changes no program, so the line takes its command's row.
-    for (line, row) in [
-        ("F=/tmp/x; cat \"$F\"", Row::Read),
-        ("FOO=1 cat README.md", Row::Read),
-        ("NO_COLOR=1 rg desk /r/herdr-ide", Row::Read),
-        ("env FOO=1 cat README.md", Row::Read),
-        ("for F in a.md b.md; do wc -l \"$F\"; done", Row::Read),
-        ("GIT_PAGER=cat git log --oneline -5", Row::Read),
-        ("PAGER= git log --oneline -5", Row::Read),
-        ("ID=agent-1; hide agent read \"$ID\" --lines 20", Row::Hide),
-        ("export FOO=1; cat README.md", Row::Shell),
-        ("DIR=/r/herdr-ide; mkdir -p \"$DIR/notes\"", Row::Shell),
-        // Variables both shells read only as values.
-        ("LANG=C sort notes.md", Row::Read),
-        ("LC_ALL=C grep -c x notes.md", Row::Read),
-        ("COLUMNS=200 ls -l", Row::Read),
-        // `printf` sets only the variable after `-v`; brackets in what it
-        // prints are words, not a table's element.
-        ("printf '%s' 'items[0]'", Row::Read),
-        ("printf -v OUT '%s' x; echo \"$OUT\"", Row::Read),
-        ("[ \"$a\" = \"$b\" ] && echo same", Row::Read),
-    ] {
-        assert_eq!(reading(line).row, row, "{line}");
-        assert_eq!(asks(line), [], "{line}");
-    }
-    // What the command does that cannot be undone still asks, and only that.
-    assert_eq!(asks("FOO=1 rm -f /fixture/outside/victim"), [OUTSIDE]);
-    assert_eq!(asks("F=/r/herdr-ide/a.md; rm -f \"$F\""), [OUTSIDE]);
-    assert_eq!(
-        asks("GIT_PAGER='rm -f /fixture/outside/victim' git log"),
-        [OUTSIDE]
-    );
-}
-
-#[test]
-fn a_variable_that_chooses_what_runs_or_a_line_hide_cannot_read_still_asks() {
-    for line in [
-        // Which program a name runs, what it loads, where a path leads.
-        "Path=/fixture/bin; cat README.md",
-        "LD_PRELOAD=/fixture/lib.so cat README.md",
-        "DYLD_INSERT_LIBRARIES=/fixture/lib.dylib cat README.md",
-        "CDPATH=/fixture; cd outside; cat README.md",
-        // git's repository and configuration may name a program it runs.
-        "GIT_DIR=/fixture/outside/.git git status",
-        "GIT_CONFIG_PARAMETERS=\"'core.pager=sh'\" git log",
-        "RIPGREP_CONFIG_PATH=/fixture/rg.conf rg desk",
-        // The Hide a `hide` command reaches is not the one the core knows.
-        "HIDE_STATE_DIR=/fixture/state hide agent list",
-        // The shell's own tables of what a name runs, set through a
-        // variable: bash(1) Shell Variables `BASH_CMDS`, `BASH_ALIASES`, and
-        // the zsh/parameter module's `commands`, `functions`, `aliases`.
-        "printf -v 'BASH_CMDS[cat]' /bin/rm; cat /fixture/outside/victim",
-        "read -r 'BASH_CMDS[cat]' <<< /bin/rm; cat x",
-        "printf -v 'BASH_ALIASES[cat]' 'rm -f'; cat x",
-        "BASH_CMDS=([cat]=/bin/rm); cat x",
-        "printf -v 'commands[cat]' /bin/rm; cat x",
-        "typeset 'functions[cat]=rm -f /fixture/outside/victim'; cat x",
-        "declare 'aliases[cat]=rm'; cat x",
-        "fpath=(/fixture/functions); cat x",
-        // What zsh runs on its own: for a line of redirections alone, and
-        // on a change of folder (zshparam(1), zshmisc(1)).
-        "NULLCMD=sh; <<<'rm -rf /fixture/outside/victim'",
-        "READNULLCMD=sh; < notes.md",
-        "chpwd_functions=(cleanup); cd notes",
-        // A name made to stand for another variable may stand for any.
-        "declare -n P=PATH; P=/fixture/bin; cat x",
-        "local -n table=BASH_CMDS; cat x",
-        // zsh's `set -A` sets an array (zshbuiltins(1)).
-        "set -A path /fixture/bin; cat x",
-        "set -A commands cat /bin/rm; cat /fixture/outside/victim",
-        // Arithmetic that sets one.
-        "let PATH=1; cat x",
-        // A program another one runs, set to one Hide cannot read or to a
-        // value it does not see.
-        "EDITOR=vim git commit",
-        "PAGER+=' -R' git log",
-        "read PAGER; git log",
-        "export GIT_PAGER; git log",
-        // A line Hide cannot read at all.
-        "cat \"README.md",
-        "CMD='cat README.md'; eval \"$CMD\"",
-        "bash <<'EOF'\ncat README.md\nEOF",
-    ] {
-        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
-        assert_eq!(reading(line).row, Row::Shell, "{line}");
-    }
-}
-
-#[cfg(windows)]
-#[test]
-fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
-    // PowerShell's `rm -r C:\work\x` read as POSIX would delete
-    // `C:workx` below the folder it runs in.
-    let line = r"cd /r/herdr-ide; rm -r C:\work\x";
-    assert!(asks(line).contains(&UNREADABLE), "{:?}", asks(line));
-}
-
-#[test]
-fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_harmless() {
-    // bash(1) `set -k`: every `NAME=value` among a command's arguments
-    // becomes its environment, so `git diff` would run an external diff.
-    for line in [
-        "set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
-        "set -ek; git diff GIT_EXTERNAL_DIFF='echo X;'",
-        "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
-        "builtin set -k; git diff GIT_EXTERNAL_DIFF='echo X;'",
-        // The same options given to a shell it starts (bash(1) OPTIONS).
-        "bash -k -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
-        "bash -kc \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
-        "sh -o keyword -c \"git diff GIT_EXTERNAL_DIFF='echo X;'\"",
-        "bash -O expand_aliases -c 'cat x'",
-        "bash --rcfile /fixture/rc -c 'cat x'",
-        "set -a; cat x",
-        "set -e -o pipefail -o keyword; cat x",
-        "set -f; cat x",
-        "shopt -s expand_aliases; cat x",
-        "shopt -u sourcepath; cat x",
-        // zsh: setopt(1) `KEYWORD_ARGS` is `set -k`; `emulate ksh` turns
-        // on ksh's options.
-        "setopt KEYWORD_ARGS; git diff GIT_EXTERNAL_DIFF='echo X;'",
-        "unsetopt function_argzero; cat x",
-        "emulate ksh; cat x",
-        // What a name runs, and what runs on a signal or on exit.
-        "alias cat='rm -f'; cat x",
-        "unalias ls; ls",
-        "trap 'rm -rf /fixture/outside/victim' EXIT; cat x",
-        "enable -n cd; cat x",
-        "zmodload zsh/files; cat x",
-        "autoload -U compinit; cat x",
-    ] {
-        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
-        assert_eq!(reading(line).row, Row::Shell, "{line}");
-    }
-    for line in [
-        "set -euo pipefail; cat x",
-        "set -x; cat x",
-        "set +e; cat x",
-        "set -o errexit -o nounset; cat x",
-        "set +o xtrace; cat x",
-        "set -- -k a; cat x",
-        "set -A items -k a; cat x",
-        "shopt; cat x",
-        "shopt -q extglob; cat x",
-        "shopt -p; cat x",
-        "bash -c 'cat x'",
-        "bash -ec 'cat x'",
-        "bash -euo pipefail -c 'cat x'",
-        "bash -lc 'cat x'",
-        "bash --login -c 'cat x'",
-        "hash; cat x",
-    ] {
-        assert_eq!(reading(line).row, Row::Read, "{line}");
-        assert!(asks(line).is_empty(), "{line}: {:?}", asks(line));
-    }
-}
-
-#[test]
-fn an_expansion_that_may_assign_asks_unless_its_name_reads_exactly_since_unreadable_is_the_safe_side()
- {
-    // An assignment inside an expansion, in any word, redirection or
-    // here-document body (bash(1) Parameter Expansion `${NAME:=word}` and
-    // `${NAME=word}`, zshexpn(1) `${NAME::=word}`, arithmetic in both).
-    for line in [
-        ": \"${BASH_CMDS[cat]:=/bin/rm}\"; cat /fixture/outside/victim",
-        "echo \"${BASH_CMDS[cat]:=/bin/rm}\" >/dev/null; cat x",
-        ": ${PATH::=/fixture/bin}; cat x",
-        ": ${PATH=/fixture/bin}; cat x",
-        ": ${commands[cat]::=/bin/rm}; cat x",
-        "cat <<EOF\n${PATH:=/fixture/bin}\nEOF",
-        ": $((BASH_CMDS[cat] = 1)); cat x",
-        ": $[PATH<<=1]; cat x",
-        // A name Hide cannot read exactly: zsh's flags, bash's indirection,
-        // a nested expansion, an element named by an expansion.
-        ": ${(P)name::=/fixture/bin}; cat x",
-        ": ${!ref:=/fixture/bin}; cat x",
-        ": ${${PATH::=/fixture/bin}}; cat x",
-        ": ${BASH_CMDS[$key]:=/bin/rm}; cat x",
-    ] {
-        assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
-        assert_eq!(reading(line).row, Row::Shell, "{line}");
-    }
-    // A name read exactly that sets a value is judged by the command.
-    for line in [
-        ": \"${OUT:=notes.md}\"; cat \"$OUT\"",
-        "echo \"${HOME:-/tmp}\" \"${PATH%%:*}\"",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-        assert_eq!(reading(line).row, Row::Read, "{line}");
-    }
-}
-
-#[test]
-fn a_relative_delete_is_judged_in_every_folder_the_shell_may_be_in_then() {
-    for line in [
-        // A subshell's `cd` ends with it.
-        "cd /fixture/outside; (cd /r/herdr-ide); rm -f victim",
-        "cd /fixture/outside && (cd /r/herdr-ide) && rm -f victim",
-        // A `cd` may fail, and what follows `;` or `||` runs anyway.
-        "cd /r/herdr-ide/missing; rm -f victim",
-        "cd /r/herdr-ide || rm -f victim",
-        "cd /fixture/outside || cd /r/herdr-ide && rm -f victim",
-        // A loop or `eval` may move the shell anywhere.
-        "cd /r/herdr-ide && for d in a b; do cd $d; done; rm -f victim",
-        "cd /r/herdr-ide && eval cd /fixture/outside && rm -f victim",
-        // `env` runs a program named `cd`, which leaves the shell's folder.
-        "env cd /r/herdr-ide && rm -f victim",
-        // A pattern in a folder's name may match a link.
-        "rm -f /r/herdr-ide/*/victim",
-        "rm -f /r/herdr-ide/{a,../../fixture/outside}/victim",
-    ] {
-        assert_eq!(asks(line), [OUTSIDE], "{line}");
-    }
-    for line in [
-        "cd /r/herdr-ide && rm -rf target web/dist",
-        "(cd /r/herdr-ide && rm -rf target)",
-        "cd /r/herdr-ide && cd ./web && rm -rf dist",
-        "cd /r/herdr-ide && command cd ./web/src && rm -f old.ts",
-        "rm -f /r/herdr-ide/*.log",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-}
-
-#[test]
-fn a_delete_after_a_command_that_may_make_a_link_cannot_be_named() {
-    for line in [
-        "ln -s /fixture/outside /r/herdr-ide/link && rm -f /r/herdr-ide/link/victim",
-        "rm -f /r/herdr-ide/link/victim | ln -s /fixture/outside /r/herdr-ide/link",
-        "git checkout links && rm -rf /r/herdr-ide/link/",
-        "echo $(ln -s /fixture/outside /r/herdr-ide/link); rm -f /r/herdr-ide/link/victim",
-    ] {
-        assert_eq!(asks(line), [OUTSIDE], "{line}");
-    }
-    // What only reads, deletes or makes folders and files makes no link.
-    assert_eq!(
-        asks(
-            "ls /r/herdr-ide && rm -rf /r/herdr-ide/build && mkdir /r/herdr-ide/build && rm -f /r/herdr-ide/build/x"
-        ),
-        []
-    );
-}
-
-/// The core's facts about one project on this machine's disk.
-struct OnDisk {
-    project: String,
-}
-
-impl Facts for OnDisk {
-    fn working(&self, _: &str) -> bool {
-        false
-    }
-
-    fn in_project(&self, path: &str) -> bool {
-        hide_platform::path::wire_relative(&self.project, path).is_ok_and(|below| !below.is_root())
-    }
-}
-
-#[test]
-fn a_delete_through_a_link_is_judged_where_the_link_leads() {
-    let root = tempfile::tempdir().unwrap();
-    let wire = |path: &Path| hide_platform::path::to_wire_lossy(path);
-    let project = root.path().join("project");
-    let outside = root.path().join("outside");
-    std::fs::create_dir_all(project.join("real")).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
-    hide_platform::fs::link::create_link(&outside, &project.join("link")).unwrap();
-    let facts = OnDisk {
-        project: wire(&hide_platform::fs::identity::canonical(&project).unwrap()),
-    };
-    // The paths are written as the operator's shell names them, which may
-    // itself pass through a link (macOS's temporary folder does).
-    let project = wire(&project);
-    let asks = |line: &str| {
-        let mut reading = reading(line);
-        follow_links(&mut reading);
-        decide(&reading, &Table::default(), &facts, &BTreeSet::new()).asks
-    };
-    for line in [
-        format!("rm -f {project}/link/victim"),
-        format!("rm -rf {project}/link/"),
-        format!("cd {project}/link && rm -f victim"),
-        format!("rm -rf {project}/link/../victim"),
-        format!("find {project}/link -name '*.log' -delete"),
-        format!("git -C {project}/link clean -fdx"),
-    ] {
-        assert_eq!(asks(&line), [OUTSIDE], "{line}");
-    }
-    // Writing a name that is a link writes where it leads.
-    std::fs::write(outside.join("file"), "").unwrap();
-    hide_platform::fs::link::create_link(
-        &outside.join("file"),
-        &Path::new(&project).join("real").join("file-link"),
-    )
-    .unwrap();
-    for line in [
-        format!("echo x > {project}/link/victim"),
-        format!("echo x > {project}/real/file-link"),
-        format!("cd {project}/link && cp /dev/null victim"),
-    ] {
-        assert_eq!(asks(&line), [OVERWRITE], "{line}");
-    }
-    assert_eq!(asks(&format!("echo x > {project}/real/notes.md")), []);
-    for line in [
-        // Deleting the link removes the link, inside the project.
-        format!("rm -f {project}/link"),
-        format!("rm -rf {project}/real/victim {project}/new/victim"),
-        format!("cd {project}/real && rm -f ../victim"),
-    ] {
-        assert_eq!(asks(&line), [], "{line}");
-    }
-}
-
-const OVERWRITE: Ask = Ask::Irreversible(Irreversible::OverwriteOutside);
-const REMOTE: Ask = Ask::Irreversible(Irreversible::DeleteRemote);
-
-#[test]
-fn overwriting_or_moving_a_file_outside_every_project_always_asks() {
-    // The second review's inputs and D-90's list.
-    for line in [
-        "echo x > /fixture/outside/victim",
-        "echo x >> /fixture/outside/victim",
-        "echo x &> /fixture/outside/victim",
-        "echo x >| /fixture/outside/victim",
-        "cp /dev/null /fixture/outside/victim",
-        "cp -t /fixture/outside /r/herdr-ide/a",
-        "truncate -s0 /fixture/outside/victim",
-        "dd if=/dev/zero of=/fixture/outside/victim",
-        "hide ps | tee /fixture/outside/victim",
-        "mv /fixture/outside/victim /r/herdr-ide/v",
-        "mv /r/herdr-ide/v /fixture/outside/victim",
-        "install -m 644 /r/herdr-ide/a /fixture/outside/victim",
-        "ln -sf /r/herdr-ide/a /fixture/outside/victim",
-        "sort -o /fixture/outside/victim /r/herdr-ide/a",
-        "uniq /r/herdr-ide/a /fixture/outside/victim",
-        "find /r/herdr-ide -fprint /fixture/outside/victim",
-        "git log --output=/fixture/outside/victim",
-        // Judged where it lands, as a deletion is.
-        "cd /fixture/outside && echo x > victim",
-        "echo x > /r/herdr-ide/../../fixture/outside/victim",
-        "echo x > $HOME/victim",
-        // Desk's own folder is no project.
-        "hide agent list > agents.json",
-    ] {
-        assert_eq!(asks(line), [OVERWRITE], "{line}");
-    }
-    for line in [
-        "echo x > /r/herdr-ide/notes.md",
-        "cd /r/herdr-ide && cp a b && echo x >> b",
-        "cat < /fixture/outside/victim",
-        "hide agent list 2>/dev/null",
-        // A new link outside replaces nothing.
-        "ln -s /r/herdr-ide/a /fixture/outside/new",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-    assert_eq!(reading("cat < /fixture/outside/victim").row, Row::Read);
-    let edit = |path: &str| {
-        let reading = classify(
-            &Action::Edit {
-                paths: vec![path.into()],
-                delete: false,
-                reason: None,
-            },
-            &place(),
-        );
-        decide(&reading, &Table::default(), &NONE_WORKING, &BTreeSet::new()).asks
-    };
-    assert_eq!(edit("/fixture/outside/victim"), [OVERWRITE]);
-    assert_eq!(edit("/r/herdr-ide/web/src/App.tsx"), []);
-}
-
-#[test]
-fn deleting_a_remote_branch_or_tag_always_asks() {
-    for line in [
-        "git push origin :main",
-        "git push origin :refs/tags/v1",
-        "git push --delete origin main",
-        "git push -d origin v1",
-        "git push --prune origin",
-        "git -C /r/herdr-ide push origin +:main",
-    ] {
-        assert!(asks(line).contains(&REMOTE), "{line}");
-    }
-    assert_eq!(
-        asks("bash -lc 'cd /r/herdr-ide && git push --mirror'"),
-        [Ask::Irreversible(Irreversible::ForcePush), REMOTE]
-    );
-    for line in [
-        "git push origin main",
-        "git push -u origin x",
-        "git push origin main:main",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-    }
-}
-
-#[test]
-fn a_program_hide_does_not_know_always_asks_whatever_it_runs() {
-    // The second review's inputs (D-89): a program that runs its words as a
-    // command, a shell keyword that hides the command after it, a function
-    // and a read-only command's option that runs a command.
-    for line in [
-        "caffeinate -i rm -f /fixture/outside/victim",
-        "arch -arm64 rm -f /fixture/outside/victim",
-        "script -q /dev/null rm -f /fixture/outside/victim",
-        "flock /tmp/l rm -f /fixture/outside/victim",
-        "setsid rm -f /fixture/outside/victim",
-        "watch rm -f /fixture/outside/victim",
-        "ionice -c3 rm -f /fixture/outside/victim",
-        "parallel rm -f ::: /fixture/outside/victim",
-        "fd . /r/herdr-ide -x rm -f /fixture/outside/victim",
-        "git rebase --exec 'rm -f /fixture/outside/victim' HEAD~1",
-        "git submodule foreach 'rm -f /fixture/outside/victim'",
-        "tar -xf a.tar --to-command='rm -f /fixture/outside/victim'",
-        "rsync -e 'sh -c \"rm -f /fixture/outside/victim\"' a b:c",
-        "vim -c ':!rm -f /fixture/outside/victim'",
-        "time -p rm -f /fixture/outside/victim",
-        "coproc rm -f /fixture/outside/victim",
-        "git grep -O'rm -f /fixture/outside/victim #' hello",
-        "git grep --open-files-in-pager='rm -f /fixture/outside/victim #' hello",
-        "git diff --ext-diff",
-        "git log -p --textconv",
-        // Any other program, alias or setting that may name one.
-        "cargo test",
-        "make",
-        "npm run build",
-        "sudo ls",
-        "nohup ls",
-        "exec ls",
-        "trap 'rm -f /fixture/outside/victim' EXIT",
-        "alias ls='rm -f /fixture/outside/victim'",
-        "git st",
-        "git config alias.st '!rm -f /fixture/outside/victim'",
-        "git -C /r/herdr-ide merge -s mine main",
-        "git fetch --upload-pack='rm -f /fixture/outside/victim' origin",
-        "git push --receive-pack='rm -f /fixture/outside/victim' origin main",
-        "herdr pane run w1:p1 ls",
-        "sort --compress-program=gzip notes.md",
-        "mapfile -C 'rm -f /fixture/outside/victim' lines",
-        "sed -i 's/a/b/' notes.md",
-        "sed 's/x/rm -f \\/fixture\\/outside\\/victim/e' notes.md",
-        "sed -n 'w /fixture/outside/victim' notes.md",
-        "env -P /tmp ls",
-        "env -S 'rm -f /fixture/outside/victim'",
-        "nice --unknown rm -f victim",
-        // Words from the input may be any option.
-        "ls | xargs git",
-        "ls | xargs -I{} fd {} .",
-        "ls | xargs bash",
-    ] {
-        assert_eq!(asks(line), [UNREADABLE], "{line}");
-    }
-    // A function's body runs wherever a later word names it.
-    for line in [
-        "function cat { rm -f /fixture/outside/victim; }; cat x",
-        "cat() (rm -f /fixture/outside/victim); cat x",
-        "f() { cd /fixture/outside; }; cd /r/herdr-ide && f && rm -f victim",
-    ] {
-        assert!(asks(line).contains(&UNREADABLE), "{line}");
-    }
-}
-
-#[test]
-fn a_program_hide_knows_is_read_with_its_words() {
-    // Reads, printed with a script of line numbers only.
-    for line in [
-        "sed -n '1,80p' README.md",
-        "sed -n -e '10q' README.md",
-        "git config --get user.name",
-        "git remote -v",
-        "git stash list",
-        "git log --oneline -5 | head",
-        "git diff -Oorder.txt",
-        "fd -e rs desk /r/herdr-ide",
-        "ls | xargs wc -l",
-        "hide agent list | jq -r '.[]' | xargs -I{} hide agent read {}",
-    ] {
-        assert_eq!(
-            asks_with(line, &Table::default(), &NONE_WORKING, &BTreeSet::new()),
-            [],
-            "{line}"
-        );
-        assert_ne!(reading(line).row, Row::Shell, "{line}");
-    }
-    // Changes Hide knows: the `그 밖의 셸 명령` row, no irreversible kind.
-    for line in [
-        "mkdir -p notes && touch notes/a.md",
-        "cp /r/herdr-ide/a.md /r/herdr-ide/b.md",
-        "cd /r/herdr-ide && mv a.md b.md",
-        "git commit -m x",
-        "git checkout -b desk/x",
-        "git -C /r/herdr-ide merge -s ours main",
-        "export lower=1",
-    ] {
-        assert_eq!(asks(line), [], "{line}");
-        assert_eq!(reading(line).row, Row::Shell, "{line}");
-    }
-    // What a wrapper runs is read as a command of its own.
-    for line in [
-        "nice -n 5 rm -f /fixture/outside/victim",
-        "timeout --signal KILL 5 rm -f /fixture/outside/victim",
-        "env -C /fixture/outside rm -f victim",
-        "env --chdir=/fixture/outside rm -f victim",
-        "ls | xargs rm -f",
-        "git --work-tree=/fixture/outside clean -fdx",
-        "git -C /fixture/outside rm -r .",
-        "git worktree remove --force /fixture/outside/wt",
-    ] {
-        assert_eq!(asks(line), [OUTSIDE], "{line}");
-    }
-    // An archive whose session comes from the input names none.
-    assert!(
-        reading("hide agent list | jq -r '.[]' | xargs -I{} hide agent archive {}")
-            .ends
-            .contains(&None)
-    );
-    assert!(
-        reading("echo agent-1 | xargs hide agent archive")
-            .ends
-            .contains(&None)
-    );
-    assert_eq!(
-        reading("hide agent archive agent-1").ends,
-        [Some("agent-1".to_owned())]
-    );
-}
-
-/// letter-47180: every card names the folder its request acts in (desk.md:
-/// "A card shows the command or files, the folder and the agent's reason"),
-/// also when the agent's request names none, as Claude's `Bash` does not;
-/// and a `hide` line reads as the `hide 명령` row, which is the card's kind.
-#[test]
-fn every_card_names_its_folder_and_a_hide_line_reads_as_the_hide_row() {
-    let hide = reading("hide agent list");
-    assert_eq!(
-        (hide.row, hide.card.folder.as_deref()),
-        (Row::Hide, Some(WORK))
-    );
-    let shell = reading("echo hi > notes.txt");
-    assert_eq!(
-        (shell.row, shell.card.folder.as_deref()),
-        (Row::Shell, Some(WORK))
-    );
-    let named = classify(
+fn every_card_names_its_folder() {
+    let named = card(
         &Action::Command {
             command: "rm -rf /tmp/x".into(),
             folder: Some(PROJECT.into()),
@@ -1202,18 +282,16 @@ fn every_card_names_its_folder_and_a_hide_line_reads_as_the_hide_row() {
         },
         &place(),
     );
-    assert_eq!(named.card.folder.as_deref(), Some(PROJECT));
+    assert_eq!(named.folder.as_deref(), Some(PROJECT));
 
     let edit = |paths: &[&str]| {
-        classify(
+        card(
             &Action::Edit {
                 paths: paths.iter().map(|path| (*path).to_owned()).collect(),
-                delete: false,
                 reason: None,
             },
             &place(),
         )
-        .card
         .folder
     };
     assert_eq!(
@@ -1228,11 +306,11 @@ fn every_card_names_its_folder_and_a_hide_line_reads_as_the_hide_row() {
     // A path Hide cannot name leaves the folder out rather than guess.
     assert_eq!(edit(&["$HOME/x"]), None);
 
-    let read = classify(
+    let read = card(
         &Action::Read {
             what: "src/lib.rs".into(),
         },
         &place(),
     );
-    assert_eq!(read.card.folder.as_deref(), Some(WORK));
+    assert_eq!(read.folder.as_deref(), Some(WORK));
 }

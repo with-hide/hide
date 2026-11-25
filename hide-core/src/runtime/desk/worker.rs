@@ -125,15 +125,15 @@ pub(super) enum Report {
     AttachmentsGone {
         tag: u64,
     },
-    /// A request Hide can read, for the runtime to answer from the table
-    /// or put on a card.
+    /// A request the agent made, for the runtime to answer from the
+    /// operator's choice or put on a card: the agent's options, the card,
+    /// and whether it runs only `hide` commands.
     Permission {
         rpc_id: Value,
-        allow: String,
-        reject: Option<String>,
-        reading: permission::Reading,
+        options: Vec<permission::Choice>,
+        card: permission::Card,
+        hide_line: bool,
     },
-    Blocked(String),
     Choices {
         adapter: AdapterId,
         choices: Choices,
@@ -565,10 +565,7 @@ impl Worker {
                 account: account.as_deref(),
                 desk: &places.desk,
                 capability: &credential.reference,
-                codex_home: &places.codex_home,
-                codex_sign_in: places.codex_sign_in.as_deref().map_err(String::as_str),
             },
-            &credential.nonce,
         );
         let launch = match launch {
             Ok(launch) => launch,
@@ -601,17 +598,8 @@ impl Worker {
         if let Err(error) = self.platform.bind(&credential, host.pid(), host.started()) {
             return Err(close(&self.platform, host, OpenError::Failed(error)));
         }
-        let marker = launch.pi_marker.clone();
-        let host_pid = host.pid();
-        let pi_ready = move || hide_desk::adapter::pi_extension_loaded(marker.as_deref(), host_pid);
         let work = adapter::work_dir(&places.desk);
-        let opened = match session::open(
-            host.connection(),
-            adapter,
-            &work,
-            send.resume.as_deref(),
-            &pi_ready,
-        ) {
+        let opened = match session::open(host.connection(), &work, send.resume.as_deref()) {
             Ok(opened) => opened,
             Err(error) => {
                 let error = open_refusal(error, self.signed_out.load(Ordering::SeqCst));
@@ -723,7 +711,6 @@ impl Worker {
                 match update {
                     Update::Tool { id, call } => running.remember(id, call),
                     Update::Choices(choices) => self.report(Report::Choices { adapter, choices }),
-                    Update::Mode(mode) => self.mode_moved(&mode),
                     Update::Text { .. } | Update::Break | Update::Info(_) | Update::Other => {}
                 }
                 if let Some((tag, text)) = text {
@@ -839,29 +826,9 @@ impl Worker {
         self.end_process(false);
     }
 
-    /// The session left its ask mode: it is ended rather than used (D-53).
-    fn mode_moved(&mut self, mode: &str) {
-        let Some(running) = &self.running else {
-            return;
-        };
-        if let Some(adapter::AskMode::SetMode(ask)) = running.adapter.ask_mode()
-            && mode != ask
-        {
-            let adapter = running.adapter;
-            self.end_process_with(true, Some(format!("the agent moved to mode {mode}")), None);
-            // The agent took the turn's message, so it is not given back:
-            // the process's end ended that turn.
-            self.report(Report::OpenFailed {
-                adapter,
-                error: OpenError::AskModeUnconfirmed(format!("moved to {mode}")),
-                turn: None,
-            });
-        }
-    }
-
-    /// Reads a permission request off the lock: one Hide cannot read, or
-    /// answer with a one-time allowance, is refused here (D-60); the
-    /// runtime answers every other one (D-82).
+    /// Reads a permission request off the lock for the runtime to answer
+    /// (D-92): the agent's options, the card, and whether the line runs only
+    /// `hide` commands.
     fn permission(&mut self, rpc_id: Value, params: &Value) {
         let Some(running) = &self.running else {
             return;
@@ -870,47 +837,28 @@ impl Worker {
             .pointer("/toolCall/toolCallId")
             .and_then(Value::as_str);
         let announced = call_id.and_then(|id| running.announced.get(id));
-        let request = permission::read_request(running.adapter, params, announced);
-        let (Some(action), Some(allow)) = (permission::readable(&request), request.allow_once())
-        else {
-            let selected =
-                |option: &str| json!({"outcome": {"outcome": "selected", "optionId": option}});
-            let answer = request
-                .reject()
-                .map_or_else(|| json!({"outcome": {"outcome": "cancelled"}}), selected);
-            let _ = running.host.connection().respond(&rpc_id, answer);
-            let title = params
-                .pointer("/toolCall/title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .chars()
-                .take(400)
-                .collect();
-            self.report(Report::Blocked(title));
-            return;
-        };
+        let request = permission::read_request(params, announced);
         let places = self.platform.places();
         let hide = places.hide_dir.join(hide_program());
         let cwd = hide_platform::path::to_wire_lossy(&adapter::work_dir(&places.desk));
         let home = hide_platform::host::home_dir()
             .ok()
             .map(|home| hide_platform::path::to_wire_lossy(&home));
-        let mut reading = permission::classify(
-            action,
-            &permission::Place {
-                hide: &hide,
-                cwd: &cwd,
-                home: home.as_deref(),
-            },
-        );
-        // Where a deleted path leads is read from the filesystem here, off
-        // the lock, so the core judges the place the command would reach.
-        permission::follow_links(&mut reading);
+        let place = permission::Place {
+            hide: &hide,
+            cwd: &cwd,
+            home: home.as_deref(),
+        };
+        let hide_line = match &request.action {
+            permission::Action::Command { command, .. } => permission::hide_line(command, &place),
+            _ => false,
+        };
+        let card = permission::card(&request.action, &place);
         self.report(Report::Permission {
             rpc_id,
-            allow: allow.to_owned(),
-            reject: request.reject().map(str::to_owned),
-            reading,
+            options: request.choices,
+            card,
+            hide_line,
         });
     }
 
@@ -1060,9 +1008,6 @@ fn look(
     cli_found: &dyn Fn(&str) -> bool,
     installed: &dyn Fn(AdapterId) -> bool,
 ) -> Look {
-    if adapter.ask_mode().is_none() {
-        return Look::State(DeskAgentState::NoAskMode, None);
-    }
     if let Some(cli) = adapter.own_cli()
         && !cli_found(cli)
     {
@@ -1141,8 +1086,6 @@ mod tests {
             DeskPlaces {
                 adapters: PathBuf::new(),
                 desk: PathBuf::new(),
-                codex_home: PathBuf::new(),
-                codex_sign_in: Err("not in this test".into()),
                 hide_dir: PathBuf::new(),
             }
         }
@@ -1168,9 +1111,6 @@ mod tests {
             .to_vec(),
             env: vec![(IDLE.into(), "1".into())],
             cwd: cwd.to_owned(),
-            files: Vec::new(),
-            links: Vec::new(),
-            pi_marker: None,
         };
         let arrivals = session::Arrivals::default();
         let host = Host::start(&launch, arrivals.sink(|_, _| {})).unwrap();
@@ -1485,10 +1425,6 @@ mod tests {
             open_refusal(OpenError::Failed("x".into()), false),
             OpenError::Failed("x".into())
         );
-        assert_eq!(
-            open_refusal(OpenError::AskModeUnconfirmed("m".into()), true),
-            OpenError::AskModeUnconfirmed("m".into())
-        );
     }
 
     #[test]
@@ -1499,7 +1435,7 @@ mod tests {
             [
                 ("claude", Look::Install),
                 ("codex", Look::Install),
-                ("grok", Look::State(DeskAgentState::NoAskMode, None)),
+                ("grok", Look::State(DeskAgentState::Ready, None)),
                 ("opencode", ready),
                 ("pi", Look::Install),
                 ("omp", Look::State(DeskAgentState::Ready, None)),
