@@ -806,11 +806,7 @@ impl Worker {
             && mode != ask
         {
             let adapter = running.adapter;
-            self.end_process_with(
-                true,
-                Some(format!("the agent moved to mode {mode}")),
-                None,
-            );
+            self.end_process_with(true, Some(format!("the agent moved to mode {mode}")), None);
             // The agent took the turn's message, so it is not given back:
             // the process's end ended that turn.
             self.report(Report::OpenFailed {
@@ -902,7 +898,9 @@ impl Worker {
     /// another process.
     fn turn_ended(&mut self, tag: u64, outcome: TurnOutcome, past_cap: Option<String>) {
         match past_cap {
-            Some(detail) => self.end_process_with(true, Some(detail), Some(TurnEnd { tag, outcome })),
+            Some(detail) => {
+                self.end_process_with(true, Some(detail), Some(TurnEnd { tag, outcome }))
+            }
             None => self.report(Report::TurnEnded { tag, outcome }),
         }
     }
@@ -1036,7 +1034,167 @@ fn hide_program() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::desk::DeskPlaces;
+    use crate::model::DeskHostState;
+    use crate::runtime::desk::tests::{event, opened, runtime, sends, sent};
+
+    /// The variable that puts this test binary in a waiting process's role.
+    const IDLE: &str = "HIDE_CORE_DESK_IDLE_PROCESS";
+
+    /// A process that only reads its input until it closes: this binary run
+    /// again with [`IDLE`], so a worker test ends a real process. Run as a
+    /// test without it, it returns at once.
+    #[test]
+    fn idle_process() {
+        if std::env::var_os(IDLE).is_some() {
+            let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        }
+    }
+
+    struct NoCapability;
+
+    impl DeskPlatform for NoCapability {
+        fn issue(&self) -> Result<DeskCredential, String> {
+            Err("not in this test".into())
+        }
+        fn bind(&self, _: &DeskCredential, _: u32, _: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn revoke(&self, _: &DeskCredential) {}
+        fn places(&self) -> DeskPlaces {
+            DeskPlaces {
+                adapters: PathBuf::new(),
+                desk: PathBuf::new(),
+                codex_home: PathBuf::new(),
+                codex_sign_in: Err("not in this test".into()),
+                hide_dir: PathBuf::new(),
+            }
+        }
+    }
+
+    /// A worker whose process is the idle one, running the turn `tag`, and
+    /// reporting to `runtime`.
+    fn worker_running(runtime: &Arc<Mutex<Runtime>>, cwd: &std::path::Path, tag: u64) -> Worker {
+        let launch = adapter::Launch {
+            program: std::env::current_exe().unwrap(),
+            args: [
+                "--exact",
+                "runtime::desk::worker::tests::idle_process",
+                "-q",
+                "--test-threads=1",
+            ]
+            .map(OsString::from)
+            .to_vec(),
+            env: vec![(IDLE.into(), "1".into())],
+            cwd: cwd.to_owned(),
+            files: Vec::new(),
+            links: Vec::new(),
+            pi_marker: None,
+        };
+        let arrivals = session::Arrivals::default();
+        let host = Host::start(&launch, arrivals.sink(|_, _| {})).unwrap();
+        let mut turn = session::TurnReader::new(None);
+        turn.start(tag, arrivals.next());
+        let (orders, _) = mpsc::channel();
+        Worker {
+            platform: Arc::new(NoCapability),
+            runtime: Arc::downgrade(runtime),
+            notifier: ChangeNotifier::new(),
+            orders,
+            queued: Arc::new(AtomicUsize::new(0)),
+            arrivals,
+            signed_out: Arc::new(AtomicBool::new(false)),
+            dropped_reported: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            on: true,
+            running: Some(Running {
+                host,
+                adapter: AdapterId::CLAUDE,
+                session_id: "s1".into(),
+                credential: DeskCredential {
+                    reference: PathBuf::new(),
+                    nonce: String::new(),
+                },
+                announced: HashMap::new(),
+                announced_order: Vec::new(),
+                turn,
+                placement: None,
+            }),
+            installing: Vec::new(),
+        }
+    }
+
+    /// A runtime with a turn under way on Claude and one message behind it.
+    fn a_turn_and_one_waiting(
+        root: &std::path::Path,
+    ) -> (Arc<Mutex<Runtime>>, Receiver<Order>, u64) {
+        let (mut runtime, received) = runtime(root);
+        event(&mut runtime, "desk_select", json!({"agent": "claude"}));
+        event(&mut runtime, "desk_send", json!({"text": "one"}));
+        let one = sent(&received);
+        opened(&mut runtime, AdapterId::CLAUDE);
+        event(&mut runtime, "desk_send", json!({"text": "two"}));
+        (Arc::new(Mutex::new(runtime)), received, one.tag)
+    }
+
+    fn after(runtime: &Arc<Mutex<Runtime>>) -> (bool, usize, Option<DeskHostState>) {
+        let runtime = runtime.lock().unwrap();
+        (
+            runtime.desk.turn.is_some(),
+            runtime.desk.stored.queued.len(),
+            runtime.desk.host.state,
+        )
+    }
+
+    /// S2, from the worker: a process that dies under a turn tells that
+    /// turn's end with its own, so the message behind it waits for
+    /// `다시 시작` rather than go to a process that is ending.
+    #[test]
+    fn a_process_that_dies_under_a_turn_sends_no_queued_message() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
+        let mut worker = worker_running(&runtime, root.path(), tag);
+        worker.incoming(
+            u64::MAX,
+            Incoming::Closed {
+                why: "the agent exited".into(),
+            },
+        );
+        assert!(worker.running.is_none());
+        assert_eq!(sends(&received), Vec::<String>::new());
+        assert_eq!(after(&runtime), (false, 1, Some(DeskHostState::Stopped)));
+    }
+
+    /// S2, from the worker: a turn the agent answered past its cap ends
+    /// with the process, in one report, so the message behind it waits for
+    /// `다시 시작`; under the cap it goes at once.
+    #[test]
+    fn a_turn_past_the_cap_ends_with_its_process_and_sends_no_queued_message() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
+        let mut worker = worker_running(&runtime, root.path(), tag);
+        worker.running.as_mut().unwrap().turn.end(tag);
+        worker.turn_ended(
+            tag,
+            TurnOutcome::Done,
+            Some("the agent left 60 processes".into()),
+        );
+        assert!(worker.running.is_none());
+        assert_eq!(sends(&received), Vec::<String>::new());
+        assert_eq!(after(&runtime), (false, 1, Some(DeskHostState::Stopped)));
+
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, received, tag) = a_turn_and_one_waiting(root.path());
+        let mut worker = worker_running(&runtime, root.path(), tag);
+        worker.running.as_mut().unwrap().turn.end(tag);
+        worker.turn_ended(tag, TurnOutcome::Done, None);
+        assert_eq!(sends(&received), ["two"]);
+        worker.end_process(false);
+    }
 
     fn looked(
         node: Result<(), InstallError>,

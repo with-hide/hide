@@ -449,6 +449,10 @@ pub struct DeskConversationSnapshot {
     pub queued_max: usize,
     /// The line is full: the screen says so, and ✕ on one frees a place.
     pub queued_full: bool,
+    /// The line waits for the operator: the agent refused the message at
+    /// its head (a sign-in, a session that did not open), so nothing goes
+    /// until `다시 시작` or a new message.
+    pub queued_held: bool,
 }
 
 /// A message waiting for the turn before it to end (desk.md: "while a reply

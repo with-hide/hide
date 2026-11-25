@@ -1517,6 +1517,7 @@ impl Runtime {
                 queued: desk.stored.queued.clone(),
                 queued_max: DESK_QUEUED_MAX,
                 queued_full: desk.stored.queued.len() >= DESK_QUEUED_MAX,
+                queued_held: desk.held && !desk.stored.queued.is_empty(),
             },
             approvals_waiting: desk.approvals.len(),
             settings: desk.stored.settings,
@@ -1752,11 +1753,11 @@ mod tests {
         snapshot
     }
 
-    fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
+    pub(super) fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
         runtime.desk_event(DeskEvent::decode(kind, payload).expect(kind))
     }
 
-    fn sent(received: &Receiver<Order>) -> worker::Send {
+    pub(super) fn sent(received: &Receiver<Order>) -> worker::Send {
         loop {
             match received.try_recv().expect("no Send order") {
                 Order::Send(send) => return send,
@@ -1776,7 +1777,7 @@ mod tests {
             .clone()
     }
 
-    fn opened(runtime: &mut Runtime, adapter: AdapterId) {
+    pub(super) fn opened(runtime: &mut Runtime, adapter: AdapterId) {
         runtime.desk_report(Report::Opened {
             adapter,
             session_id: format!("{}-session", adapter.as_str()),
@@ -2337,10 +2338,11 @@ mod tests {
             "desk_send",
             json!({"text": "what runs now"})
         ));
-        sent(&received);
+        let send = sent(&received);
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::CODEX,
             error: OpenError::Login,
+            turn: Some(send.tag),
         });
         let conversation = &runtime.desk.stored.conversation.items;
         assert!(
@@ -2409,10 +2411,7 @@ mod tests {
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::OPENCODE,
             error: OpenError::Login,
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: send.tag,
-            outcome: TurnOutcome::Cancelled,
+            turn: Some(send.tag),
         });
         runtime.desk_report(Report::Ended {
             unexpected: false,
@@ -2567,10 +2566,7 @@ mod tests {
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::CLAUDE,
             error: OpenError::Login,
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: kept.tag,
-            outcome: TurnOutcome::Cancelled,
+            turn: Some(kept.tag),
         });
         no_send(&received);
         assert!(event(
@@ -2589,7 +2585,7 @@ mod tests {
         );
     }
 
-    fn sends(received: &Receiver<Order>) -> Vec<String> {
+    pub(super) fn sends(received: &Receiver<Order>) -> Vec<String> {
         received
             .try_iter()
             .filter_map(|order| match order {
@@ -2612,15 +2608,14 @@ mod tests {
         let one = sent(&received);
         opened(&mut runtime, AdapterId::CLAUDE);
         event(&mut runtime, "desk_send", json!({"text": "two"}));
-        // The cap: the process ends, then the turn's end is told.
+        // The cap: the turn's end and the process's in one report.
         runtime.desk_report(Report::Ended {
             unexpected: true,
             detail: Some("the agent left 60 processes".into()),
-            turn: None,
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: one.tag,
-            outcome: TurnOutcome::Done,
+            turn: Some(TurnEnd {
+                tag: one.tag,
+                outcome: TurnOutcome::Done,
+            }),
         });
         assert_eq!(sends(&received), Vec::<String>::new());
         assert_eq!(queued(&runtime).len(), 1);
@@ -2634,7 +2629,10 @@ mod tests {
         runtime.desk_report(Report::Ended {
             unexpected: true,
             detail: Some("killed".into()),
-            turn: Some(two.tag),
+            turn: Some(TurnEnd {
+                tag: two.tag,
+                outcome: TurnOutcome::Ended,
+            }),
         });
         assert!(runtime.desk.turn.is_none());
         assert_eq!(sends(&received), Vec::<String>::new());
@@ -2658,7 +2656,10 @@ mod tests {
         runtime.desk_report(Report::Ended {
             unexpected: false,
             detail: None,
-            turn: Some(one.tag),
+            turn: Some(TurnEnd {
+                tag: one.tag,
+                outcome: TurnOutcome::Ended,
+            }),
         });
         assert_eq!(
             runtime.desk.turn.as_ref().map(|turn| turn.tag),
@@ -2694,10 +2695,7 @@ mod tests {
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::CODEX,
             error: OpenError::Login,
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: a.tag,
-            outcome: TurnOutcome::Cancelled,
+            turn: Some(a.tag),
         });
         let texts = |runtime: &Runtime| {
             queued(runtime)
@@ -2719,12 +2717,123 @@ mod tests {
         runtime.desk_report(Report::OpenFailed {
             adapter: AdapterId::CODEX,
             error: OpenError::Failed("the process did not start".into()),
-        });
-        runtime.desk_report(Report::TurnEnded {
-            tag: again.tag,
-            outcome: TurnOutcome::Cancelled,
+            turn: Some(again.tag),
         });
         assert_eq!(texts(&runtime), ["A", "B", "C"]);
+    }
+
+    /// letter-47232: a login file can outlive its sign-in, so Hide AI's
+    /// read says signed in while the agent refuses Desk for its sign-in.
+    /// Once it refused, the bar says what the refusal said, `로그인 필요`,
+    /// until a session of that agent opens again.
+    #[test]
+    fn an_agent_that_refused_for_its_sign_in_reads_signed_out_until_a_session_opens() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        runtime.ingest_background_ai(read(&[("codex", "ready", true)]));
+        let word = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .desk
+                .as_ref()
+                .unwrap()
+                .agents
+                .iter()
+                .find(|agent| agent.id == AdapterId::CODEX)
+                .and_then(|agent| agent.signed_in)
+        };
+        assert_eq!(word(&runtime), Some(true));
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "hi"}));
+        let first = sent(&received);
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Login,
+            turn: Some(first.tag),
+        });
+        assert_eq!(word(&runtime), Some(false));
+        event(
+            &mut runtime,
+            "desk_send",
+            json!({"text": "after codex login"}),
+        );
+        sent(&received);
+        opened(&mut runtime, AdapterId::CODEX);
+        assert_eq!(word(&runtime), Some(true));
+    }
+
+    /// An open that failed for a turn `다시 시작` already ended gives back
+    /// nothing of the turn it started since, whose message was taken from
+    /// the line and goes to the next process.
+    #[test]
+    fn a_late_refused_open_leaves_the_turn_started_since() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "A"}));
+        let a = sent(&received);
+        event(&mut runtime, "desk_send", json!({"text": "B"}));
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let b = sent(&received);
+        assert_eq!(b.text, "B");
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Failed("the process did not start".into()),
+            turn: Some(a.tag),
+        });
+        assert_eq!(runtime.desk.turn.as_ref().map(|turn| turn.tag), Some(b.tag));
+        assert!(queued(&runtime).is_empty());
+        assert!(
+            items(&runtime)
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { text, .. } if text == "B"))
+        );
+    }
+
+    /// A line held after a sign-in refusal, full to one past its cap, moves
+    /// on one press of `다시 시작` (the login line's button): its head goes
+    /// at once and the rest one after another, with no new message.
+    #[test]
+    fn a_held_line_goes_again_on_restart_even_when_full() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "codex"}));
+        event(&mut runtime, "desk_send", json!({"text": "A"}));
+        let a = sent(&received);
+        for n in 0..DESK_QUEUED_MAX {
+            assert!(event(
+                &mut runtime,
+                "desk_send",
+                json!({"text": format!("q{n}")})
+            ));
+        }
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::CODEX,
+            error: OpenError::Login,
+            turn: Some(a.tag),
+        });
+        let conversation = |runtime: &Runtime| {
+            let desk = runtime.snapshot.desk.as_ref().unwrap();
+            (
+                desk.conversation.queued.len(),
+                desk.conversation.queued_full,
+                desk.conversation.queued_held,
+            )
+        };
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX + 1, true, true));
+        no_send(&received);
+
+        assert!(event(&mut runtime, "desk_restart", json!({})));
+        let again = sent(&received);
+        assert_eq!(again.text, "A");
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX, true, false));
+        opened(&mut runtime, AdapterId::CODEX);
+        runtime.desk_report(Report::TurnEnded {
+            tag: again.tag,
+            outcome: TurnOutcome::Done,
+        });
+        assert_eq!(sent(&received).text, "q0");
+        assert_eq!(conversation(&runtime), (DESK_QUEUED_MAX - 1, false, false));
     }
 
     /// O1: Desk turned off with a message waiting, and on again, sends it:
@@ -2803,7 +2912,10 @@ mod tests {
         let (mut runtime, received) = runtime(root.path());
         event(&mut runtime, "desk_select", json!({"agent": "claude"}));
         let stop = |runtime: &mut Runtime| {
-            let turn = runtime.desk.turn.as_ref().map(|turn| turn.tag);
+            let turn = runtime.desk.turn.as_ref().map(|turn| TurnEnd {
+                tag: turn.tag,
+                outcome: TurnOutcome::Ended,
+            });
             runtime.desk_report(Report::Ended {
                 unexpected: true,
                 detail: Some("killed".into()),
