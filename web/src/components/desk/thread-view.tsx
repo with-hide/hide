@@ -1,24 +1,28 @@
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
-import { useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
 import type { AcpContentBlock, AcpPlanEntry, AcpToolKind, DeskJob, DeskMention, DeskOutput, DeskSessionRef, ThreadHidePart, ThreadLine, ThreadReadFailure, ThreadTurn } from "../../desk";
-import { askedOnce, threadPhase, threadTurns } from "../../desk";
+import { askedIn, namedMention, threadPhase, threadTurns } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
+import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
+import { CopyableMessage } from "../copy-words";
+import type { CopyText } from "../human-turn-copy";
+import type { AskLine } from "../open-asks";
 import { useRunningClock } from "../elapsed";
 import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
 import { Hint } from "../ui/tooltip";
-import { MentionText } from "./desk-chat";
 import { DeskComposer, SentAttachments } from "./desk-composer";
 import { sentWords, type ComposerTray } from "../../deskComposer";
 import { DeskMissionChip } from "./desk-job-card";
 import { WorkingLine } from "./working-line";
-import { SessionChip } from "./session-chip";
+import { SessionChip, useSessionChipBridge } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
+import { ThreadAsks } from "./thread-asks";
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
   execute: SquareTerminalIcon,
@@ -116,10 +120,21 @@ function AcpPlan({ entries }: { entries: readonly AcpPlanEntry[] }) {
 
 export type ThreadPartActions = {
   onMission: (missionId: string) => void;
+  /**
+   * An output a line names, placed where it is read: the card's own when it
+   * lists it, else the file on the machine the session runs on (B27). What
+   * the thread draws and what `onOutput` opens are both this answer.
+   */
+  outputOf: (output: DeskOutput) => DeskOutput;
   onOutput: (output: DeskOutput) => void;
   /** A session a chip or an `@name` names: its pane when Hide knows it, else its name alone. */
   onSession: (session: DeskSessionRef) => void;
+  /** Puts a message's or a code block's words on the clipboard (Doop E2). */
+  onCopy: CopyText;
 };
+
+/** How the thread draws the agent's words: the `@name`s as chips, and the clipboard its `복사` writes to; both kept stable between renders. */
+type Words = { chips: readonly MarkdownChip[]; copy: CopyText };
 
 /**
  * A line a Hide part takes in the thread: an icon and its words, with no box.
@@ -171,7 +186,7 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
       );
       break;
     case "view":
-      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[part.output]} onOpen={actions.onOutput} /></div>;
+      body = <div data-desk-thread-line="hide" data-desk-hide-part="view"><DeskOutputs outputs={[actions.outputOf(part.output)]} onOpen={actions.onOutput} /></div>;
       break;
     case "mission":
       body = (
@@ -189,13 +204,13 @@ function HidePartLine({ part, command, actions }: { part: ThreadHidePart; comman
 }
 
 /** One line of a turn's work (B25, B26). */
-function WorkLine({ line, mentions, actions }: { line: ThreadLine; mentions: readonly DeskMention[]; actions: ThreadPartActions }) {
+function WorkLine({ line, words, actions }: { line: ThreadLine; words: Words; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   switch (line.kind) {
     case "user":
       return null;
     case "agent":
-      return <AgentWords text={line.text} mentions={mentions} actions={actions} />;
+      return <AgentWords line={line} words={words} lit={false} />;
     case "thought":
       return <p className="line-clamp-2 min-w-0 whitespace-pre-wrap text-caption text-muted-foreground" title={line.text} data-desk-thread-line="thought">{t("desk.thread.thought")} · {line.text}</p>;
     case "tool":
@@ -207,8 +222,19 @@ function WorkLine({ line, mentions, actions }: { line: ThreadLine; mentions: rea
   }
 }
 
-function AgentWords({ text, mentions, actions }: { text: string; mentions: readonly DeskMention[]; actions: ThreadPartActions }) {
-  return <p className="min-w-0 whitespace-pre-wrap break-keep text-body leading-relaxed text-foreground [overflow-wrap:anywhere]" data-desk-thread-line="agent"><MentionText text={text} mentions={mentions} onMention={(mention) => actions.onSession({ name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null })} /></p>;
+/**
+ * The agent's words as Desk's answers read (Doop E2): Markdown in the
+ * answer's type, an `@name` as its session's chip, `복사` of the original
+ * words on hover and on every code block. `lit` lights the message a
+ * question Hide found was asked in, for a moment after the question line
+ * brought it into view.
+ */
+function AgentWords({ line, words, lit }: { line: Extract<ThreadLine, { kind: "agent" }>; words: Words; lit: boolean }) {
+  return (
+    <CopyableMessage text={line.text} copy={words.copy} className={cn("-mx-xs rounded-md px-xs transition-colors", lit && "bg-open-ask/10 ring-1 ring-open-ask")} data-desk-thread-line="agent" data-desk-thread-message={line.id} data-desk-thread-lit={lit ? "true" : undefined}>
+      <MarkdownText text={line.text} size="chat" chips={words.chips} copyCode={words.copy} />
+    </CopyableMessage>
+  );
 }
 
 /**
@@ -234,7 +260,7 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 }
 
 /** The operator's words, the one thing drawn as a bubble (D-75); the first one carries `Desk가 맡김` when Desk handed the task. */
-function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
+function UserLine({ line, handed, copy, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; copy: CopyText; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   // The files a composer sent stand over the words, read from the quoted paths it typed before them (B41).
   const sent = useMemo(() => sentWords(line.text), [line.text]);
@@ -245,7 +271,11 @@ function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind:
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
       <SentAttachments files={sent.files} />
-      {sent.words ? <p className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-body leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p> : null}
+      {sent.words ? (
+        <CopyableMessage text={sent.words} copy={copy} align="end">
+          <p data-desk-thread-bubble="true" className="max-w-(--size-pr-popover) whitespace-pre-wrap break-keep rounded-xl bg-secondary px-md py-xs text-subhead leading-relaxed text-foreground [overflow-wrap:anywhere]">{sent.words}</p>
+        </CopyableMessage>
+      ) : null}
       {line.images.map((block, index) => <ThreadImage key={index} block={block} />)}
     </div>
   );
@@ -257,7 +287,7 @@ function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind:
  * work open, along a rail. A part that leads somewhere (a new session, a
  * letter, an output, a mission, a PR) stays in view while the work is folded.
  */
-function Turn({ turn, live, handed, mentions, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; mentions: readonly DeskMention[]; actions: ThreadPartActions }) {
+function Turn({ turn, live, handed, words, lit, actions }: { turn: ThreadTurn; live: boolean; handed: boolean; words: Words; lit: string | null; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   const [toggled, setToggled] = useState(false);
   const open = live !== toggled;
@@ -265,7 +295,7 @@ function Turn({ turn, live, handed, mentions, actions }: { turn: ThreadTurn; liv
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <li className="flex min-w-0 flex-col gap-sm" data-desk-thread-turn={open ? "open" : "folded"}>
-      {turn.user ? <UserLine line={turn.user} handed={handed} actions={actions} /> : null}
+      {turn.user ? <UserLine line={turn.user} handed={handed} copy={words.copy} actions={actions} /> : null}
       {turn.work.length ? (
         <Button variant="text" size="inline" className="self-start gap-xxs text-caption text-muted-foreground" aria-expanded={open} data-desk-turn-toggle={open ? "open" : "folded"} onClick={() => setToggled(!toggled)}>
           {[t("desk.turn.work"), ...counts].join(" · ")}
@@ -274,10 +304,10 @@ function Turn({ turn, live, handed, mentions, actions }: { turn: ThreadTurn; liv
       ) : null}
       {open && turn.work.length ? (
         <ol className="ml-xxs flex min-w-0 flex-col gap-xs border-l border-border pl-sm" data-desk-thread-work={turn.work.length}>
-          {turn.work.map((line) => <li key={line.id} className="min-w-0"><WorkLine line={line} mentions={mentions} actions={actions} /></li>)}
+          {turn.work.map((line) => <li key={line.id} className="min-w-0"><WorkLine line={line} words={words} actions={actions} /></li>)}
         </ol>
       ) : null}
-      {turn.answer.map((line) => <AgentWords key={line.id} text={line.text} mentions={mentions} actions={actions} />)}
+      {turn.answer.map((line) => <AgentWords key={line.id} line={line} words={words} lit={lit === line.id} />)}
       {!open && turn.parts.length ? <FoldedParts parts={turn.parts} actions={actions} /> : null}
     </li>
   );
@@ -285,7 +315,7 @@ function Turn({ turn, live, handed, mentions, actions }: { turn: ThreadTurn; liv
 
 /** What a folded turn keeps in view (B26): its lines that lead somewhere, then the outputs it opened as one row of pictures. */
 function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: ThreadPartActions }) {
-  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [line.part.output] : []));
+  const outputs = parts.flatMap((line) => (line.part.kind === "view" ? [actions.outputOf(line.part.output)] : []));
   const rest = parts.filter((line) => line.part.kind !== "view");
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-desk-thread-parts={parts.length}>
@@ -328,16 +358,41 @@ function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) 
   return { ref, onScroll };
 }
 
+/** How long the message a question was asked in stays lit after the question line brought it into view (Doop B4). */
+const LIT_MS = 2_000;
+
 /**
- * A thread (D-61, D-75, B25-B27, B29): the session's record as turns, its
- * question at the foot, its outputs after it, and the box that types into
- * its terminal. Its state is in the head, said once. A record that cannot be
- * read says why in one line and offers the terminal; one being read, or with
- * nothing in it yet, says so in one quiet line. A session asleep with no
- * card any more (its sleep closed its pane, B43) keeps its record above the
- * foot that wakes it.
+ * The thread's `@name`s as chips and its clipboard, kept stable while the
+ * names stay the same, so a message's Markdown is drawn again only when its
+ * words change.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, ask = null, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
+/** The defaults a caller without mentions or questions gets, one array each, so nothing reads them as changed. */
+export const NO_MENTIONS: readonly DeskMention[] = [];
+const NO_ASKS: readonly AskLine[] = [];
+
+function useWords(mentions: readonly DeskMention[], onSession: ThreadPartActions["onSession"], onCopy: CopyText): Words {
+  const latest = useRef({ onSession, onCopy });
+  latest.current = { onSession, onCopy };
+  const bridge = useSessionChipBridge();
+  const chips = useMemo<MarkdownChip[]>(() => mentions.map((mention) => {
+    const session: DeskSessionRef = { name: mention.name, mark: mention.mark ?? null, agent_kind: mention.agent_kind ?? null };
+    return { token: namedMention(mention), node: bridge(<SessionChip session={session} onPress={() => latest.current.onSession(session)} />) };
+  }), [mentions, bridge]);
+  const copy = useCallback<CopyText>((text, what) => latest.current.onCopy(text, what), []);
+  return useMemo(() => ({ chips, copy }), [chips, copy]);
+}
+
+/**
+ * A thread (D-61, D-75, B25-B27, B29): the session's record as turns, what
+ * the agent's own screen asks at its end (a choice card answered in place),
+ * the questions Hide found in one line above the input box (Doop B4), and
+ * the box that types into its terminal. Its state is in the head, said once.
+ * A record that cannot be read says why in one line and offers the
+ * terminal; one being read, or with nothing in it yet, says so in one quiet
+ * line. A session asleep with no card any more (its sleep closed its pane,
+ * B43) keeps its record above the foot that wakes it.
+ */
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = NO_MENTIONS, startedByDesk = false, composer, ask = null, asks = NO_ASKS, foot = null, workingSince = null, onTerminal, onReachTop, ...actions }: {
   job: DeskJob | null;
   /** When the session's running turn started (its row's last prompt), for the working line's time. */
   workingSince?: number | null;
@@ -349,11 +404,11 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   mentions?: readonly DeskMention[];
   /** Desk handed the thread its task: the first message says so. */
   startedByDesk?: boolean;
-  outputs: readonly DeskOutput[];
-  selectedOutput?: string | null;
   composer: { value: string; tray: ComposerTray; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void };
-  /** What the session waits on, at the conversation's end (the question card, PRD desk-2-ui B14). */
+  /** What the agent's own screen asks, at the conversation's end, answered in place (the choice card, PRD desk-2-ui B14). */
   ask?: ReactNode;
+  /** The questions Hide found that still wait on the operator, oldest first (`open_asks`, the list 내 차례 reads). */
+  asks?: readonly AskLine[];
   /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
   foot?: ReactNode;
   onTerminal: () => void;
@@ -362,9 +417,29 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
 } & ThreadPartActions) {
   const { t } = useInterfaceTranslation();
   const scroller = useThreadScroll(lines, onReachTop);
-  // An asking job's question is said once, in the wait at the foot (D-75).
-  const turns = job?.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
+  const turns = useMemo(() => threadTurns(lines), [lines]);
   const running = job?.state === "working" || job?.state === "starting";
+  const words = useWords(mentions, actions.onSession, actions.onCopy);
+  // A press again on the same question lights it again for the whole time.
+  const [lit, setLit] = useState<{ id: string; press: number } | null>(null);
+  useEffect(() => {
+    if (lit === null) return undefined;
+    const timer = window.setTimeout(() => setLit(null), LIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [lit]);
+  // A question goes to the answer it was asked in; one asked before every page read so far goes to the top, which reads the page before.
+  const goTo = (ask: AskLine) => {
+    const box = scroller.ref.current;
+    if (!box) return;
+    const id = askedIn(turns, ask.at_unix_ms);
+    const message = id === null ? null : box.querySelector<HTMLElement>(`[data-desk-thread-message="${CSS.escape(id)}"]`);
+    if (id === null || !message) {
+      box.scrollTo({ top: 0 });
+      return;
+    }
+    message.scrollIntoView({ block: "center" });
+    setLit((now) => ({ id, press: (now?.press ?? 0) + 1 }));
+  };
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
       <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
@@ -380,19 +455,14 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           <p className="text-caption text-muted-foreground" data-desk-thread-empty="true">{t("desk.thread.empty")}</p>
         ) : (
           <ol className="flex min-w-0 flex-col gap-lg" data-desk-thread-lines={lines.length}>
-            {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} mentions={mentions} actions={actions} />)}
+            {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} words={words} lit={lit?.id ?? null} actions={actions} />)}
           </ol>
         )}
         {/* The working line Desk's conversation draws too (feedback 1 c3), until the turn ends or waits on the operator. */}
         {running && !reading && !failure ? <WorkingLine phase={threadPhase(turns.at(-1))} since={workingSince} /> : null}
         {ask}
-        {outputs.length ? (
-          <section className="flex min-w-0 flex-col gap-xs" aria-label={t("desk.outputs.title")} data-desk-thread-outputs={outputs.length}>
-            <h3 className="text-caption text-muted-foreground">{t("desk.outputs.title")}</h3>
-            <DeskOutputs outputs={outputs} selected={selectedOutput} onOpen={actions.onOutput} />
-          </section>
-        ) : null}
       </div>
+      {asks.length ? <div className="shrink-0 px-sm pt-xs"><ThreadAsks asks={asks} onGo={goTo} /></div> : null}
       {foot ?? (
         <div className="shrink-0 px-sm pb-sm">
           <DeskComposer

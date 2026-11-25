@@ -4,10 +4,13 @@
 // viewer's preview. The language pack loads lazily, as a document's does; the
 // text stands plain until it arrives.
 
+import { syntaxTree } from "@codemirror/language";
 import { Compartment, EditorState, Prec, type Extension, type Range } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { useEffect, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { CopyWords } from "./components/copy-words";
+import type { CopyText } from "./components/human-turn-copy";
 import { languageLoader } from "./editor/languages";
 import { markdownLive } from "./editor/markdownLivePlugin";
 import { baseTheme, liveTheme } from "./editor/theme";
@@ -27,6 +30,12 @@ const prose = EditorView.theme({
 // session-docs-and-assistant D-75): the subhead size at a relaxed leading.
 const chat = EditorView.theme({
   "&.cm-editor .cm-content": { fontSize: "var(--text-subhead)", lineHeight: "1.625" },
+});
+
+// A code block's `복사` stands at the top right of its first line, inside the block's own ground.
+const codeCopy = EditorView.theme({
+  ".cm-md-code-head": { position: "relative" },
+  ".cm-md-code-copy": { position: "absolute", top: "var(--spacing-xxs)", right: "var(--spacing-xs)", fontFamily: "var(--font-sans)", lineHeight: "normal" },
 });
 
 /** A token of the text drawn as a part instead of its letters, such as a session a Desk reply names. */
@@ -69,10 +78,78 @@ function chipDecorations(text: string, chips: readonly MarkdownChip[]): Extensio
   return EditorView.decorations.of(Decoration.set(ranges, true));
 }
 
+/** A code block's `복사`, in a root of its own, unmounted after the editor lets it go. */
+class CodeCopyWidget extends WidgetType {
+  constructor(readonly code: string, readonly copy: CopyText) {
+    super();
+  }
+  eq(other: CodeCopyWidget) {
+    return other.code === this.code && other.copy === this.copy;
+  }
+  toDOM() {
+    const dom = document.createElement("span");
+    dom.className = "cm-md-code-copy";
+    dom.dataset.markdownCodeCopy = "true";
+    const root = createRoot(dom);
+    root.render(<CopyWords text={this.code} what="code block" copy={this.copy} />);
+    roots.set(dom, root);
+    return dom;
+  }
+  destroy(dom: HTMLElement) {
+    const root = roots.get(dom);
+    roots.delete(dom);
+    if (root) queueMicrotask(() => root.unmount());
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/** Each fenced code block's code with `복사` on its first line, read from the parse; a diagram drawn in its place has none. */
+function codeCopyDecorations(view: EditorView, copy: CopyText): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  const doc = view.state.doc;
+  syntaxTree(view.state).iterate({
+    enter: (node) => {
+      if (node.name !== "FencedCode") return;
+      const info = node.node.getChild("CodeInfo");
+      if (info && doc.sliceString(info.from, info.to).trim().toLowerCase() === "mermaid") return false;
+      const text = node.node.getChild("CodeText");
+      if (!text || text.from === text.to) return false;
+      const line = doc.lineAt(text.from);
+      ranges.push(Decoration.line({ class: "cm-md-code-head" }).range(line.from));
+      ranges.push(Decoration.widget({ widget: new CodeCopyWidget(doc.sliceString(text.from, text.to), copy), side: -1 }).range(line.from));
+      return false;
+    },
+  });
+  return Decoration.set(ranges, true);
+}
+
+/** `복사` on every code block, found again whenever the lazily loaded language parses the text. */
+function codeCopyButtons(copy: CopyText): Extension {
+  return [
+    codeCopy,
+    ViewPlugin.define(
+      (view) => ({
+        decorations: codeCopyDecorations(view, copy),
+        update(this: { decorations: DecorationSet }, update: ViewUpdate) {
+          if (update.docChanged || syntaxTree(update.state) !== syntaxTree(update.startState)) this.decorations = codeCopyDecorations(update.view, copy);
+        },
+      }),
+      { decorations: (plugin) => plugin.decorations },
+    ),
+  ];
+}
+
 const NO_CHIPS: readonly MarkdownChip[] = [];
 
-/** `size="chat"` sets the text at Desk's conversation size; `chips` draws tokens of the text as parts (keep the array stable between renders). */
-export function MarkdownText({ text, size = "body", chips = NO_CHIPS }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[] }) {
+/**
+ * `size="chat"` sets the text at Desk's conversation size; `chips` draws
+ * tokens of the text as parts (keep the array stable between renders);
+ * `copyCode` puts `복사` on every code block (Doop E2), always in view. The
+ * text can be selected and copied as a page's text is.
+ */
+export function MarkdownText({ text, size = "body", chips = NO_CHIPS, copyCode }: { text: string; size?: "body" | "chat"; chips?: readonly MarkdownChip[]; copyCode?: CopyText }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const parent = host.current;
@@ -82,7 +159,7 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS }: { text: 
       parent,
       state: EditorState.create({
         doc: text,
-        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), chipDecorations(text, chips), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
+        extensions: [baseTheme(), liveTheme, Prec.highest(size === "chat" ? [chat, prose] : prose), language.of([]), markdownLive({ reveal: false }), chipDecorations(text, chips), copyCode ? codeCopyButtons(copyCode) : [], EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)],
       }),
     });
     let live = true;
@@ -93,6 +170,6 @@ export function MarkdownText({ text, size = "body", chips = NO_CHIPS }: { text: 
       live = false;
       view.destroy();
     };
-  }, [text, size, chips]);
+  }, [text, size, chips, copyCode]);
   return <div ref={host} className="min-w-0" data-markdown-text="true" />;
 }

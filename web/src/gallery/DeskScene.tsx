@@ -16,7 +16,8 @@ import { DeskApprovalCard, DeskChat, DeskEmpty, DeskHandedLine, type DeskChatAct
 import { DeskPaneReturn } from "../components/desk/desk-entry";
 import { DeskJobCard, JobMark, OutputMark } from "../components/desk/desk-job-card";
 import { DeskChatColumn, DeskChatHead, DeskRoom, DeskTabPanel, type PanelTab } from "../components/desk/desk-room";
-import { SessionHead, SessionQuestionCard, sessionQuestion } from "../components/desk/desk-session";
+import { SessionAskCard, SessionHead } from "../components/desk/desk-session";
+import { OutputShelf } from "../components/desk/output-shelf";
 import { SidebarHeader } from "../components/sidebar-header";
 import { DeskMentionMenu } from "../components/desk/desk-mention-menu";
 import { DeskOutputs } from "../components/desk/desk-outputs";
@@ -35,7 +36,7 @@ import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { MissionMap } from "../MissionMap";
 import { cn } from "../lib/utils";
 import { useShellStore } from "../store";
-import type { SnapshotRest } from "../snapshot";
+import type { SessionPull, SnapshotRest } from "../snapshot";
 import { missionFixture } from "./MissionScene";
 import {
   AGENTS, AGENTS_PREPARING, cardSceneItems, LONG_UNREADABLE_CARD, CHIP_PROJECT, CHIP_SESSION, CHIP_TEXT, chipItems, chipsScene, conductorThread, deskJob, enteredSessions, everyStateJobs, GALLERY_DONE_THREAD, galleryThread, handoffItems, IRREVERSIBLE_CARD, MENTIONS, MENU_PROJECTS, menuSessions,
@@ -49,7 +50,7 @@ export const DESK_SCENES = [
   { state: "s2b", label: "2-1 현황 묻기 (B7, D-24)" },
   { state: "s3", label: "3 카드 상태 모음 (B16-B24, B36-B39)" },
   { state: "s4", label: "4 Desk 옆에 연 세션 (B2, B6, B8, B9)" },
-  { state: "s5", label: "5 세션이 물을 때: 질문 카드 (B14, B34)" },
+  { state: "s5", label: "5 세션이 물을 때: 에이전트 자신의 선택 카드 (B14, B34)" },
   { state: "s7", label: "7 결과물이 세션 옆 탭 패널에 (B16-B21)" },
   { state: "agent", label: "에이전트 고르기 · 바꿈 (B4, B8, B9, B44)" },
   { state: "agent-preparing", label: "Desk를 켠 직후 · 어댑터 받는 중 (B44, D-80)" },
@@ -76,13 +77,15 @@ export const DESK_SCENES = [
 type SceneState = (typeof DESK_SCENES)[number]["state"];
 
 const noop = () => undefined;
+/** A copy the gallery takes as done, so `복사함 ✓` shows. */
+const copied = () => Promise.resolve(true);
 
 const CHAT_ACTIONS: DeskChatActions = {
   onOpen: noop, onAnswer: noop, onCancel: noop, onRequeue: noop, onRetry: noop, onOutput: noop, onMission: noop,
-  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: noop, onMention: noop, onHanded: noop,
+  onApproval: noop, onQueuedRemove: noop, onNoticeAction: noop, onCopy: copied, onMention: noop, onHanded: noop,
 };
 
-const PART_ACTIONS = { onMission: noop, onOutput: noop, onSession: noop };
+const PART_ACTIONS = { onMission: noop, outputOf: (output: DeskOutput) => output, onOutput: noop, onSession: noop, onCopy: copied };
 
 /** A session the scene names, as its chip draws it. */
 const sceneSession = (name: string): DeskSessionRef => Object.values(SESSIONS).find((session) => session.name === name) ?? { name, mark: null, agent_kind: null };
@@ -142,14 +145,18 @@ function samplePicture(): Blob {
   return new Blob([decodeURIComponent(data.slice(data.indexOf(",") + 1))], { type: "image/svg+xml" });
 }
 
-/** A session open beside Desk: its head, read as a pane head, its conversation, and the question card when it asks. */
-function ThreadColumn({ job, updates, parts, reading = false, failure = null, outputs = job.outputs, selectedOutput = null, focused = false, draft = "", files = [] }: {
+/** A card's pull requests as the session's PR list draws them on the shelf. */
+function scenePulls(job: DeskJob): SessionPull[] {
+  return job.pull_requests.map((pull) => ({ url: `https://github.com/with-hide/hide/pull/${pull.number}`, number: pull.number, title: `${job.title} #${pull.number}`, state: pull.state, own: true, holders: [], stale: false, last_read_at_unix_ms: null }));
+}
+
+/** A session open beside Desk: its head and outputs shelf, its conversation, and the question Hide found above the box when it asks. */
+function ThreadColumn({ job, updates, parts, reading = false, failure = null, selectedOutput = null, focused = false, draft = "", files = [] }: {
   job: DeskJob;
   updates: Parameters<typeof threadLines>[0];
   parts?: Parameters<typeof threadLines>[1];
   reading?: boolean;
   failure?: ThreadReadFailure | null;
-  outputs?: readonly DeskOutput[];
   selectedOutput?: string | null;
   focused?: boolean;
   draft?: string;
@@ -158,13 +165,22 @@ function ThreadColumn({ job, updates, parts, reading = false, failure = null, ou
   const [text, setText] = useState(draft);
   const actions = useMemo(() => createActions(() => true), []);
   const lines = useMemo(() => threadLines(updates, parts, sceneSession), [updates, parts]);
-  const question = sessionQuestion(job, null);
+  // A question is one Hide found in the conversation (the line above the box); an approval is the agent's own screen asking (its choice card).
+  const asks = useMemo(() => (job.state === "asking" && job.ask === "question" && job.question ? [
+    { id: `${job.id}:earlier`, text: "라이트 캡처는 6장 모두 찍을까요?", at_unix_ms: Date.now() - 12 * 60_000 },
+    { id: `${job.id}:ask`, text: job.question, at_unix_ms: Date.now() - 3 * 60_000 },
+  ] : []), [job]);
+  const choice = job.state === "asking" && job.ask === "approval" && job.question
+    ? <SessionAskCard ask={{ kind: "permission", turn: `${job.id}:turn`, since_ms: 2 * 60_000, command: job.question, choices: [{ id: "1", label: "Yes" }, { id: "2", label: "Yes, and don't ask again for this command" }, { id: "3", label: "No, and tell Codex what to do differently" }], answerable: true }} disabled={false} waited="2분" picked={null} answer={null} error={null} onPick={noop} onAnswer={noop} onTerminal={noop} onWrite={noop} />
+    : null;
   return <>
-    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} selectedOutput={selectedOutput} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
+    <SessionHead paneId={job.pane_id ?? job.id} title={job.title} job={job} row={null} pane={null} machine={job.machine} disconnected={job.disconnected} sleeping={job.state === "sleeping"} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />
+    <OutputShelf outputs={job.outputs} pulls={scenePulls(job)} selected={selectedOutput} onOpen={noop} onPull={noop} />
     <ThreadView
-      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk outputs={outputs} selectedOutput={selectedOutput}
+      job={job} lines={lines} reading={reading} failure={failure} mentions={MENTIONS} startedByDesk
       composer={{ value: text, tray: sceneTray(files), focused, onChange: setText, onSend: noop }}
-      ask={question ? <SessionQuestionCard question={question} onWrite={noop} /> : null}
+      ask={choice}
+      asks={asks}
       onTerminal={noop} {...PART_ACTIONS}
     />
   </>;
@@ -238,13 +254,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
         { kind: "job", id: 3, job_id: "gallery" },
       ];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { jobs: { gallery }, selectedJob: "gallery" })}
-        session={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} outputs={[]} />} />;
+        session={<ThreadColumn job={gallery} updates={thread.updates} parts={thread.parts} />} />;
       break;
     }
     case "s5": {
       const items: DeskItem[] = [{ kind: "job", id: 1, job_id: "record" }, { kind: "job", id: 2, job_id: "gallery" }];
       body = <Room chat={chat(items, <ChatComposer selection={CLAUDE} />, { selectedJob: "record" })}
-        session={<ThreadColumn job={jobs.record!} updates={RECORD_THREAD} outputs={[]} focused draft="응 지우고 다시 빌드해" />} />;
+        session={<ThreadColumn job={jobs.record!} updates={RECORD_THREAD} focused draft="응 지우고 다시 빌드해" />} />;
       break;
     }
     case "s7": {
@@ -298,13 +314,13 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       const log: TrayFile = { id: "log", name: "설치-로그.txt", size: 84_000, preview: null, state: "reading", read: 34_000 };
       const thread = conductorThread(jobs);
       body = <Room chat={chat(sent, <ChatComposer selection={CLAUDE} value="이 화면이랑 로그 보고 왜 끊기는지 봐 줘" files={[shot, zip]} />)}
-        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} outputs={[]} draft="이 로그도 같이 봐 줘" files={[log]} />} />;
+        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} draft="이 로그도 같이 봐 줘" files={[log]} />} />;
       break;
     }
     case "parts": {
       const thread = conductorThread(jobs);
       body = <Room chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
-        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} outputs={[]} />} />;
+        session={<ThreadColumn job={jobs.conductor!} updates={thread.updates} parts={thread.parts} />} />;
       break;
     }
     case "pane":
@@ -324,7 +340,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
     case "mission":
       body = <Room chat={chat(missionItems(now), <ChatComposer selection={CLAUDE} />, { selectedJob: "conductor" })}
         panel={<DeskTabPanel tabs={[tab("map", t("desk.lane.missionMap", { title: "Desk 1차" }), true, <MapIcon aria-hidden="true" className="size-(--size-icon-sm)" />)]} active="map" onTab={noop} onKeep={noop} onCloseTab={noop} onClose={noop}><MissionMap missionId="mission-1" actions={actions} /></DeskTabPanel>}
-        session={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} outputs={[]} />} />;
+        session={<ThreadColumn job={jobs["1b"]!} updates={WORKER_THREAD} />} />;
       break;
     case "outputs":
       body = <OutputsCriteria />;
@@ -343,7 +359,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
           {column("failed", <ThreadColumn job={jobs.release!} updates={[]} failure="no_record" />)}
           {column("reading", <ThreadColumn job={jobs.release!} updates={[]} reading />)}
           {column("empty", <ThreadColumn job={fresh} updates={[]} />)}
-          {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} outputs={[]} />)}
+          {column("disconnected", <ThreadColumn job={off} updates={RECORD_THREAD} />)}
         </div>
       );
       break;

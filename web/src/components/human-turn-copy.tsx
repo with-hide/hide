@@ -11,8 +11,36 @@ import { Hint } from "./ui/tooltip";
 /** Puts text on the clipboard of the screen the operator looks at, answering whether it took it (`Actions.copyText`, the phone's `browserClipboard`). */
 export type CopyText = (text: string, what: string) => Promise<boolean>;
 
-/** How long the copy icon stays a check after the place was copied. */
+/** How long a copy control says it copied. */
 const COPIED_MS = 1500;
+
+/**
+ * A copy control's moment of `복사함`: `run` puts the text on the clipboard
+ * through `copy`, and `copied` holds for 1.5 s once the clipboard took it.
+ * A refused write leaves it as it was (design principle 13), and a write
+ * that lands after the control went arms nothing.
+ */
+export function useCopied(copy: CopyText): { copied: boolean; run: (text: string, what: string) => void } {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
+  }, []);
+  const run = (text: string, what: string) => {
+    void copy(text, what).then((took) => {
+      if (!took || !mounted.current) return;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      setCopied(true);
+      timer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
+    });
+  };
+  return { copied, run };
+}
 
 /**
  * A surface with a pointer shows Copy only under the pointer, on keyboard
@@ -35,14 +63,7 @@ const REVEALED = "-my-xxs opacity-0 group-hover/turn:opacity-100 focus-visible:o
  */
 export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: { id: string; place: string }; copy: CopyText; touch?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<number | null>(null);
-  // A write that lands after the line went arms no timer for a part that is gone.
-  const mounted = useRef(true);
-  useEffect(() => () => {
-    mounted.current = false;
-    if (timer.current !== null) window.clearTimeout(timer.current);
-  }, []);
+  const { copied, run } = useCopied(copy);
   const label = copied ? t("common.copied") : t("agents.human.copyPlace");
   const button = (
     <Button
@@ -56,12 +77,7 @@ export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: 
       onMouseDown={(event) => event.preventDefault()}
       onClick={(event) => {
         event.stopPropagation();
-        void copy(turn.place, "person's turn place").then((took) => {
-          if (!took || !mounted.current) return;
-          if (timer.current !== null) window.clearTimeout(timer.current);
-          setCopied(true);
-          timer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
-        });
+        run(turn.place, "person's turn place");
       }}
     >
       {copied ? <CheckIcon aria-hidden="true" className="text-success" /> : <CopyIcon aria-hidden="true" />}

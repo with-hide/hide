@@ -177,7 +177,8 @@ function holderNames(pull: SessionPull): string | null {
   return pull.own && pull.holders.length <= 1 ? null : pull.holders.join(" · ") || null;
 }
 
-function PrListItem({ pull }: { pull: SessionPull }) {
+/** One PR of a list as every PR list draws it: its mark (stale and closed as they read), its title and who holds it. */
+export function PrListItem({ pull }: { pull: SessionPull }) {
   const { t } = useInterfaceTranslation();
   const names = holderNames(pull);
   return (

@@ -4,7 +4,10 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAttachments } from "../../attachments";
+import { configureFileBytes, receiveBytes } from "../../fileBytes";
 import { keepSent } from "../../deskComposer";
+import type { CopyText } from "../human-turn-copy";
+import type { AskLine } from "../open-asks";
 import type { DeskJob } from "../../desk";
 import type { SessionThreadSection } from "../../snapshot";
 import { useShellStore } from "../../store";
@@ -48,7 +51,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
+async function mount(card: DeskJob | null = job, foot: ReactNode = null, { asks = [], onCopy = () => Promise.resolve(true) }: { asks?: AskLine[]; onCopy?: CopyText } = {}) {
   const actions = { openThread: vi.fn(), closeThread: vi.fn(), readOlderThread: vi.fn() };
   const container = document.createElement("div");
   document.body.append(container);
@@ -57,7 +60,7 @@ async function mount(card: DeskJob | null = job, foot: ReactNode = null) {
   const noop = () => undefined;
   await act(async () => root.render(
     <TooltipProvider>
-      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+      <ThreadPanel job={card} paneId={job.pane_id} actions={actions} foot={foot} asks={asks} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={onCopy} />
     </TooltipProvider>,
   ));
   const box = () => container.querySelector("textarea")!;
@@ -219,6 +222,23 @@ it("draws the files a sent message typed before its words over its bubble, by th
   expect(container.querySelector('[data-desk-thread-line="user"] p')?.textContent).toBe("이것 좀 봐 줘");
 });
 
+it("draws an image the session showed as its picture, read from the file as the shelf reads it", async () => {
+  const reads: Record<string, unknown>[] = [];
+  configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
+  vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: () => "blob:dark", revokeObjectURL: () => undefined }));
+  const { container } = await mount();
+  const shown = { sessionUpdate: "tool_call", toolCallId: "f", kind: "execute", title: "hide file open /repo/shots/dark.png", status: "completed" };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: { updates: [shown], parts: { f: { kind: "view", view: "file", target: "/repo/shots/dark.png" } }, sessions: {} } }) }));
+  expect(reads).toMatchObject([{ path: "/repo/shots/dark.png" }]);
+  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: reads[0]!.request_id, path: "/repo/shots/dark.png", offset: 0, total: 1, eof: true }));
+  const frame = new Uint8Array(4 + header.length + 1);
+  new DataView(frame.buffer).setUint32(0, header.length, false);
+  frame.set(header, 4);
+  await act(async () => receiveBytes(frame.buffer));
+  const tile = container.querySelector('[data-desk-hide-part="view"] [data-desk-output-thumb="image"]');
+  expect(tile?.querySelector("img")?.getAttribute("src")).toBe("blob:dark");
+});
+
 it("draws a turn an agent recorded as interrupted as one quiet line, never as the operator's bubble", async () => {
   const { container } = await mount();
   const interrupted = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "[Request interrupted by user]" }, _meta: { hide: { origin: "interrupted" } } };
@@ -228,5 +248,74 @@ it("draws a turn an agent recorded as interrupted as one quiet line, never as th
   expect(line?.textContent).toBe("Interrupted");
   expect(container.textContent).not.toContain("Request interrupted");
   // The only bubble is the operator's own words.
-  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
+  expect(Array.from(container.querySelectorAll('[data-desk-thread-line="user"] [data-desk-thread-bubble]')).map((one) => one.textContent)).toEqual(["다크도 찍어줘"]);
+});
+
+/** Waits until the lazily loaded Markdown language parsed the messages, so a code block carries its copy button. */
+const codeCopyDrawn = (container: HTMLElement) => act(() => vi.waitFor(() => expect(container.querySelector("[data-markdown-code-copy]")).not.toBeNull()));
+
+it("draws the agent's words as Markdown and copies a message's original words and a code block's code (Doop E2)", async () => {
+  const copied: [string, string][] = [];
+  const { container } = await mount(job, null, { onCopy: async (text, what) => { copied.push([text, what]); return true; } });
+  const words = "**라이트**는 끝났어요.\n\n```\nopen https://play.google.com/console\n```";
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "다크도 찍어줘" } }, said(words)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  await codeCopyDrawn(container);
+  const message = container.querySelector('[data-desk-thread-line="agent"]')!;
+  expect(message.querySelector('[data-markdown-text="true"]')).not.toBeNull();
+  await act(async () => message.querySelector<HTMLElement>('[data-message-copy] [data-copy-words="message"]')!.click());
+  await act(async () => message.querySelector<HTMLElement>('[data-markdown-code-copy] [data-copy-words="code block"]')!.click());
+  expect(copied).toEqual([[words, "message"], ["open https://play.google.com/console", "code block"]]);
+  // A copy that took says so on the button that made it.
+  expect(message.querySelector('[data-copy-words="message"]')?.getAttribute("data-copied")).toBe("true");
+});
+
+it("keeps every message's view while the operator types and while the last message streams, so a selection in one stays", async () => {
+  // Mounted as Desk mounts it: no mentions passed.
+  const { container, type } = await mount();
+  const answer = (id: string, text: string) => ({ sessionUpdate: "agent_message_chunk", messageId: id, content: { type: "text", text } });
+  const turns = (last: string) => ({ updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "첫 질문" } }, answer("a", "첫 **답**"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "둘째 질문" } }, answer("b", last)], parts: {}, sessions: {} });
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중") }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  const views = () => Array.from(container.querySelectorAll('[data-desk-thread-line="agent"] .cm-editor'));
+  const [first, second] = views();
+  expect([first, second].every(Boolean)).toBe(true);
+  await type("다");
+  expect(views()).toEqual([first, second]);
+  // A streamed chunk redraws only the message it grows.
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail: turns("쓰는 중, 더 썼어요") }) }));
+  expect(views()[0]).toBe(first);
+  expect(container.textContent).toContain("쓰는 중, 더 썼어요");
+});
+
+it("shows the questions Hide found above the box and goes to the answer each was asked in, lit for 2 s (Doop B4)", async () => {
+  const scrolled: string[] = [];
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this.textContent ?? ""); };
+  const answer = (text: string, at: number) => ({ sessionUpdate: "agent_message_chunk", messageId: text, content: { type: "text", text }, _meta: { hide: { at_ms: at } } });
+  const asks: AskLine[] = [
+    { id: "missed-1-0", text: "다크도 찍을지 물었어요", at_unix_ms: 1_500 },
+    { id: "missed-2-0", text: "본인 확인을 직접 해 줄 수 있는지 물었어요", at_unix_ms: 2_500 },
+  ];
+  const { container } = await mount(job, null, { asks });
+  const tail = { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "스크린샷 찍어 줘" } }, answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "결제해놨어" } }, answer("본인 확인은 직접 해 줄 수 있어?", 2_000)], parts: {}, sessions: {} };
+  await act(async () => useShellStore.setState({ sessionThread: section({ tail }), sessionThreadHistory: { generation: 4, pages: [] } }));
+  // One line above the box says the newest question and how many more there are.
+  const line = container.querySelector("[data-desk-thread-asks]")!;
+  expect(line.querySelector('[data-desk-thread-ask="missed-2-0"]')?.textContent).toContain("본인 확인을 직접 해 줄 수 있는지 물었어요");
+  expect(line.querySelector("[data-desk-thread-asks-more]")?.getAttribute("data-desk-thread-asks-more")).toBe("1");
+  expect(line.compareDocumentPosition(container.querySelector("textarea")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  vi.useFakeTimers();
+  try {
+    await act(async () => line.querySelector<HTMLElement>('[data-desk-thread-ask="missed-2-0"]')!.click());
+    const lit = () => Array.from(container.querySelectorAll('[data-desk-thread-lit="true"]')).map((one) => one.textContent);
+    expect(scrolled.at(-1)).toContain("본인 확인은 직접 해 줄 수 있어?");
+    expect(lit()).toEqual([expect.stringContaining("본인 확인은 직접 해 줄 수 있어?")]);
+    await act(async () => vi.advanceTimersByTime(1_999));
+    expect(lit()).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(lit()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
