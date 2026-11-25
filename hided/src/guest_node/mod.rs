@@ -15,7 +15,7 @@ pub(crate) mod away;
 mod event_box;
 mod tap;
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -434,7 +434,7 @@ pub fn run(dir: &str) -> ! {
         let session = life.begin(stream.shutdown_handle());
         record("guest_node.link_started", json!({"session": session}));
         terminals.relink();
-        let reader = BufReader::new(stream.duplicate());
+        let reader = stream.duplicate();
         // The link's end closes its stream (`LinkEnd::Shut`), whichever end
         // ended the link.
         let ending = stream.shutdown_handle();

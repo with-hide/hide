@@ -4,7 +4,7 @@
 //! connection that started it (PRD S5.5 D-20).
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -79,7 +79,7 @@ pub trait Terminals: Send + Sync {
 }
 
 pub fn serve(
-    input: impl BufRead,
+    input: impl Read,
     output: impl Write + Send + 'static,
     end: LinkEnd,
 ) -> io::Result<()> {
@@ -89,7 +89,7 @@ pub fn serve(
 /// [`serve`] with the node's terminal service, for a node whose process is
 /// its link (`LinkEnd::Process`).
 pub fn serve_with_terminals(
-    input: impl BufRead,
+    input: impl Read,
     output: impl Write + Send + 'static,
     terminals: &dyn Terminals,
 ) -> io::Result<()> {
@@ -238,7 +238,7 @@ impl Services<'_> {
 
 /// [`serve`] with what `services` names.
 pub fn serve_with(
-    input: impl BufRead,
+    input: impl Read,
     output: impl Write + Send + 'static,
     services: Services<'_>,
 ) -> io::Result<()> {
@@ -246,7 +246,7 @@ pub fn serve_with(
 }
 
 fn serve_in(
-    mut input: impl BufRead,
+    input: impl Read,
     output: impl Write + Send + 'static,
     env: Env,
     services: Services<'_>,
@@ -284,6 +284,10 @@ fn serve_in(
         output,
         liveness: Arc::clone(&liveness),
     }));
+    let mut input = io::BufReader::new(LinkInput {
+        input,
+        liveness: &liveness,
+    });
     start_pinger(&link_output, &liveness)?;
     let output = &*link_output;
     let link = crate::link_bridge::LinkBridge::new(services.browser);
@@ -483,7 +487,6 @@ fn serve_in(
                 drop(pane_receiver);
                 let result = read_requests(
                     &mut input,
-                    &liveness,
                     [&sender, &control_sender, &background_sender, &pane_sender],
                     output,
                     &running,
@@ -582,6 +585,25 @@ pub fn windows_drives() -> Option<String> {
     }
 }
 
+/// The link's input as the node reads it: each read of the connection that
+/// brings bytes is heard (`Liveness::hear`), so a line still arriving keeps
+/// the link alive, once per read under the node's buffer rather than once
+/// per line.
+struct LinkInput<'a, R> {
+    input: R,
+    liveness: &'a Liveness,
+}
+
+impl<R: Read> Read for LinkInput<'_, R> {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        let read = self.input.read(into)?;
+        if read > 0 {
+            self.liveness.hear();
+        }
+        Ok(read)
+    }
+}
+
 /// The link's output as the node writes it: a write that fails tells the
 /// link's watch, which ends the link even while the core still writes.
 /// Every line is written with one `write_all` under the output's lock
@@ -651,9 +673,8 @@ fn start_pinger<W: Write + Send + 'static>(
 }
 
 /// One whole line, newline included, or what is left of the input when it
-/// ends without one; `None` at its end. Every read that brings bytes is
-/// heard, so a line still arriving keeps the link alive.
-fn read_line(input: &mut impl BufRead, liveness: &Liveness) -> io::Result<Option<Vec<u8>>> {
+/// ends without one; `None` at its end.
+fn read_line(input: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
     loop {
         let available = match input.fill_buf() {
@@ -664,7 +685,6 @@ fn read_line(input: &mut impl BufRead, liveness: &Liveness) -> io::Result<Option
         if available.is_empty() {
             return Ok((!line.is_empty()).then_some(line));
         }
-        liveness.hear();
         let (taken, whole) = match available.iter().position(|byte| *byte == b'\n') {
             Some(end) => (end + 1, true),
             None => (available.len(), false),
@@ -688,14 +708,13 @@ fn read_line(input: &mut impl BufRead, liveness: &Liveness) -> io::Result<Option
 /// background, pane]`.
 fn read_requests(
     input: &mut impl BufRead,
-    liveness: &Liveness,
     [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
     output: &Mutex<impl Write>,
     running: &Mutex<HashMap<u64, bool>>,
     terminals: Option<&dyn Terminals>,
 ) -> io::Result<()> {
     loop {
-        let Some(line) = read_line(input, liveness)? else {
+        let Some(line) = read_line(input)? else {
             return Ok(());
         };
         if line == PING_LINE {
