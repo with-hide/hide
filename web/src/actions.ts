@@ -306,9 +306,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * moving one slider right after the other would send the first one's older
    * value back. The folds (`collapsed_workspace_ids`,
    * `expanded_checkout_ids`, `expanded_agent_pane_ids`,
-   * `sessions_expanded_agent_pane_ids`) are left out for the same reason: the
-   * core owns them through `project_checkouts_fold`, `checkout_agents_toggle`,
-   * `agent_tree_toggle` and `session_tree_toggle`. The recent lists
+   * `sessions_expanded_agent_pane_ids`, `folded_guest_work`) are left out for
+   * the same reason: the core owns them through `project_checkouts_fold`,
+   * `checkout_agents_toggle`, `agent_tree_toggle`, `session_tree_toggle` and
+   * `guest_work_fold_toggle`. The recent lists
    * (`recent_checkouts`, `recent_pane_ids`) ride along and the core ignores
    * them, keeping its own. The keyboard's pane, checkout and device are left
    * out too: the core moves them on their own events, and this copy can be
@@ -329,6 +330,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       expanded_checkout_ids: _checkoutFolds,
       expanded_agent_pane_ids: _lineageFolds,
       sessions_expanded_agent_pane_ids: _sessionFolds,
+      folded_guest_work: _guestFolds,
       selected_pane_id: _pane,
       focused_checkout_id: _checkout,
       focused_device_id: _device,
@@ -342,6 +344,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     void _terminalFontFamily;
     void _language;
     void _projectFolds;
+    void _guestFolds;
     void _checkoutFolds;
     void _lineageFolds;
     void _sessionFolds;
@@ -1752,6 +1755,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     setProductAnalytics(enabled: boolean) {
       dispatch({ schema_version: 2, kind: "product_analytics_set", payload: { enabled } });
     },
+    setRailCounts(shown: boolean) {
+      dispatch({ schema_version: 2, kind: "rail_counts_set", payload: { shown } });
+    },
     setDesktopNotifications(enabled: boolean, doneEnabled?: boolean) {
       dispatch({ schema_version: 2, kind: "desktop_notifications_set", payload: doneEnabled === undefined ? { enabled } : { enabled, done_enabled: doneEnabled } });
     },
@@ -2815,6 +2821,25 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * A ⌘P pick on Desk (PRD desk-2-ui D-23, B37, B38): the file opens in the
+     * tab panel, as the checkout's preview tab as the app's ⌘P opens it, or
+     * to the side (`beside`, ⌘↵): a second view of the file in the panel, the
+     * window's own, which leaves nothing in any Workspace's layout. The
+     * Explorer column stays as it was.
+     */
+    openDeskIndexEntry(hit: { device_id: string; root_path: string; path: string }, beside = false) {
+      ui().closeOverlay();
+      ui().setExplorerSelection(hit.path);
+      this.deskOpen({ kind: "file", device_id: hit.device_id, root: hit.root_path, path: hit.path }, beside ? { beside: true } : { preview: true });
+    },
+
+    /** ⌘↵ on a session in Desk's ⌘K (PRD desk-2-ui D-24, B39): its tab, where ⌘J brings Desk back (B7). */
+    openDeskSessionTab(paneId: string) {
+      ui().setDeskReturn(paneId);
+      this.openAgent(paneId);
+    },
+
+    /**
      * The whole set of files Desk's room shows (PRD desk-2-ui B19, B36, B37,
      * `deskFiles.ts`): hided holds them for this window and lets them go
      * when it leaves. The room's watcher calls it.
@@ -3706,6 +3731,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "session_fold_toggle", payload: { key } });
     },
 
+    /** Folds or opens the head of `deviceId`'s work in the place whose folder is `folder` (`""` outside every project); the core keeps it. */
+    toggleGuestWorkFold(deviceId: string, folder: string) {
+      dispatch({ schema_version: 2, kind: "guest_work_fold_toggle", payload: { device_id: deviceId, folder } });
+    },
+
     toggleInactiveCheckouts(projectPath: string) {
       dispatch({ schema_version: 2, kind: "inactive_checkouts_toggle", payload: { project_path: projectPath } });
     },
@@ -4109,10 +4139,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
     },
 
-    /**
-     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
-     * project Desk named last, comes first in the answer.
-     */
     /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
     askPane(deviceId: string, paneId: string) {
       dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
@@ -4130,6 +4156,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       return sent === false ? null : requestId;
     },
 
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
     requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
       dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },

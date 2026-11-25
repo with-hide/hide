@@ -17,8 +17,18 @@ export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pi
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
-/** Seen demands and sleeping raised asks still carry turn; bucket is not activity. */
+/**
+ * A session's filter group on the operator's map: 내 차례 is the core's `group` alone, the rule every other number
+ * of the operator's turns follows (docs/status-model.md), so a read question or a read View, Seen whatever its mark
+ * says, stays on the map as an idle session and is no one's turn.
+ */
 export function graphActivity(agent: AgentRow): GraphActivity {
+  if (agent.group === "needs_you") return "turn";
+  const own = markActivity(agent);
+  return own === "turn" ? "idle" : own;
+}
+/** The session's own mark as a filter group; a tool's cell reads it too (`toolGraphActivity`). */
+function markActivity(agent: AgentRow): GraphActivity {
   switch (agent.mark) {
     case "turn": case "look": return "turn";
     case "going": case "waiting": return "working";
@@ -41,7 +51,7 @@ export function toolGraphActivity(agent: AgentRow, card: TaskState | undefined):
     case "working": case "waiting": return "working";
     case "done": return "results";
   }
-  const own = graphActivity(agent);
+  const own = markActivity(agent);
   return own !== "turn" ? own : card === undefined ? "working" : "idle";
 }
 /** Whether a session's own words, its title, checkout or branch, hold a search's lowercased needle. */

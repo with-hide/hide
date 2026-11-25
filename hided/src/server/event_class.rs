@@ -278,6 +278,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     // only a machine holding an open grant to this one draws (D-74, B10).
     ("guest_pane_close", Window),
     ("guest_panes", Daemon),
+    ("guest_work_fold_toggle", Screen),
     ("herdr_import", Screen),
     ("herdr_profiles_list", Screen),
     ("hide_ai_switch", Screen),
@@ -369,6 +370,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("project_memory_navigate", Screen),
     ("project_settings_set", Screen),
     ("project_target", Screen),
+    ("rail_counts_set", Screen),
     ("reconnect_pane", Screen),
     ("refresh_status", Screen),
     ("register_device", Local),

@@ -1514,6 +1514,99 @@ fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_
     }
 }
 
+/// A folded head of another machine's work (operator review 2026-11-25)
+/// over the state folders released builds wrote: the fold names the
+/// machine by its device id, and the next start's conversions keep it as
+/// this build stored it (`Moves::Stays`), so the core reads the same fold.
+#[test]
+fn a_folded_head_of_another_machines_work_over_a_released_state_folder_is_kept_at_the_next_start() {
+    use crate::node_migration::upgrade_tests::{fixtures, started};
+    use crate::node_migration::{CORE_STATE, MARKER_FILE, convert, name_devices};
+
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let stored = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(state.path().join(name)).unwrap()).unwrap()
+        };
+        let node = crate::node::NodeId::parse(stored(MARKER_FILE)["node"].as_str().unwrap())
+            .unwrap_or_else(|error| panic!("{tag}: {error}"));
+        let home = tempfile::tempdir().unwrap();
+        // A core's start over the folder, as `runtime_showing_drives` makes
+        // one over an empty folder.
+        let reading = || {
+            Runtime::new(
+                CoreOptions {
+                    schema_version: SCHEMA_VERSION,
+                    home: None,
+                    node_id: node.clone(),
+                    app_state_path: state.path().join(CORE_STATE).to_string_lossy().into_owned(),
+                    host_helper_root: None,
+                    host_cli_dir: None,
+                    workspace_views_path: None,
+                    shortcut_import_path: None,
+                    local_issues_path: None,
+                    machine_name: None,
+                    windows_drives: None,
+                    account_state_folder: false,
+                },
+                environment::EnvironmentReport {
+                    statuses: Vec::new(),
+                    home_path: Some(home.path().to_path_buf()),
+                    codex_home: None,
+                },
+                std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
+                crate::node::test_devices(),
+            )
+        };
+        let fold = crate::guest_panes::GuestWorkFold {
+            device_id: "windows-pc".into(),
+            folder: String::new(),
+        };
+
+        let mut runtime = reading();
+        runtime.snapshot.navigator.guest_panes = vec![crate::guest_panes::GuestPanes {
+            device_id: "windows-pc".into(),
+            key: "ab".repeat(32),
+            panes: Vec::new(),
+        }];
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "guest_work_fold_toggle",
+            "payload": { "device_id": "windows-pc", "folder": "" },
+        }))
+        .expect("fold event");
+        assert!(runtime.dispatch_json(&event), "{tag}");
+        assert_eq!(
+            runtime.snapshot.ui_state.folded_guest_work,
+            std::slice::from_ref(&fold),
+            "{tag}"
+        );
+        drop(runtime);
+        let saved = stored(CORE_STATE)["folded_guest_work"].clone();
+        assert_eq!(
+            saved,
+            serde_json::json!([{ "device_id": "windows-pc", "folder": "" }]),
+            "{tag}"
+        );
+
+        // The next start: what `hided` runs before the core reads the folder.
+        convert(state.path(), &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        name_devices(state.path(), &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        assert_eq!(
+            stored(CORE_STATE)["folded_guest_work"],
+            saved,
+            "{tag}: the start moved the fold"
+        );
+        assert_eq!(
+            reading().snapshot.ui_state.folded_guest_work,
+            [fold],
+            "{tag}"
+        );
+    }
+}
+
 /// A machine this one opens is a device for as long as the pairing holds
 /// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
 /// kept through a pause, and removed with what Hide recorded for it when
@@ -2612,10 +2705,10 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
 /// B10: what this core shows its work on a machine it opens by, read for
 /// that machine by its connection key, each pane by the id the machine's
 /// node lists it under: the agent's label, else the name its tab was given,
-/// the branch of its checkout and the mark its row is drawn with. A tab
-/// known only by its number has no name and is still told, by its branch
-/// and a quiet mark; a machine whose session this core does not hold now
-/// tells nothing.
+/// the branch of its checkout, the mark its row is drawn with and the
+/// agent that runs in it. A tab known only by its number has no name and
+/// is still told, by its branch and a quiet mark, with no agent; a machine
+/// whose session this core does not hold now tells nothing.
 #[test]
 fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
     let mut runtime = runtime();
@@ -2693,7 +2786,15 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         .remove(&key)
         .expect("the machine is told")
         .into_iter()
-        .map(|named| (named.pane, named.name, named.branch, named.mark))
+        .map(|named| {
+            (
+                named.pane,
+                named.name,
+                named.branch,
+                named.mark,
+                named.agent,
+            )
+        })
         .collect();
     let branch = || Some("m75-relay".to_owned());
     assert_eq!(
@@ -2703,20 +2804,119 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
                 "w1:p1".to_owned(),
                 Some("로그인 고치기".to_owned()),
                 branch(),
-                crate::agent_state::RowMark::Going
+                crate::agent_state::RowMark::Going,
+                Some("codex".to_owned())
             ),
             (
                 "w1:p2".to_owned(),
                 Some("배포 확인".to_owned()),
                 branch(),
-                crate::agent_state::RowMark::Quiet
+                crate::agent_state::RowMark::Quiet,
+                None
             ),
             (
                 "w1:p3".to_owned(),
                 None,
                 branch(),
-                crate::agent_state::RowMark::Quiet
+                crate::agent_state::RowMark::Quiet,
+                None
             ),
         ]
+    );
+}
+
+/// B10, operator review 2026-11-25: a head of another machine's work folds
+/// and opens again by its machine and the folder of the place it stands in
+/// (a project or checkout of this machine, or `""` outside every project),
+/// survives a restart, and is refused for a machine or a folder the list
+/// does not hold; past the cap the oldest fold opens again.
+#[test]
+fn a_head_of_another_machines_work_folds_by_machine_and_folder_and_is_kept() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "shop",
+        "shop",
+        "/work/shop",
+        vec![checkout("shop", "shop:main", "/work/shop", None)],
+    )];
+    runtime.snapshot.navigator.guest_panes = vec![crate::guest_panes::GuestPanes {
+        device_id: "macbook".into(),
+        key: "cd".repeat(32),
+        panes: Vec::new(),
+    }];
+    let toggle = |device: &str, folder: &str| {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "guest_work_fold_toggle",
+            "payload": { "device_id": device, "folder": folder },
+        }))
+        .expect("event")
+    };
+    let fold = |folder: &str| crate::guest_panes::GuestWorkFold {
+        device_id: "macbook".into(),
+        folder: folder.into(),
+    };
+
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    assert!(runtime.dispatch_json(&toggle("macbook", "")));
+    assert_eq!(
+        runtime.snapshot.ui_state.folded_guest_work,
+        [fold("/work/shop"), fold("")]
+    );
+    let (restored, _, _) = persistence::load(&runtime.state_path);
+    assert_eq!(restored.folded_guest_work, [fold("/work/shop"), fold("")]);
+
+    // Toggled again, the head opens; the other stays folded.
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    assert_eq!(runtime.snapshot.ui_state.folded_guest_work, [fold("")]);
+
+    // A machine with no work here, or a folder no project holds, folds nothing.
+    for (device, folder) in [("windows-pc", "/work/shop"), ("macbook", "/elsewhere")] {
+        assert!(runtime.dispatch_json(&toggle(device, folder)));
+        assert_eq!(
+            runtime.snapshot.ui_state.folded_guest_work,
+            [fold("")],
+            "{device} {folder}"
+        );
+    }
+
+    // Full: a fold whose machine or folder is no longer listed goes first,
+    // even when a drawn one is older.
+    let mut full = vec![fold("")];
+    full.extend(
+        (1..crate::guest_panes::MAX_FOLDS).map(|n| crate::guest_panes::GuestWorkFold {
+            device_id: format!("gone-{n}"),
+            folder: String::new(),
+        }),
+    );
+    runtime.snapshot.ui_state.folded_guest_work = full;
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    let folds = &runtime.snapshot.ui_state.folded_guest_work;
+    assert_eq!(folds.len(), crate::guest_panes::MAX_FOLDS);
+    assert_eq!(folds[0], fold(""), "the drawn fold is kept");
+    assert_eq!(folds[1].device_id, "gone-2");
+    assert_eq!(folds.last(), Some(&fold("/work/shop")));
+
+    // Every fold drawn: the oldest opens again.
+    runtime.snapshot.navigator.guest_panes = (0..=crate::guest_panes::MAX_FOLDS)
+        .map(|n| crate::guest_panes::GuestPanes {
+            device_id: format!("m-{n}"),
+            key: "cd".repeat(32),
+            panes: Vec::new(),
+        })
+        .collect();
+    runtime.snapshot.ui_state.folded_guest_work = (0..crate::guest_panes::MAX_FOLDS)
+        .map(|n| crate::guest_panes::GuestWorkFold {
+            device_id: format!("m-{n}"),
+            folder: String::new(),
+        })
+        .collect();
+    let last = format!("m-{}", crate::guest_panes::MAX_FOLDS);
+    assert!(runtime.dispatch_json(&toggle(&last, "")));
+    let folds = &runtime.snapshot.ui_state.folded_guest_work;
+    assert_eq!(folds.len(), crate::guest_panes::MAX_FOLDS);
+    assert_eq!(folds[0].device_id, "m-1");
+    assert_eq!(
+        folds.last().map(|kept| kept.device_id.as_str()),
+        Some(last.as_str())
     );
 }

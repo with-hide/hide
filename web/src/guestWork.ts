@@ -39,6 +39,8 @@ export type GuestPane = {
   project: string | null;
   /** That project's checkout that holds the folder, by its longest path: the row the work stands under. */
   checkoutId: string | null;
+  /** The agent its machine says runs in it (`claude`, `codex`, ...), for the row's logo; `null` for a plain terminal, or a machine whose build tells none. */
+  agent: string | null;
 };
 
 const NO_GUESTS: GuestPanes[] = [];
@@ -95,39 +97,89 @@ export function guestPanes(rest: SnapshotRest | null | undefined, projects: read
         const folder = pane.folder ?? null;
         const branch = pane.branch?.trim();
         const label = pane.name?.trim() || (branch ? terminal(branch) : null) || (folder ? folderName(folder) : pane.pane);
-        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, status: markOf(pane.mark), ...placeOf(folder) };
+        return { id: pane.id, deviceId: guest.device_id, key: guest.key, machine, mark: tileMonogram(machine), folder, label, status: markOf(pane.mark), agent: pane.agent?.trim() || null, ...placeOf(folder) };
       });
   });
 }
 
 /**
- * Where `projectId`'s panes of other machines' work stand in a list that
- * draws `rows`, the project's checkouts it shows as rows: each under the
- * checkout that holds its folder, after that checkout's own rows, and the
- * rest (a checkout folded away, or the project's own row standing for it)
- * at the project's end, so none is hidden by a fold (B10).
+ * How one project's tree is drawn now, for placing other machines' work in
+ * it: whether the project is open, the checkouts it draws as rows, and the
+ * checkouts a closed fold keeps (다른 체크아웃).
  */
-export function guestPlaces(panes: readonly GuestPane[], projectId: string, rows: ReadonlySet<string>): { byCheckout: ReadonlyMap<string, GuestPane[]>; atEnd: GuestPane[] } {
+export type GuestLayout = { open: boolean; rows: ReadonlySet<string>; folded: ReadonlySet<string> };
+
+/** A project whose tree is open and draws no checkout as a row, as when every checkout waits under 정리할 것: its panes all stand at its end. */
+export const NO_CHECKOUT_ROWS: GuestLayout = { open: true, rows: new Set(), folded: new Set() };
+
+/** The fold of `projectId`'s tree that hides `pane`'s place: the project's own, the 다른 체크아웃 fold its checkout waits in, or none. */
+export type GuestFold = "project" | "others" | null;
+
+function foldOf(pane: GuestPane, layout: GuestLayout): GuestFold {
+  if (!layout.open) return "project";
+  if (pane.checkoutId !== null && !layout.rows.has(pane.checkoutId) && layout.folded.has(pane.checkoutId)) return "others";
+  return null;
+}
+
+/**
+ * Where `projectId`'s panes of other machines' work stand (B10, operator
+ * review 2026-11-25): each under the checkout row that holds its folder,
+ * after that checkout's own rows; at the project's end, inside it, when its
+ * checkout has no row of its own (the project's row stands for it, or it
+ * waits under 정리할 것 or is a Hide AI checkout the tree does not draw);
+ * and nowhere while a fold hides its place, the project's own or the fold
+ * its checkout waits in.
+ */
+export function guestPlaces(panes: readonly GuestPane[], projectId: string, layout: GuestLayout): { byCheckout: ReadonlyMap<string, GuestPane[]>; atEnd: GuestPane[] } {
   const byCheckout = new Map<string, GuestPane[]>();
   const atEnd: GuestPane[] = [];
   for (const pane of panes) {
-    if (pane.projectId !== projectId) continue;
-    if (pane.checkoutId !== null && rows.has(pane.checkoutId)) byCheckout.set(pane.checkoutId, [...(byCheckout.get(pane.checkoutId) ?? []), pane]);
+    if (pane.projectId !== projectId || foldOf(pane, layout) !== null) continue;
+    if (pane.checkoutId !== null && layout.rows.has(pane.checkoutId)) byCheckout.set(pane.checkoutId, [...(byCheckout.get(pane.checkoutId) ?? []), pane]);
     else atEnd.push(pane);
   }
   return { byCheckout, atEnd };
 }
 
-/** The panes that stand under no project of this computer, by the machine that asked for them (B10). */
-export function guestGroups(panes: readonly GuestPane[]): { deviceId: string; machine: string; panes: GuestPane[] }[] {
-  const groups = new Map<string, { deviceId: string; machine: string; panes: GuestPane[] }>();
+/**
+ * Which of `projectId`'s folds holds the pane the center shows (`inFront`),
+ * when one hides it: that fold is marked as holding it, as for this
+ * computer's own checkout in front.
+ */
+export function guestFoldInFront(panes: readonly GuestPane[], inFront: string | null, projectId: string, layout: GuestLayout): GuestFold {
+  const pane = inFront === null ? undefined : panes.find((candidate) => candidate.id === inFront && candidate.projectId === projectId);
+  return pane ? foldOf(pane, layout) : null;
+}
+
+/** The heads a person folded, as the core keeps them: a machine and the folder of the place the head stands in, `""` outside every project. */
+export type GuestHeadFolds = readonly { device_id: string; folder: string }[];
+
+/**
+ * Whether `machine`'s head in the place whose folder is `folder` is open,
+ * and whether, folded, it holds the pane the center shows and is marked as
+ * holding it as the list's other folds are.
+ */
+export function guestHead(folds: GuestHeadFolds, machine: GuestMachine, folder: string, inFront: string | null): { open: boolean; current: boolean } {
+  const open = !folds.some((fold) => fold.device_id === machine.deviceId && fold.folder === folder);
+  return { open, current: !open && machine.panes.some((pane) => pane.id === inFront) };
+}
+
+/** The panes of other machines' work that stand under no project this list draws a tree for (`projects`): the list's end, one head per machine. */
+export function guestsOutside(panes: readonly GuestPane[], projects: ReadonlySet<string>): GuestPane[] {
+  return panes.filter((pane) => pane.projectId === null || !projects.has(pane.projectId));
+}
+
+/** One machine's panes among `panes`, under the one head a list draws for that machine: its name and letters once, in the order the machines first appear. */
+export type GuestMachine = { deviceId: string; machine: string; mark: string; panes: GuestPane[] };
+
+export function byMachine(panes: readonly GuestPane[]): GuestMachine[] {
+  const machines = new Map<string, GuestMachine>();
   for (const pane of panes) {
-    if (pane.projectId !== null) continue;
-    const group = groups.get(pane.deviceId) ?? { deviceId: pane.deviceId, machine: pane.machine, panes: [] };
-    group.panes.push(pane);
-    groups.set(pane.deviceId, group);
+    const machine = machines.get(pane.deviceId) ?? { deviceId: pane.deviceId, machine: pane.machine, mark: pane.mark, panes: [] };
+    machine.panes.push(pane);
+    machines.set(pane.deviceId, machine);
   }
-  return [...groups.values()];
+  return [...machines.values()];
 }
 
 /** The panes a tab strip draws beside `pane`: the same machine's in the same place, the project or the machine's own group. */

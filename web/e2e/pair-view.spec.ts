@@ -585,7 +585,7 @@ test("the rail's desk button folds and stands focus mode's desk, counting the pa
     await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await expect(deskButton).toHaveAttribute("aria-pressed", "false");
-    await expect(deskButton.locator('[data-lane-badge="1"]')).toBeVisible();
+    await expect(deskButton).toHaveAttribute("aria-description", "1 view open");
     await deskButton.click();
     await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
     await expect(deskButton).toHaveAttribute("aria-pressed", "true");
