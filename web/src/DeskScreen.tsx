@@ -353,7 +353,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
           room={room}
           chat={(
             <DeskChatColumn head={<DeskChatHead onNewConversation={() => actions.deskNewConversation()} />} composer={composer} scrollRef={scroller}>
-              {shown.length === 0 && !answering ? (
+              {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
                 <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
