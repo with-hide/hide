@@ -4211,6 +4211,13 @@ impl Runtime {
                                 attempt.ready,
                             )
                         }),
+                        once: task.is_some_and(|task| {
+                            task.kind == crate::coordination::TaskKind::Automation
+                                && task
+                                    .target
+                                    .as_deref()
+                                    .is_some_and(|id| self.automation_once(id))
+                        }),
                     }
                 });
         }

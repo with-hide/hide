@@ -1056,6 +1056,12 @@ pub struct HideAiSnapshot {
     /// itself asks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<HomeTurn>,
+    /// The run of a once automation (mission-104 O-4): its end stands in
+    /// Needs You on the automation's own line (`automation_looks`), so a
+    /// View its agent opened does not call the operator too; the screen
+    /// marks its badge with a clock, not the repeat arrow.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
 }
 
 /// An external tool's work on a row (PRD hide-external-control D-09, D-15).

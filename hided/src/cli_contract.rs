@@ -277,6 +277,9 @@ const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
     "schedule_time_invalid",
     "schedule_days_missing",
     "schedule_hours_out_of_range",
+    "schedule_date_invalid",
+    "schedule_once_past",
+    "schedule_once_too_far",
 ];
 
 /// Why an automation as written is refused (B7, B10).
@@ -289,6 +292,9 @@ pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
     "schedule_time_invalid",
     "schedule_days_missing",
     "schedule_hours_out_of_range",
+    "schedule_date_invalid",
+    "schedule_once_past",
+    "schedule_once_too_far",
     "automation_unknown",
     "automation_name_missing",
     "automation_name_invalid",
@@ -2425,7 +2431,11 @@ pub const COMMANDS: &[Spec] = &[
         ..automation_by_id(&["automation", "run"], &["automation"])
     },
     Spec {
-        refusals: &["automation_unknown", "automation_changed_unread"],
+        refusals: &[
+            "automation_unknown",
+            "automation_done",
+            "automation_changed_unread",
+        ],
         ..automation_by_id(&["automation", "pause"], &["automation"])
     },
     Spec {

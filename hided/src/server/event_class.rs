@@ -170,6 +170,7 @@ pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("automation_add", Screen),
     ("automation_call", Screen),
     ("automation_edit", Screen),
+    ("automation_look_seen", Screen),
     ("automation_pause", Screen),
     ("automation_remove", Screen),
     ("automation_resume", Screen),
