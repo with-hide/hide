@@ -176,13 +176,7 @@ pub fn device_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Op
 /// identity and keep to the paths its boundary admits.
 pub fn files_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Option<Target> {
     let view = rest.workspace_view.as_ref()?;
-    let files: Vec<String> = view
-        .file_paths()
-        .into_iter()
-        .filter(|path| relative(&view.path, path).is_some_and(|relative| !relative.is_empty()))
-        .take(FILE_WATCH_CAP)
-        .map(str::to_owned)
-        .collect();
+    let files = shown_files(&view.path, &view.file_paths());
     if files.is_empty() {
         return None;
     }
@@ -204,6 +198,17 @@ pub fn files_target_from_rest(rest: &hide_core::RestSections, node: &str) -> Opt
         folders: files,
         pinned: None,
     })
+}
+
+/// The shown files to stamp: the first `FILE_WATCH_CAP` under `root`, in the
+/// order given; a file past them shows what it read when it opened.
+fn shown_files(root: &str, paths: &[&str]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| relative(root, path).is_some_and(|relative| !relative.is_empty()))
+        .take(FILE_WATCH_CAP)
+        .map(|path| (*path).to_owned())
+        .collect()
 }
 
 /// The daemon's watch service: this machine's Explorer, the selected
@@ -874,6 +879,24 @@ pub(crate) mod tests {
         assert_eq!(relative("/r", "/r"), Some(String::new()));
         assert_eq!(relative("/r", "/r/src/deep"), Some("src/deep".to_owned()));
         assert_eq!(relative("/r", "/rx/src"), None);
+    }
+
+    /// The shown files' watch keeps to the checkout and to its cap, the
+    /// first files in the order the areas lie.
+    #[test]
+    fn the_shown_files_are_the_first_ones_under_the_checkout_up_to_the_cap() {
+        let paths: Vec<String> = (0..FILE_WATCH_CAP + 8)
+            .map(|index| format!("/r/doc{index}.md"))
+            .collect();
+        let mut shown: Vec<&str> = vec!["/r", "/rx/sibling.md", "/elsewhere/a.md"];
+        shown.extend(paths.iter().map(String::as_str));
+        let files = shown_files("/r", &shown);
+        assert_eq!(files.len(), FILE_WATCH_CAP);
+        assert_eq!(files.first().map(String::as_str), Some("/r/doc0.md"));
+        assert_eq!(
+            files.last(),
+            Some(&format!("/r/doc{}.md", FILE_WATCH_CAP - 1))
+        );
     }
 
     /// A file a View starts showing is not announced, since the View has
