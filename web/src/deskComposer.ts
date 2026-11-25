@@ -113,10 +113,11 @@ export function replaceRange(draft: DeskDraft, start: number, end: number, words
   return { draft: { ...draft, text: draft.text.slice(0, start) + words + draft.text.slice(end) }, caret: start + words.length };
 }
 
-/** ⌫ right after a chip, or ⌦ right before one, takes the whole chip out (B49); none when the caret is beside no chip on that side. */
+/** ⌫ right after a chip, or ⌦ right before one, takes the whole chip out (B49), and ⌫ one space past a chip takes the space the pick put after it too, so one press removes what one pick added; none when the caret is beside no chip on that side. */
 export function chipDelete(draft: DeskDraft, caret: number, forward: boolean): { draft: DeskDraft; caret: number } | null {
-  const chip = draftChips(draft).find((one) => (forward ? one.start === caret : one.end === caret));
-  return chip ? replaceRange(draft, chip.start, chip.end, "") : null;
+  const chips = draftChips(draft);
+  const chip = chips.find((one) => (forward ? one.start === caret : one.end === caret || (one.end + 1 === caret && draft.text[one.end] === " ")));
+  return chip ? replaceRange(draft, chip.start, !forward && chip.end < caret ? chip.end + 1 : chip.end, "") : null;
 }
 
 /** ← right after a chip, or → right before one, steps over it whole (D-85); none when the caret is beside no chip on that side. */

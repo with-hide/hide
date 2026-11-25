@@ -79,8 +79,15 @@ describe("chips in the box (D-85, B49)", () => {
     const end = 4 + SESSION.length;
     expect(chipDelete(draft, end, false)).toEqual({ draft: { text: "ask  now", mentions: [session] }, caret: 4 });
     expect(chipDelete(draft, 4, true)).toEqual({ draft: { text: "ask  now", mentions: [session] }, caret: 4 });
-    expect(chipDelete(draft, end + 1, false)).toBeNull();
+    expect(chipDelete(draft, end + 2, false)).toBeNull();
     expect(chipDelete(draft, 4, false)).toBeNull();
+  });
+
+  it("takes the space a pick put after the chip with it, so one ⌫ right after a pick leaves the words as they were", () => {
+    const picked = pickMention({ text: "ask @rec", mentions: [] }, { start: 4, query: "rec" }, session);
+    expect(chipDelete(picked.draft, picked.caret, false)).toEqual({ draft: { text: "ask ", mentions: [session] }, caret: 4 });
+    const middle = { text: `ask ${SESSION} now`, mentions: [session] };
+    expect(chipDelete(middle, 4 + SESSION.length + 1, false)).toEqual({ draft: { text: "ask now", mentions: [session] }, caret: 4 });
   });
 
   it("steps over a chip whole with ← after it and → before it", () => {
