@@ -2911,7 +2911,7 @@ mod tests {
                     if node_end.write_all(PING_LINE).is_err() {
                         return;
                     }
-                    std::thread::sleep(Duration::from_secs(3));
+                    std::thread::sleep(Duration::from_secs(3)); // wait-ok: the node's next ping, spaced well under the limit as a live node's are
                 }
             })
         };
