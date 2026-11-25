@@ -749,7 +749,7 @@ fn a_windows_line_with_a_backslash_is_one_hide_cannot_read() {
 }
 
 #[test]
-fn a_shell_option_other_than_the_known_harmless_ones_makes_the_line_unreadable() {
+fn a_word_that_changes_the_shell_state_makes_the_line_unreadable_unless_known_harmless() {
     // bash(1) `set -k`: every `NAME=value` among a command's arguments
     // becomes its environment, so `git diff` would run an external diff.
     for line in [
@@ -758,10 +758,21 @@ fn a_shell_option_other_than_the_known_harmless_ones_makes_the_line_unreadable()
         "set -o keyword; git diff GIT_EXTERNAL_DIFF='echo X;'",
         "set -a; cat x",
         "set -e -o pipefail -o keyword; cat x",
+        "set -f; cat x",
         "shopt -s expand_aliases; cat x",
-        // zsh's own option words are not commands Hide knows.
+        "shopt -u sourcepath; cat x",
+        // zsh: setopt(1) `KEYWORD_ARGS` is `set -k`; `emulate ksh` turns
+        // on ksh's options.
         "setopt KEYWORD_ARGS; git diff GIT_EXTERNAL_DIFF='echo X;'",
+        "unsetopt function_argzero; cat x",
         "emulate ksh; cat x",
+        // What a name runs, and what runs on a signal or on exit.
+        "alias cat='rm -f'; cat x",
+        "unalias ls; ls",
+        "trap 'rm -rf /fixture/outside/victim' EXIT; cat x",
+        "enable -n cd; cat x",
+        "zmodload zsh/files; cat x",
+        "autoload -U compinit; cat x",
     ] {
         assert!(asks(line).contains(&UNREADABLE), "{line}: {:?}", asks(line));
         assert_eq!(reading(line).row, Row::Shell, "{line}");
@@ -771,10 +782,13 @@ fn a_shell_option_other_than_the_known_harmless_ones_makes_the_line_unreadable()
         "set -x; cat x",
         "set +e; cat x",
         "set -o errexit -o nounset; cat x",
+        "set +o xtrace; cat x",
         "set -- -k a; cat x",
         "set -A items -k a; cat x",
         "shopt; cat x",
         "shopt -q extglob; cat x",
+        "shopt -p; cat x",
+        "hash; cat x",
     ] {
         assert_eq!(reading(line).row, Row::Read, "{line}");
         assert!(asks(line).is_empty(), "{line}: {:?}", asks(line));

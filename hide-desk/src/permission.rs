@@ -482,8 +482,8 @@ struct Line {
 }
 
 impl Line {
-    /// The one decision behind every way a line rewrites what runs: `hash`
-    /// and `enable` with arguments, a variable the shell, the loader or a
+    /// The one decision behind every way a line rewrites what runs: a
+    /// word that changes the shell's own state ([`SHELL_STATE`]), a variable the shell, the loader or a
     /// program reads to find or run code ([`Sets::Choice`]), an element of
     /// a table, a name made to stand for another variable, and a program
     /// variable set to a value Hide does not see. What follows may run any
@@ -1448,11 +1448,58 @@ fn expansion_assigns(
     }
 }
 
-/// The shell options `set` may change and still leave the rest of the line
-/// read as Hide reads it: stop on an error, an unset name or a failed pipe,
-/// print each command, leave globs and files alone.
-const SET_LETTERS: &str = "euxvfC";
-const SET_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "verbose", "pipefail", "noglob", "noclobber"];
+/// The shell's own words that change its state: which options it reads a
+/// line with, what a name runs (aliases, functions, builtins, modules, the
+/// table of found programs) and what it runs on a signal. Only the forms
+/// known to change nothing that decides what runs are read; any other one
+/// may change how the words after it are read or what they run, so Hide
+/// cannot read the line.
+const SHELL_STATE: &[&str] = &[
+    "shopt",
+    "setopt",
+    "unsetopt",
+    "emulate",
+    "enable",
+    "disable",
+    "hash",
+    "unhash",
+    "zmodload",
+    "autoload",
+    "alias",
+    "unalias",
+    "unfunction",
+    "trap",
+];
+
+fn shell_state(
+    name: &str,
+    args: &[String],
+    folders: &Folders,
+    place: &Place<'_>,
+    depth: usize,
+    line: &mut Line,
+) {
+    let changes = match name {
+        "set" => return set(args, folders, place, depth, line),
+        // bash's `shopt` alone, `shopt NAME`, `-p` and `-q` only report.
+        "shopt" => args
+            .iter()
+            .any(|word| word.starts_with('-') && !matches!(word.as_str(), "-p" | "-q")),
+        // Alone they only report.
+        name if SHELL_STATE.contains(&name) => !args.is_empty(),
+        _ => false,
+    };
+    if changes {
+        line.other = true;
+        line.rewrites_what_runs();
+    }
+}
+
+/// The options `set` may change and still leave the rest of the line read
+/// as Hide reads it: stop on an error, an unset name or a failed pipe, and
+/// print each command.
+const SET_LETTERS: &str = "euxv";
+const SET_NAMES: &[&str] = &["errexit", "nounset", "xtrace", "verbose", "pipefail"];
 
 /// `set`: zsh's `set -A NAME values` and `set +A NAME values` set an array;
 /// any other option than [`SET_LETTERS`] and [`SET_NAMES`] may change how the
@@ -1779,13 +1826,7 @@ fn run_program(
     if ASSIGNING.contains(&name) {
         assigns(name, args, folders, place, depth, line);
     }
-    if name == "set" {
-        set(args, folders, place, depth, line);
-    }
-    if name == "shopt" && args.iter().any(|word| matches!(word.as_str(), "-s" | "-u" | "-o")) {
-        // An option of bash's may change how the words after it are read.
-        line.rewrites_what_runs();
-    }
+    shell_state(name, args, folders, place, depth, line);
     match name {
         // It runs in this shell, so where it leaves the shell is not
         // followed.
@@ -1795,11 +1836,6 @@ fn run_program(
         }
         "cd" | "pushd" => cd(args, folders, place.home),
         "popd" => Move::Unknown,
-        "hash" | "enable" if !args.is_empty() => {
-            line.other = true;
-            line.rewrites_what_runs();
-            Move::Stay
-        }
         "hash" | "enable" => Move::Stay,
         "git" => {
             git(args, folders, place, line);
