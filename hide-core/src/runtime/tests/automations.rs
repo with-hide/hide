@@ -2928,11 +2928,11 @@ fn a_once_automation_is_kept_as_its_date_and_its_end_waits_in_needs_you_until_op
             &json!("succeeded")
         )
     );
-    assert_eq!(harness.looks(), [id.clone()]);
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
     let phone = harness.phone();
     assert_eq!(
         phone.looks,
-        [id.clone()],
+        std::slice::from_ref(&id),
         "the phone's 내 차례 counts it too"
     );
     let listed = phone.find(&id).unwrap();
@@ -2977,7 +2977,7 @@ fn a_failed_once_run_stands_in_needs_you_and_the_automation_is_done_not_stopped(
         (item.get("paused"), &item["done"], &item["look_run"]),
         (None, &json!(true), &json!(1))
     );
-    assert_eq!(harness.looks(), [id.clone()]);
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
     assert!(
         needs_you(&mut harness.runtime.lock().unwrap()).0.is_empty(),
         "no stop line: the once line says it"
@@ -3054,7 +3054,7 @@ fn a_once_time_that_passed_while_the_core_was_off_runs_once_when_it_is_back() {
     after.show(&pane_of(&intent(&id, 1, 1)), answered);
     after.tick(1);
     assert_eq!(after.item(&id)["done"], true);
-    assert_eq!(after.looks(), [id.clone()]);
+    assert_eq!(after.looks(), std::slice::from_ref(&id));
     after.tick(3 * 24 * 60 * 60);
     assert_eq!(after.asked().len(), 1);
 }
@@ -3099,7 +3099,7 @@ fn a_once_time_at_the_usage_limit_starts_and_a_refusal_for_it_ends_the_run_faile
         (json!("failed"), json!(1), json!("usage_limit"))
     );
     assert_eq!(harness.item(&id)["done"], true);
-    assert_eq!(harness.looks(), [id.clone()]);
+    assert_eq!(harness.looks(), std::slice::from_ref(&id));
 }
 
 /// mission-104 O-3: a once automation paused past its time runs once as
