@@ -3640,7 +3640,7 @@ export type DeskSection = {
   agents: DeskAgent[];
   host: { state: DeskHostState; detail: string | null };
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
-  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean };
+  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };

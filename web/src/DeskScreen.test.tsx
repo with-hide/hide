@@ -35,11 +35,11 @@ const rest = {
 
 const claude = (state: DeskAgent["state"], signedIn: boolean | null): DeskAgent => ({ id: "claude", label: "Claude Code", state, detail: null, signed_in: signedIn, always_runs: [], login_command: "claude /login", models: [], efforts: [] });
 
-const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = []): DeskSection => ({
+const desk = (items: DeskItem[], state: DeskAgent["state"] = "ready", signedIn: boolean | null = true, queued: DeskSection["conversation"]["queued"] = [], held = false): DeskSection => ({
   selection: { agent: "claude", model: null, effort: null },
   agents: [claude(state, signedIn)],
   host: { state: "ready", detail: null },
-  conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8 },
+  conversation: { generation: 1, items, dropped: 0, queued, queued_max: 8, queued_full: queued.length >= 8, queued_held: held },
   approvals_waiting: 0,
   settings: { enabled: true, default_agent: "claude", location: "worktree", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "run" } },
   lane: { view_width: null, session_width: null },
@@ -355,6 +355,22 @@ describe("Desk's room", () => {
       expect(useUiStore.getState().deskDraft).toEqual({ text: "", mentions: [] });
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
       expect(document.body.textContent).not.toContain("The waiting line is full");
+    });
+
+    it("draws a line stopped on its first message as waiting for a restart, and lets 다시 시작 on the sign-in notice send it, however full the line", async () => {
+      const login: DeskItem = { kind: "notice", id: 2, notice: "login_needed", agent: "claude", detail: "claude /login" };
+      const full = Array.from({ length: 9 }, (_, index) => waiting(10 + index, `말 ${index}`));
+      await render(desk([login], "ready", false, [waiting(5, "로그인 뒤에 보낼 말")], true));
+      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Sent after you restart");
+      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).not.toContain("Waiting for the reply");
+      await press("[data-desk-notice-action='restart']");
+      expect(sent("desk_restart")).toEqual([{}]);
+      // A full line stopped the same way is freed by the same button.
+      await show(desk([login], "ready", false, full, true));
+      expect(document.body.querySelector("[data-desk-notice-action='restart']")).not.toBeNull();
+      // A line that is not stopped keeps its 대기 중.
+      await show(desk([], "ready", true, [waiting(5, "그냥 기다려요")], false));
+      expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
     });
 
     it("keeps the words in the box and sends nothing while eight messages already wait", async () => {

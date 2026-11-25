@@ -57,16 +57,16 @@ export function DeskUserMessage({ text, mentions, onMention }: { text: string; m
 
 /**
  * A message sent while a reply was being written, waiting for the turn before
- * it: the operator's bubble with `대기 중` and `✕`, which takes it out before it
+ * it (stopped, with `다시 시작하면 보내요`, while the agent refused the line's first one): the operator's bubble with `대기 중` and `✕`, which takes it out before it
  * goes (it is not in the conversation until its turn starts).
  */
-export function DeskQueuedBubble({ message, onRemove, onMention }: { message: DeskQueuedMessage; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
+export function DeskQueuedBubble({ message, held = false, onRemove, onMention }: { message: DeskQueuedMessage; held?: boolean; onRemove: () => void; onMention?: (mention: DeskMention) => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-queued={message.id}>
       <div className="opacity-(--opacity-dimmed)"><DeskUserMessage text={message.text} mentions={message.mentions} onMention={onMention} /></div>
       <span className="flex items-center gap-xxs text-micro text-muted-foreground">
-        {t("desk.queued.waiting")}
+        {t(held ? "desk.queued.held" : "desk.queued.waiting")}
         <Hint label={t("desk.queued.remove")}>
           <Button variant="ghost" size="icon-xs" aria-label={t("desk.queued.remove")} data-desk-queued-remove="true" onClick={onRemove}><XIcon /></Button>
         </Hint>
@@ -159,6 +159,7 @@ const NOTICE_ACTION: Partial<Record<DeskNoticeKind, DeskNoticeAction>> = {
   install_failed: "reinstall",
   blocked: "retry",
   host_stopped: "restart",
+  login_needed: "restart",
   turn_failed: "retry",
 };
 
@@ -204,7 +205,7 @@ export function DeskNotice({ item, reason = failureReason(item.detail, null), se
           </Hint>
         </span>
       ) : null}
-      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(ACTION_WORDS[action])}</Button> : null}
+      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(action === "restart" && item.notice === "login_needed" ? "desk.action.signedIn" : ACTION_WORDS[action])}</Button> : null}
     </p>
   );
 }
@@ -399,13 +400,15 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * each job Desk started. `live` is the answer still arriving; `thinking`
  * shows until it starts.
  */
-export function DeskChat({ items, jobs, agents, queued = [], live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
   agents: readonly DeskAgent[];
   /** Messages waiting for the turn before them, after everything else. */
   queued?: readonly DeskQueuedMessage[];
+  /** The line is stopped on its first message until a send or a restart. */
+  held?: boolean;
   /** The answer streaming now, after the last item. */
   live?: string | null;
   thinking?: boolean;
@@ -432,7 +435,7 @@ export function DeskChat({ items, jobs, agents, queued = [], live = null, thinki
         </li>
       ))}
       {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
-      {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
+      {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );
 }

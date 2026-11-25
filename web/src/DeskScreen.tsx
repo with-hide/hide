@@ -138,6 +138,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   // the box never gets it again (B6). The core refuses one more when the line is full: then the words stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
   const queuedFull = desk?.conversation.queued_full ?? false;
+  const queuedHeld = desk?.conversation.queued_held ?? false;
   const canSend = agent?.state === "ready" && !queuedFull;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
@@ -352,7 +353,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
               {shown.length === 0 && !answering && queued.length === 0 ? (
                 <DeskEmpty working={working} asking={jobs.filter((job) => job.state === "asking").length} onExample={(text) => (canSend ? send({ text, mentions: [] }) : setDraft({ text, mentions: [] }))} />
               ) : (
-                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
+                <DeskChat items={shown} jobs={byId} agents={desk.agents} queued={queued} held={queuedHeld} live={liveText} thinking={answering && liveText === null} startedAt={turn} selectedJob={shownJob} selectedOutput={shownOutput} {...chatActions} />
               )}
             </DeskChatColumn>
           )}
