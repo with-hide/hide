@@ -2956,7 +2956,6 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    #[cfg(unix)]
     use hide_node_link::holders::{
         HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
         PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
@@ -2964,7 +2963,6 @@ mod tests {
 
     /// Holders whose ownership is the state folder's real pane lock, taken
     /// as a node's holders take it, and asked nothing else.
-    #[cfg(unix)]
     enum LockHolders {
         Unowned(hide_kit::panes::Panes),
         Owned(#[allow(dead_code)] hide_kit::panes::Owner),
@@ -3034,14 +3032,12 @@ mod tests {
     /// its panes (`Recovered`, answered as id 1); the test's end of the
     /// link, the node's result once its loop returns, and whether its state
     /// folder's pane lock is free.
-    #[cfg(unix)]
     struct OwningNode {
-        core: std::os::unix::net::UnixStream,
+        core: hide_platform::ipc::LocalStream,
         finished: mpsc::Receiver<io::Result<()>>,
         home: tempfile::TempDir,
     }
 
-    #[cfg(unix)]
     impl OwningNode {
         fn start(output: impl Write + Send + 'static) -> Self {
             use hide_node_link::holders::PaneCall;
@@ -3052,7 +3048,7 @@ mod tests {
                 ))),
                 ..Env::of_process()
             };
-            let (mut core, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+            let (mut core, theirs) = hide_platform::ipc::LocalStream::pair().unwrap();
             let (done, finished) = mpsc::channel();
             std::thread::spawn(move || {
                 let _ = done.send(serve_in(
@@ -3091,7 +3087,6 @@ mod tests {
 
     /// The lines a node wrote until it answered its core's id 1, refusing
     /// nothing.
-    #[cfg(unix)]
     fn answered_for_its_panes(written: &mpsc::Receiver<Vec<u8>>) {
         let mut said = Vec::new();
         while !String::from_utf8_lossy(&said).contains("\"id\":1") {
@@ -3114,7 +3109,6 @@ mod tests {
     /// lets go of its state folder's pane ownership, so the node of the
     /// core's next link takes it; its output stuck in a write meanwhile, as
     /// one is once the connection's buffers are full, holds none of it up.
-    #[cfg(unix)]
     #[test]
     fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
         use hide_node_link::panes::{HEARTBEAT, HEARTBEAT_LIMIT, PING_LINE};
@@ -3180,7 +3174,6 @@ mod tests {
     /// A node whose output failed ends its link and lets go of its pane
     /// ownership even while its core keeps writing: the core's pings keep
     /// the input alive, and only the failed write says the link is gone.
-    #[cfg(unix)]
     #[test]
     fn a_node_whose_output_fails_ends_its_link_while_its_core_still_pings() {
         use hide_node_link::panes::PING_LINE;
@@ -3214,7 +3207,7 @@ mod tests {
             !node.lock_is_free(),
             "the node does not hold the ownership it answered for"
         );
-        let mut pinging = node.core.try_clone().unwrap();
+        let mut pinging = node.core.duplicate();
         let (stop, stopped) = mpsc::channel::<()>();
         let pinger = std::thread::spawn(move || {
             while let Err(mpsc::RecvTimeoutError::Timeout) =
