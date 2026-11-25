@@ -1,8 +1,8 @@
-import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronDownIcon, LoaderCircleIcon, PaperclipIcon, ShieldIcon, SquareIcon, UploadIcon, XIcon } from "lucide-react";
 import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { MAX_BATCH_BYTES, MAX_FILE_BYTES, MAX_FILES } from "../../attachments";
-import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
-import { agentPickable, deskAgentWord } from "../../desk";
+import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskPermissionLevel, DeskPermissions, DeskSelection } from "../../desk";
+import { agentPickable, DESK_PERMISSION_LEVEL_ORDER, DESK_PERMISSION_LEVELS, deskAgentWord, deskPermissionLevel } from "../../desk";
 import { dragHasFiles, traySendable, type ComposerTray, type SentAttachment, type TrayFile } from "../../deskComposer";
 import { fileIcon } from "../../fileIcons";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -11,6 +11,7 @@ import { formatBytes } from "../../i18n/format";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import { cn } from "../../lib/utils";
 import { AgentMark } from "../../AgentMark";
+import { Badge } from "../ui/badge";
 import { FileMark } from "../file-mark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -184,7 +185,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
         <PopoverAnchor asChild>
           <div
-            className={cn("relative flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen || over ? "border-ring ring-1 ring-ring" : "border-input")}
+            className={cn("relative flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-md py-sm", focused || menuOpen || over ? "border-ring ring-1 ring-ring" : "border-input")}
             data-desk-composer-frame={over ? "drop" : focused ? "focused" : "rest"}
             onDragEnter={dragOver}
             onDragOver={dragOver}
@@ -205,7 +206,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, tray,
             <div className="flex min-w-0 items-center gap-xs">
               {tray ? (
                 <Hint label={t("desk.composer.attach")}>
-                  <Button variant="ghost" size="icon-sm" className="-ml-xxs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={() => picker.current?.click()} data-desk-composer-attach="true"><PaperclipIcon /></Button>
+                  <Button variant="ghost" size="icon-sm" className="-ml-xs text-muted-foreground" aria-label={t("desk.composer.attach")} onClick={() => picker.current?.click()} data-desk-composer-attach="true"><PaperclipIcon /></Button>
                 </Hint>
               ) : null}
               <span className="flex min-w-0 flex-1 items-center justify-end">{children}</span>
@@ -284,7 +285,7 @@ function AgentWord({ word, ...data }: { word: DeskAgentWord } & Record<`data-${s
 }
 
 /** One of the bar's three menus: its trigger names the value, and pressing it opens the choices. */
-function BarMenu({ name, value, open, onOpenChange, highlight = false, children, ...data }: { name: string; value: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; highlight?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
+function BarMenu({ name, value, open, onOpenChange, highlight = false, wide = false, children, ...data }: { name: string; value: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void; highlight?: boolean; /** A menu whose choices carry a line under their name. */ wide?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <Hint label={name}>
@@ -295,7 +296,7 @@ function BarMenu({ name, value, open, onOpenChange, highlight = false, children,
           </Button>
         </DropdownMenuTrigger>
       </Hint>
-      <DropdownMenuContent align="end" side="top" className="min-w-(--size-tab-preferred)">{children}</DropdownMenuContent>
+      <DropdownMenuContent align="end" side="top" className={wide ? "w-(--size-picker-popover) max-w-(--radix-dropdown-menu-content-available-width)" : "min-w-(--size-tab-preferred)"}>{children}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -369,5 +370,65 @@ export function DeskAgentBar({ agents, selection, open = null, onAgent, onModel,
         </>
       ) : null}
     </div>
+  );
+}
+
+const LEVEL_NAME: Record<DeskPermissionLevel, MessageKey> = {
+  ask_all: "desk.level.ask_all",
+  ask_changes: "desk.level.ask_changes",
+  auto: "desk.level.auto",
+};
+
+const LEVEL_DETAIL: Record<DeskPermissionLevel, MessageKey> = {
+  ask_all: "desk.level.ask_allDetail",
+  ask_changes: "desk.level.ask_changesDetail",
+  auto: "desk.level.autoDetail",
+};
+
+/** What the level reads as: its name, or `줄마다 정함` for a table no level matches. */
+export function permissionLevelName(level: DeskPermissionLevel | null): MessageKey {
+  return level === null ? "desk.level.mixed" : LEVEL_NAME[level];
+}
+
+/**
+ * Under Desk's composer, before the agent (feedback 1, frame A): how much Desk
+ * does without asking, as one of three levels of the core's permission table.
+ * A choice sends the whole table in one event; a table set row by row in
+ * Settings reads `줄마다 정함` with no level marked, and `줄마다 정하기…` opens
+ * that table. The same for every agent, since the core answers the agent's
+ * requests. What cannot be undone asks at every level.
+ */
+export function DeskPermissionMenu({ permissions, open, onLevel, onPerRow }: {
+  permissions: DeskPermissions;
+  /** Opens the menu, for review. */
+  open?: boolean;
+  onLevel: (permissions: DeskPermissions) => void;
+  /** Opens Settings › Labs, where Desk's table is. */
+  onPerRow: () => void;
+}) {
+  const { t } = useInterfaceTranslation();
+  const level = deskPermissionLevel(permissions);
+  return (
+    <BarMenu name={t("desk.level.name")} value={<><ShieldIcon aria-hidden="true" className="size-(--size-icon-sm)" />{t(permissionLevelName(level))}</>} open={open} highlight={open} wide data-desk-bar="permissions" data-desk-permission-level={level ?? "mixed"}>
+      <DropdownMenuLabel className="font-normal text-muted-foreground">{t("desk.level.heading")}</DropdownMenuLabel>
+      <DropdownMenuRadioGroup value={level ?? ""} onValueChange={(value) => value !== level && onLevel({ ...DESK_PERMISSION_LEVELS[value as DeskPermissionLevel] })}>
+        {DESK_PERMISSION_LEVEL_ORDER.map((one) => (
+          <DropdownMenuRadioItem key={one} value={one} className="items-start" data-desk-permission-level-choice={one}>
+            <span className="flex min-w-0 flex-col gap-xxs">
+              <span className="flex items-center gap-xs text-foreground">
+                {t(LEVEL_NAME[one])}
+                {one === "auto" ? <Badge variant="secondary">{t("desk.level.default")}</Badge> : null}
+              </span>
+              <span className="whitespace-normal break-keep text-caption text-muted-foreground">{t(LEVEL_DETAIL[one])}</span>
+            </span>
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onSelect={onPerRow} className="justify-between gap-sm" data-desk-permission-per-row="true">
+        <span>{t("desk.level.perRow")}</span>
+        <span className="text-caption text-muted-foreground">{t("desk.level.settings")}</span>
+      </DropdownMenuItem>
+    </BarMenu>
   );
 }

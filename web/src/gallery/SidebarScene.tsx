@@ -14,6 +14,7 @@ import { TitleRow } from "../TitleRow";
 import { SettingsGate } from "../SettingsSheet";
 import { NOTHING_UNDER_WAY } from "../pairing";
 import type { AgentScope } from "../agentScope";
+import type { DisplayPreferences } from "../displayPreferences";
 import type { AgentRow, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
@@ -46,6 +47,13 @@ export type SceneParams = {
   lang?: "en" | "ko";
   /** `on`: a paired MacBook Pro and Windows PC run terminals on this computer, in this computer's projects' folders and outside them (B10). */
   guests?: "off" | "on";
+  /**
+   * Who shows the screen: `own`, this computer's window; `unsaid`, another
+   * computer's window whose desktop app sends no display choices, so the
+   * screen draws its own (`logos`); `shown`, another computer's window whose
+   * View menu shows logos, which the screen draws with (UI_BEHAVIOR.md, Device rail).
+   */
+  viewer?: "own" | "unsaid" | "shown";
 };
 
 export function sceneParams(params: URLSearchParams): SceneParams {
@@ -72,10 +80,13 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   if (lang !== "en" && lang !== "ko") throw new Error(`Unknown scene lang ${lang}`);
   const guests = params.get("guests") ?? "off";
   if (guests !== "off" && guests !== "on") throw new Error(`Unknown scene guests ${guests}`);
-  return { lens, logos, peers, lang, guests, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
+  const viewer = params.get("viewer") ?? "own";
+  if (viewer !== "own" && viewer !== "unsaid" && viewer !== "shown") throw new Error(`Unknown scene viewer ${viewer}`);
+  return { lens, logos, peers, lang, guests, viewer, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
-export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", peers = "off", lang = "en", guests = "off", axis = false }: SceneParams) {
+export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", peers = "off", lang = "en", guests = "off", viewer = "own", axis = false }: SceneParams) {
+  if (viewer !== "own") standInViewer(lang, viewer === "shown" ? { agent_logo_mode: "shown", pane_turn_row_mode: "one_line" } : undefined);
   const [folds, setFolds] = useState<SceneFolds>({ ...REFERENCE_FOLDS, frontDevice: front === "mini" ? "mini" : front === "offline" ? OFFLINE_DEVICE : "local" });
   const actions = useMemo(
     () =>
@@ -128,6 +139,23 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
       <SettingsGate actions={actions} />
     </TooltipProvider>
   );
+}
+
+/**
+ * A stand-in for the desktop's remote preload, put on the page before
+ * anything hears the viewer: it says only who shows the screen, and with
+ * `display` that window's View menu choices. It stays for the page's life,
+ * since one scene fills one document and the page hears its viewer once.
+ */
+function standInViewer(lang: string, display: DisplayPreferences | undefined): void {
+  (window as unknown as { hideRemote?: unknown }).hideRemote = {
+    bridge: 1,
+    socket: { events: () => undefined, open: () => undefined, send: () => undefined, close: () => undefined },
+    clipboardWrite: async () => false,
+    onMenuCommand: () => undefined,
+    onVisible: () => undefined,
+    onViewer: (listener: (viewer: { language: string; name: string | null; display?: DisplayPreferences }) => void) => listener({ language: lang, name: "Mac mini", ...(display ? { display } : {}) }),
+  };
 }
 
 /**

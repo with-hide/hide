@@ -1369,19 +1369,22 @@ fn shell_named(variable: &str) -> std::ffi::OsString {
     })
 }
 
-/// The variables of a home made for one test's shell, every shell alike:
-/// `HOME` and each XDG folder under `home`, so nothing a shell reads or
-/// writes at its start is the runner's, and a home the shells have run in
-/// before, so none does its first-run work while the test waits:
+/// The variables of a home made for one test's `shell`: `HOME` and each XDG
+/// folder under `home`, so nothing a shell reads or writes at its start is
+/// the runner's, and a home the shell has run in before, so it does no
+/// first-run work while the test waits:
 /// - zsh finds startup files, so Debian's and Ubuntu's zsh opens no new-user
 ///   menu, and Ubuntu's global zshrc runs no compinit, which asks about the
 ///   runner's folders; either would take the typed start as its answer.
-/// - fish finds its generated completions, so it starts no man-page reader:
-///   fish runs that `python3` in its own process group, where it held the
-///   terminal for 15 to 30 s on a Linux runner (the shell never held it
-///   alone, so nothing could be typed).
+/// - fish (the lane's `HIDE_TEST_FISH_BIN`) finds the folder it generates
+///   man-page completions into, so it starts no generator: at its first
+///   prompt fish starts one when that folder is missing
+///   (`share/functions/__fish_config_interactive.fish`, `if not test -d
+///   $__fish_cache_dir/generated_completions` at fish 4.2.1, line 46), and
+///   its `sh` and `python3` stay in the shell's own process group, which held
+///   the terminal for 15 to 30 s on a Linux runner, so nothing could be typed.
 #[cfg(unix)]
-fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
+fn shell_home(home: &std::path::Path, shell: &std::ffi::OsStr) -> BTreeMap<String, String> {
     std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
     std::fs::write(home.join(".zshrc"), "").unwrap();
     let mut env = BTreeMap::from([("HOME".to_owned(), home.to_str().unwrap().to_owned())]);
@@ -1395,8 +1398,41 @@ fn shell_home(home: &std::path::Path) -> BTreeMap<String, String> {
         std::fs::create_dir_all(&folder).unwrap();
         env.insert(name.to_owned(), folder.to_str().unwrap().to_owned());
     }
-    std::fs::create_dir_all(home.join(".local/share/fish/generated_completions")).unwrap();
+    if std::env::var_os("HIDE_TEST_FISH_BIN").as_deref() == Some(shell) {
+        std::fs::create_dir_all(fish_generated_completions(shell, home, &env)).unwrap();
+    }
     env
+}
+
+/// The folder `fish` generates man-page completions into under `env`, as
+/// that fish names it in its own `fish_complete_path`: the folder moved from
+/// `$__fish_user_data_dir` to `$__fish_cache_dir` in fish 4.0, and a home
+/// made from one version's path started the generator on the other's.
+#[cfg(unix)]
+fn fish_generated_completions(
+    fish: &std::ffi::OsStr,
+    home: &std::path::Path,
+    env: &BTreeMap<String, String>,
+) -> std::path::PathBuf {
+    let listed = std::process::Command::new(fish)
+        .envs(env)
+        .args([
+            "-c",
+            "string match -- '*/generated_completions' $fish_complete_path",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("{fish:?} starts: {error}"));
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    match stdout.lines().collect::<Vec<_>>()[..] {
+        [folder] if listed.status.success() && std::path::Path::new(folder).starts_with(home) => {
+            folder.into()
+        }
+        _ => panic!(
+            "{fish:?} names no one folder of generated completions under {home:?}: {}, {stdout:?}, {:?}",
+            listed.status,
+            String::from_utf8_lossy(&listed.stderr)
+        ),
+    }
 }
 
 #[cfg(unix)]
@@ -1413,9 +1449,9 @@ fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
         std::env::var_os("HIDE_TEST_HIDE_BIN").is_some(),
         "the start runs the node's hide: set HIDE_TEST_HIDE_BIN (scripts/prepare-ignored-tests.sh)"
     );
-    let running = Running(BuiltHolders::start_in(vec![shell]));
+    let running = Running(BuiltHolders::start_in(vec![shell.clone()]));
     let built = &running.0;
-    let home = shell_home(&built.home);
+    let home = shell_home(&built.home, &shell);
     let engine = &built.engine;
     engine.set_agent_definitions(std::sync::Arc::new(
         hide_agent_adapter::definition::Catalog::read(Vec::new()),

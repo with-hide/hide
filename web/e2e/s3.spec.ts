@@ -526,14 +526,16 @@ test("editing a document marks it dirty, saves it, and a disk change asks how to
     await page.keyboard.press(chord("save_file"));
     await expect.poll(() => sent.get("file_save")).toBe(savesBeforeChord + 1);
 
-    // A change on disk after the open makes the next save a conflict, and the
-    // tab offers the two choices (B5).
-    fs.writeFileSync(file, "export const answer = 0;\n");
-    const ahead = new Date(Date.now() + 5_000);
-    fs.utimesSync(file, ahead, ahead);
+    // A change on disk under a draft makes the next save a conflict, and the
+    // tab offers the two choices (B5); a tab with a draft never follows the
+    // disk on its own.
     await content.click();
     await page.keyboard.press("ControlOrMeta+KeyA");
     await page.keyboard.type("export const answer = 43;\n");
+    await expect(page.locator('[data-editor-dirty="true"]')).toHaveCount(1);
+    fs.writeFileSync(file, "export const answer = 0;\n");
+    const ahead = new Date(Date.now() + 5_000);
+    fs.utimesSync(file, ahead, ahead);
     await page.keyboard.press(chord("save_file"));
     await expect(page.locator("[data-editor-conflict]")).toBeVisible();
     await expect.poll(() => onDisk(file)).toBe("export const answer = 0;\n");
@@ -543,8 +545,16 @@ test("editing a document marks it dirty, saves it, and a disk change asks how to
     await page.locator('[data-conflict-action="reload"]').click();
     await expect(page.locator("[data-editor-conflict]")).toHaveCount(0);
     await expect(content).toContainText("export const answer = 0;");
-    await expect.poll(() => sent.get("file_conflict")).toBe(1);
-    expect(lastSent.get("file_conflict")).toMatchObject({ action: "reload" });
+    expect(sent.get("file_conflict.reload")).toBe(1);
+
+    // A tab with nothing of the operator's follows the file when something
+    // else writes it, as an agent does (file_changed).
+    const follows = sent.get("file_conflict.follow") ?? 0;
+    fs.writeFileSync(file, "export const answer = 7;\n");
+    await expect(content).toContainText("export const answer = 7;");
+    expect(sent.get("file_conflict.follow")).toBeGreaterThan(follows);
+    await expect(page.locator('[data-editor-dirty="true"]')).toHaveCount(0);
+    await expect(page.locator("[data-editor-conflict]")).toHaveCount(0);
   } finally {
     close(fixture);
   }

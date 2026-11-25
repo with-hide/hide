@@ -244,11 +244,13 @@ pub const GUIDE_SKILL: Skill = Skill {
     // an automation (PRD automations B9).
     // Version 12 opens a shown file beside the terminal of a watched pane
     // and otherwise leaves it in that pane's Views list (lane desk).
+    // Version 13 makes a task for one later time a once automation too
+    // (mission-104 O-6).
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 12,
+    version: 13,
 };
 
 /// Routes work that needs a Conductor to `hide mission help`, leaving

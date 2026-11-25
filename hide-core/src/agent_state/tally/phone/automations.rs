@@ -1,8 +1,10 @@
 //! What a phone sees of the automations (PRD automations B34, B35, D-20):
 //! the core's `automations` section, trimmed to the list and each
-//! automation's run records the phone's tab draws, and the automations whose
-//! pause the core counts as the operator's turn (`agent_scope.automation_asks`,
-//! D-12), which the phone's 내 차례 draws. It carries no folder, no task text,
+//! automation's run records the phone's tab draws, and the automations the
+//! core counts as the operator's turn, which the phone's 내 차례 draws: those
+//! whose pause a person fixes (`agent_scope.automation_asks`, D-12) and the
+//! once ones whose run waits to be opened (`agent_scope.automation_looks`,
+//! mission-104 O-4). It carries no folder, no task text,
 //! no agent's answer, no pane and no branch; of the agent it carries only the
 //! kind a usage-limit skip names. Only the structs below reach the wire, so a
 //! field the core adds to an automation stays on the Mac until it is named
@@ -43,6 +45,11 @@ pub struct PhoneAutomations {
     /// pause first, as the core counts them in Needs You (D-12, B23).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub asks: Vec<String>,
+    /// The listed once automations whose run ended and waits for the
+    /// operator to open it, the one that ended first first, as the core
+    /// counts them in Needs You (mission-104 O-4).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub looks: Vec<String>,
     /// The book before could not be read and was set aside: one line above
     /// the list. The file it was set aside under stays on the Mac.
     #[serde(skip_serializing_if = "is_false")]
@@ -62,6 +69,12 @@ pub struct PhoneAutomation {
     pub paused: Option<Pause>,
     /// A run goes now: [지금 실행] is off (B19).
     pub running: bool,
+    /// A once automation whose one time came and whose run for it ended
+    /// (mission-104 O-3).
+    pub done: bool,
+    /// The run whose end waits in Needs You (mission-104 O-4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look_run: Option<u64>,
     pub unseen: usize,
     /// What the runs its records keep spent together (B39).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,10 +132,15 @@ fn is_zero(value: &usize) -> bool {
 }
 
 impl PhoneAutomations {
-    /// The phone's automations from the core's section, with `asks` the
-    /// core's `automation_asks` in its order; none before the core restored
-    /// its book. An ask names only an automation the frame lists.
-    pub fn project(section: Option<&AutomationsSnapshot>, asks: &[String]) -> Self {
+    /// The phone's automations from the core's section, with `asks` and
+    /// `looks` the core's `automation_asks` and `automation_looks` in their
+    /// order; none before the core restored its book. Each names only an
+    /// automation the frame lists.
+    pub fn project(
+        section: Option<&AutomationsSnapshot>,
+        asks: &[String],
+        looks: &[String],
+    ) -> Self {
         let Some(section) = section else {
             return Self::default();
         };
@@ -134,16 +152,19 @@ impl PhoneAutomations {
             .map(phone_automation)
             .collect();
         omitted += fit(&mut items, LIST_BUDGET);
-        let asks = asks
-            .iter()
-            .filter(|id| items.iter().any(|item| &item.id == *id))
-            .cloned()
-            .collect();
+        let listed = |ids: &[String]| -> Vec<String> {
+            ids.iter()
+                .filter(|id| items.iter().any(|item| &item.id == *id))
+                .cloned()
+                .collect()
+        };
+        let (asks, looks) = (listed(asks), listed(looks));
         Self {
             items,
             omitted,
             zone: section.zone.clone(),
             asks,
+            looks,
             unreadable: section.unreadable.is_some(),
         }
     }
@@ -177,6 +198,8 @@ fn phone_automation(automation: &AutomationSnapshot) -> PhoneAutomation {
         next_run_at_unix_ms: automation.next_run_at_unix_ms,
         paused: automation.paused,
         running: automation.running,
+        done: automation.done,
+        look_run: automation.look_run,
         unseen: automation.unseen,
         recent_spend: automation.recent_spend,
         records: automation
@@ -285,6 +308,8 @@ mod tests {
             },
             paused: None,
             running: false,
+            done: false,
+            look_run: None,
             unseen: 1,
             recent_spend: None,
             records: (0..records as u64).rev().map(run).collect(),
@@ -329,7 +354,8 @@ mod tests {
             file: "secret-book.json".into(),
             at_unix_ms: 3,
         });
-        let projected = PhoneAutomations::project(Some(&book), &["b".into(), "unlisted".into()]);
+        let projected =
+            PhoneAutomations::project(Some(&book), &["b".into(), "unlisted".into()], &[]);
         assert!(
             projected.unreadable,
             "the line above the list, without its file"
@@ -370,7 +396,8 @@ mod tests {
 
     #[test]
     fn records_past_the_phone_cap_are_counted_and_the_newest_kept() {
-        let projected = PhoneAutomations::project(Some(&section(vec![automation("a", 50)])), &[]);
+        let projected =
+            PhoneAutomations::project(Some(&section(vec![automation("a", 50)])), &[], &[]);
         let item = &projected.items[0];
         assert_eq!(item.records.len(), MAX_RECORDS);
         assert_eq!(item.records_omitted, 50 - MAX_RECORDS);
@@ -382,7 +409,7 @@ mod tests {
         let many = (0..MAX_AUTOMATIONS + 3)
             .map(|index| automation(&index.to_string(), 0))
             .collect();
-        let projected = PhoneAutomations::project(Some(&section(many)), &[]);
+        let projected = PhoneAutomations::project(Some(&section(many)), &[], &[]);
         assert_eq!(projected.items.len(), MAX_AUTOMATIONS);
         assert_eq!(projected.omitted, 3);
         let mut items = vec![phone_automation(&automation("a", 20)); 4];
@@ -394,7 +421,7 @@ mod tests {
     #[test]
     fn no_section_is_an_empty_list() {
         assert_eq!(
-            PhoneAutomations::project(None, &["a".into()]),
+            PhoneAutomations::project(None, &["a".into()], &[]),
             PhoneAutomations::default()
         );
     }
@@ -413,9 +440,12 @@ mod tests {
             run.spend = Some(spend);
         }
         item.recent_spend = Some(crate::automations::RecentSpend { spend, runs: 1 });
-        let phone =
-            serde_json::to_value(PhoneAutomations::project(Some(&section(vec![item])), &[]))
-                .unwrap();
+        let phone = serde_json::to_value(PhoneAutomations::project(
+            Some(&section(vec![item])),
+            &[],
+            &[],
+        ))
+        .unwrap();
         let item = &phone["items"][0];
         assert_eq!(
             item["records"][0]["spend"],
