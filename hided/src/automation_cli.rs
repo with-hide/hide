@@ -334,12 +334,15 @@ pub fn read_schedule(text: &str) -> Result<Asked, &'static str> {
 fn read_once(rest: &str) -> Result<Asked, &'static str> {
     const UNREADABLE: &str = "schedule_unreadable";
     let words: Vec<&str> = rest.split_whitespace().collect();
+    let from_now = words
+        .first()
+        .is_some_and(|word| word.eq_ignore_ascii_case("in"));
     match words.as_slice() {
-        [date, time] if !date.eq_ignore_ascii_case("in") => Ok(Asked::Schedule(Schedule::Once {
+        [date, time] if !from_now => Ok(Asked::Schedule(Schedule::Once {
             date: Day::parse(date)?,
             time: Clock::parse(time)?,
         })),
-        ["in", count] | ["in", count, _] => {
+        [_, count] | [_, count, _] if from_now => {
             let lower = count.to_ascii_lowercase();
             let (digits, unit) = lower.split_at(lower.len().saturating_sub(1));
             if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -947,6 +950,7 @@ mod tests {
         );
         for (text, minutes) in [
             ("once in 3h", 180),
+            ("once IN 3H", 180),
             ("once in 30m", 30),
             ("once in 2d", 2880),
         ] {

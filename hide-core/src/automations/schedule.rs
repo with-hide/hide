@@ -224,6 +224,14 @@ impl From<Schedule> for Asked {
 }
 
 impl Asked {
+    /// The schedule a make, an edit or a preview at `now` keeps: read in
+    /// `zone` ([`Asked::resolve`]) and then checked ([`Schedule::validate`]).
+    pub fn checked(self, now: u64, zone: &TimeZone) -> Result<Schedule, &'static str> {
+        let schedule = self.resolve(now, zone)?;
+        schedule.validate(now, zone)?;
+        Ok(schedule)
+    }
+
     /// The schedule this names at `now` in `zone`: a time named from now
     /// becomes the date and time it falls on, to the minute. Only a count
     /// too large to be a time is refused here; whether the time is past or

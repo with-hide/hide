@@ -25,6 +25,7 @@ hide automation remove <id|name>
   - `once in 7d 09:00`: one time, 7 days from today at 09:00 (`once in 0d 18:00` is today); `once in 3h`, `once in 30m` and `once in 2d` are now plus that, to the minute.
 - A once time named from now is turned into its date and time when the automation is made or edited, so the answer's `reads_as_text` says the date itself (`once on Wed 2026-12-02 at 09:00`); for a weekday such as next Tuesday, give that date.
   A once time already past is refused (`schedule_once_past`), and so is one more than 366 days ahead (`schedule_once_too_far`).
+  `once in 3h` counts real time; `once in 2d` without a time across a clock change lands an hour off the wall clock, so give the time (`once in 2d 09:00`) when the hour matters.
 - An automation runs at most every five minutes: a cron line whose times come closer than that is refused (`*/5 * * * *` runs; `*/4 * * * *` does not). A once time has no such limit.
   When the operator wants an unattended repeat more often than that, tell them the shortest period is five minutes and offer `every 5m`.
   A run still going when the next time comes keeps going, and that time is skipped.

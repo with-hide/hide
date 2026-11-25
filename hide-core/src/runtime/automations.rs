@@ -267,7 +267,7 @@ pub(crate) fn restore(path: PathBuf) -> (Option<LatestFile<Stored>>, Stored, Tim
 }
 
 /// The window event kinds, each one `Call` by the same name.
-pub(super) const EVENT_KINDS: [&str; 11] = [
+pub(super) const EVENT_KINDS: [&str; 12] = [
     "automation_add",
     "automation_edit",
     "automation_pause",
@@ -279,6 +279,7 @@ pub(super) const EVENT_KINDS: [&str; 11] = [
     "automation_run_viewing",
     "automation_run_result_open",
     "automation_seen",
+    "automation_look_seen",
 ];
 
 pub(super) fn decode_event(kind: &str, payload: Value) -> Option<Call> {
@@ -350,9 +351,16 @@ impl Runtime {
             }
             // A book saved by an earlier run keeps its times; one on with no
             // time takes its next one now, which a once automation whose time
-            // was taken never gets again.
-            if automation.on() && automation.next_due_unix_ms.is_none() {
-                automation.next_due_unix_ms = automation.next_time(now, &zone);
+            // was taken never gets again. A once automation still waiting is
+            // read again as its wall date and time in this zone, the rule a
+            // zone change follows, so a core started in another zone than it
+            // was made in runs it there, once (mission-104 review S1).
+            if automation.on()
+                && (automation.next_due_unix_ms.is_none() || automation.schedule.is_once())
+            {
+                let next = automation.next_time(now, &zone);
+                save |= next != automation.next_due_unix_ms;
+                automation.next_due_unix_ms = next;
             }
         }
         for (automation, run, machine, (intents, worktree)) in left_elsewhere {
@@ -625,6 +633,13 @@ impl Runtime {
             .or_else(|| pane(run.opened.as_ref()?.agent_id.as_ref()))
     }
 
+    /// Keeps the zone the book was installed with: a test that installs one
+    /// zone is not moved to the machine's own a minute later.
+    #[cfg(test)]
+    pub(crate) fn hold_automation_zone(&mut self) {
+        self.automations.next_zone_read_unix_ms = u64::MAX;
+    }
+
     /// Reads the machine's zone again on a worker; a zone that changed moves
     /// every automation's next time to that zone's wall clock.
     fn read_zone(&mut self, now: u64) {
@@ -812,7 +827,10 @@ impl Runtime {
         now: u64,
     ) {
         self.forget(key);
-        let viewed = self.automations.viewing.contains_key(key);
+        // The screen's word that it shows the run holds for a while after
+        // the window went; only an attached window has the operator see the
+        // end (mission-104 review O2).
+        let viewed = self.ui_attached() && self.automations.viewing.contains_key(key);
         let Some(automation) = self.automation_mut(&key.0) else {
             return;
         };
@@ -829,8 +847,13 @@ impl Runtime {
         run.ask = None;
         // A once automation's run that ended waits in the operator's Needs
         // You until they open it, whatever its result (mission-104 O-4),
-        // unless a window shows it as it ends.
-        if ended && once && !viewed {
+        // unless a window shows it as it ends, or the failure stopped the
+        // automation for a person, whose own line already says so.
+        let stopped = automation
+            .paused
+            .as_ref()
+            .is_some_and(|pause| pause.reason.asks());
+        if ended && once && !viewed && !stopped {
             automation.look_run = Some(key.1);
         }
         if ended && let Some(sink) = &self.product_analytics {
@@ -2104,6 +2127,7 @@ impl Runtime {
             Call::RunStop { id, run } => self.stop_run(&id, run, now),
             Call::RunOpen { id, run } => self.open_run(&id, run, now),
             Call::Seen { id } => self.see_automation(&id),
+            Call::LookSeen { id, run } => self.see_look(&id, run),
             Call::RunViewing {
                 id,
                 run,
@@ -2504,8 +2528,7 @@ impl Runtime {
         now: u64,
     ) -> Result<Value, String> {
         let zone = self.zone();
-        let schedule = schedule.resolve(now, &zone).map_err(str::to_owned)?;
-        schedule.validate(now, &zone).map_err(str::to_owned)?;
+        let schedule = schedule.checked(now, &zone).map_err(str::to_owned)?;
         Ok(json!({
             "reads_as": schedule.meaning().reads_as,
             "next_run_at_unix_ms": schedule.next_after(now, &zone),
@@ -2585,8 +2608,7 @@ impl Runtime {
         let zone = self.zone();
         let name = crate::automations::checked_name(&draft.name)?;
         let task = crate::automations::checked_task(&draft.task)?;
-        let schedule = draft.schedule.resolve(now, &zone)?;
-        schedule.validate(now, &zone)?;
+        let schedule = draft.schedule.checked(now, &zone)?;
         if self.automations.book.find(&name).is_some() {
             return Err("automation_name_taken");
         }
@@ -2606,11 +2628,11 @@ impl Runtime {
         // new one is known to be made.
         if full && let Some(index) = self.automations.book.oldest_done() {
             let dropped = self.automations.book.automations[index].id.clone();
+            self.remove_automation(&dropped, now)?;
             crate::diagnostic!(json!({
                 "component": "automations", "kind": "automation.cap_dropped",
                 "automation": dropped, "cap": crate::automations::AUTOMATION_CAP,
             }));
-            self.remove_automation(&dropped, now)?;
         }
         let automation = Automation {
             id: id.clone(),
@@ -2701,11 +2723,8 @@ impl Runtime {
             .transpose()?;
         let schedule = changes
             .schedule
-            .map(|schedule| schedule.resolve(now, &zone))
+            .map(|schedule| schedule.checked(now, &zone))
             .transpose()?;
-        if let Some(schedule) = &schedule {
-            schedule.validate(now, &zone)?;
-        }
         let agent = changes
             .agent
             .as_ref()
@@ -2751,10 +2770,15 @@ impl Runtime {
         // A new schedule takes effect from its next time: a done once
         // automation given a new time or a repeating schedule waits again
         // (mission-104 O-3).
+        // A time it is given here is this machine's to keep, as a resume
+        // makes it (mission-104 review m2).
         if let Some(schedule) = schedule {
             automation.schedule = schedule;
             if automation.on() {
                 automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
+                if automation.next_due_unix_ms.is_some() {
+                    automation.machine = self.node.as_str().to_owned();
+                }
             }
         }
         if let Some(agent) = agent.clone() {
@@ -2956,6 +2980,21 @@ impl Runtime {
     }
 
     /// The operator looked at the automation (B11).
+    /// A once automation's line for `run` goes from Needs You, as it does
+    /// when the automation screen shows the run; a newer run's line stays.
+    fn see_look(&mut self, id: &str, run: u64) -> Result<Value, &'static str> {
+        let index = self
+            .automations
+            .book
+            .position(id)
+            .ok_or("automation_unknown")?;
+        let automation = &mut self.automations.book.automations[index];
+        if automation.look_run == Some(run) {
+            automation.look_run = None;
+        }
+        Ok(json!({"id": automation.id, "look_run": automation.look_run}))
+    }
+
     fn see_automation(&mut self, id: &str) -> Result<Value, &'static str> {
         let index = self
             .automations

@@ -325,7 +325,7 @@ fn prs_frame(prs: &PhonePrs) -> Value {
 /// (`asks`) and the once automations whose run ended and waits to be opened
 /// (`looks`, mission-104 O-4), each one line of the phone's Needs You as on
 /// the desktop. An older bundle ignores `looks`.
-fn automations_frame(automations: &PhoneAutomations) -> Value {
+pub(super) fn automations_frame(automations: &PhoneAutomations) -> Value {
     json!({
         "type": "automations", "items": automations.items, "omitted": automations.omitted,
         "zone": automations.zone, "asks": automations.asks, "looks": automations.looks,
@@ -1861,11 +1861,13 @@ async fn dispatch_action(
 /// What a phone's `automation` press asks, once it names a listed
 /// automation: the one `automation_run`, `automation_pause` or
 /// `automation_resume` event the desktop's buttons send (PRD automations
-/// B34). A run while one goes is refused here as the desktop's button is off
-/// (B19); the core refuses it too.
+/// B34), or `automation_look_seen` with the `run` a once automation's line
+/// names, when the phone opens that line (mission-104 review m6). A run
+/// while one goes is refused here as the desktop's button is off (B19); the
+/// core refuses it too.
 fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8>, &'static str> {
     let action = match message.get("action").and_then(Value::as_str) {
-        Some(action @ ("run" | "pause" | "resume")) => action,
+        Some(action @ ("run" | "pause" | "resume" | "look_seen")) => action,
         _ => return Err("invalid_request"),
     };
     let id = message.get("id").and_then(Value::as_str);
@@ -1875,9 +1877,17 @@ fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8
     if action == "run" && automation.running {
         return Err("running");
     }
+    let mut payload = json!({"id": automation.id});
+    if action == "look_seen" {
+        let run = message
+            .get("run")
+            .and_then(Value::as_u64)
+            .ok_or("invalid_request")?;
+        payload["run"] = json!(run);
+    }
     Ok(json!({
         "schema_version": hide_core::SCHEMA_VERSION, "kind": format!("automation_{action}"),
-        "payload": {"id": automation.id},
+        "payload": payload,
     })
     .to_string()
     .into_bytes())
@@ -3917,6 +3927,19 @@ mod tests {
         assert_eq!(
             automation_event(&press("remove", "auto-1", "r"), &listed),
             Err("invalid_request")
+        );
+        // Opening a once automation's line names the run it waits for.
+        let mut look = press("look_seen", "auto-1", "r");
+        assert_eq!(automation_event(&look, &listed), Err("invalid_request"));
+        look["run"] = json!(3);
+        let event: Value =
+            serde_json::from_slice(&automation_event(&look, &listed).unwrap()).unwrap();
+        assert_eq!(
+            (&event["kind"], &event["payload"]),
+            (
+                &json!("automation_look_seen"),
+                &json!({"id": "auto-1", "run": 3})
+            )
         );
         assert_eq!(
             automation_event(&press("run", "auto-9", "r"), &listed),
