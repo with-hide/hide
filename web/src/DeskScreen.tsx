@@ -135,8 +135,9 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   const agent = desk?.selection.agent ? desk.agents.find((one) => one.id === desk.selection.agent) : undefined;
   // A ready agent takes a message even when Settings reads it signed out: the agent's own refusal comes back as the sign-in line (B6).
   // While Desk answers a message waits for its turn (it shows in the conversation as 대기 중); only an agent not ready holds it.
-  const canSend = agent?.state === "ready";
+  // The core refuses a ninth waiting message, so at eight the words stay in the box.
   const queued = desk?.conversation.queued ?? NO_QUEUED;
+  const canSend = agent?.state === "ready" && queued.length < DESK_QUEUED_MAX;
 
   const lastUserId = (list: readonly DeskItem[]) => list.reduce((last, item) => (item.kind === "user" ? item.id : last), -1);
   useEffect(() => {
@@ -516,6 +517,8 @@ function DeskRoomView({ actions, room, chat }: { actions: Actions; room: RoomAct
   );
 }
 
+/** Messages that wait at once (`DESK_QUEUED_MAX` in hide-core). */
+const DESK_QUEUED_MAX = 8;
 const NO_QUEUED: readonly DeskQueuedMessage[] = [];
 const NO_WIDTHS = { view_width: null, session_width: null };
 
