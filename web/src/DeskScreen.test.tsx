@@ -363,11 +363,20 @@ describe("Desk's room", () => {
       await render(desk([login], "ready", false, [waiting(5, "로그인 뒤에 보낼 말")], true));
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Sent after you restart");
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).not.toContain("Waiting for the reply");
+      expect(document.body.querySelector("[data-desk-notice-action='restart']")?.textContent).toBe("Signed in · Restart");
       await press("[data-desk-notice-action='restart']");
       expect(sent("desk_restart")).toEqual([{}]);
       // A full line stopped the same way is freed by the same button.
       await show(desk([login], "ready", false, full, true));
       expect(document.body.querySelector("[data-desk-notice-action='restart']")).not.toBeNull();
+      // Whatever refused the line, its notice carries the restart that frees it: a no-ask agent has no box to send from.
+      const noAsk: DeskItem = { kind: "notice", id: 4, notice: "no_ask_mode", agent: "grok", detail: null };
+      await show(desk([noAsk], "no_ask_mode", false, [waiting(5, "묻지 못하는 에이전트")], true));
+      expect(document.body.querySelector("[data-desk-notice='no_ask_mode'] [data-desk-notice-action='restart']")?.textContent).toBe("Restart");
+      await press("[data-desk-notice-action='restart']");
+      expect(sent("desk_restart")).toEqual([{}, {}]);
+      await show(desk([noAsk], "no_ask_mode", false, [], false));
+      expect(document.body.querySelector("[data-desk-notice-action]")).toBeNull();
       // A line that is not stopped keeps its 대기 중.
       await show(desk([], "ready", true, [waiting(5, "그냥 기다려요")], false));
       expect(document.body.querySelector("[data-desk-queued='5']")?.textContent).toContain("Waiting for the reply");
