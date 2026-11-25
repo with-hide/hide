@@ -316,7 +316,8 @@ describe("snapshot merge", () => {
 
   it("counts a shown file's change only for the device it shows", () => {
     const store = useShellStore.getState();
-    useShellStore.setState({ rest: { navigator: { focused_device_id: "mac" } } as never, fileChanges: {} });
+    // The Workspace in front names its device; the rail may ring another.
+    useShellStore.setState({ rest: { navigator: { focused_device_id: "local" }, workspace_view: { device_id: "mac" } } as never, fileChanges: {} });
     store.applyFrame({ type: "file_changed", payload: { path: "/r/plan.md", device_id: "local" } });
     expect(useShellStore.getState().fileChanges).toEqual({});
     store.applyFrame({ type: "file_changed", payload: { path: "/r/plan.md", device_id: "mac" } });

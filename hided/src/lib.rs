@@ -1180,41 +1180,42 @@ fn apply_snapshot(
             .collect::<Vec<_>>(),
     );
     index.set_projects(projects_from_rest(rest, boundary.node().as_str()));
-    let root = rest.navigator.root_path.as_ref().cloned();
-    let expanded = rest.ui_state.expanded_paths.clone();
-    let root = root.and_then(|root| {
-        boundary
-            .root_identity(&root)
-            .map(|identity| (root, identity))
-    });
-    let expanded: Vec<String> = expanded
-        .into_iter()
-        .filter(|path| boundary.resolve_target(path).is_ok())
-        .collect();
-    watch.reconcile(root.map(|(root, identity)| {
-        watch::Target::of(boundary.node().as_str(), root, &expanded).pinned_by(identity)
+    let node = boundary.node().as_str();
+    watch.reconcile(rest.navigator.root_path.as_ref().cloned().and_then(|root| {
+        let (identity, expanded) =
+            pinned_here(boundary, &root, rest.ui_state.expanded_paths.clone())?;
+        Some(watch::Target::of(node, root, &expanded).pinned_by(identity))
     }));
     watch.reconcile_device(watch::device_target_from_rest(
         rest,
         boundary.node().as_str(),
     ));
-    // This machine's shown files are stamped by the identity the boundary
-    // verified, like its Explorer, and only where the boundary admits them.
     watch.reconcile_files(
-        watch::files_target_from_rest(rest, boundary.node().as_str()).and_then(|target| {
-            if target.node != boundary.node().as_str() {
+        watch::files_target_from_rest(rest, node).and_then(|target| {
+            if target.node != node {
                 return Some(target);
             }
-            let identity = boundary.root_identity(&target.root)?;
-            let folders: Vec<String> = target
-                .folders
-                .iter()
-                .filter(|path| boundary.resolve_target(path).is_ok())
-                .cloned()
-                .collect();
+            let (identity, folders) = pinned_here(boundary, &target.root, target.folders.clone())?;
             (!folders.is_empty()).then(|| watch::Target { folders, ..target }.pinned_by(identity))
         }),
     );
+}
+
+/// A watch of this machine's `paths` under `root`: stamped by the identity
+/// the boundary verified when the checkout was registered, and kept to the
+/// paths the boundary admits, so the watch never opens a path a listing or a
+/// read would refuse. None while the boundary does not hold the root.
+fn pinned_here(
+    boundary: &Boundary,
+    root: &str,
+    paths: Vec<String>,
+) -> Option<(hide_node_link::RootIdentity, Vec<String>)> {
+    let identity = boundary.root_identity(root)?;
+    let paths = paths
+        .into_iter()
+        .filter(|path| boundary.resolve_target(path).is_ok())
+        .collect();
+    Some((identity, paths))
 }
 
 fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {

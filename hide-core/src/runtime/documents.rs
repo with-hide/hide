@@ -737,9 +737,7 @@ impl Runtime {
         // A save in flight owns the tab's revision until its answer is
         // settled; a reload landing first would take the slot with it and
         // let the save's revision describe the reloaded text (PRD S5.5 B13).
-        if self.document_saves.get(tab_id).is_some_and(|slot| {
-            slot.running || slot.checking || slot.unsettled.is_some() || slot.queued.is_some()
-        }) {
+        if self.save_in_flight(tab_id) {
             self.set_error(
                 "file.reload_busy",
                 format!(
@@ -829,14 +827,20 @@ impl Runtime {
         true
     }
 
+    /// Whether a save of the tab has not come to a known answer yet: it
+    /// runs, waits behind one, is read back, or lost its answer.
+    fn save_in_flight(&self, tab_id: &str) -> bool {
+        self.document_saves.get(tab_id).is_some_and(|slot| {
+            slot.running || slot.checking || slot.unsettled.is_some() || slot.queued.is_some()
+        })
+    }
+
     /// Whether the tab holds no edit, save or conflict that a read of its
     /// file would replace.
     pub(super) fn holds_nothing_of_its_own(&self, tab_id: &str) -> bool {
         self.editor_documents.get(tab_id).is_some_and(|document| {
             !document.dirty && document.conflict.is_none() && document.save.is_none()
-        }) && !self.document_saves.get(tab_id).is_some_and(|slot| {
-            slot.running || slot.checking || slot.unsettled.is_some() || slot.queued.is_some()
-        })
+        }) && !self.save_in_flight(tab_id)
     }
 
     /// Whether a followed read replaces the tab's document: the tab still

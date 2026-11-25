@@ -695,10 +695,11 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "file_changed") {
       // A file a View shows changed on disk; every View showing it reads it
-      // again (`useFileBytes`, `DocumentKeeper`). The shown Workspace's files
-      // are the shown device's, so another device's frame is not for them.
+      // again (`useFileBytes`, `DocumentKeeper`). The watch stamps the files
+      // of the Workspace in front on its own device, so a frame for another
+      // device is not for them.
       const path = payload.path;
-      const shownDevice = frontDeviceId(get().rest);
+      const shownDevice = get().rest?.workspace_view?.device_id ?? frontDeviceId(get().rest);
       if (path && (payload.device_id || localDeviceId(get().rest)) === shownDevice) {
         set({ fileChanges: countChange(get().fileChanges, path) });
       }
