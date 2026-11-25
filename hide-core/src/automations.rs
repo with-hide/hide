@@ -519,6 +519,12 @@ impl Automation {
         self.paused.is_none()
     }
 
+    /// Whether a record of it is in use: a run going or closing, or a
+    /// conversation opened again, which the cap never drops (B28).
+    pub fn in_use(&self) -> bool {
+        self.records.iter().any(Entry::held)
+    }
+
     /// A once automation whose one time came and whose run for it ended
     /// (mission-104 O-3): it never runs again on schedule. A manual run of
     /// it going leaves it done; a new time from an edit makes it wait again.
@@ -570,12 +576,14 @@ impl Automation {
     /// Takes the time that came, if one did by `now`, and moves the next one
     /// past `now`. One time noticed on time runs as itself; anything else,
     /// several times, or one noticed late, is a missed line and one run for
-    /// all of them (D-15).
+    /// all of them (D-15). A once automation's time, once taken, leaves it
+    /// none, whatever its wall time reads as in `zone` (mission-104 review S1).
     pub fn take_due(&mut self, now: u64, zone: &TimeZone, notice: Notice) -> Option<Due> {
         let first = self.next_due_unix_ms.filter(|due| *due <= now)?;
+        let once = self.schedule.is_once();
         let mut last = first;
         let mut count = 1u32;
-        while count < MISSED_COUNT_CAP {
+        while !once && count < MISSED_COUNT_CAP {
             match self.schedule.next_after(last, zone) {
                 Some(next) if next <= now => {
                     last = next;
@@ -584,7 +592,11 @@ impl Automation {
                 _ => break,
             }
         }
-        self.next_due_unix_ms = self.schedule.next_after(now, zone);
+        self.next_due_unix_ms = if once {
+            None
+        } else {
+            self.schedule.next_after(now, zone)
+        };
         let on_time = count == 1 && now.saturating_sub(first) <= LATE_MS;
         let missed = (!on_time).then_some(Entry::Missed {
             first_unix_ms: first,
@@ -931,6 +943,14 @@ pub enum Call {
     Seen {
         id: String,
     },
+    /// The operator opened a once automation's ended run where the
+    /// automation screen cannot say it shows it, on the phone: its line in
+    /// Needs You goes, if that run is still the one it names (mission-104
+    /// review m6).
+    LookSeen {
+        id: String,
+        run: u64,
+    },
     List,
     Show {
         id: String,
@@ -1056,12 +1076,13 @@ impl Stored {
 
     /// The done once automation a create at the cap drops (mission-104
     /// O-5): one the operator opened before one that waits in Needs You,
-    /// then the one done first.
+    /// then the one done first; never one in use (a manual run going, a
+    /// conversation opened again), so none when every done one is.
     pub fn oldest_done(&self) -> Option<usize> {
         self.automations
             .iter()
             .enumerate()
-            .filter(|(_, automation)| automation.done())
+            .filter(|(_, automation)| automation.done() && !automation.in_use())
             .min_by_key(|(_, automation)| (automation.look_run.is_some(), automation.done_at()))
             .map(|(index, _)| index)
     }
