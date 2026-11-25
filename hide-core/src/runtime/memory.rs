@@ -203,11 +203,8 @@ impl Runtime {
             .filter(|row| {
                 let provider_matches = match filter {
                     SessionsProviderFilter::All => true,
-                    SessionsProviderFilter::Codex => {
-                        Agent::from_kind(&row.provider) == Some(Agent::Codex)
-                    }
-                    SessionsProviderFilter::Claude => {
-                        Agent::from_kind(&row.provider) == Some(Agent::Claude)
+                    SessionsProviderFilter::Agent(agent) => {
+                        Agent::from_kind(&row.provider) == Some(agent)
                     }
                 };
                 provider_matches
@@ -229,12 +226,11 @@ impl Runtime {
     pub(super) fn set_sessions_filter(&mut self, provider: &str, query: String) -> bool {
         let filter = match (provider, Agent::from_kind(provider)) {
             ("all", _) => SessionsProviderFilter::All,
-            (_, Some(Agent::Codex)) => SessionsProviderFilter::Codex,
-            (_, Some(Agent::Claude)) => SessionsProviderFilter::Claude,
+            (_, Some(agent)) => SessionsProviderFilter::Agent(agent),
             _ => {
                 self.set_error(
                     "sessions.filter_invalid",
-                    "Session filter must be all, codex, or claude",
+                    "Session filter must be all or an agent whose sessions Hide reads",
                     false,
                 );
                 return true;
