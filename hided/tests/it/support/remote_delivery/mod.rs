@@ -773,6 +773,9 @@ pub struct Fixture {
     pub local: Agent,
     pub remote: Agent,
     pub ssh: super::sshd::Sshd,
+    /// What the core's `ssh` reaches the device's server through, which a
+    /// journey can cut as a network that went away.
+    pub network: super::relay::Relay,
     pub state: PathBuf,
     pub hide: PathBuf,
     pub hooks: PathBuf,
@@ -901,9 +904,10 @@ impl Fixture {
             remote_env.home.join("absent-tailscale").into_os_string(),
         );
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
+        let network = super::relay::Relay::start(ssh.port)?;
         fs::write(
             local_env.home.join(".ssh/config"),
-            ssh.client_config("delivery-fixture"),
+            ssh.client_config_through("delivery-fixture", network.port)?,
         )?;
         local_env.set("HIDE_STATE_DIR", state.as_os_str());
         local_env.set("HIDE_KEEP_ALIVE", "1");
@@ -996,6 +1000,7 @@ impl Fixture {
                 local,
                 remote,
                 ssh,
+                network,
                 state,
                 hide: cli.join("hide"),
                 hooks: cli.join("hide-agent-hooks"),
