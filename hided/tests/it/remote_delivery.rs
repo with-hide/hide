@@ -809,6 +809,11 @@ fn a_device_link_cut_without_a_close_gives_its_panes_to_the_next_link() -> Resul
     /// its restore fails (`hide_core::engine::own::restore`, `RECOVERY_WAIT`).
     const RECOVERY_WAIT: Duration = Duration::from_secs(120);
     Fixture::journey(|fixture| {
+        // Sleep off: the stand-ins' conversations are dated long ago, so the
+        // idle rule ends the local caller while the cut link waits out its
+        // limit, and its next command never runs; the journey's subject is
+        // the link, not sleep.
+        fixture.event("agent_sleep_set", serde_json::json!({"after_hours": null}))?;
         let project = fixture.commit_remote_project()?;
         fixture.agent_ready_on_device("claude-code", ".claude")?;
         let state = fixture.state.clone();

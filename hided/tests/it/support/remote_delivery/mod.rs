@@ -1246,7 +1246,8 @@ impl Fixture {
         self.screen.snapshot()
     }
 
-    fn event(&self, kind: &str, payload: Value) -> Result<()> {
+    /// Sends the core a screen event, as the window does.
+    pub fn event(&self, kind: &str, payload: Value) -> Result<()> {
         self.screen.event(kind, payload)
     }
 
