@@ -1742,10 +1742,11 @@ fn run_program(
         // zsh's `set -A NAME values` and `set +A NAME values` set an array.
         let mut words = args.iter();
         while let Some(word) = words.next() {
-            if (word.starts_with('-') || word.starts_with('+')) && word.contains('A') {
-                if let Some(target) = words.next() {
-                    assign(target, folders, place, depth, line);
-                }
+            if (word.starts_with('-') || word.starts_with('+'))
+                && word.contains('A')
+                && let Some(target) = words.next()
+            {
+                assign(target, folders, place, depth, line);
             }
         }
     }
