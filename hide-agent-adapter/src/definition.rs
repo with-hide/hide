@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock, OnceLock};
 
-pub use hide_screen_rules::{Rules, State};
+pub use hide_screen_rules::{Asks, Rules, State};
 
 mod file;
 pub use file::{

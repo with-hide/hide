@@ -946,6 +946,46 @@ fn qwen_code_s_own_rule_for_the_worktree_or_a_folder_above_stays_the_operator_s(
     assert_eq!(read_json(&settings)[key], "TRUST_FOLDER");
 }
 
+/// The rule as Qwen Code compares it, written and resolved: a rule for a
+/// link to a folder above the worktree decides the worktree too.
+#[cfg(unix)]
+#[test]
+fn qwen_code_s_rule_for_a_link_to_a_folder_above_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let alias = home.path().join("alias");
+    std::os::unix::fs::symlink(key.parent().unwrap(), &alias).unwrap();
+    let text = serde_json::to_string_pretty(
+        &serde_json::json!({ alias.to_str().unwrap(): "DO_NOT_TRUST" }),
+    )
+    .unwrap();
+    std::fs::write(&settings, &text).unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), text);
+    assert!(recorded(Agent::QwenCode, home.path()).is_empty());
+}
+
+/// Qwen Code compares folders without case on Windows (`path.relative`), so
+/// a rule for a folder above spelled in another case decides the worktree.
+#[cfg(windows)]
+#[test]
+fn qwen_code_s_rule_in_another_case_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::QwenCode.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let above = key.parent().unwrap().to_str().unwrap().to_uppercase();
+    let text = serde_json::to_string_pretty(&serde_json::json!({ above: "DO_NOT_TRUST" })).unwrap();
+    std::fs::write(&settings, &text).unwrap();
+    trust_worktree(Agent::QwenCode, home.path(), &linked, none()).unwrap();
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), text);
+    assert!(recorded(Agent::QwenCode, home.path()).is_empty());
+}
+
 /// Claude Code's account in the folder `spelled`, as the node resolves a
 /// profile's for a start.
 fn claude_account(home: &Path, spelled: &str) -> Account {

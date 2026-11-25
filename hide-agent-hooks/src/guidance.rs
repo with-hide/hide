@@ -1229,16 +1229,15 @@ pub fn remove<'h>(
         total.removed_entries += outcome.removed_entries;
         total.preserved_entries += outcome.preserved_entries;
     }
-    // Switching agy or Grok off also takes out the folder trust Hide added
-    // (D-08), and agy's also Hide AI's folder for agy (D-09). A profile's
-    // account has its trust taken out by the kit, which judges that
-    // account's file first (`hide_kit` targets).
-    let trusted = match agent {
-        _ if !at.is_default() => None,
-        GuidanceAgent::Antigravity => Some(crate::folder_trust::Agent::Antigravity),
-        GuidanceAgent::Grok => Some(crate::folder_trust::Agent::Grok),
-        _ => None,
-    };
+    // Switching an agent off also takes out the folder trust Hide added for
+    // it, when its definition declares a trust file (D-08), and agy's also
+    // Hide AI's folder for agy (D-09). A profile's account has its trust
+    // taken out by the kit, which judges that account's file first
+    // (`hide_kit` targets).
+    let trusted = at
+        .is_default()
+        .then(|| crate::folder_trust::Agent::of_kind(agent.id()))
+        .flatten();
     if let Some(trusted) = trusted {
         let forgotten = crate::folder_trust::forget_all(
             trusted,

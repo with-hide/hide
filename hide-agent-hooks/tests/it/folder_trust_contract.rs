@@ -17,15 +17,16 @@ const INSTALL: &str = include_str!("../../../docs/INSTALL.md");
 const GAP_SECTION: &str = "agent-hooks.md#agents-whose-folder-trust-hide-does-not-record";
 
 /// Whether `definition`'s screen rules draw the agent's question whether to
-/// trust a folder: a blocked rule whose id names a trust, the convention
-/// every such rule of a built-in definition follows (`trust_directory`,
-/// `workspace_trust_prompt`, `folder_trust_dialog`).
+/// trust a folder: a rule that says so (`asks = "folder_trust"`), which the
+/// captured screens of that question are held to (`hide-agent-adapter`'s
+/// `screens` tests).
 fn asks_folder_trust(definition: &Definition) -> bool {
     definition.screen.as_ref().is_some_and(|screen| {
-        screen.rules.rules().iter().any(|rule| {
-            rule.state == Some(definition::State::Blocked)
-                && rule.id.split('_').any(|word| word == "trust")
-        })
+        screen
+            .rules
+            .rules()
+            .iter()
+            .any(|rule| rule.asks == Some(definition::Asks::FolderTrust))
     })
 }
 
@@ -45,12 +46,13 @@ fn every_agent_whose_screen_asks_for_folder_trust_records_it_or_names_its_suppor
         .iter()
         .filter(|definition| asks_folder_trust(definition))
         .collect();
-    // The rule's convention reaches the agents known to ask; a renamed
-    // rule would otherwise leave its agent out of this test unseen.
+    // Every agent whose definition's rules were taken from a real screen of
+    // that question says so; a rule that stopped saying it would leave its
+    // agent out of this test unseen.
     for id in ["codex", "antigravity", "devin", "qwen", "muse"] {
         assert!(
             asking.iter().any(|definition| definition.id == id),
-            "{id}'s screen rules no longer name its folder trust question"
+            "{id}'s screen rules no longer say which rule is its folder trust question"
         );
     }
     for definition in asking {

@@ -4,6 +4,9 @@
 # Version 2.0; see NOTICE at the repository root.
 # Changed by Hide: the manifest's id and aliases became this file's identity
 # and its version, engine and rules moved under [screen], unchanged.
+# Added by Hide: `asks = "folder_trust"` on the rule of its question whether
+# to trust a folder, which no evaluator reads (docs/agent-hooks.md, Folder
+# trust for the folders Hide starts agents in).
 schema = 1
 id = "antigravity"
 name = "Antigravity"
@@ -59,6 +62,7 @@ contains = ["navigate", "esc skip"]
 [[screen.rules]]
 id = "trust_prompt"
 state = "blocked"
+asks = "folder_trust"
 priority = 280
 region = "bottom_non_empty_lines(8)"
 visible_blocker = true

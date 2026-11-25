@@ -1533,7 +1533,23 @@ pub fn handle_with_progress(
             // trust for the folders Hide starts agents in).
             if trusted {
                 let automations = hide_kit::layout::automations_home(home);
-                folder_trust::trust_started_folder(agent, at, folder, &automations, tools)
+                folder_trust::trust_started_folder(agent, at, folder, &automations, tools).map(
+                    |added| {
+                        // The operator's own answer for the folder, "Do not
+                        // trust" included, stays as it is; the start goes on
+                        // as it would without Hide.
+                        if added == folder_trust::Added::Present {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "component": "node",
+                                    "kind": "agent_trust.operator_decides",
+                                    "agent": kind,
+                                })
+                            );
+                        }
+                    },
+                )
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }

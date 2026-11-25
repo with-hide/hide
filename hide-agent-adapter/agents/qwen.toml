@@ -6,6 +6,9 @@
 # and its version, engine and rules moved under [screen], unchanged; its
 # alias with a space is left out, since a program is a plain file name.
 # [resume] last: qwenlm.github.io/qwen-code-docs, "--continue: Resume the most recent session for this project".
+# Added by Hide: `asks = "folder_trust"` on the rule of its question whether
+# to trust a folder, which no evaluator reads (docs/agent-hooks.md, Folder
+# trust for the folders Hide starts agents in).
 schema = 1
 id = "qwen"
 name = "Qwen Code"
@@ -108,6 +111,7 @@ line_regex = [
 [[screen.rules]]
 id = "folder_trust_dialog"
 state = "blocked"
+asks = "folder_trust"
 priority = 970
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true

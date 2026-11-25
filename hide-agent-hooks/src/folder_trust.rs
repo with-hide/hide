@@ -133,6 +133,14 @@ impl Agent {
         hide_agent_adapter::folder_trust_format(kind).map(Self::of)
     }
 
+    /// The writer's name in a report: the stem of Hide's record of it,
+    /// without its `-trust`.
+    pub fn code(self) -> &'static str {
+        self.file_stem()
+            .strip_suffix("-trust")
+            .expect("every record stem ends in -trust")
+    }
+
     /// The agent's name in a reason the operator reads.
     pub const fn label(self) -> &'static str {
         match self {
@@ -469,11 +477,12 @@ fn write_record(agent: Agent, home: &Path, record: &[Recorded]) -> Result<(), In
 
 /// What adding an entry found.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Added {
+pub enum Added {
     /// Hide wrote the entry.
     New,
-    /// The agent already decides the folder (trusted, or Pi's saved "Do not
-    /// trust"), so the entry stays the operator's and Hide records nothing.
+    /// The agent already decides the folder (trusted, or Pi's or Qwen Code's
+    /// saved "Do not trust"), so the entry stays the operator's and Hide
+    /// records nothing.
     Present,
 }
 
@@ -486,7 +495,7 @@ pub fn trust<'a>(
     at: impl Into<AccountAt<'a>>,
     folder: &Path,
     tools: Tools,
-) -> Result<(), InstallFailure> {
+) -> Result<Added, InstallFailure> {
     trust_in(agent, at.into(), folder, InRepository::Yes, tools)
 }
 
@@ -506,7 +515,7 @@ fn trust_in(
     folder: &Path,
     in_repository: InRepository,
     tools: Tools,
-) -> Result<(), InstallFailure> {
+) -> Result<Added, InstallFailure> {
     let home = at.home();
     let account = key_of(at);
     let settings = agent.settings_path(at);
@@ -602,9 +611,9 @@ fn trust_in(
             // The agent no longer trusts them; an entry still recorded is
             // taken out of the record with the next one Hide adds.
             let _ = write_record(agent, home, &record);
-            Ok(())
+            Ok(Added::New)
         }
-        Ok(_) => Ok(()),
+        Ok(added) => Ok(added),
         Err(failure) => {
             if added {
                 record.retain(|recorded| recorded != &new);
@@ -634,7 +643,7 @@ pub fn trust_worktree<'a>(
     at: impl Into<AccountAt<'a>>,
     folder: &Path,
     tools: Tools,
-) -> Result<(), InstallFailure> {
+) -> Result<Added, InstallFailure> {
     let at = at.into();
     let canonical = startable(agent, at.home(), folder)?;
     if std::fs::symlink_metadata(canonical.join(".git")).is_err() {
@@ -655,7 +664,7 @@ pub fn trust_started_folder<'a>(
     folder: &Path,
     automations: &Path,
     tools: Tools,
-) -> Result<(), InstallFailure> {
+) -> Result<Added, InstallFailure> {
     let at = at.into();
     let canonical = startable(agent, at.home(), folder)?;
     let automation = hide_platform::fs::identity::canonical(automations)
@@ -777,6 +786,19 @@ fn same_folder(entry: &str, path: &Path) -> bool {
         fold(entry) == fold(path)
     } else {
         trim(entry) == trim(path)
+    }
+}
+
+/// Whether `path` is `root` or a folder below it, as the system compares
+/// folders: on Windows without case and with either separator, and exactly
+/// elsewhere, by whole names.
+fn folder_within(path: &Path, root: &Path) -> bool {
+    if cfg!(windows) {
+        let fold =
+            |name: &Path| PathBuf::from(name.to_string_lossy().replace('/', "\\").to_lowercase());
+        fold(path).starts_with(fold(root))
+    } else {
+        path.starts_with(root)
     }
 }
 
@@ -1335,16 +1357,24 @@ mod qwen {
 
     /// Whether a rule of Qwen Code's already decides `key`, trusted or not:
     /// one for the folder or a folder above it, or a `TRUST_PARENT` for a
-    /// folder below the one that names it. A value Qwen Code does not know
-    /// decides nothing, as it reads it.
+    /// folder below the one that names it. Qwen Code compares each rule and
+    /// the folder both as written and resolved (`getPathComparisonVariants`),
+    /// and on Windows without case (`path.relative`), so a rule for a link
+    /// to a folder above, or one spelled in another case there, decides it
+    /// too. A value Qwen Code does not know decides nothing, as it reads it.
     fn decided(rules: &Map<String, Value>, key: &str) -> bool {
-        rules.iter().any(|(folder, level)| {
+        let folder = folder_names(Path::new(key));
+        rules.iter().any(|(rule, level)| {
             let decides = match level.as_str() {
-                Some("TRUST_FOLDER" | "DO_NOT_TRUST") => Some(Path::new(folder.as_str())),
-                Some("TRUST_PARENT") => Path::new(folder.as_str()).parent(),
+                Some("TRUST_FOLDER" | "DO_NOT_TRUST") => Some(Path::new(rule.as_str())),
+                Some("TRUST_PARENT") => Path::new(rule.as_str()).parent(),
                 _ => None,
             };
-            decides.is_some_and(|decides| Path::new(key).starts_with(decides))
+            decides.is_some_and(|decides| {
+                folder_names(decides)
+                    .iter()
+                    .any(|root| folder.iter().any(|name| folder_within(name, root)))
+            })
         })
     }
 
