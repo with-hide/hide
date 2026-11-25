@@ -1,12 +1,21 @@
 //! `hide agent exec`, the command a pane's shell runs to start an agent
 //! with a profile (PRD agent-profiles D-26; docs/ARCHITECTURE.md, Starting
-//! an agent with a profile). It is not in the help: the core types it, with
-//! the absolute path of the `hide` beside the pane's node, as the start line
-//! of a profile's agent.
+//! an agent with a profile) or with a first input (docs/delivery.md, The
+//! input ladder). It is not in the help: the core types it, with the
+//! absolute path of the `hide` beside the pane's node, as the start line of
+//! such an agent.
 //!
 //! ```text
-//! hide agent exec --attempt <id> -- <program> <argument>...
+//! hide agent exec [--attempt <id>] [--prompt-file <path>] -- <program> <argument>...
 //! ```
+//!
+//! `--prompt-file` names the private file the pane's node keeps the start's
+//! first input in (`Call::PromptFile`): this command reads it, removes it and
+//! hands its text to the program as its last argument, so no shell reads the
+//! text and no shell's syntax or locale changes it. A file that is not there
+//! or cannot be read ends the start with why, never with an empty argument.
+//! A start with no profile then runs the program its shell's `PATH` finds,
+//! as the shell would have, and on Unix becomes it.
 //!
 //! The line names the start's attempt and the agent's own words, nothing of
 //! its profile: it first asks the pane's node how the profile runs
@@ -78,13 +87,32 @@ pub fn run(arguments: &[OsString]) -> Option<i32> {
         eprintln!("hide: this agent start line cannot be read: {why}");
         Some(MISUSED)
     };
-    let attempt = match attempt_of(&arguments[3..]) {
-        Ok(attempt) => attempt,
+    let line = match Line::parse(&arguments[3..]) {
+        Ok(line) => line,
         Err(why) => return misused(why),
     };
-    let argv = match parse(&arguments[5..]) {
-        Ok(argv) => argv,
-        Err(why) => return misused(why),
+    let mut argv = line.argv;
+    if let Some(file) = line.prompt_file {
+        match take_prompt(file) {
+            Ok(text) => argv.push(text),
+            Err(why) => {
+                if let Some(attempt) = line.attempt {
+                    report(
+                        attempt,
+                        AgentExecEvent::Refused {
+                            failure: format!("its first input could not be read: {why}"),
+                        },
+                    );
+                }
+                eprintln!(
+                    "hide: this agent's first input could not be read ({why}). This pane is a shell again."
+                );
+                return Some(NOT_RUN);
+            }
+        }
+    }
+    let Some(attempt) = line.attempt else {
+        return Some(run_program(&argv));
     };
     let start = match profile(attempt) {
         Ok(ExecProfile::Ready(start)) => start,
@@ -106,6 +134,106 @@ pub fn run(arguments: &[OsString]) -> Option<i32> {
         }
     };
     Some(run_start(attempt, &start, &argv))
+}
+
+/// A start line after `agent exec`: the profile's attempt first when it has
+/// one, then the file its first input waits in when it has one, then the
+/// agent's own words after `--`. A line names at least one of the two, as
+/// the engine types it.
+#[derive(Debug, PartialEq)]
+struct Line<'a> {
+    attempt: Option<&'a str>,
+    prompt_file: Option<&'a OsStr>,
+    argv: Vec<OsString>,
+}
+
+impl<'a> Line<'a> {
+    fn parse(arguments: &'a [OsString]) -> Result<Self, String> {
+        use hide_agent_hooks::hook_request::{AGENT_EXEC_ATTEMPT, AGENT_EXEC_PROMPT_FILE};
+        let (attempt, rest) = match arguments.first() {
+            Some(flag) if flag == AGENT_EXEC_ATTEMPT => {
+                (Some(attempt_of(arguments)?), &arguments[2..])
+            }
+            _ => (None, arguments),
+        };
+        let (prompt_file, rest) = match rest {
+            [flag, file, rest @ ..] if flag == AGENT_EXEC_PROMPT_FILE && !file.is_empty() => {
+                (Some(file.as_os_str()), rest)
+            }
+            [flag, ..] if flag == AGENT_EXEC_PROMPT_FILE => {
+                return Err(format!("{AGENT_EXEC_PROMPT_FILE} names no file"));
+            }
+            rest => (None, rest),
+        };
+        if attempt.is_none() && prompt_file.is_none() {
+            return Err(format!(
+                "it names neither {AGENT_EXEC_ATTEMPT} nor {AGENT_EXEC_PROMPT_FILE} first"
+            ));
+        }
+        Ok(Self {
+            attempt,
+            prompt_file,
+            argv: parse(rest)?,
+        })
+    }
+}
+
+/// The text of the prompt file `file`, which is removed once read: the
+/// start's first input, handed to the program as its last argument. A file
+/// that is not there or cannot be read fails the start, never an empty word.
+fn take_prompt(file: &OsStr) -> Result<OsString, String> {
+    let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+    if let Err(error) = std::fs::remove_file(file) {
+        // Its node drops it once its start has ended.
+        eprintln!("hide: the first input's file stays until Hide removes it ({error}).");
+    }
+    #[cfg(unix)]
+    {
+        Ok(std::os::unix::ffi::OsStringExt::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(bytes)
+            .map(OsString::from)
+            .map_err(|_| "it is not UTF-8 text".to_owned())
+    }
+}
+
+/// Runs `argv`, a start with no profile, as the shell that typed the line
+/// would have: the program its `PATH` finds, by the name the line gave it.
+/// On Unix this process becomes the program; on Windows it stays its parent
+/// and hands on its exit code (`hide_platform::process::hand_over`).
+fn run_program(argv: &[OsString]) -> i32 {
+    let program = &argv[0];
+    let failure = |why: &dyn std::fmt::Display| {
+        eprintln!(
+            "hide: {} could not start: {why}. This pane is a shell again.",
+            program.to_string_lossy()
+        );
+    };
+    let search = std::env::var_os("PATH").unwrap_or_default();
+    let found = match startable(program, &search) {
+        Ok(found) => found,
+        Err((why, code)) => {
+            failure(&why);
+            return code;
+        }
+    };
+    let mut command = command(&found);
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut command, program);
+    command.args(&argv[1..]);
+    match hide_platform::process::hand_over(command, |_| {}) {
+        Ok(code) => code,
+        Err(error) => {
+            failure(&error);
+            if error.kind() == std::io::ErrorKind::NotFound {
+                NOT_FOUND
+            } else {
+                NOT_RUN
+            }
+        }
+    }
 }
 
 /// Runs `argv`, the agent's own words, as `start` says, for `attempt`.
@@ -396,6 +524,76 @@ mod tests {
         assert_eq!(
             run(&words(&["hide", "agent", "exec", "--", "a"])),
             Some(MISUSED)
+        );
+    }
+
+    #[test]
+    fn a_start_line_names_its_attempt_or_its_first_inputs_file_before_the_agents_words() {
+        let line = words(&["--prompt-file", "/s/p", "--", "claude", "--"]);
+        assert_eq!(
+            Line::parse(&line).unwrap(),
+            Line {
+                attempt: None,
+                prompt_file: Some(OsStr::new("/s/p")),
+                argv: words(&["claude", "--"]),
+            }
+        );
+        let line = words(&[
+            "--attempt",
+            ATTEMPT,
+            "--prompt-file",
+            "/s/p",
+            "--",
+            "claude",
+        ]);
+        assert_eq!(
+            Line::parse(&line).unwrap(),
+            Line {
+                attempt: Some(ATTEMPT),
+                prompt_file: Some(OsStr::new("/s/p")),
+                argv: words(&["claude"]),
+            }
+        );
+        for line in [
+            &["--", "claude"][..],
+            &["--prompt-file"][..],
+            &["--prompt-file", "", "--", "claude"][..],
+            &[
+                "--prompt-file",
+                "/s/p",
+                "--attempt",
+                ATTEMPT,
+                "--",
+                "claude",
+            ][..],
+        ] {
+            assert!(Line::parse(&words(line)).is_err(), "{line:?}");
+        }
+    }
+
+    /// The first input reaches the program byte for byte and its file is
+    /// gone; a file that is not there fails the start rather than give the
+    /// program an empty word.
+    #[test]
+    fn a_first_inputs_file_is_read_whole_and_removed() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("start-1");
+        let text = "한글 첫 지시: '따옴표' \"큰따옴표\" $HOME `tick`\u{2028}둘째 줄";
+        std::fs::write(&file, text).unwrap();
+        assert_eq!(take_prompt(file.as_os_str()).unwrap(), OsString::from(text));
+        assert!(!file.exists());
+        assert!(take_prompt(file.as_os_str()).is_err());
+        assert_eq!(
+            run(&words(&[
+                "hide",
+                "agent",
+                "exec",
+                "--prompt-file",
+                file.to_str().unwrap(),
+                "--",
+                "claude",
+            ])),
+            Some(NOT_RUN)
         );
     }
 

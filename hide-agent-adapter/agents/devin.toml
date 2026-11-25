@@ -6,6 +6,9 @@
 # and its version, engine and rules moved under [screen], unchanged; its
 # alias with a space is left out, since a program is a plain file name.
 # [resume] last: docs.devin.ai/cli/essential-commands, "devin -c  # Continue the most recent session in the current directory".
+# Added by Hide: `asks = "folder_trust"` on the rule of its question whether
+# to trust a folder, which no evaluator reads (docs/agent-hooks.md, Folder
+# trust for the folders Hide starts agents in).
 schema = 1
 id = "devin"
 name = "Devin"
@@ -23,6 +26,7 @@ updated_at = "2026-06-15T00:00:00Z"
 [[screen.rules]]
 id = "workspace_trust_prompt"
 state = "blocked"
+asks = "folder_trust"
 priority = 300
 region = "bottom_non_empty_lines(8)"
 visible_blocker = true

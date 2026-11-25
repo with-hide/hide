@@ -446,6 +446,9 @@ pub(crate) struct ExplorerTarget {
     pub(crate) checkout_id: String,
     pub(crate) device_id: String,
     pub(crate) root: String,
+    /// Desk's Explorer asked: a created file opens in Desk's tab panel, not
+    /// in a Workspace's View.
+    pub(crate) desk: bool,
 }
 
 /// An Explorer change as the page asked for it. One asked while another runs
@@ -457,6 +460,10 @@ pub(crate) struct ExplorerTarget {
 pub(crate) struct ExplorerRequest {
     pub(crate) root: String,
     pub(crate) device: Option<String>,
+    /// Desk's Explorer asked: the change is planned against the registered
+    /// checkout at `root` on `device`, which Desk's session shows, rather
+    /// than the checkout in front (PRD desk-2-ui B35).
+    pub(crate) desk: bool,
     pub(crate) change: ExplorerChange,
 }
 

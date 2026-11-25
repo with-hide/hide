@@ -97,10 +97,19 @@ impl Local {
         self
     }
 
-    /// The node keeps View feedback screenshots and letter attachments under
-    /// `state`, the daemon's state folder (`hide_host::feedback`).
+    /// The node keeps View feedback screenshots, letter attachments and the
+    /// prompt files of its panes' starts under `state`, the daemon's state
+    /// folder (`hide_host::feedback`, `hide_host::prompt_files`).
     pub fn keeping_feedback_in(mut self, state: std::path::PathBuf) -> Self {
         self.env.state = Some(state);
+        self
+    }
+
+    /// The node's `hide` is the one beside `program` rather than beside the
+    /// running executable: a test's node, in a test binary with no `hide`
+    /// beside it, names the built one.
+    pub fn with_program(mut self, program: std::path::PathBuf) -> Self {
+        self.env.program = Some(program);
         self
     }
 

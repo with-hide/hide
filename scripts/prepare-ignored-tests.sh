@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# What a test marked `#[ignore]` needs before it can run: the built pane holder
-# and the shells Hide starts, which those tests name in `HIDE_TEST_*` variables.
+# What a test marked `#[ignore]` needs before it can run: the built pane holder,
+# the built `hide`, and the shells Hide starts, which those tests name in `HIDE_TEST_*` variables.
 # docs/TESTING.md, "The repeat lane", owns when it is called; this file owns
 # what it puts in place, so `pr.yml` and `repeat.yml` cannot drift apart.
 #
@@ -27,6 +27,14 @@ bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) export HIDE_TEST_HOLDER_BIN="$_repository/target/debug/hide-holder.exe" ;;
     *) export HIDE_TEST_HOLDER_BIN="$_repository/target/debug/hide-holder" ;;
+esac
+
+# The `hide` a start with a first input runs on the pane's machine (`hide
+# agent exec --prompt-file`), which an engine test's node names beside it.
+bash scripts/verify-cargo.sh build -p hided --bin hide
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) export HIDE_TEST_HIDE_BIN="$_repository/target/debug/hide.exe" ;;
+    *) export HIDE_TEST_HIDE_BIN="$_repository/target/debug/hide" ;;
 esac
 
 # Windows' pinned ConPTY runtime, which the holder linked there runs on

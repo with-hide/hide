@@ -1044,6 +1044,7 @@ impl Runtime {
             "display_kind": oldest.kind,
         }));
         if let Some(document) = oldest.document
+            && !self.desk_holds_tab(&document)
             && !self
                 .every_view()
                 .any(|(_, display)| display.tab_id.as_ref() == Some(&document))
@@ -1761,7 +1762,7 @@ impl Runtime {
         let shown = self
             .view_displays(key)
             .any(|display| display.tab_id.as_deref() == Some(tab_id));
-        if shown || self.document_kept(tab_id) {
+        if shown || self.document_kept(tab_id) || self.desk_holds_tab(tab_id) {
             return;
         }
         if let Some(index) = self
@@ -1791,7 +1792,7 @@ impl Runtime {
                 let shown = self
                     .view_displays(key)
                     .any(|display| display.tab_id.as_deref() == Some(old_tab.as_str()));
-                if shown {
+                if shown || self.desk_holds_tab(&old_tab) {
                     return;
                 }
                 if let Some(index) = self
@@ -2797,10 +2798,15 @@ impl Runtime {
         let tab = display.tab_id.clone();
         // A document can show in another Workspace too, a file a terminal
         // link opened where the operator was, and stays open for it.
+        // So does a file Desk's tab panel holds (PRD desk-2-ui D-22).
         let shared = match &tab {
-            Some(tab) => self.every_view().any(|(view, other)| {
-                other.tab_id.as_ref() == Some(tab) && (&view != key || other.id != display_id)
-            }),
+            Some(tab) => {
+                self.desk_holds_tab(tab)
+                    || self.every_view().any(|(view, other)| {
+                        other.tab_id.as_ref() == Some(tab)
+                            && (&view != key || other.id != display_id)
+                    })
+            }
             None => self
                 .view_displays(key)
                 .any(|other| other.id != display_id && other.shows(&path, kind, committed)),
@@ -3082,6 +3088,11 @@ impl Runtime {
             .iter()
             .map(|key| (key.clone(), self.front_place(key)))
             .collect();
+        let desk_held: HashSet<String> = tabs
+            .iter()
+            .filter(|tab| self.desk_holds_tab(&tab.id))
+            .map(|tab| tab.id.clone())
+            .collect();
         let now = unix_milliseconds();
         let store = self.workspace_views.as_mut().expect("checked above");
         let mut stored = false;
@@ -3141,11 +3152,14 @@ impl Runtime {
                 .views()
                 .filter_map(|display| display.tab_id.clone())
                 .collect();
+            // Nor is a file Desk holds: its tab panel shows it (PRD desk-2-ui D-22).
             let owned: HashSet<String> = tabs
                 .iter()
                 .filter(|tab| {
                     tab.key.as_ref() == Some(&key)
-                        && (shown.elsewhere(tab, &key) || bound.contains(&tab.id))
+                        && (shown.elsewhere(tab, &key)
+                            || bound.contains(&tab.id)
+                            || desk_held.contains(&tab.id))
                 })
                 .map(|tab| tab.id.clone())
                 .collect();
@@ -3435,6 +3449,13 @@ impl Runtime {
             };
             if self.editor_documents.contains_key(tab_id) && !visible.contains(tab_id) {
                 visible.push(tab_id.clone());
+            }
+        }
+        // The files Desk's tab panel holds, at most `MAX_DESK_FILES`: which
+        // of them is in front is the window's.
+        for tab_id in self.desk_file_tabs() {
+            if self.editor_documents.contains_key(&tab_id) && !visible.contains(&tab_id) {
+                visible.push(tab_id);
             }
         }
         visible

@@ -6,7 +6,7 @@
 // on the first paint of either.
 
 import { create } from "zustand";
-import { isInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
+import { isInterfaceLanguage, resolveInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 import { resolveTheme, type ThemeChoice } from "../theme";
 import { appHost } from "./appHost";
 import { setAppearance } from "./appBridge";
@@ -82,6 +82,40 @@ export function choosePhoneSettings(change: Partial<PhoneSettings>): void {
     kept = false;
   }
   usePhoneSettings.setState({ language, theme, kept });
+}
+
+/**
+ * The explicit language of the last Mac this phone showed (its core's `interface_language`), so the start page, which has no Mac
+ * to ask, speaks the language the app last spoke: the phone's own choice, else this, else the phone's language. Absent while that
+ * Mac follows its system, which the app reads as the phone's own language too.
+ */
+export const MAC_LANGUAGE_KEY = "hide.phone.macLanguage";
+
+export function readMacLanguage(storage: Pick<Storage, "getItem">): InterfaceLanguage | null {
+  try {
+    const stored = storage.getItem(MAC_LANGUAGE_KEY);
+    return isInterfaceLanguage(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Kept from each `agents` frame; written only when it changed, since a frame arrives with every change of the list. */
+export function rememberMacLanguage(storage: Pick<Storage, "getItem" | "setItem" | "removeItem">, language: string | null): void {
+  const next = isInterfaceLanguage(language) ? language : null;
+  if (readMacLanguage(storage) === next) return;
+  try {
+    if (next === null) storage.removeItem(MAC_LANGUAGE_KEY);
+    else storage.setItem(MAC_LANGUAGE_KEY, next);
+  } catch (error) {
+    // The start page then speaks the phone's language, as before this was kept.
+    console.warn(JSON.stringify({ event: "phone.mac_language_unsaved", error: String(error) }));
+  }
+}
+
+/** The start page's language, resolved as the app resolves its own (`PhoneLanguageBoundary`). */
+export function startLanguage(storage: Pick<Storage, "getItem">, systemLanguage: string): InterfaceLanguage {
+  return resolveInterfaceLanguage(usePhoneSettings.getState().language ?? readMacLanguage(storage), systemLanguage).language;
 }
 
 /**

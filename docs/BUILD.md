@@ -785,10 +785,10 @@ A whole run took about 6 minutes and the mini's free disk fell by about 1 GB (20
 The command stops before it starts only when the mini has less than 5 GB free, a few times what a run uses, so a run cannot fill the disk under the mini's other work; a run that runs out of space anyway fails at the step that ran out.
 
 **Version and build number.**
-The version is the app's own: the `version` of `mobile/package.json`, three numbers, and it moves only when the app is released to the App Store, not with the desktop release.
-The phone is a shell around a hosted phone page, so a desktop release reaches it through the phone protocol ([Retained bundles and the pin](#retained-bundles-and-the-pin)), which needs no store release; the app and the desktop number their releases apart, and what says whether a desktop and a phone work together is the protocol, never the two versions.
-The first App Store version is 1.2.7 (released 2026-11-13): Apple refuses a version number below the one released, and refuses to delete the only version of an app, so the number cannot go back.
-The next app release raises `version` above 1.2.7.
+The version is the `version` of `mobile/package.json`, three numbers, and it moves only when the app is released to the App Store.
+An app release takes the number of the desktop release whose phone page it carries, the one that page ships with or the next one when the page is newer than the latest desktop release, skipping the numbers between (operator decision 2026-11-25): app 1.3.0 beside desktop 1.3.0, then app 1.3.3 beside desktop 1.3.3 when the app is next released; the Android app (`mobile/android/version.json`) follows the same rule, so the two apps carry one number.
+The phone page is inside the app ([Retained bundles and the pin](#retained-bundles-and-the-pin)), so a change to it reaches app users only with an app release; what says whether a desktop and a phone work together is still the protocol, never the two versions.
+The first App Store version is 1.2.7 (released 2026-11-13): Apple refuses a version number below the one released, and refuses to delete the only version of an app, so the number only ever rises.
 The build number is the UTC time of the machine that starts the command, taken after the Swift tests and just before the mini starts, `YYYYMMDDHHMMSS`: it rises with every run, a second run on the same commit uploads under a new number, and nothing is edited by hand.
 App Store Connect refuses a build number that is not higher than every earlier build of the same version, so two runs that overlap are decided by the order they upload in, and a mini whose clock runs backwards is refused after the upload with Apple's own message.
 A run that fails before the upload, or whose upload Apple refused, is run again as it is.

@@ -33,6 +33,7 @@ hook_trust = false
 plugins = "{PI_CODING_AGENT_DIR}/extensions"
 skills = "shared"
 folder_trust = "{PI_CODING_AGENT_DIR}/trust.json"
+folder_trust_format = "pi"
 sessions = "{PI_CODING_AGENT_DIR}/sessions"
 login = "{PI_CODING_AGENT_DIR}/auth.json"
 state = "{PI_CODING_AGENT_DIR}"

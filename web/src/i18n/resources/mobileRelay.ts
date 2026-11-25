@@ -1,7 +1,11 @@
 import type { Catalogs } from "../schema";
 export const mobileRelayEnglish = {
   "mobile.relay.devices": "Devices",
-  "mobile.relay.add": "Connect another device",
+  "mobile.relay.add": "Add device",
+  "mobile.add.computer": "A computer with Hide",
+  "mobile.add.computerBody": "Mac · Windows · Linux. Scan its QR to connect it to this phone directly.",
+  "mobile.add.server": "SSH server",
+  "mobile.add.serverBody": "Add it in Hide on your computer: Settings › Devices › Add device › Computer. It then shows under that computer by itself.",
   "mobile.relay.encrypted": "Only your phone and this device can read your content.",
   "mobile.relay.offline": "{{name}} has Hide turned off or is asleep · Retrying",
   "mobile.relay.updateTitle": "Update Hide on this device",
@@ -57,8 +61,12 @@ export const mobileRelayEnglish = {
 export const mobileRelayCatalogs = {
   en: mobileRelayEnglish,
   "ko": {
-    "mobile.relay.devices": "기기 고르기",
-    "mobile.relay.add": "다른 기기 연결",
+    "mobile.relay.devices": "기기",
+    "mobile.relay.add": "기기 추가",
+    "mobile.add.computer": "Hide가 있는 컴퓨터",
+    "mobile.add.computerBody": "Mac · Windows · Linux. 그 컴퓨터의 QR을 찍어 이 폰에 바로 연결해요.",
+    "mobile.add.server": "SSH 서버",
+    "mobile.add.serverBody": "컴퓨터의 Hide에서 추가해요: 설정 › 기기 › 기기 추가 › 컴퓨터. 추가하면 그 컴퓨터 밑에 저절로 보여요.",
     "mobile.relay.encrypted": "폰과 이 기기만 내용을 읽을 수 있어요",
     "mobile.relay.offline": "{{name}}의 Hide가 꺼져 있거나 잠자고 있어요 · 다시 시도 중",
     "mobile.relay.updateTitle": "Hide를 업데이트해 주세요",
@@ -113,7 +121,11 @@ export const mobileRelayCatalogs = {
   },
   "ja": {
     "mobile.relay.devices": "デバイス",
-    "mobile.relay.add": "別のデバイスを接続",
+    "mobile.relay.add": "デバイスを追加",
+    "mobile.add.computer": "Hide が入ったコンピュータ",
+    "mobile.add.computerBody": "Mac · Windows · Linux。そのコンピュータの QR を読み取って、このスマートフォンに直接接続します。",
+    "mobile.add.server": "SSH サーバー",
+    "mobile.add.serverBody": "コンピュータの Hide で追加します: 設定 › デバイス › デバイスを追加 › コンピュータ。追加すると、そのコンピュータの下に自動で表示されます。",
     "mobile.relay.encrypted": "内容を読めるのは、この端末とスマートフォンだけです。",
     "mobile.relay.offline": "{{name}}のHideが終了中かスリープ中です · 再接続中",
     "mobile.relay.updateTitle": "Hideを更新してください",
@@ -168,7 +180,11 @@ export const mobileRelayCatalogs = {
   },
   "zh-CN": {
     "mobile.relay.devices": "设备",
-    "mobile.relay.add": "连接其他设备",
+    "mobile.relay.add": "添加设备",
+    "mobile.add.computer": "装有 Hide 的电脑",
+    "mobile.add.computerBody": "Mac · Windows · Linux。扫描那台电脑的二维码，直接连接到这部手机。",
+    "mobile.add.server": "SSH 服务器",
+    "mobile.add.serverBody": "在电脑的 Hide 中添加：设置 › 设备 › 添加设备 › 电脑。添加后会自动显示在那台电脑下面。",
     "mobile.relay.encrypted": "只有此设备和手机能读取内容。",
     "mobile.relay.offline": "{{name}}的Hide已关闭或正在休眠 · 正在重试",
     "mobile.relay.updateTitle": "请更新Hide",

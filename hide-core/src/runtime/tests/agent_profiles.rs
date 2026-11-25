@@ -417,6 +417,7 @@ fn submitted(
         codex_daemon: Default::default(),
         wakes: false,
         program: None,
+        prompt: None,
     };
     finish.submitted(&launch);
     finish

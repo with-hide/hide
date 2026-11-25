@@ -211,6 +211,18 @@ export function bundlePath(protocol: number, supported: readonly number[]): stri
 /** The start page as the list of saved computers: it never opens one by itself, so a way back to the list stays there. */
 export const HOST_LIST_LINK = "/?list=1";
 
+/** 기기 추가: the start page asks first what is added, a computer with Hide or an SSH server (`AddChoice`). */
+export const ADD_DEVICE_LINK = "/?add=1";
+
+/** Adding a computer with Hide straight away, its QR scan and paste page: 다시 연결 and the demo's way to a real computer know what they add. */
+export const ADD_COMPUTER_LINK = "/?add=computer";
+
+/** What an add address opens: the choice, the computer's page, or neither. */
+export function addStep(search: URLSearchParams): "choice" | "computer" | null {
+  const add = search.get("add");
+  return add === null ? null : add === "computer" ? "computer" : "choice";
+}
+
 /**
  * The computer the start page opens without showing the list: the one its address names, or else the only computer
  * this phone keeps, unless the address asks for the list or the scanner, or that computer refused this phone.

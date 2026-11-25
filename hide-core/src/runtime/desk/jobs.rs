@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::super::Runtime;
 use crate::agent_state::RowMark;
-use crate::coordination::Command as AgentCommand;
+use crate::coordination::{Command as AgentCommand, SPAWN_BUSY};
 use crate::delivery::{Actor, Command, HIDE_DESK_ROLE};
 use crate::desk::{MAX_QUEUE, QueuedJob, QueuedState};
 use crate::model::{DeskJobState, SidebarAgentSnapshot};
@@ -61,7 +61,12 @@ impl Runtime {
             return Ok(None);
         }
         let waiting = self.desk_waiting();
-        if waiting == 0 && self.desk_places_taken() < usize::from(self.desk.stored.settings.cap) {
+        // While the queue starts one, a spawn of Desk's lines up behind it
+        // rather than meet it at this machine's start line.
+        if waiting == 0
+            && !self.desk_queue_starting()
+            && self.desk_places_taken() < usize::from(self.desk.stored.settings.cap)
+        {
             return Ok(None);
         }
         let queue = &mut self.desk.stored.queue;
@@ -95,7 +100,9 @@ impl Runtime {
     /// under the lock, so the screen is told once the lock is let go.
     pub(in crate::runtime) fn desk_queued_after(&self) -> Option<crate::delivery::worker::After> {
         let notifier = self.desk.handle.as_ref()?.notifier.clone();
-        Some(Box::new(move |_: &Result<Value, String>| notifier.notify()))
+        Some(Box::new(move |_: &mut Result<Value, String>| {
+            notifier.notify()
+        }))
     }
 
     /// Its place in the queue, from 1, while it waits.
@@ -116,6 +123,16 @@ impl Runtime {
             .iter()
             .filter(|job| job.state == QueuedState::Waiting)
             .count()
+    }
+
+    /// Whether the queue is starting one of its spawns now: it starts one at
+    /// a time, since this machine starts one session at a time.
+    fn desk_queue_starting(&self) -> bool {
+        self.desk
+            .stored
+            .queue
+            .iter()
+            .any(|job| job.state == QueuedState::Starting)
     }
 
     /// Jobs that hold one of Desk's places: starting from the queue, or in
@@ -171,9 +188,8 @@ impl Runtime {
                 command: spawn @ AgentCommand::Spawn { parent: None, .. },
             } => {
                 let spawn = spawn.clone();
-                return Some(Box::new(move |result: &Result<Value, String>| {
-                    let result = result.clone();
-                    handle.apply(move |runtime| runtime.desk_spawn_answered(spawn, result));
+                return Some(Box::new(move |result: &mut Result<Value, String>| {
+                    handle.apply(|runtime| runtime.desk_spawn_answered(spawn, result));
                 }));
             }
             Command::Send {
@@ -210,7 +226,7 @@ impl Runtime {
             }
             _ => return None,
         };
-        Some(Box::new(move |result: &Result<Value, String>| {
+        Some(Box::new(move |result: &mut Result<Value, String>| {
             let Ok(answer) = result else {
                 return;
             };
@@ -223,21 +239,25 @@ impl Runtime {
     }
 
     /// Desk's own spawn answered: its card line, or a failed card that
-    /// `다시 시도` puts back in the queue (B22, B23).
-    fn desk_spawn_answered(&mut self, spawn: AgentCommand, result: Result<Value, String>) -> bool {
+    /// `다시 시도` puts back in the queue (B22, B23). One refused only
+    /// because another start held this machine's start line started
+    /// nothing, so it waits first in the queue rather than fail, and its
+    /// asker reads that it waits, as a spawn the queue admitted reads.
+    fn desk_spawn_answered(
+        &mut self,
+        spawn: AgentCommand,
+        result: &mut Result<Value, String>,
+    ) -> bool {
         let AgentCommand::Spawn { intent, .. } = &spawn else {
             return false;
         };
         let intent = intent.clone();
         let queue = &mut self.desk.stored.queue;
         queue.retain(|job| job.intent != intent || job.state == QueuedState::Waiting);
-        if let Err(code) = result {
-            crate::diagnostic!(json!({
-                "component": "desk",
-                "kind": "desk.spawn_failed",
-                "intent": intent,
-                "code": code,
-            }));
+        let mut queued = false;
+        if let Err(code) = &*result {
+            let code = code.clone();
+            let busy = code == SPAWN_BUSY;
             if queue.len() >= MAX_QUEUE
                 && let Some(ended) = queue.iter().position(|job| {
                     matches!(job.state, QueuedState::Cancelled | QueuedState::Failed)
@@ -246,13 +266,35 @@ impl Runtime {
                 queue.remove(ended);
             }
             if queue.len() < MAX_QUEUE {
-                queue.push(QueuedJob {
+                let job = QueuedJob {
                     intent: intent.clone(),
                     command: spawn,
                     queued_at_ms: crate::links::now_ms(),
-                    state: QueuedState::Failed,
-                    code: Some(code),
-                });
+                    state: if busy {
+                        QueuedState::Waiting
+                    } else {
+                        QueuedState::Failed
+                    },
+                    code: (!busy).then(|| code.clone()),
+                };
+                if busy {
+                    // Asked before every spawn queued since, so first.
+                    queue.insert(0, job);
+                    queued = true;
+                } else {
+                    queue.push(job);
+                }
+            }
+            // A busy spawn the full queue could not take is logged failed,
+            // as it is: nothing will start it.
+            crate::diagnostic!(json!({
+                "component": "desk",
+                "kind": if queued { "desk.spawn_queued_busy" } else { "desk.spawn_failed" },
+                "intent": intent,
+                "code": code,
+            }));
+            if queued {
+                *result = Ok(queued_answer(&intent, 1));
             }
         } else if let Some(turn) = self.desk.turn.as_mut() {
             turn.steps.count(hide_desk::permission::Step::Start);
@@ -261,6 +303,9 @@ impl Runtime {
             id: 0,
             job_id: intent,
         });
+        if queued {
+            self.desk_start_queued();
+        }
         self.save_desk();
         self.compose_desk_jobs();
         true
@@ -341,7 +386,9 @@ impl Runtime {
     }
 
     /// Starts the first waiting spawn when a place is free, on a thread of
-    /// its own, as `hide:desk`; its answer comes back to the queue.
+    /// its own, as `hide:desk`; its answer comes back to the queue and
+    /// starts the next, so a cap raised or a place freed fills every place
+    /// it can, one start after another.
     pub(super) fn desk_start_queued(&mut self) -> bool {
         if self.desk_waiting() == 0 {
             return false;
@@ -351,52 +398,94 @@ impl Runtime {
     }
 
     /// Starts the first waiting job when fewer than the cap's places are
-    /// taken.
+    /// taken and the queue is starting none: the queue starts one at a time,
+    /// so its starts never meet each other at this machine's start line.
     fn desk_start_next(&mut self, places: usize) -> bool {
         // Switched off, the queue keeps its spawns and starts none (D-76);
         // turning Desk on again starts them in order.
-        if !self.desk.stored.settings.enabled {
+        if !self.desk.stored.settings.enabled
+            || places >= usize::from(self.desk.stored.settings.cap)
+            || self.desk_queue_starting()
+        {
             return false;
         }
+        let Some(index) = self
+            .desk
+            .stored
+            .queue
+            .iter()
+            .position(|job| job.state == QueuedState::Waiting)
+        else {
+            return false;
+        };
+        let job = &self.desk.stored.queue[index];
+        let (intent, command) = (job.intent.clone(), job.command.clone());
+        let state = match self.desk_launch(intent, command) {
+            Launch::Started => QueuedState::Starting,
+            Launch::Unavailable => return false,
+            Launch::Failed => QueuedState::Failed,
+        };
+        self.desk.stored.queue[index].state = state;
+        self.save_desk();
+        true
+    }
+
+    /// Runs a queued start on a thread of its own, which reports to the
+    /// queue under the lock this caller holds, so the job is marked before
+    /// its answer can land.
+    fn desk_launch(&mut self, intent: String, command: AgentCommand) -> Launch {
         let Some(handle) = self.desk.handle.clone() else {
-            return false;
+            // A test with no handle runs no start: it reads which job the
+            // queue started and answers it with `desk_queued_started`.
+            #[cfg(test)]
+            {
+                self.desk.launched.push(intent);
+                return Launch::Started;
+            }
+            #[cfg(not(test))]
+            return Launch::Unavailable;
         };
-        if places >= usize::from(self.desk.stored.settings.cap) {
-            return false;
-        }
         let Ok((client, authority, actor)) = self.hide_delivery(HIDE_DESK_ROLE) else {
-            return false;
+            return Launch::Unavailable;
         };
+        let spawned = std::thread::Builder::new()
+            .name("hide-core-desk-start".into())
+            .spawn(move || {
+                let result = crate::coordination::run(client, authority, actor, command);
+                let started = after_start(result, crate::coordination::wait_for_spawn_line);
+                handle.apply(|runtime| runtime.desk_queued_answered(&intent, started));
+            });
+        match spawned {
+            Ok(_) => Launch::Started,
+            Err(_) => Launch::Failed,
+        }
+    }
+
+    /// A queued start's thread answered.
+    fn desk_queued_answered(&mut self, intent: &str, started: Started) -> bool {
+        match started {
+            Started::LineFreed => self.desk_queued_busy(intent),
+            Started::Answered(result) => self.desk_queued_started(intent, result),
+        }
+    }
+
+    /// A queued start met another start at this machine's start line and
+    /// started nothing; that start has let the line go. It waits again in
+    /// its own place, first in line, and the queue asks it again.
+    fn desk_queued_busy(&mut self, intent: &str) -> bool {
         let Some(job) = self
             .desk
             .stored
             .queue
             .iter_mut()
-            .find(|job| job.state == QueuedState::Waiting)
+            .find(|job| job.intent == intent && job.state == QueuedState::Starting)
         else {
             return false;
         };
-        job.state = QueuedState::Starting;
-        let intent = job.intent.clone();
-        let command = job.command.clone();
-        let started = intent.clone();
-        let spawned = std::thread::Builder::new()
-            .name("hide-core-desk-start".into())
-            .spawn(move || {
-                let result = crate::coordination::run(client, authority, actor, command);
-                handle.apply(|runtime| runtime.desk_queued_started(&started, result));
-            });
-        if spawned.is_err()
-            && let Some(job) = self
-                .desk
-                .stored
-                .queue
-                .iter_mut()
-                .find(|job| job.intent == intent && job.state == QueuedState::Starting)
-        {
-            job.state = QueuedState::Failed;
-        }
+        job.state = QueuedState::Waiting;
+        self.desk_start_queued();
         self.save_desk();
+        self.compose_desk_jobs();
         true
     }
 
@@ -429,6 +518,34 @@ impl Runtime {
         self.desk_start_queued();
         self.compose_desk_jobs();
         true
+    }
+}
+
+/// Whether a queued start went to its thread.
+enum Launch {
+    Started,
+    /// Nothing can run it now (no handle or no delivery yet); it stays
+    /// waiting.
+    Unavailable,
+    Failed,
+}
+
+/// What a queued start's thread hands back to the queue.
+#[derive(Debug, PartialEq)]
+enum Started {
+    /// Another start held this machine's start line, nothing was started,
+    /// and that start has since let the line go: it is asked again.
+    LineFreed,
+    Answered(Result<Value, String>),
+}
+
+/// What a queued start's answer is for the queue: a busy line is waited
+/// out with `wait` (off the runtime's lock), never the job's failure; a line
+/// a panicked start poisoned refuses every start, so its answer stands.
+fn after_start(result: Result<Value, String>, wait: impl FnOnce() -> bool) -> Started {
+    match result {
+        Err(code) if code == SPAWN_BUSY && wait() => Started::LineFreed,
+        answer => Started::Answered(answer),
     }
 }
 
@@ -1826,7 +1943,7 @@ impl Runtime {
     /// A start of Desk's that answered `code`, as its spawn's answer comes
     /// back to Desk.
     pub(in crate::runtime) fn fail_test_desk_start(&mut self, spawn: AgentCommand, code: &str) {
-        self.desk_spawn_answered(spawn, Err(code.into()));
+        self.desk_spawn_answered(spawn, &mut Err(code.into()));
     }
 }
 
@@ -2069,6 +2186,118 @@ mod tests {
         );
     }
 
+    fn raise_cap(runtime: &mut Runtime, cap: u8) {
+        let event =
+            super::super::DeskEvent::decode("desk_settings_set", json!({"cap": cap})).unwrap();
+        assert!(runtime.desk_event(event));
+    }
+
+    /// letter-47172: three spawns waiting behind a full cap, then the cap
+    /// raised. Every place it freed is filled in order, one start after the
+    /// other, and none of them fails for meeting another start.
+    #[test]
+    fn a_raised_cap_starts_the_queue_in_order_one_start_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 1, &["a"]);
+        runtime.start_test_desk();
+        for (branch, position) in [("b", 1), ("c", 2), ("d", 3)] {
+            assert_eq!(admit(&mut runtime, branch).unwrap()["position"], position);
+        }
+        assert!(runtime.desk.launched.is_empty());
+
+        raise_cap(&mut runtime, 8);
+        assert_eq!(runtime.desk.launched, ["intent-b"]);
+        assert_eq!(card(&runtime, "b").state, DeskJobState::Starting);
+        // A refresh while one starts starts no second one beside it.
+        runtime.refresh_desk_jobs();
+        assert_eq!(runtime.desk.launched, ["intent-b"]);
+        assert_eq!(card(&runtime, "c").queue_position, Some(1));
+        // A spawn Desk asks for now lines up behind them, too.
+        assert_eq!(admit(&mut runtime, "e").unwrap()["position"], 3);
+
+        for (answered, next) in [("b", "intent-c"), ("c", "intent-d"), ("d", "intent-e")] {
+            assert!(runtime.desk_queued_started(&format!("intent-{answered}"), Ok(json!({}))));
+            assert_eq!(runtime.desk.launched.last().map(String::as_str), Some(next));
+        }
+        assert_eq!(
+            runtime.desk.launched,
+            ["intent-b", "intent-c", "intent-d", "intent-e"]
+        );
+        assert!(
+            runtime
+                .desk_jobs()
+                .iter()
+                .all(|job| job.state != DeskJobState::Failed)
+        );
+    }
+
+    /// A spawn of Desk's that met another start at this machine's start
+    /// line started nothing: it waits first in the queue and starts from
+    /// there, rather than read failed.
+    #[test]
+    fn a_spawn_refused_for_a_busy_start_line_waits_first_and_starts_from_the_queue() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 3, &["a"]);
+        runtime.start_test_desk();
+        assert_eq!(admit(&mut runtime, "b"), None);
+        let mut answer = Err(SPAWN_BUSY.into());
+        runtime.desk_spawn_answered(spawn_command("b", None), &mut answer);
+        let answer = answer.expect("a busy spawn the queue took reads as queued");
+        assert_eq!(
+            (answer["queued"].as_bool(), answer["position"].as_u64()),
+            (Some(true), Some(1))
+        );
+        assert_eq!(card(&runtime, "b").state, DeskJobState::Starting);
+        assert_eq!(runtime.desk.launched, ["intent-b"]);
+        assert_eq!(admit(&mut runtime, "c").unwrap()["position"], 1);
+    }
+
+    /// A queued start that met another start at the start line started
+    /// nothing: once that start let the line go it waits in its own place,
+    /// first, and the queue asks it again, ahead of the ones behind it.
+    #[test]
+    fn a_queued_start_that_met_a_busy_line_is_asked_again_before_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = desk(root.path(), 1, &["a"]);
+        runtime.start_test_desk();
+        admit(&mut runtime, "b").expect("queued");
+        admit(&mut runtime, "c").expect("queued");
+        raise_cap(&mut runtime, 2);
+        assert_eq!(runtime.desk.launched, ["intent-b"]);
+        let busy = after_start(Err(SPAWN_BUSY.into()), || true);
+        assert!(runtime.desk_queued_answered("intent-b", busy));
+        assert_eq!(runtime.desk.launched, ["intent-b", "intent-b"]);
+        assert_eq!(card(&runtime, "b").state, DeskJobState::Starting);
+        assert_eq!(card(&runtime, "c").queue_position, Some(1));
+    }
+
+    /// A busy start line is waited out and the job asked again; a line a
+    /// panicked start poisoned, or any other refusal, is the start's answer.
+    #[test]
+    fn a_busy_line_is_waited_out_and_any_other_answer_stands() {
+        assert_eq!(
+            after_start(Err(SPAWN_BUSY.into()), || true),
+            Started::LineFreed
+        );
+        assert_eq!(
+            after_start(Err(SPAWN_BUSY.into()), || false),
+            Started::Answered(Err(SPAWN_BUSY.into()))
+        );
+        let waited = std::cell::Cell::new(false);
+        assert_eq!(
+            after_start(Err("branch_in_use".into()), || {
+                waited.set(true);
+                true
+            }),
+            Started::Answered(Err("branch_in_use".into()))
+        );
+        assert!(!waited.get(), "only a busy line is waited for");
+        assert_eq!(
+            after_start(Ok(json!({"id": "child"})), || true),
+            Started::Answered(Ok(json!({"id": "child"})))
+        );
+    }
+
     #[test]
     fn a_spawn_under_the_cap_runs_at_once() {
         let root = tempfile::tempdir().unwrap();
@@ -2083,9 +2312,9 @@ mod tests {
         let mut runtime = desk(root.path(), 2, &["a"]);
         runtime.desk_spawn_answered(
             spawn_command("b", Some("mini")),
-            Err("machine_unavailable".into()),
+            &mut Err("machine_unavailable".into()),
         );
-        runtime.desk_spawn_answered(spawn_command("c", None), Err("spawn_refused".into()));
+        runtime.desk_spawn_answered(spawn_command("c", None), &mut Err("spawn_refused".into()));
         let b = card(&runtime, "b");
         assert_eq!(
             (b.state, b.reason),
@@ -2363,7 +2592,7 @@ mod tests {
             (DeskJobState::Queued, Some(1))
         );
         assert_eq!(told.load(Ordering::SeqCst), 0, "told after the lock");
-        runtime.desk_queued_after().expect("Desk's handle")(&Ok(answer));
+        runtime.desk_queued_after().expect("Desk's handle")(&mut Ok(answer));
         assert_eq!(told.load(Ordering::SeqCst), 1);
     }
 
@@ -2385,8 +2614,11 @@ mod tests {
                 _ => None,
             })
             .expect("a Send order");
-        runtime.desk_spawn_answered(spawn_command("a", None), Ok(json!({"id": "agent-1"})));
-        runtime.desk_spawn_answered(spawn_command("b", None), Err("parent_unavailable".into()));
+        runtime.desk_spawn_answered(spawn_command("a", None), &mut Ok(json!({"id": "agent-1"})));
+        runtime.desk_spawn_answered(
+            spawn_command("b", None),
+            &mut Err("parent_unavailable".into()),
+        );
         runtime.desk_report(Report::Text {
             tag,
             text: "one started".into(),

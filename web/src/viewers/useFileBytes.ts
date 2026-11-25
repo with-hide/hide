@@ -27,8 +27,11 @@ export function useFileBytes(path: string): FileBytesState {
   return useFileBytesFrom(path, useFileSource());
 }
 
-/** A file's bytes from a named source, for a viewer showing a file outside the checkout in front (Desk's 결과물). */
-export function useFileBytesFrom(path: string, source: FileSource): FileBytesState {
+/**
+ * A file's bytes from a named source, for a viewer showing a file outside the checkout in front (Desk's 결과물).
+ * `attempt` is the caller's retry count: a new one reads the file again.
+ */
+export function useFileBytesFrom(path: string, source: FileSource, attempt = 0): FileBytesState {
   const [state, setState] = useState<FileBytesState>({ status: "loading" });
   const device = source?.device ?? null;
   const root = source?.root ?? null;
@@ -45,6 +48,6 @@ export function useFileBytesFrom(path: string, source: FileSource): FileBytesSta
     return () => {
       live = false;
     };
-  }, [path, device, root]);
+  }, [path, device, root, attempt]);
   return state;
 }

@@ -819,7 +819,9 @@ impl<'g> Engine for FakeEngine<'g> {
             "pane": launch.pane_id,
             "name": launch.name,
             "kind": hide_agent_adapter::canonical_kind(launch.launch.kind()),
-            "args": launch.args,
+            // The words the program is given: its arguments, then the first
+            // input the real engine reads from the pane's prompt file.
+            "args": launch.args.iter().chain(launch.prompt.as_ref()).collect::<Vec<_>>(),
             "codex_daemon": debug(&launch.codex_daemon),
             "program": launch.program.as_ref().map(|file| json!([file.program, file.leading])),
         });

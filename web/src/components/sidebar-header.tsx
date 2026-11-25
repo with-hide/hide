@@ -6,6 +6,8 @@ import { Kbd } from "./ui/kbd";
 import { RowButton } from "./ui/row-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
+import { StatusMark } from "./status-mark";
+import { DeskMark } from "./desk/desk-entry";
 
 
 /** A device the hidden rail's menu lists. */
@@ -60,6 +62,7 @@ export function DeviceTitle({ rail, title, deviceMenu }: { rail: boolean; title:
  */
 export function SidebarHeader({
   overview,
+  desk,
   missions,
   automations,
   addProject,
@@ -69,6 +72,8 @@ export function SidebarHeader({
 }: {
   compact?: boolean;
   overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
+  /** Desk's row (PRD desk-2-ui D-32, B46), drawn only while Settings › Labs › Desk has it on: selected while Desk is in front, its warning mark the sessions Desk started that ask the operator. */
+  desk?: { selected: boolean; asking: number; chord: string | null; onOpen: () => void };
   /** The mission screen's row (B1): selected while the screen shows, its count the missions with something in their 내 차례. */
   missions?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
   /** The automation screen's row (PRD automations B1): selected while the screen shows, its count the runs not looked at. */
@@ -95,12 +100,22 @@ export function SidebarHeader({
       {overview ? (
         <Hint label={overview.count > 0 ? t("overview.needsYouHint", { count: overview.count }) : t("overview.title")} shortcut={overview.chord}>
           <button type="button" aria-current={overview.selected ? "page" : undefined} data-sidebar-overview="true" onClick={overview.onOpen}
-            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject || missions || automations ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
+            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject || desk || missions || automations ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
             <LayoutDashboardIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 flex-1 truncate text-left">{t("overview.title")}</span>
             {overview.count > 0 ? <span data-overview-count="true" className="text-caption text-warning">{t("overview.askingCount", { count: overview.count })}</span> : null}
             {overview.chord && !compact ? <Kbd className="sidebar-command-keycap">{overview.chord}</Kbd> : null}
           </button>
+        </Hint>
+      ) : null}
+      {desk ? (
+        <Hint label={desk.asking > 0 ? `${t("desk.name")} · ${t("desk.lane.threadsCount", { count: desk.asking })}` : t("desk.name")} shortcut={desk.chord}>
+          <RowButton aria-current={desk.selected ? "page" : undefined} data-sidebar-desk="true" data-desk-sidebar-row="true" onClick={desk.onOpen}
+            className={cn("h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", desk.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
+            <DeskMark size="md" />
+            <span className="min-w-0 flex-1 truncate text-left">{t("desk.name")}</span>
+            {desk.asking > 0 ? <StatusMark mark="turn" data-desk-sidebar-asking={desk.asking} /> : null}
+          </RowButton>
         </Hint>
       ) : null}
       {missions ? (

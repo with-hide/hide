@@ -167,7 +167,8 @@ impl Eq for Version {}
 
 /// A rule set as written: an agent definition's `[screen]` table. It
 /// serializes to what it reads back, so a rule set can be handed to another
-/// process (a pane's holder) and compiled there.
+/// process (a pane's holder) and compiled there; only a rule's [`Asks`],
+/// which no evaluator reads, stays behind.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -180,11 +181,30 @@ pub struct Manifest {
     pub rules: Vec<Rule>,
 }
 
+/// What the screen a rule matches asks the operator, when it is a question
+/// Hide answers before it starts the agent: a key of Hide's own, not of
+/// the copied grammar, and a value it does not know is refused.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Asks {
+    /// The agent's question whether to trust the folder it starts in, which
+    /// Hide answers from the trust file the agent's definition declares
+    /// (docs/agent-hooks.md, Folder trust for the folders Hide starts agents
+    /// in).
+    FolderTrust,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
     pub state: Option<State>,
+    /// What the rule's screen asks ([`Asks`]): read from the definition by
+    /// Hide alone, never by the evaluator, and never handed to a holder, so
+    /// a holder of an earlier build, which refuses a key it does not know,
+    /// reads the same rules.
+    #[serde(default, skip_serializing)]
+    pub asks: Option<Asks>,
     #[serde(default)]
     pub priority: i32,
     #[serde(default = "default_region")]
