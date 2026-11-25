@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, FilePenIcon, FileSearchIcon, GlobeIcon, MailIcon, PlusIcon, SquareTerminalIcon, WrenchIcon } from "lucide-react";
 import { pullLabel } from "../../codeHost";
 import { useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Trans } from "react-i18next";
@@ -11,74 +11,12 @@ import { PlanChecklist } from "../plan-checklist";
 import { PrMark } from "../pr-mark";
 import { StatusMark } from "../status-mark";
 import { Button } from "../ui/button";
-import { Kbd } from "../ui/kbd";
 import { Hint } from "../ui/tooltip";
 import { MentionText } from "./desk-chat";
 import { DeskComposer, type ComposerAttachment } from "./desk-composer";
-import { DeskMissionChip, DeskPlanChip, JobLead, JobLine, jobStateWords } from "./desk-job-card";
+import { DeskMissionChip } from "./desk-job-card";
 import { SessionChip } from "./session-chip";
 import { DeskOutputs } from "./desk-outputs";
-import { LaneHeadControls } from "./desk-lane";
-
-/** The Conductor a worker's thread sits under (B34): its title, and the way back to its thread. */
-export type ThreadConductor = { title: string; onOpen: () => void };
-
-/**
- * A thread's head, read as a pane's head (D-75, B25, B34, B35). The first
- * line is ‹, the session (its status, its agent, its title, after its
- * Conductor's for a worker), `터미널로` to its Agent tab, the pin and ✕; the
- * second is the sidebar row's second line, with the plan chip and the model
- * at its end. The thread's state is said here once.
- */
-export function ThreadHead({ job, model = null, conductor = null, pinned, expanded = false, terminalChord = "⌘J", onBack, onTerminal, onPin, onExpand, onClose }: {
-  job: DeskJob;
-  /** The model Hide launched the session with (`threadLaunchModel`); none when the launch chose none. */
-  model?: string | null;
-  conductor?: ThreadConductor | null;
-  pinned: boolean;
-  expanded?: boolean;
-  /** `터미널로`'s chord as this system presses it (`desk_terminal`), shown beside the words. */
-  terminalChord?: string | null;
-  onBack: () => void;
-  onTerminal: () => void;
-  onPin: () => void;
-  onExpand?: () => void;
-  onClose: () => void;
-}) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <header className="flex shrink-0 flex-col gap-xxs border-b border-border py-xs pl-xs pr-xs text-caption" data-desk-thread-head={job.state}>
-      <div className="flex min-w-0 items-center gap-xs">
-        <Hint label={conductor ? conductor.title : t("desk.thread.back")}>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" data-desk-thread-back="true" onClick={conductor ? conductor.onOpen : onBack}><ChevronLeftIcon /></Button>
-        </Hint>
-        <JobLead job={job} />
-        <nav className="flex min-w-0 flex-1 items-center gap-xxs" aria-label={t("desk.thread.path")} data-desk-thread-path={conductor ? 2 : 1}>
-          {conductor ? (
-            <>
-              <Button variant="text" size="inline" className="min-w-0 max-w-1/2 shrink truncate text-muted-foreground" onClick={conductor.onOpen}>{conductor.title}</Button>
-              <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-            </>
-          ) : null}
-          <span className="min-w-0 truncate text-body font-semibold text-foreground" aria-current="page">{job.title}</span>
-        </nav>
-        <Hint label={t("desk.thread.toTerminal")}>
-          <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-thread-terminal="true" onClick={onTerminal}>
-            <SquareTerminalIcon />
-            {t("desk.thread.toTerminal")}
-            {terminalChord ? <Kbd aria-hidden="true" data-desk-thread-terminal-chord="true">{terminalChord}</Kbd> : null}
-          </Button>
-        </Hint>
-        <LaneHeadControls edge expanded={expanded} pinned={pinned} onExpand={onExpand} onPin={onPin} onClose={onClose} />
-      </div>
-      <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
-        <JobLine job={job} className="flex-1" />
-        {job.plan ? <DeskPlanChip plan={job.plan} review={job.ask === "plan_review"} /> : null}
-        {model ? <span className="shrink-0 text-micro text-muted-foreground" data-desk-thread-model="true">{model}</span> : null}
-      </div>
-    </header>
-  );
-}
 
 const TOOL_ICON: Partial<Record<AcpToolKind, typeof WrenchIcon>> = {
   execute: SquareTerminalIcon,
@@ -297,6 +235,8 @@ function ReceivedLine({ line, actions }: { line: Extract<ThreadLine, { kind: "us
 function UserLine({ line, handed, actions }: { line: Extract<ThreadLine, { kind: "user" }>; handed: boolean; actions: ThreadPartActions }) {
   const { t } = useInterfaceTranslation();
   if (line.origin === "letter") return <ReceivedLine line={line} actions={actions} />;
+  // Whatever an agent records when its turn was cut short is one quiet word, never the operator's bubble (D-75).
+  if (line.origin === "interrupted") return <p className="text-micro text-muted-foreground" data-desk-thread-line="interrupted">{t("desk.thread.interrupted")}</p>;
   return (
     <div className="flex min-w-0 flex-col items-end gap-xxs" data-desk-thread-line="user" data-origin={line.origin}>
       {handed ? <span className="text-micro text-muted-foreground" data-desk-thread-handed="true">{t("desk.thread.handedByDesk")}</span> : null}
@@ -350,25 +290,6 @@ function FoldedParts({ parts, actions }: { parts: ThreadTurn["parts"]; actions: 
   );
 }
 
-/**
- * The wait at the conversation's foot (B20, B25, D-75), the one place a
- * question sits: the asking mark and what it asks; a permission shows the
- * command on its grey block.
- */
-function ThreadAsk({ job }: { job: DeskJob }) {
-  const { t } = useInterfaceTranslation();
-  const permission = job.ask === "approval";
-  return (
-    <section className="flex min-w-0 flex-col gap-xs" aria-label={jobStateWords(t, job)} data-desk-thread-ask={job.ask ?? "question"}>
-      <p className="flex min-w-0 items-start gap-xs text-body text-foreground">
-        <StatusMark mark="turn" read={job.mark_read} />
-        <span className="min-w-0 whitespace-normal break-keep [overflow-wrap:anywhere]">{permission ? t("desk.thread.askPermission") : (job.question ?? jobStateWords(t, job))}</span>
-      </p>
-      {permission && job.question ? <pre className="ml-(--size-agent-mark) min-w-0 whitespace-pre-wrap break-all rounded-sm bg-secondary px-sm py-xs font-mono text-caption text-foreground">{job.question}</pre> : null}
-    </section>
-  );
-}
-
 /** How near an end of the conversation still counts as at it, in pixels. */
 const AT_END = 24;
 
@@ -407,10 +328,12 @@ function useThreadScroll(lines: readonly ThreadLine[], onReachTop?: () => void) 
  * question at the foot, its outputs after it, and the box that types into
  * its terminal. Its state is in the head, said once. A record that cannot be
  * read says why in one line and offers the terminal; one being read, or with
- * nothing in it yet, says so in one quiet line.
+ * nothing in it yet, says so in one quiet line. A session asleep with no
+ * card any more (its sleep closed its pane, B43) keeps its record above the
+ * foot that wakes it.
  */
-export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, onTerminal, onReachTop, ...actions }: {
-  job: DeskJob;
+export function ThreadView({ job, lines, reading = false, failure = null, mentions = [], startedByDesk = false, outputs, selectedOutput = null, composer, ask = null, foot = null, onTerminal, onReachTop, ...actions }: {
+  job: DeskJob | null;
   lines: readonly ThreadLine[];
   /** The record is still being read: `lines` is not the thread yet. */
   reading?: boolean;
@@ -422,6 +345,10 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   outputs: readonly DeskOutput[];
   selectedOutput?: string | null;
   composer: { value: string; attachments: readonly ComposerAttachment[]; focused?: boolean; held?: boolean; notice?: string | null; onChange: (value: string) => void; onSend: () => void; onAttach: () => void; onRemoveAttachment: (id: string) => void };
+  /** What the session waits on, at the conversation's end (the question card, PRD desk-2-ui B14). */
+  ask?: ReactNode;
+  /** Drawn in the input box's place, as a sleeping session's wake line is (B43). */
+  foot?: ReactNode;
   onTerminal: () => void;
   /** The conversation was scrolled to its top: the page before it can be read. */
   onReachTop?: () => void;
@@ -429,10 +356,10 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
   const { t } = useInterfaceTranslation();
   const scroller = useThreadScroll(lines, onReachTop);
   // An asking job's question is said once, in the wait at the foot (D-75).
-  const turns = job.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
-  const running = job.state === "working" || job.state === "starting";
+  const turns = job?.state === "asking" && job.ask === "question" ? askedOnce(threadTurns(lines), job.question) : threadTurns(lines);
+  const running = job?.state === "working" || job?.state === "starting";
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job.id}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-thread={job?.id ?? ""}>
       <div ref={scroller.ref} onScroll={scroller.onScroll} data-desk-thread-conversation="true" className="flex min-h-0 min-w-0 flex-1 flex-col gap-md overflow-y-auto px-md py-md">
         {failure ? (
           <p role="alert" className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" data-desk-thread-failure={failure}>
@@ -449,7 +376,7 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
             {turns.map((turn, index) => <Turn key={turn.key} turn={turn} live={running && index === turns.length - 1} handed={startedByDesk && index === 0} mentions={mentions} actions={actions} />)}
           </ol>
         )}
-        {job.state === "asking" ? <ThreadAsk job={job} /> : null}
+        {ask}
         {outputs.length ? (
           <section className="flex min-w-0 flex-col gap-xs" aria-label={t("desk.outputs.title")} data-desk-thread-outputs={outputs.length}>
             <h3 className="text-caption text-muted-foreground">{t("desk.outputs.title")}</h3>
@@ -457,21 +384,23 @@ export function ThreadView({ job, lines, reading = false, failure = null, mentio
           </section>
         ) : null}
       </div>
-      <div className="shrink-0 px-sm pb-sm">
-        <DeskComposer
-          value={composer.value}
-          label={t("desk.thread.composerLabel", { title: job.title })}
-          placeholder={t("desk.thread.placeholder")}
-          attachments={composer.attachments}
-          focused={composer.focused}
-          held={composer.held}
-          notice={composer.notice}
-          onChange={composer.onChange}
-          onSend={composer.onSend}
-          onAttach={composer.onAttach}
-          onRemoveAttachment={composer.onRemoveAttachment}
-        />
-      </div>
+      {foot ?? (
+        <div className="shrink-0 px-sm pb-sm">
+          <DeskComposer
+            value={composer.value}
+            label={t("desk.thread.composerLabel", { title: job?.title ?? "" })}
+            placeholder={t("desk.thread.placeholder")}
+            attachments={composer.attachments}
+            focused={composer.focused}
+            held={composer.held}
+            notice={composer.notice}
+            onChange={composer.onChange}
+            onSend={composer.onSend}
+            onAttach={composer.onAttach}
+            onRemoveAttachment={composer.onRemoveAttachment}
+          />
+        </div>
+      )}
     </div>
   );
 }

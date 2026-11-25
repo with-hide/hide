@@ -1,4 +1,5 @@
 import { projectCheckout } from "./projects";
+import type { PhoneAsk } from "./mobile/protocol";
 import { deviceConnected, readsHere } from "./devices";
 import { samePull } from "./codeHost";
 import { useGroupFeedback } from "./groupTabs";
@@ -56,6 +57,8 @@ import {
   explorerContext,
   focusedCheckout,
   frontCheckout,
+  checkoutAtRoot,
+  checkoutOfPane,
   nextSidebarLens,
   sameDetailItem,
   visibleTab,
@@ -92,10 +95,11 @@ import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
-import { deskOn, threadKeyPane } from "./desk";
-import { openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
+import { deskOn } from "./desk";
+import { closePanel as closeDeskPanel, closeSession as closeDeskSession, openSession as openDeskSession, openTab as openDeskTab, toggleExplorer as toggleDeskExplorer, type DeskTab } from "./deskRoom";
+import type { DeskFileRef } from "./deskFiles";
 import { focusedPaneOf, useShellStore } from "./store";
-import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type ExplorerTarget, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import { remoteBridge, remoteClipboard, type RemoteWork } from "./remoteView";
 import type { PairingVerb } from "./pairing";
@@ -206,11 +210,76 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * selected device, named with that device so the core refuses the change
    * once another device's tree is on screen (S5.5 B16, B34).
    */
-  const explorerTarget = (): { root: string; device_id?: string } | null => {
+  const explorerTarget = (): ExplorerTarget | null => {
     const context = explorerContext(rest());
     if (!context.checkout) return null;
     return { root: context.checkout.path, ...deviceField(context.device, localDeviceId(rest())) };
   };
+
+  /**
+   * The Explorer's own calls over one target: the checkout it lists, its
+   * device's expanded folders and the changes it asks for (create, rename,
+   * move, copy, import, trash). The app's Explorer targets the checkout in
+   * front; Desk's its session's (`explorerIn`).
+   */
+  const explorerOps = (target: () => ExplorerTarget | null, device: () => string) => ({
+    /** One checkout folder's children, answered by hided as a `directory_list`. */
+    listChildren(root: string, path: string) {
+      dispatch({ schema_version: 2, kind: "file_list", payload: { root, path, ...deviceField(device(), localDeviceId(rest())) } });
+    },
+
+    /** The core owns which folders the tree has expanded, per device; this replaces that device's set. */
+    setExpandedPaths(paths: string[]) {
+      updateUiState(expandedPatch(device(), paths));
+    },
+
+    /** A new file or folder in `parent`; the core opens a created file (B9). */
+    createEntry(parent: string, name: string, isDirectory: boolean) {
+      const here = target();
+      if (!here) return diagnostic("explorer create: no focused checkout");
+      dispatch({
+        schema_version: 2,
+        kind: isDirectory ? "dir_create" : "file_create",
+        payload: { ...here, parent, name },
+      });
+    },
+
+    renameEntry(path: string, name: string) {
+      const here = target();
+      if (!here) return diagnostic("path_rename: no focused checkout");
+      dispatch({ schema_version: 2, kind: "path_rename", payload: { ...here, path, name } });
+    },
+
+    /** A drag that landed: one `path_move` into the folder it was dropped on. */
+    moveEntry(path: string, destination: string) {
+      const here = target();
+      if (!here) return diagnostic("path_move: no focused checkout");
+      dispatch({ schema_version: 2, kind: "path_move", payload: { ...here, path, destination } });
+    },
+
+    /** A paste of a copy, or Duplicate: one `path_copy` of `path` into the folder `destination`; the host names the copy when the name is taken. */
+    copyEntry(path: string, destination: string) {
+      const here = target();
+      if (!here) return diagnostic("path_copy: no focused checkout");
+      ui().setExplorerNotice(null);
+      dispatch({ schema_version: 2, kind: "path_copy", payload: { ...here, path, destination } });
+    },
+
+    /** Files and folders dropped from the file manager into the folder `destination` (docs/UI_BEHAVIOR.md, Explorer). */
+    importDropped(destination: string, dropped: CapturedDrop) {
+      const here = target();
+      if (!here) return diagnostic("path_import: no focused checkout");
+      void submitDrop(here, destination, dropped);
+    },
+
+    /** Opens the trash confirmation; nothing is dispatched until it is confirmed. */
+    requestTrash(path: string, name: string, isDirectory: boolean, selectAfter: string, inode: string | null) {
+      const held = target();
+      if (!held) return diagnostic("path_trash: no focused checkout");
+      ui().setPendingTrash({ path, name, isDirectory, selectAfter, inode, target: held });
+    },
+
+  });
 
   const setLeftSidebarVisible = (visible: boolean) => {
     const state = rest()?.ui_state;
@@ -470,6 +539,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: workspaceId, checkout_id: checkoutId, ...(expanded === undefined ? {} : { expanded }), ...(projectExpanded === undefined ? {} : { project_expanded: projectExpanded }) } });
   };
 
+  /** Whether ⌘J on `pane` goes back to Desk (B7): the pane `터미널 ⌘J` left Desk for, or a session Desk started. */
+  const deskReturnsTo = (pane: string): boolean => {
+    if (ui().deskReturn === pane) return true;
+    const section = useShellStore.getState().deskJobs;
+    return [...(section?.jobs ?? []), ...(section?.workers ?? [])].some((job) => job.pane_id === pane);
+  };
+
   /**
    * Keyboard focus to one pane. The pane's own id says which host it is on,
    * so a remote pane is focused there and a local one here, whatever the
@@ -709,8 +785,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * the keyboard into their active area.
    */
   const toggleLane = () => {
-    // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
-    if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
     // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
     // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
     const pairView = workspaceViewOf(rest());
@@ -2691,41 +2765,116 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * ⌘J and a thread's `터미널로` (PRD session-docs-and-assistant D-42,
-     * B35): from Desk, the Agent tab of the thread in its tool column; from
-     * a Desk thread's Agent tab, back to Desk as it was left, that thread in
-     * its tool column. Anywhere else there is nowhere to go.
+     * ⌘J and the session panel's `터미널 ⌘J` (PRD desk-2-ui D-04, B7): from
+     * Desk, the Agent tab of the session open beside it, with the keyboard
+     * in its pane; from that pane, or a Desk job's, back to Desk with that
+     * session beside it. Anywhere else there is nowhere to go.
      */
     deskTerminal() {
       // A menu item or a host's chord can still ask while Desk is off; it goes nowhere (D-76).
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk terminal: Desk is switched off");
-      const section = useShellStore.getState().deskJobs;
-      const jobs = [...(section?.jobs ?? []), ...(section?.workers ?? [])];
       const state = ui();
       if (state.screen?.kind === "desk") {
-        const tool = state.deskLane.up ? state.deskLane.tool : null;
-        // A session the conversation names opens in the lane as a thread too (D-86).
-        const job = tool?.kind === "thread" ? [...jobs, ...(section?.named ?? [])].find((one) => one.id === tool.job) : undefined;
-        // A session that is no job opens by its pane, card or not yet (D-87).
-        const pane = job?.pane_id ?? (tool?.kind === "thread" ? threadKeyPane(tool.job) : null);
-        if (!pane) return diagnostic("desk terminal: no thread in Desk's lane");
+        const pane = state.deskRoom.session;
+        if (!pane) return diagnostic("desk terminal: no session open beside Desk");
+        state.setDeskReturn(pane);
         return this.openAgent(pane);
       }
       const pane = useShellStore.getState().focusedPaneId;
-      const job = pane ? jobs.find((one) => one.pane_id === pane) : undefined;
-      if (!job) return diagnostic("desk terminal: the pane in front is not a Desk thread");
-      this.openDeskThread(job.id);
+      if (!pane || !deskReturnsTo(pane)) return diagnostic("desk terminal: the pane in front is no session Desk opened");
+      this.openDeskSession(pane);
     },
 
-    /** Desk as it was left, with `jobId`'s thread in its lane's tool column (B35). */
-    openDeskThread(jobId: string) {
-      ui().setDeskLane((lane) => (lane.up && lane.tool?.kind === "thread" && lane.tool.job === jobId ? lane : openDeskThread(lane, jobId)));
-      this.openDesk();
+    /**
+     * A session opened beside Desk (PRD desk-2-ui B2, B3, B7, B13, B47): Desk
+     * comes to the front with that session's conversation at its right;
+     * `answer` gives the keyboard to its input box. Another session's tab
+     * panel closes (D-14).
+     */
+    openDeskSession(paneId: string, options: { answer?: boolean } = {}) {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
+      if (ui().screen?.kind !== "desk") this.openDesk();
+      ui().setDeskRoom((room) => openDeskSession(room, paneId, options));
+    },
+
+    /**
+     * The tab panel's open contract (PRD desk-2-ui D-05, D-08, D-22-D-24,
+     * B16, B19, B20, B36-B39): `tab` opens in the tab panel, which floats
+     * beside the session open beside Desk, or at the window's right edge when
+     * none is (`deskRoom.ts`, `panelPlace`). A file is the app's own file
+     * view: its checkout comes in front in the core, which places the file in
+     * its preview slot or keeps it (`preview`), and the panel draws that
+     * display, so editing and ⌘S are the app's.
+     */
+    deskOpen(tab: DeskTab, options: { preview?: boolean; beside?: boolean } = {}) {
+      if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
+      if (tab.kind === "file" && !checkoutAtRoot(rest(), tab.device_id, tab.root)) return diagnostic("desk file: its checkout is not registered");
+      if (ui().screen?.kind !== "desk") this.openDesk();
+      // The room's file tabs reach hided as one `desk_files` set (`deskFiles.ts`).
+      ui().setDeskRoom((room) => openDeskTab(room, tab, options));
+    },
+
+    /**
+     * The whole set of files Desk's room shows (PRD desk-2-ui B19, B36, B37,
+     * `deskFiles.ts`): hided holds them for this window and lets them go
+     * when it leaves. The room's watcher calls it.
+     */
+    deskFiles(files: DeskFileRef[]) {
+      dispatch({ schema_version: 2, kind: "desk_files", payload: { files } });
+    },
+
+    /** A Desk file the core could not open, read again (B28). */
+    deskFileRetry(file: { workspace_id: string; checkout_id: string; device_id: string; path: string }) {
+      dispatch({ schema_version: 2, kind: "desk_file_retry", payload: file });
+    },
+
+    /**
+     * `파일 ⇧⌘E` beside Desk (PRD desk-2-ui D-22, B35): the Explorer of the
+     * open session's checkout in the tab panel's tool column, or that column
+     * closed. The Explorer lists that checkout whatever is in front.
+     */
+    deskToggleExplorer() {
+      const room = ui().deskRoom;
+      if (ui().screen?.kind !== "desk" || !room.session) return diagnostic("desk explorer: no session open beside Desk");
+      if (!room.panel?.explorer && !checkoutOfPane(rest(), room.session)) return diagnostic("desk explorer: the session's checkout is not listed");
+      ui().setDeskRoom(toggleDeskExplorer);
+    },
+
+    /** The session beside Desk's `✕`, or Escape with no layer open: the tab panel closes with it (B6). */
+    deskCloseSession() {
+      ui().setDeskRoom(closeDeskSession);
+    },
+
+    /**
+     * A press on a sidebar row of an agent, in a project's tree or in the
+     * 태스크 tab: while Desk is in front it opens the session beside Desk, and
+     * a ⌘-click (Ctrl on Windows and Linux) goes to its tab as anywhere else
+     * (PRD desk-2-ui D-03, D-04, B3, B5). Every other way to an agent (⌥
+     * number, a notification, another computer) opens its tab.
+     */
+    openSidebarRow(paneId: string, how?: { tab: boolean }) {
+      if (this.rowOpensBesideDesk(how)) return this.openDeskSession(paneId);
+      this.openListedAgent(paneId);
+    },
+
+    /** Whether a sidebar row's press opens its session beside Desk: Desk in front and no ⌘-click (PRD desk-2-ui B3, B5, B44). */
+    rowOpensBesideDesk(how?: { tab: boolean }): boolean {
+      return ui().screen?.kind === "desk" && deskOn(useShellStore.getState().desk) && how?.tab !== true;
+    },
+
+    /** The tab panel's `✕`, Escape or a press on the dimmed outside (B21). */
+    deskClosePanel() {
+      ui().setDeskRoom(closeDeskPanel);
     },
 
     /** One message to Desk's agent with the sessions and projects it names (B7, B18). */
     deskSend(text: string, mentions: readonly DeskMention[]) {
       dispatch({ schema_version: 2, kind: "desk_send", payload: { text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })) } });
+    },
+
+    /** ✕ on a message waiting for the turn before it: it never goes (`desk_queued_remove`). */
+    deskQueuedRemove(id: number) {
+      dispatch({ schema_version: 2, kind: "desk_queued_remove", payload: { id } });
     },
 
     /** `중지`: ends Desk's turn and nothing it started (B7). */
@@ -3863,7 +4012,31 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     showDocuments,
     closeLane,
 
-    toggleLane,
+    toggleLane() {
+      // In Desk's room the right side is the session panel, which `deskToggleSession` closes and opens.
+      if (ui().screen?.kind === "desk") return this.deskToggleSession();
+      return toggleLane();
+    },
+
+    /**
+     * ⌘E in Desk's room (B6; operator decision 2026-11-25, replacing PRD desk-2-ui D-13's nothing): the session
+     * panel closes, with its tab panel, as its `✕` does, and pressed again opens the session just closed, as a
+     * sidebar row's press does, with the keyboard in its input box as a work tab's ⌘E gives it back to the pane. A
+     * session whose pane is gone since (closed, archived, woken in another pane) is not reopened as an empty
+     * panel: the memory is cleared and only the log says so.
+     */
+    deskToggleSession() {
+      const room = ui().deskRoom;
+      if (room.session) return ui().setDeskRoom(closeDeskSession);
+      const pane = room.closed;
+      if (!pane) return diagnostic("toggle_lane: no session was closed beside Desk to open again");
+      const state = useShellStore.getState();
+      if (!agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).has(pane)) {
+        ui().setDeskRoom((now) => ({ ...now, closed: null }));
+        return diagnostic(`toggle_lane: the session closed beside Desk (${pane}) is gone`);
+      }
+      this.openDeskSession(pane, { answer: true });
+    },
 
     setWorkspaceView,
 
@@ -3935,6 +4108,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
      * project Desk named last, comes first in the answer.
      */
+    /** Reads what the agent in `paneId` asks on its own screen now; a `pane_ask` frame answers (PRD desk-2-ui B14). */
+    askPane(deviceId: string, paneId: string) {
+      dispatch({ schema_version: 2, kind: "pane_ask", payload: { device_id: deviceId, pane_id: paneId } });
+    },
+
+    /**
+     * Answers the ask a `pane_ask` frame showed with one of its choice ids, as the phone does: `ask` goes back as
+     * the frame gave it, untouched, and the daemon types the keys the agent's screen takes for the choice only
+     * while the agent asks exactly that. Returns the request id the `pane_choice_result` frame names, or null when
+     * nothing could be sent.
+     */
+    answerPane(deviceId: string, paneId: string, ask: PhoneAsk, choice: string): string | null {
+      const requestId = crypto.randomUUID();
+      const sent = dispatch({ schema_version: 2, kind: "pane_choice", payload: { request_id: requestId, device_id: deviceId, pane_id: paneId, choice, ask } });
+      return sent === false ? null : requestId;
+    },
+
     requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
       dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },
@@ -4014,15 +4204,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "remove_workspace", payload: { workspace_id: workspaceId, ...(closeDescendants.length > 0 ? { close_descendant_pane_ids: closeDescendants } : {}) } });
     },
 
-    /** One checkout folder's children, answered by hided as a `directory_list`. */
-    listChildren(root: string, path: string) {
-      const device = explorerContext(rest()).device;
-      dispatch({ schema_version: 2, kind: "file_list", payload: { root, path, ...deviceField(device, localDeviceId(rest())) } });
-    },
+    ...explorerOps(explorerTarget, () => explorerContext(rest()).device),
 
-    /** The core owns which folders the tree has expanded, per device; this replaces the selected device's set. */
-    setExpandedPaths(paths: string[]) {
-      updateUiState(expandedPatch(explorerContext(rest()).device, paths));
+    /**
+     * The Explorer's listing, expansion and changes for the checkout at
+     * `root` on `device` whatever is in front: Desk's Explorer of its
+     * session's checkout (PRD desk-2-ui B35). Its changes carry `desk: true`,
+     * so the core plans them against that checkout.
+     */
+    explorerIn(device: string, root: string) {
+      return explorerOps(() => ({ root, ...deviceField(device, localDeviceId(rest())), desk: true }), () => device);
     },
 
     /** A single click opens the active area's preview slot; a double click pins it. */
@@ -4289,52 +4480,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     retryView(displayId: string) {
       const frame = frameFor("retry");
       if (frame) viewLayout(frame, { action: "retry", display_id: displayId });
-    },
-
-    /** A new file or folder in `parent`; the core opens a created file (B9). */
-    createEntry(parent: string, name: string, isDirectory: boolean) {
-      const here = explorerTarget();
-      if (!here) return diagnostic("explorer create: no focused checkout");
-      dispatch({
-        schema_version: 2,
-        kind: isDirectory ? "dir_create" : "file_create",
-        payload: { ...here, parent, name },
-      });
-    },
-
-    renameEntry(path: string, name: string) {
-      const here = explorerTarget();
-      if (!here) return diagnostic("path_rename: no focused checkout");
-      dispatch({ schema_version: 2, kind: "path_rename", payload: { ...here, path, name } });
-    },
-
-    /** A drag that landed: one `path_move` into the folder it was dropped on. */
-    moveEntry(path: string, destination: string) {
-      const here = explorerTarget();
-      if (!here) return diagnostic("path_move: no focused checkout");
-      dispatch({ schema_version: 2, kind: "path_move", payload: { ...here, path, destination } });
-    },
-
-    /** A paste of a copy, or Duplicate: one `path_copy` of `path` into the folder `destination`; the host names the copy when the name is taken. */
-    copyEntry(path: string, destination: string) {
-      const here = explorerTarget();
-      if (!here) return diagnostic("path_copy: no focused checkout");
-      ui().setExplorerNotice(null);
-      dispatch({ schema_version: 2, kind: "path_copy", payload: { ...here, path, destination } });
-    },
-
-    /** Files and folders dropped from the file manager into the folder `destination` (docs/UI_BEHAVIOR.md, Explorer). */
-    importDropped(destination: string, dropped: CapturedDrop) {
-      const here = explorerTarget();
-      if (!here) return diagnostic("path_import: no focused checkout");
-      void submitDrop(here, destination, dropped);
-    },
-
-    /** Opens the trash confirmation; nothing is dispatched until it is confirmed. */
-    requestTrash(path: string, name: string, isDirectory: boolean, selectAfter: string, inode: string | null) {
-      const target = explorerTarget();
-      if (!target) return diagnostic("path_trash: no focused checkout");
-      ui().setPendingTrash({ path, name, isDirectory, selectAfter, inode, target });
     },
 
     confirmTrash() {

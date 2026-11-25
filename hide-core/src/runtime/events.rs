@@ -636,6 +636,10 @@ pub(super) struct ExplorerCreatePayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     pub(super) parent: String,
     pub(super) name: String,
@@ -646,6 +650,10 @@ pub(super) struct PathRenamePayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     pub(super) path: String,
     pub(super) name: String,
@@ -656,6 +664,10 @@ pub(super) struct PathMovePayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     pub(super) path: String,
     /// The folder the item lands in; the item keeps its name.
@@ -669,6 +681,10 @@ pub(super) struct PathCopyPayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     pub(super) path: String,
     /// The folder the copy lands in.
@@ -684,6 +700,10 @@ pub(super) struct PathImportPayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     /// The folder the items land in.
     pub(super) destination: String,
@@ -705,6 +725,10 @@ pub(super) struct PathTrashPayload {
     /// The device whose tree asked; absent for this machine.
     #[serde(default)]
     pub(super) device_id: Option<String>,
+    /// Desk's Explorer asked, in its session's checkout rather than the one
+    /// in front (PRD desk-2-ui B35).
+    #[serde(default)]
+    pub(super) desk: bool,
     pub(super) root: String,
     pub(super) path: String,
     /// The row the tree selects once the item is gone: its next sibling,
@@ -3945,7 +3969,8 @@ impl Runtime {
                 // The created file opens into a display, so a Workspace at its
                 // display cap refuses the create before anything is made.
                 let created = format!("{}/{}", payload.parent.trim_end_matches('/'), payload.name);
-                if self.separate_view_areas()
+                if !payload.desk
+                    && self.separate_view_areas()
                     && let Some(key) = self.front_workspace_key()
                     && !self.admit_view_open(
                         &key,
@@ -3962,6 +3987,7 @@ impl Runtime {
                 self.request_explorer_change(ExplorerRequest {
                     root: payload.root,
                     device: payload.device_id,
+                    desk: payload.desk,
                     change: ExplorerChange::Create {
                         kind: files::ExplorerOperationKind::FileCreate,
                         parent: payload.parent,
@@ -3972,6 +3998,7 @@ impl Runtime {
             Event::DirCreate(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Create {
                     kind: files::ExplorerOperationKind::DirCreate,
                     parent: payload.parent,
@@ -3981,6 +4008,7 @@ impl Runtime {
             Event::PathRename(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Rename {
                     path: payload.path,
                     name: payload.name,
@@ -3989,6 +4017,7 @@ impl Runtime {
             Event::PathMove(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Move {
                     path: payload.path,
                     destination: payload.destination,
@@ -3997,6 +4026,7 @@ impl Runtime {
             Event::PathCopy(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Copy {
                     path: payload.path,
                     destination: payload.destination,
@@ -4005,6 +4035,7 @@ impl Runtime {
             Event::PathImport(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Import {
                     destination: payload.destination,
                     items: payload
@@ -4022,6 +4053,7 @@ impl Runtime {
             Event::PathTrash(payload) => self.request_explorer_change(ExplorerRequest {
                 root: payload.root,
                 device: payload.device_id,
+                desk: payload.desk,
                 change: ExplorerChange::Trash {
                     path: payload.path,
                     select_after: payload.select_after,

@@ -36,18 +36,22 @@ import { commandLabel } from "./shortcutLabels";
  * agent-hierarchy-screens D-14, B20): each name opens that pane. A narrow
  * pane drops the names and keeps each arrow, whose accessible name and
  * tooltip still say where it goes. A root pane has none.
+ *
+ * `names="always"` is a head that is no pane (Desk's session head, PRD
+ * desk-2-ui B47): the pane's width query cannot reach it, so the names stay
+ * and truncate with the title instead.
  */
-export function AncestorPath({ pane, actions }: { pane: PaneRow; actions: Actions }) {
+export function AncestorPath({ pane, actions, names = "wide" }: { pane: PaneRow; actions: Actions; names?: "wide" | "always" }) {
   const ancestors = (pane.lineage_path ?? []).slice(0, -1);
   if (ancestors.length === 0) return null;
   return (
     <nav className="flex min-w-0 shrink items-center" data-pane-path={pane.id}>
-      {ancestors.map((step) => <AncestorStep key={step.pane_id} pane={pane} step={step} actions={actions} />)}
+      {ancestors.map((step) => <AncestorStep key={step.pane_id} pane={pane} step={step} actions={actions} names={names} />)}
     </nav>
   );
 }
 
-function AncestorStep({ pane, step, actions }: { pane: PaneRow; step: NonNullable<PaneRow["lineage_path"]>[number]; actions: Actions }) {
+function AncestorStep({ pane, step, actions, names }: { pane: PaneRow; step: NonNullable<PaneRow["lineage_path"]>[number]; actions: Actions; names: "wide" | "always" }) {
   const { t } = useInterfaceTranslation();
   const progress = useRelationProgress(pane.id, step.pane_id);
   const pending = progress?.phase === "pending";
@@ -64,7 +68,7 @@ function AncestorStep({ pane, step, actions }: { pane: PaneRow; step: NonNullabl
         disabled={pending || (failed && !progress.retryable)}
         onClick={() => actions.followRelation(pane.id, step.pane_id, step.label)}
       >
-        <span className="hidden min-w-0 max-w-(--size-pane-child-chip-max) truncate pane-wide:inline">{failed && progress.retryable ? t("common.retry") : step.label}</span>
+        <span className={`min-w-0 max-w-(--size-pane-child-chip-max) truncate ${names === "always" ? "inline" : "hidden pane-wide:inline"}`}>{failed && progress.retryable ? t("common.retry") : step.label}</span>
         <span aria-hidden="true" className="shrink-0 text-muted-foreground">{pending ? "…" : "›"}</span>
       </button>
     </Hint>

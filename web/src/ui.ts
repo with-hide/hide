@@ -13,7 +13,7 @@ import type { CycleItem } from "./recent";
 import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
-import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
+import { DESK_ROOM_CLOSED, type DeskRoomWindow } from "./deskRoom";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
@@ -297,8 +297,11 @@ export type PendingTrash = {
    * checkout follows its own engine focus and can move while the prompt is
    * open, so the confirmation goes to this target, not the one in front then (B34).
    */
-  target: { root: string; device_id?: string };
+  target: ExplorerTarget;
 };
+
+/** The checkout an Explorer change names: its root and its device, and `desk` for Desk's Explorer, which changes its session's checkout rather than the one in front (PRD desk-2-ui B35). */
+export type ExplorerTarget = { root: string; device_id?: string; desk?: true };
 
 type UiStore = {
   screen: Screen | null;
@@ -314,9 +317,15 @@ type UiStore = {
   setSharing: (sharing: boolean) => void;
   deskDraft: DeskDraft;
   setDeskDraft: (draft: DeskDraft) => void;
-  /** Desk's lane in this window: its columns, the tool column's thread and the preview tab (`deskLane.ts`). */
-  deskLane: DeskLaneWindow;
-  setDeskLane: (change: (lane: DeskLaneWindow) => DeskLaneWindow) => void;
+  /** Desk's room in this window: the session open beside Desk and its tab panel (`deskRoom.ts`); closed each time the room is left (PRD desk-2-ui B26). */
+  deskRoom: DeskRoomWindow;
+  setDeskRoom: (change: (room: DeskRoomWindow) => DeskRoomWindow) => void;
+  /** The pane `터미널 ⌘J` left Desk for, which ⌘J on it brings back beside Desk (B7). */
+  deskReturn: string | null;
+  setDeskReturn: (pane: string | null) => void;
+  /** How far above the window's foot the corner's notices stand: the top of the input boxes drawn there (`noticeFloor.ts`). */
+  noticeFloor: number;
+  setNoticeFloor: (floor: number) => void;
   /** Overview is a shell layer; opening it leaves the Workspace mounted. */
   overviewOpen: boolean;
   overview: OverviewPlace;
@@ -557,6 +566,7 @@ export function coveringLayer(layers: readonly (() => void)[]): (() => void) | n
   return [...layers].reverse().find((layer) => !inlineLayers.has(layer)) ?? null;
 }
 
+
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
   remoteScreen: null,
@@ -565,8 +575,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setSharing: (sharing) => set({ sharing }),
   deskDraft: { text: "", mentions: [] },
   setDeskDraft: (deskDraft) => set({ deskDraft }),
-  deskLane: DESK_LANE_CLOSED,
-  setDeskLane: (change) => set((state) => ({ deskLane: change(state.deskLane) })),
+  deskRoom: DESK_ROOM_CLOSED,
+  setDeskRoom: (change) => set((state) => ({ deskRoom: change(state.deskRoom) })),
+  deskReturn: null,
+  setDeskReturn: (deskReturn) => set({ deskReturn }),
+  noticeFloor: 0,
+  setNoticeFloor: (noticeFloor) => set({ noticeFloor }),
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,
@@ -638,6 +652,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   tooltips: [],
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
+  // Leaving Desk closes its right side, so the room starts closed the next time it is entered (PRD desk-2-ui B26).
   setScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
   restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
   setMainView: (mainView) => set({ mainView }),
@@ -748,3 +763,16 @@ export const useUiStore = create<UiStore>((set, get) => ({
     return () => set({ tooltips: get().tooltips.filter((tooltip) => tooltip !== close) });
   },
 }));
+
+// Desk's room is this window's and closes whenever the screen leaves Desk
+// (PRD desk-2-ui B26), whichever way the screen moved: a setter, a restore or
+// a direct `setState`. Coming back to Desk, by ⌘J or any other way, spends
+// the pane `터미널 ⌘J` left for: its `Desk로` and ⌘J are one round trip (B7).
+useUiStore.subscribe((state, previous) => {
+  if (previous.screen?.kind === "desk" && state.screen?.kind !== "desk" && state.deskRoom !== DESK_ROOM_CLOSED) {
+    useUiStore.setState({ deskRoom: DESK_ROOM_CLOSED });
+  }
+  if (previous.screen?.kind !== "desk" && state.screen?.kind === "desk" && state.deskReturn !== null) {
+    useUiStore.setState({ deskReturn: null });
+  }
+});

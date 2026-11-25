@@ -14,6 +14,7 @@
 //! never in the agent: `allow_always` is never chosen. A new conversation, a
 //! restart or the process's end closes a waiting card as a refusal.
 
+mod files;
 pub(super) mod jobs;
 mod worker;
 
@@ -71,6 +72,9 @@ pub(super) struct Desk {
     /// Watch asks for Desk's sessions that have no watch yet, by intent;
     /// only sessions the ledger still holds are kept.
     watch_asks: HashMap<String, jobs::WatchAsk>,
+    /// The files Desk's tab panel holds open, oldest first (`files.rs`);
+    /// the window's, so never stored.
+    files: Vec<files::DeskFile>,
     /// The agent refused the last start (its sign-in, its ask mode, a
     /// process that did not open): the queued messages wait for the
     /// operator's next send, `다시 시작` or a session that opens, rather
@@ -169,6 +173,11 @@ pub(super) enum DeskEvent {
     /// A panel width the operator dragged and let go (PRD desk-2-ui B22):
     /// one event per drag.
     Lane(LanePayload),
+    /// The files windows' rooms brought into Desk's hold and let go, from
+    /// `hided`, which owns each hold (PRD desk-2-ui B19, B36).
+    File(files::FilePayload),
+    /// A held file that could not be opened, read again (B28).
+    FileRetry(files::RetryPayload),
     /// ✕ on a message waiting for the turn before it: it never goes.
     QueuedRemove(QueuedPayload),
 }
@@ -259,7 +268,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 }
 
 impl DeskEvent {
-    pub(super) const KINDS: [&'static str; 14] = [
+    pub(super) const KINDS: [&'static str; 16] = [
         "desk_send",
         "desk_stop",
         "desk_approval",
@@ -273,6 +282,8 @@ impl DeskEvent {
         "desk_job_read",
         "desk_output_seen",
         "desk_lane",
+        "desk_file",
+        "desk_file_retry",
         "desk_queued_remove",
     ];
 
@@ -294,6 +305,8 @@ impl DeskEvent {
             "desk_job_read" => Self::JobRead(parse(payload)?),
             "desk_output_seen" => Self::OutputSeen(parse(payload)?),
             "desk_lane" => Self::Lane(parse(payload)?),
+            "desk_file" => Self::File(parse(payload)?),
+            "desk_file_retry" => Self::FileRetry(parse(payload)?),
             "desk_queued_remove" => Self::QueuedRemove(parse(payload)?),
             _ => return None,
         })
@@ -344,7 +357,10 @@ impl Runtime {
         // installed refuses it: the phone's 볼 것 sends the same event for a
         // View it showed (PRD mobile-companion-ui D-15).
         let view_seen = matches!(event, DeskEvent::OutputSeen(_));
-        if !view_seen {
+        // Letting a file go always lands, so a Desk switched off holds
+        // nothing a window let go; `desk_file` opens nothing while it is off.
+        let file_holds = matches!(event, DeskEvent::File(_));
+        if !view_seen && !file_holds {
             if self.desk.worker.is_none() {
                 return refused("desk_unavailable");
             }
@@ -361,11 +377,14 @@ impl Runtime {
                 | DeskEvent::JobRead(_)
                 | DeskEvent::OutputSeen(_)
         );
-        // A width moves only the `desk` section's lane.
-        let jobs = !matches!(event, DeskEvent::Lane(_));
+        // A width moves only the `desk` section's lane; a file Desk holds
+        // moves the editor's documents, no section of Desk's.
+        let file = matches!(event, DeskEvent::File(_) | DeskEvent::FileRetry(_));
+        let jobs = !file && !matches!(event, DeskEvent::Lane(_));
+        let room = room && !file;
         // An output seen moves the View's seen state, which the core keeps
-        // with the View, not in Desk's store.
-        let stored = !matches!(event, DeskEvent::OutputSeen(_));
+        // with the View, not in Desk's store; a file held is the window's.
+        let stored = !file && !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
             DeskEvent::Send(payload) => {
                 // Only the Desk composer sends it.
@@ -394,6 +413,8 @@ impl Runtime {
                 self.mark_view_seen(&(payload.device_id, payload.checkout), &payload.id)
             }
             DeskEvent::Lane(payload) => self.desk_lane(payload),
+            DeskEvent::File(payload) => self.desk_file(payload),
+            DeskEvent::FileRetry(payload) => self.desk_file_retry(payload.into()),
             DeskEvent::QueuedRemove(payload) => self.desk_queued_remove(payload.id),
         };
         let sent = self.desk_send_queued();

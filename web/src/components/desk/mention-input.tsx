@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Clipboard
 import { createPortal } from "react-dom";
 import { markedMention } from "../../desk";
 import { chipDelete, chipStep, draftChips, replaceRange, type DraftChip } from "../../deskComposer";
+import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import type { DeskDraft } from "../../ui";
 import { DeskMentionChip } from "./desk-chat";
@@ -225,7 +226,7 @@ export function MentionInput({ draft, label, placeholder, autoFocus = false, cla
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
     const element = box.current;
-    if (!element || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.metaKey || event.ctrlKey) return;
+    if (!element || event.defaultPrevented || composingKey(event) || event.altKey || event.metaKey || event.ctrlKey) return;
     const selection = selectionIn(element);
     if (!selection) return;
     const collapsed = selection.start === selection.end;

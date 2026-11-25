@@ -1,4 +1,5 @@
 import type { StoredBuffer } from "./buffers";
+import type { PhoneAsk } from "./mobile/protocol";
 import type { TerminalFrame, UsageSnapshot } from "./generated/hided-ws";
 import { create } from "zustand";
 import type { ConnectionState } from "./connection";
@@ -94,6 +95,15 @@ export type FileIndexResult = {
   /** Why a device's helper could not walk the root; the next query walks again. */
   unavailable: string | null;
 };
+/**
+ * What an agent asks on its own screen, as a window's `pane_ask` read it (PRD desk-2-ui B14): the phone's ask
+ * (`PhoneAsk`), or null with why (`not_asking`, `gone`, `invalid_request`, `unavailable`).
+ */
+export type PaneAskAnswer = { device_id: string; pane_id: string; ask: PhoneAsk | null; reason: string | null };
+
+/** Where a `pane_choice` stands: the phone's reasons on a refusal (`stale`, `unknown_choice`, `uncertain`, ...). */
+export type PaneChoiceResult = { request_id: string; ok: boolean; reason: string | null };
+
 /** The answer to a `file_index_all` query: every project's matches, each naming its project root (PRD desk-2-ui B38). */
 export type FileIndexAllResult = {
   query: string;
@@ -273,6 +283,10 @@ type Store = {
   /** The ⌘P palette's last answer, keyed by the query it answered. */
   fileIndex: FileIndexResult | null;
   fileIndexAll: FileIndexAllResult | null;
+  /** The last ask a `pane_ask` read, for the session open beside Desk (B14). */
+  paneAsk: PaneAskAnswer | null;
+  /** The last `pane_choice` answered, by its request id. */
+  paneChoice: PaneChoiceResult | null;
   /** The last attachment the daemon refused, drawn as one line over its pane (B15). */
   attachmentRefusal: { pane_id: string; reason: string } | null;
   /** Tabs whose save is in flight; the strip shows only these (D-10). */
@@ -434,6 +448,8 @@ export const useShellStore = create<Store>((set, get) => ({
   directoryUnavailable: null,
   fileIndex: null,
   fileIndexAll: null,
+  paneAsk: null,
+  paneChoice: null,
   attachmentRefusal: null,
   savingTabs: new Set<string>(),
   bufferWarnings: new Set<string>(),
@@ -707,6 +723,14 @@ export const useShellStore = create<Store>((set, get) => ({
       // link; a link that waits again starts a new connection, whose split is tried again.
       if (link.phase === "live") set({ coreSplit: link.split_failed ?? null });
       else set({ coreLink: link, coreSplit: null });
+      return [];
+    }
+    if (frame.type === "pane_ask") {
+      set({ paneAsk: frame.payload as unknown as PaneAskAnswer });
+      return [];
+    }
+    if (frame.type === "pane_choice_result") {
+      set({ paneChoice: frame.payload as unknown as PaneChoiceResult });
       return [];
     }
     if (frame.type === "file_index_all_result") {

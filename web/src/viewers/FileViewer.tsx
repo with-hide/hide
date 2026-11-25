@@ -3,11 +3,12 @@
 // kind for. Every viewer reads the same way - hided file bytes behind the
 // checkout boundary - and every failure is one line in the document's place.
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
 import type { Actions } from "../actions";
 import { blobUrl } from "../fileBytes";
 import { useInterfaceTranslation } from "../i18n/client";
+import { cn } from "../lib/utils";
 import type { EditorDocumentSnapshot } from "../snapshot";
 import { useShellStore } from "../store";
 import { PdfPages } from "./pdfPages";
@@ -25,10 +26,11 @@ import { workspaceViewOf } from "../workspace";
 export type ViewerComments = { workspace: ViewWorkspace; actions: Actions };
 
 /** The one line a failed read or an unsupported file leaves behind. */
-export function ViewerNotice({ reason, state }: { reason: string; state: string }) {
+export function ViewerNotice({ reason, state, action, ...data }: { reason: string; state: string; action?: ReactNode } & Record<`data-${string}`, string>) {
   return (
-    <div className="flex flex-1 items-center justify-center px-md text-center text-caption text-muted-foreground" data-viewer-state={state}>
-      {reason}
+    <div className={cn("flex flex-1 items-center justify-center px-md text-center text-caption text-muted-foreground", action ? "flex-col gap-xs" : null)} data-viewer-state={state} {...data}>
+      {action ? <p>{reason}</p> : reason}
+      {action}
     </div>
   );
 }

@@ -141,6 +141,8 @@ pub struct AppState {
     /// Which connections show which backlog item's origin: the core keeps
     /// an origin until the last of them closes it or leaves.
     pub origin_holds: Arc<crate::demand::OriginHolds>,
+    /// The files each window's Desk room holds (`desk_files`).
+    pub desk_files: Arc<crate::demand::DeskFileHolds>,
     /// What Settings > About reads about this daemon, sent once after
     /// a handshake. No token, no environment beyond the paths it names.
     pub daemon_info: Arc<Value>,
@@ -2829,7 +2831,7 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 12] = [
+const DEVICE_FILE_EVENTS: [&str; 13] = [
     "create_workspace",
     "clone_repository",
     "file_list",
@@ -2842,6 +2844,7 @@ const DEVICE_FILE_EVENTS: [&str; 12] = [
     "path_move",
     "path_copy",
     "path_trash",
+    "desk_file_retry",
 ];
 
 /// The SSH device a file event names, or `None` for this machine. Any id
@@ -3020,6 +3023,15 @@ fn handle_client_text(
         Some("backlog_origin") => {
             let owner = origin_identity(&event)?;
             state.origin_holds.hold(connection, &owner)?;
+        }
+        // A window's Desk room names every file it shows; hided owns the
+        // holds and the core hears one change for the whole message.
+        Some("desk_files") => {
+            let (files, refusals) = desk_files_admitted(state, &event)?;
+            state.desk_files.set(connection, files, |open, close| {
+                dispatch_desk_file(&state.core, connection, open, close)
+            })?;
+            return Ok(ClientAction::Replies(refusals));
         }
         Some("backlog_origin_close") => {
             let owner = origin_identity(&event)?;
@@ -3667,6 +3679,74 @@ fn close_backlog_origin(
         eprintln!(
             "{}",
             json!({"component": "hided", "kind": "backlog.origin_release_failed", "connection": connection, "message": error})
+        );
+    }
+}
+
+/// The files a `desk_files` message names, each checked as an open is: a
+/// file of this machine's checkout by its root, a device's by the core and
+/// that device's helper. A refused file is answered and left out of the set.
+fn desk_files_admitted(
+    state: &AppState,
+    event: &Value,
+) -> Result<(Vec<crate::demand::DeskFileKey>, Vec<Message>), String> {
+    let files: Vec<crate::demand::DeskFileKey> = serde_json::from_value(
+        event
+            .get("payload")
+            .and_then(|payload| payload.get("files"))
+            .cloned()
+            .ok_or_else(|| "desk_files.files is required".to_owned())?,
+    )
+    .map_err(|error| format!("desk_files: {error}"))?;
+    let mut admitted = Vec::with_capacity(files.len());
+    let mut refusals = Vec::new();
+    for mut file in files {
+        let mut check = json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "desk_files",
+            "payload": {
+                "workspace_id": file.workspace_id,
+                "checkout_id": file.checkout_id,
+                "device_id": file.device_id,
+                "path": file.path,
+            },
+        });
+        if event_device(&state.boundary, &check).is_none() {
+            if let Some(reply) =
+                admit_event(&state.boundary, &mut check, || roots_current(&state.roots))
+            {
+                refusals.push(Message::Text(reply.to_string().into()));
+                continue;
+            }
+            file.path = payload_str(&check, "path");
+        }
+        admitted.push(file);
+    }
+    Ok((admitted, refusals))
+}
+
+/// Tells the core which files Desk's rooms newly hold and which none holds
+/// any more, as one event.
+fn dispatch_desk_file(
+    core: &CoreHandle,
+    connection: u64,
+    open: &[crate::demand::DeskFileKey],
+    close: &[crate::demand::DeskFileKey],
+) {
+    let files = |list: &[crate::demand::DeskFileKey]| {
+        list.iter()
+            .map(|file| json!({"workspace_id": file.workspace_id, "checkout_id": file.checkout_id, "path": file.path}))
+            .collect::<Vec<_>>()
+    };
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "desk_file",
+        "payload": {"open": files(open), "close": files(close)},
+    });
+    if let Err(error) = core.dispatch(event.to_string().into_bytes()) {
+        eprintln!(
+            "{}",
+            json!({"component": "hided", "kind": "desk.file_dispatch_failed", "connection": connection, "message": error})
         );
     }
 }
@@ -5087,6 +5167,8 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
+        // A file Desk's room holds, or reads again, is checked as an open is.
+        "desk_files" | "desk_file_retry" => explorer_open(boundary, event, &kind),
         "file_save" => explorer_save(boundary, event, &kind),
         "file_create" | "dir_create" => explorer_create(boundary, event, &kind),
         "path_rename" => explorer_rename(boundary, event, &kind),
@@ -5879,6 +5961,9 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     }
     state.origin_holds.release(connection, |key| {
         close_backlog_origin(&state.core, connection, key)
+    });
+    state.desk_files.release(connection, |open, close| {
+        dispatch_desk_file(&state.core, connection, open, close)
     });
     let remaining = state
         .clients

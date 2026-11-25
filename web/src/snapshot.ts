@@ -3400,6 +3400,8 @@ export type DeskIrreversible = "end_working_session" | "force_push" | "delete_re
 export type DeskApprovalAnswer = "once" | "conversation" | "reject";
 /** Why a card asks, irreversible kinds first: `desk_approval_ask`. */
 export type DeskApprovalAsk = { kind: "irreversible"; value: DeskIrreversible } | { kind: "row"; value: DeskPermissionRow };
+/** A message sent while a reply was being written, waiting for the turn before it (`desk_queued_remove` takes it out); none is in `items` until its turn starts. */
+export type DeskQueuedMessage = { id: number; text: string; at_ms: number; mentions: DeskMention[] };
 export type DeskNotice = "blocked" | "preparing" | "host_stopped" | "resume_failed" | "login_needed" | "install_failed" | "no_ask_mode" | "turn_failed";
 export type DeskLocation = "desk" | "worktree" | "checkout";
 export type DeskChoice = { id: string; label: string };
@@ -3436,7 +3438,7 @@ export type DeskItem =
    * archive ends or the path a deletion reaches; `refusal` is the line the
    * operator sent with 거절.
    */
-  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
+  | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; /** The row of Settings › Labs › Desk › 권한 the request reads as, whose name is the card's kind; none on a card kept from before it was sent. */ row?: DeskPermissionRow | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
   /** `detail` is the install's last line, the sign-in command for `login_needed`, the blocked call, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
@@ -3638,7 +3640,7 @@ export type DeskSection = {
   agents: DeskAgent[];
   host: { state: DeskHostState; detail: string | null };
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
-  conversation: { generation: number; items: DeskItem[]; dropped: number };
+  conversation: { generation: number; items: DeskItem[]; dropped: number; queued: DeskQueuedMessage[]; /** The most messages that wait at once, and whether that many do now: one more is refused. */ queued_max: number; queued_full: boolean; /** The line stands still because the agent refused its first message (sign-in, a session that did not open): it goes on a new send or a restart. */ queued_held: boolean };
   approvals_waiting: number;
   /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
@@ -4219,6 +4221,35 @@ export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
 }
 
+/** A listed checkout with its project and its machine (PRD desk-2-ui B19, B35, B37). */
+export type CheckoutPlace = { device: string; workspace: string; checkout: Checkout };
+
+/** Every listed checkout: this machine's, then each connected device's. */
+export function checkoutPlaces(rest: SnapshotRest | null): CheckoutPlace[] {
+  return catalogWorkspaces(rest).flatMap((workspace) => workspace.checkouts.map((checkout) => ({ device: workspace.device_id, workspace: workspace.id, checkout })));
+}
+
+/** The checkout at `root` on `device`, null when it is not listed. */
+export function checkoutAtRoot(rest: SnapshotRest | null, device: string, root: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.device === device && place.checkout.path === root) ?? null;
+}
+
+/** The checkout whose tab holds `paneId`, null when no listed tab does. */
+export function checkoutOfPane(rest: SnapshotRest | null, paneId: string): CheckoutPlace | null {
+  return checkoutPlaces(rest).find((place) => place.checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId))) ?? null;
+}
+
+/** The pane row of `paneId` as its tab lists it, local or on a device, for the ancestor path (PRD desk-2-ui B47). */
+export function paneRowOf(rest: SnapshotRest | null, paneId: string): PaneRow | null {
+  for (const place of checkoutPlaces(rest)) {
+    for (const tab of place.checkout.tabs) {
+      const pane = tab.panes.find((one) => one.id === paneId);
+      if (pane) return pane as PaneRow;
+    }
+  }
+  return null;
+}
+
 const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
 
 /**
@@ -4319,14 +4350,18 @@ export function agentPermission(rest: SnapshotRest | null, deviceId: string, age
  * own device, so the same path on two machines never shares a row (S5.5 B2).
  */
 export function explorerContext(rest: SnapshotRest | null): { device: string; checkout: Checkout | null; expanded: string[] } {
-  const node = localDeviceId(rest);
-  const device = focusedRemoteDevice(rest)?.id ?? node;
-  const state = rest?.ui_state;
+  const device = focusedRemoteDevice(rest)?.id ?? localDeviceId(rest);
   return {
     device,
     checkout: frontCheckout(rest),
-    expanded: (device === node ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS,
+    expanded: expandedOn(rest, device),
   };
+}
+
+/** One device's expanded Explorer folders, by absolute path (S5.5 B2); the same set for any checkout on it. */
+export function expandedOn(rest: SnapshotRest | null, device: string): string[] {
+  const state = rest?.ui_state;
+  return (device === localDeviceId(rest) ? state?.expanded_paths : state?.device_expanded_paths?.[device]) ?? NO_PATHS;
 }
 
 /** The changes of the checkout a listing belongs to, or null when they are another checkout's. */

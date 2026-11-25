@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, ImageIcon, LoaderCircleIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import type { KeyboardEvent, ReactNode, Ref } from "react";
+import { useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { DeskAgent, DeskAgentId, DeskAgentWord, DeskChoice, DeskSelection } from "../../desk";
 import { agentPickable, deskAgentWord } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
@@ -11,6 +11,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { Hint } from "../ui/tooltip";
+import { composingKey } from "../../keys";
+import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
 
@@ -26,7 +28,7 @@ export type ComposerAttachment = { id: string; name: string; image: boolean };
  * With `draft`, the box is Desk's, where picked mentions stand as chips
  * (D-85) and `value` is the draft's text; without, it is a plain text box.
  */
-export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
+export function DeskComposer({ value, draft, inputRef, label, placeholder, attachments = [], answering = false, focused = false, held = false, notice = null, menu = null, menuOpen = false, menuEmpty = false, onChange, onCaret, onKeyDown, onSend, onStop, onAttach, onRemoveAttachment, onMenuOpenChange, children }: {
   value: string;
   /** Desk's draft: its mentions are drawn as chips in the box. */
   draft?: DeskDraft;
@@ -44,6 +46,8 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   notice?: string | null;
   menu?: ReactNode;
   menuOpen?: boolean;
+  /** The open menu holds nothing to choose, so ↵ is not its own and sends. */
+  menuEmpty?: boolean;
   /** The words changed, and where the caret stands in them. */
   onChange: (value: string, caret: number) => void;
   /** The caret moved in the chip box without the words changing. */
@@ -62,13 +66,16 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   const blocked = empty || held;
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
-    // Enter sends and Shift+Enter starts a line; a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
-    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || answering || menuOpen) return;
+    // Enter sends and Shift+Enter starts a line, while Desk answers too (the message waits for its turn); a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
+    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || composingKey(event) || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
   };
+  // A notice in the window's corner stands above the box, never over it.
+  const box = useRef<HTMLDivElement>(null);
+  useNoticeFloor(box);
   return (
-    <div className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
+    <div ref={box} className="flex min-w-0 flex-col gap-xs" data-desk-composer={answering ? "answering" : "idle"}>
       <Popover open={menuOpen} onOpenChange={onMenuOpenChange}>
         <PopoverAnchor asChild>
           <div className={cn("flex min-w-0 flex-col gap-xs rounded-xl border bg-background px-sm py-xs", focused || menuOpen ? "border-ring ring-1 ring-ring" : "border-input")} data-desk-composer-frame={focused ? "focused" : "rest"}>
