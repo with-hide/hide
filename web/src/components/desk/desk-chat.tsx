@@ -182,15 +182,17 @@ const SWITCH_WORDS: Record<Extract<DeskItem, { kind: "switch" }>["carried"], Mes
  * copyable; the words the operator sent stay in the composer. A failed turn
  * names the agent's own reason in plain words when it gave one and the reply
  * above did not already say it (`reason`); once a newer turn ran or a message waits
- * (`settled`) its `다시 시도` is gone, since the answer to it was given.
+ * (`settled`) its `다시 시도` is gone, since the answer to it was given; the
+ * notice that stopped a held line (`restartable`) offers `다시 시작`, which frees it.
  */
-export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
+export function DeskNotice({ item, reason = failureReason(item.detail, null), settled = false, restartable = false, onAction, onCopy }: { item: Extract<DeskItem, { kind: "notice" }>; reason?: string | null; settled?: boolean; restartable?: boolean; onAction: (action: DeskNoticeAction) => void; onCopy: (text: string) => void }) {
   const { t } = useInterfaceTranslation();
   const turn = item.notice === "turn_failed";
   // The failed colour is the failed turn's alone, as Doop's DeskNotice draws it; a stopped host is neutral words, as its `stopped`.
   const tone = turn ? "text-destructive" : item.notice === "blocked" || item.notice === "install_failed" ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground";
   const failed = turn || item.notice === "blocked" || item.notice === "install_failed";
-  const action = settled ? undefined : NOTICE_ACTION[item.notice];
+  // The notice that stopped a held line always offers the restart that frees it, whatever its kind.
+  const action = settled ? undefined : NOTICE_ACTION[item.notice] ?? (restartable ? "restart" : undefined);
   const key = turn && reason ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
   const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: turn ? (reason ?? "") : (item.detail ?? "") });
   return (
@@ -205,7 +207,7 @@ export function DeskNotice({ item, reason = failureReason(item.detail, null), se
           </Hint>
         </span>
       ) : null}
-      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(action === "restart" && item.notice === "login_needed" ? "desk.action.signedIn" : ACTION_WORDS[action])}</Button> : null}
+      {action ? <Button variant="text-link" size="inline" className="text-caption" data-desk-notice-action={action} onClick={() => onAction(action)}>{t(item.notice === "login_needed" && action === "restart" ? "desk.action.signedIn" : ACTION_WORDS[action])}</Button> : null}
     </p>
   );
 }
@@ -429,7 +431,7 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
-            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} restartable={held && !items.slice(index + 1).some((later) => later.kind === "notice")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
