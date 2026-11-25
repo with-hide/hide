@@ -403,6 +403,24 @@ pub fn ready_panes(home: &Path) -> Result<Vec<String>> {
 
 /// The arguments the stand-in in `pane` (as the account's machine calls
 /// it) started with, `None` until it wrote them.
+/// The prompt files the node of `environment`'s account keeps for its
+/// panes' starts (`hide_kit::layout::prompt_files` of its state folder).
+pub fn prompt_files(environment: &Environment) -> Result<Vec<PathBuf>> {
+    let state = hide_kit::layout::state_dir(
+        &environment.home,
+        environment.var("HIDE_STATE_DIR").as_deref(),
+        environment.var("XDG_STATE_HOME").as_deref(),
+    );
+    let folder = hide_kit::layout::prompt_files(&state);
+    match fs::read_dir(&folder) {
+        Ok(entries) => Ok(entries
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<_>>()?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn started_with(home: &Path, pane: &str) -> Result<Option<Vec<String>>> {
     let file = home.join(".fixture-argv").join(pane.replace(':', "-"));
     match fs::read(&file) {
@@ -1237,8 +1255,15 @@ impl Fixture {
 
     /// The device's project folder as a repository a worktree can branch from.
     pub fn commit_remote_project(&self) -> Result<PathBuf> {
-        let project = self.remote.environment.home.join("project");
-        let mut commit = self.remote.environment.command("/usr/bin/git");
+        self.commit_project(true)
+    }
+
+    /// Commits to the project of the device's account, or of this machine's
+    /// with `on_device` false, so a branch can be made from it.
+    pub fn commit_project(&self, on_device: bool) -> Result<PathBuf> {
+        let account = if on_device { &self.remote } else { &self.local };
+        let project = account.environment.home.join("project");
+        let mut commit = account.environment.command("/usr/bin/git");
         commit.arg("-C").arg(&project).args([
             "-c",
             "user.name=fixture",

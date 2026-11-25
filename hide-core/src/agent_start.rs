@@ -880,6 +880,7 @@ mod tests {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 wakes: false,
                 program: None,
+                prompt: None,
             })
             .unwrap()
     }

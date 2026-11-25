@@ -48,6 +48,37 @@ impl crate::Syntax {
             }
         }
     }
+
+    /// An expression this shell reads as one word: the text of the file at
+    /// `path`, read whole, with the file removed once read. A start line
+    /// carries its first input this way (`hide-core`, `start_prompt`), so
+    /// the line the shell reads holds only the path: a shell whose locale
+    /// cannot read the text (glibc's `C` turns each non-ASCII byte a line
+    /// editor reads into `?`) still hands it on byte for byte. In a POSIX
+    /// shell the substitution is double-quoted, so nothing splits it; fish
+    /// reads `$(...)` from 3.4 on. In PowerShell the file is read as UTF-8
+    /// ([`powershell_windows_argument`] quotes it for a process start).
+    pub fn file_word(self, path: &str) -> String {
+        let path = self.single_quoted(path);
+        match self {
+            Self::Posix => format!("\"$(cat {path}; rm -f {path})\""),
+            Self::PowerShell => format!(
+                "(& {{ $hideText = [IO.File]::ReadAllText({path}); \
+                 Remove-Item -LiteralPath {path}; $hideText }})"
+            ),
+        }
+    }
+}
+
+/// A PowerShell expression whose value is the value of `expression` as one
+/// word of a Windows command line, by the rule [`windows_argument`] writes in
+/// Rust: in double quotes, each `"` and the backslashes before it escaped,
+/// and the backslashes before the closing quote doubled. For a word only the
+/// shell holds, such as a file it reads (`Syntax::file_word`).
+pub fn powershell_windows_argument(expression: &str) -> String {
+    format!(
+        "('\"' + (({expression}) -replace '(\\\\*)\"', '$1$1\\\"' -replace '(\\\\+)\\z', '$1$1') + '\"')"
+    )
 }
 
 /// The most UTF-16 units Windows takes as a process's command line, its

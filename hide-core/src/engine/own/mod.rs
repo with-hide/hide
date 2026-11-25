@@ -50,6 +50,7 @@ mod creation;
 pub(crate) mod herdr_session;
 mod ids;
 pub(crate) mod layout;
+mod prompt_file;
 mod restore;
 mod rules;
 mod shell_line;
@@ -152,6 +153,15 @@ struct Shared {
     /// ([`Engine::take_resumed`]), one per pane, so bounded by the panes.
     resumed: Mutex<Vec<crate::engine::ResumedPane>>,
 }
+
+/// A path as long as a prompt file's may be, for the bound a start line is
+/// prepared against (`prepare_start`): the node's state folder, which a
+/// home of an ordinary length holds, and the file's own name.
+const PROMPT_PATH_BOUND: &str = concat!(
+    "/0123456789012345678901234567890123456789012345678901234567890123456789",
+    "/0123456789012345678901234567890123456789012345678901234567890123456789",
+    "/.hide/state/prompt-files/start-012345678901234567890123"
+);
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
 /// holders.
@@ -2566,9 +2576,13 @@ impl<'g> Engine for OwnEngine<'g> {
             )?)?
             .words;
         // The longest of the shells' lines, so the start is bounded as the
-        // shell it meets will type it.
-        let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
-            .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
+        // shell it meets will type it; a first input is read from a file
+        // whose path is bounded by the state folder's.
+        let line = shell_line::longest(|shell| match launch.prompt {
+            Some(_) => shell_line::command_with_prompt(&argv, PROMPT_PATH_BOUND, shell),
+            None => shell_line::command(&argv, shell),
+        })
+        .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
         Ok(PreparedStart::new(launch, line))
     }
 
@@ -2618,12 +2632,25 @@ impl<'g> Engine for OwnEngine<'g> {
             .launch
             .line(argv.clone())
             .map_err(|message| refused("agent_start_refused", message))?;
-        let typed = shell_line::command(&line.words, shell).ok_or_else(|| {
-            refused(
+        // A first input is kept in a file of the pane's machine, which the
+        // line reads, so the text never crosses the shell's line editor.
+        let staged = match launch.prompt.as_deref() {
+            Some(prompt) => Some(self.stage_prompt(pane, &launch.name, prompt)?),
+            None => None,
+        };
+        let typed = match &staged {
+            Some(staged) => shell_line::command_with_prompt(&line.words, &staged.path, shell),
+            None => shell_line::command(&line.words, shell),
+        };
+        let Some(typed) = typed else {
+            if let Some(staged) = staged {
+                self.drop_prompt(pane, staged);
+            }
+            return Err(refused(
                 "agent_start_refused",
                 format!("the {} start cannot be typed into a shell", definition.id),
-            )
-        })?;
+            ));
+        };
         // A profile's start ends with what came of its attempt, which typing
         // the line does not say (PRD agent-profiles B22); whatever ends this
         // call ends the attempt with it.
@@ -2631,7 +2658,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .attempt
             .as_ref()
             .map(|attempt| attempt::Finish::new(self, pane, &attempt.id));
-        self.type_agent_start(
+        let typing = self.type_agent_start(
             pane,
             agents::PaneAgent::started(
                 &definition.id,
@@ -2641,7 +2668,13 @@ impl<'g> Engine for OwnEngine<'g> {
             &typed,
             launch.wakes,
             line.attempt.clone(),
-        )?;
+        );
+        // A refusal typed nothing, so no line will read the file; any other
+        // failure may have typed it, and the line removes the file it read.
+        if let (Err(EngineError::Refused { .. }), Some(staged)) = (&typing, staged) {
+            self.drop_prompt(pane, staged);
+        }
+        typing?;
         if let Some(finish) = finish {
             match self.await_attempt(finish, deadline(wait)) {
                 attempt::Outcome::Started => {}
@@ -4735,6 +4768,7 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         }
     }
 

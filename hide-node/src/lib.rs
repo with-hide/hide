@@ -97,8 +97,9 @@ impl Local {
         self
     }
 
-    /// The node keeps View feedback screenshots and letter attachments under
-    /// `state`, the daemon's state folder (`hide_host::feedback`).
+    /// The node keeps View feedback screenshots, letter attachments and the
+    /// prompt files of its panes' starts under `state`, the daemon's state
+    /// folder (`hide_host::feedback`, `hide_host::prompt_files`).
     pub fn keeping_feedback_in(mut self, state: std::path::PathBuf) -> Self {
         self.env.state = Some(state);
         self

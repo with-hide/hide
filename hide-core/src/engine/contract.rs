@@ -353,6 +353,8 @@ pub(crate) struct BuiltHolders {
     service: std::sync::Arc<hide_node::terminal::Service>,
     /// The node's account home, which its panes' programs run in.
     pub(crate) home: std::path::PathBuf,
+    /// The node's state folder, where it keeps its panes' prompt files.
+    pub(crate) state_dir: std::path::PathBuf,
     folder: String,
     _root: tempfile::TempDir,
 }
@@ -456,7 +458,11 @@ fn built_node_and_holders(
         PaneShell::Fixed(shell),
     ));
     (
-        Arc::new(hide_node::Local::new(Some(home.to_owned())).with_panes(panes)),
+        Arc::new(
+            hide_node::Local::new(Some(home.to_owned()))
+                .keeping_feedback_in(state_dir.to_owned())
+                .with_panes(panes),
+        ),
         terminals.service,
         holders,
     )
@@ -483,6 +489,7 @@ impl BuiltHolders {
             panes: linked,
             service,
             home,
+            state_dir,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
         }
@@ -550,6 +557,7 @@ fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         })
         .unwrap();
     let error = engine.start_agent(WAIT, &start).unwrap_err();
@@ -1220,7 +1228,8 @@ fn launched_input_reaches_npms_program(shell: &str) {
         .chain("%PATH% & ^ \"x\" \\\" ".chars().cycle())
         .take(16 * 1024)
         .collect();
-    for (index, input) in [short, long.as_str()].into_iter().enumerate() {
+    let korean = "한글 첫 지시입니다\n둘째 줄";
+    for (index, input) in [short, long.as_str(), korean].into_iter().enumerate() {
         let written = install.path().join(format!("argv-{index}.json"));
         let env = BTreeMap::from([(
             "HIDE_TEST_ARGV".to_owned(),
@@ -1238,15 +1247,17 @@ fn launched_input_reaches_npms_program(shell: &str) {
         let words = crate::start_prompt::launched("codex", &[], input, Some(&form))
             .expect("the start carries the input")
             .expect("Codex declares a launch");
+        let (lead, prompt) = crate::start_prompt::split_carried(words.clone());
         let start = engine
             .prepare_start(super::AgentLaunch {
                 pane_id: pane.clone(),
                 name: format!("launched-{index}"),
                 launch: crate::launch::Launch::default_of("codex"),
-                args: words.clone(),
+                args: lead,
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 wakes: false,
                 program: super::StartProgram::of("codex", &form),
+                prompt,
             })
             .expect("the start is prepared");
         engine
@@ -1267,6 +1278,112 @@ fn launched_input_reaches_npms_program(shell: &str) {
             "{shell} did not hand the input over as its last word"
         );
     }
+}
+
+/// A first input launched as a start's argument reaches the program whole
+/// from a shell in glibc's `C` locale, whose line editor turns each
+/// non-ASCII byte it reads into `?` (with-hide/hide#2900): the line holds
+/// only the path of the file the pane's node keeps the input in, so a
+/// Korean brief of many lines arrives as given, and the file is gone once
+/// read. Each shell the lane gives (`HIDE_TEST_ZSH_BIN`, `HIDE_TEST_BASH_BIN`,
+/// `HIDE_TEST_FISH_BIN`) and `/bin/sh` runs the pane, with `LC_ALL=C`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_launched_first_input_reaches_the_program_whole_from_a_c_locale_shell() {
+    let shells = ["HIDE_TEST_ZSH_BIN", "HIDE_TEST_BASH_BIN", "HIDE_TEST_FISH_BIN"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .chain(std::iter::once("/bin/sh".into()));
+    for shell in shells {
+        launched_input_reaches_the_program_in(shell);
+    }
+}
+
+#[cfg(unix)]
+fn launched_input_reaches_the_program_in(shell: std::ffi::OsString) {
+    use std::os::unix::fs::PermissionsExt;
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let named = shell.to_string_lossy().into_owned();
+    let running = Running(BuiltHolders::start_in(vec![shell]));
+    let built = &running.0;
+    let engine = &built.engine;
+    engine.set_agent_definitions(std::sync::Arc::new(
+        hide_agent_adapter::definition::Catalog::read(Vec::new()),
+    ));
+    // A stand-in Codex on the pane's PATH that writes each word it was
+    // given, ended by a NUL, to the file its pane names.
+    let bin = tempfile::tempdir().unwrap();
+    let codex = bin.path().join("codex");
+    std::fs::write(
+        &codex,
+        "#!/bin/sh\nfor word in \"$@\"; do printf '%s\\0' \"$word\"; done > \"$HIDE_TEST_ARGV\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let written = bin.path().join("argv");
+    let env = BTreeMap::from([
+        ("HIDE_TEST_ARGV".to_owned(), written.to_str().unwrap().to_owned()),
+        ("LC_ALL".to_owned(), "C".to_owned()),
+        (
+            "PATH".to_owned(),
+            format!("{}:/usr/bin:/bin", bin.path().display()),
+        ),
+    ]);
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "c-locale", false, env)
+        .expect("a workspace is made");
+    prompted(engine, &pane);
+    until("the shell alone holds its terminal", || {
+        engine
+            .pane_processes(WAIT, &pane)
+            .is_ok_and(|processes| processes.shell_holds_terminal())
+    });
+    let input = "한글 첫 지시입니다: '따옴표' \"큰따옴표\" $HOME `tick`\n둘째 줄 -x";
+    let words = crate::start_prompt::launched(
+        "codex",
+        &[],
+        input,
+        Some(&hide_node_link::protocol::StartForm::Program),
+    )
+    .expect("the start carries the input")
+    .expect("Codex declares a launch");
+    let (lead, prompt) = crate::start_prompt::split_carried(words.clone());
+    let start = engine
+        .prepare_start(super::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "launched-c".to_owned(),
+            launch: crate::launch::Launch::default_of("codex"),
+            args: lead,
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
+            program: None,
+            prompt,
+        })
+        .expect("the start is prepared");
+    engine
+        .start_agent(WAIT, &start)
+        .unwrap_or_else(|error| panic!("{named} takes the start: {error:?}"));
+    until_within("the program records its arguments", START_WITHIN, || {
+        written.exists()
+    });
+    let given: Vec<String> = std::fs::read(&written)
+        .unwrap()
+        .split(|byte| *byte == 0)
+        .filter(|word| !word.is_empty())
+        .map(|word| String::from_utf8(word.to_vec()).expect("UTF-8 words"))
+        .collect();
+    assert_eq!(given, words, "{named} changed a word on its way");
+    let folder = hide_kit::layout::prompt_files(&built.state_dir);
+    assert!(
+        std::fs::read_dir(&folder).map_or(true, |mut files| files.next().is_none()),
+        "{named} left the prompt file"
+    );
 }
 
 /// After the machine went down, a restarted pane's agent resumes through
@@ -1632,6 +1749,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
                 codex_daemon: CodexDaemon::Unsupported,
                 wakes: false,
                 program: None,
+                prompt: None,
             })
             .expect("the start is prepared");
         start_at_shell_reusing_name(
@@ -1752,6 +1870,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
             codex_daemon: CodexDaemon::Unsupported,
             wakes: false,
             program: None,
+            prompt: None,
         })
         .expect("the start is prepared");
     start_at_shell_reusing_name(

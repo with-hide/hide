@@ -1963,6 +1963,7 @@ fn spawn(
                 .is_some_and(|input| input.route == SendRoute::Launch);
             let words = brief_words(&reserved, &start_args, form.as_ref())?;
             let carried = words.clone();
+            let mut prompt = None;
             if let Some(words) = words {
                 if !launched_before {
                     reserved = serde_json::from_value(mutate(
@@ -1976,7 +1977,9 @@ fn spawn(
                     )?)
                     .map_err(|_| "spawn_unavailable")?;
                 }
-                start_args.extend(words);
+                let (lead, last) = crate::start_prompt::split_carried(words);
+                start_args.extend(lead);
+                prompt = last;
                 crate::diagnostic!(json!({
                     "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
                     "pane_id": pane,
@@ -2007,6 +2010,7 @@ fn spawn(
                 codex_daemon,
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+                prompt,
                 &check,
             )
             .map_err(|not| {

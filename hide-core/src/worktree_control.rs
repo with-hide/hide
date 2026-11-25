@@ -1659,9 +1659,14 @@ fn launch_agent(
     // rides the start only in a cell the journey proves
     // (`start_prompt::launched`, docs/delivery.md, The input ladder).
     let mut typed = None;
+    let mut launched = None;
     if let Some(prompt) = prompt {
         match crate::start_prompt::launched(kind, &args, prompt, form.as_ref()) {
-            Ok(Some(words)) => args.extend(words),
+            Ok(Some(words)) => {
+                let (lead, last) = crate::start_prompt::split_carried(words);
+                args.extend(lead);
+                launched = last;
+            }
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.invalid_prompt",
@@ -1689,6 +1694,7 @@ fn launch_agent(
         program: form
             .as_ref()
             .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+        prompt: launched,
     }) {
         Ok(start) => start,
         // An unread Codex is named by its own code; the rest is a wire fault.

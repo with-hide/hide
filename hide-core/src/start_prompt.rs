@@ -68,6 +68,16 @@ pub(crate) fn launched(
     }
 }
 
+/// The words a start carries its first input in ([`launched`], or a
+/// launched record's saved words), as the arguments the start adds and the
+/// last word, the input itself (`--prompt=<text>` for OpenCode's form): the
+/// engine reads that word from a file of the pane's machine rather than
+/// typing it into the shell (`AgentLaunch::prompt`).
+pub(crate) fn split_carried(mut words: Vec<String>) -> (Vec<String>, Option<String>) {
+    let prompt = words.pop();
+    (words, prompt)
+}
+
 /// How the pane's node starts the program `program` now
 /// (`Call::AgentInstalled`), asked before every start, since an update of the
 /// agent can move what its launcher runs: `None` when the program is not on
