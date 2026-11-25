@@ -173,19 +173,18 @@ pub(crate) fn remove(
             RemoveOutcome::Absent
         };
     }
-    let agent = match runtime {
-        AgentRuntime::ClaudeCode => Agent::ClaudeCode,
-        // Codex's trust is taken out by Codex itself; with no Codex left to
-        // ask, its entries and Hide's record of them stay for a later pass
-        // that finds one, and nothing reads them meanwhile.
-        AgentRuntime::Codex if target.codex.is_none() => {
-            return if removed > 0 {
-                RemoveOutcome::Removed
-            } else {
-                RemoveOutcome::Absent
-            };
-        }
-        AgentRuntime::Codex => Agent::Codex,
+    // The trust Hide recorded for the agent, when its definition declares a
+    // trust file. Codex's is taken out by Codex itself; with no Codex left
+    // to ask, its entries and Hide's record of them stay for a later pass
+    // that finds one, and nothing reads them meanwhile.
+    let Some(agent) = Agent::of_kind(runtime.id())
+        .filter(|agent| *agent != Agent::Codex || target.codex.is_some())
+    else {
+        return if removed > 0 {
+            RemoveOutcome::Removed
+        } else {
+            RemoveOutcome::Absent
+        };
     };
     let tools = Tools {
         codex: target.codex.as_ref(),

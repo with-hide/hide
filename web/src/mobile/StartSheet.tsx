@@ -1,18 +1,19 @@
-import { OfflineText } from "./OfflineText";
-// The phone's start sheet (PRD home-device-rail D-24, B42-B46): what to do, where
-// (default This Mac's Home), which agent kind and model, and Start. The kind and
-// model start from the desktop's remembered choice. The text stays until a
-// start succeeds, so a refusal or a lost connection never costs it.
+// The phone's start sheet (PRD home-device-rail D-24, B42-B46), in the desktop
+// Start panel's order: where (the device, the project `›` the branch), what to
+// do, who (the agent and its model), and Start. The kind and model start from
+// the desktop's remembered choice. The text stays until a start succeeds, so a
+// refusal or a lost connection never costs it.
 
+import { useRef } from "react";
 import { Loader2Icon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
 import { closeStartSheet, editStartSheet, submitStart } from "./connection";
-import { AgentChoice } from "./AgentChoice";
-import { Field, SELECT_CLASS } from "./parts";
 import { noticeText } from "./protocol";
-import { selectionOf, startFailure, startProblem, targetText } from "./start";
+import { OfflineText } from "./OfflineText";
+import { selectionOf, startFailure, startProblem } from "./start";
+import { WhereWords, WhoWords } from "./StartWords";
 import { usePhone } from "./store";
 
 export function StartSheet() {
@@ -25,10 +26,15 @@ export function StartSheet() {
   const tooLong = problem === "too_long";
   const shown = tooLong ? startFailure("too_long") : sheet.error;
   const pending = sheet.pending !== null;
+  const text = useRef<HTMLTextAreaElement>(null);
   const ready = connected && !pending && problem === null && selection.target !== null;
   return (
     <Sheet open={sheet.open} onOpenChange={(open) => !open && closeStartSheet()}>
-      <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-start-sheet="true">
+      <SheetContent side="bottom" className="phone-safe-bottom max-h-full gap-md overflow-y-auto rounded-t-xl px-lg pt-lg pb-lg" data-phone-start-sheet="true" onOpenAutoFocus={(event) => {
+        // The text box takes the keyboard, as it did when it was the sheet's first control.
+        event.preventDefault();
+        text.current?.focus();
+      }}>
         <SheetTitle className="text-headline">{t("mobile.start.title")}</SheetTitle>
         <SheetDescription className="sr-only">{t("mobile.start.description")}</SheetDescription>
         {!connected ? (
@@ -37,10 +43,12 @@ export function StartSheet() {
             <span><OfflineText /></span>
           </p>
         ) : null}
+        <WhereWords catalog={catalog} selection={selection} choice={sheet.choice} disabled={pending} onChange={(choice) => editStartSheet({ choice })} />
         <textarea
+          ref={text}
           value={sheet.text}
           onChange={(event) => editStartSheet({ text: event.target.value })}
-          placeholder={t("mobile.start.prompt")}
+          placeholder={t("shell.instructionPrompt")}
           aria-label={t("mobile.start.task")}
           rows={4}
           autoCorrect="off"
@@ -48,33 +56,7 @@ export function StartSheet() {
           aria-invalid={tooLong || undefined}
           className="min-h-(--size-touch-target) w-full resize-none rounded-lg border border-border bg-input px-md py-sm text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
         />
-        <Field label={t("mobile.start.target")}>
-          <select
-            value={selection.target?.id ?? ""}
-            disabled={!selection.target}
-            onChange={(event) => editStartSheet({ choice: { ...sheet.choice, target: event.target.value } })}
-            data-phone-start-target="true"
-            className={SELECT_CLASS}
-          >
-            {selection.target ? (
-              <>
-                {catalog?.targets.map((target) => (
-                  <option key={target.id} value={target.id} disabled={!target.connected}>
-                    {target.connected ? targetText(t, target, catalog.core_platform) : `${targetText(t, target, catalog.core_platform)} · ${t("mobile.start.targetDisconnected")}`}
-                  </option>
-                ))}
-                {catalog?.omitted ? (
-                  <option value="" disabled data-phone-start-targets-omitted={catalog.omitted}>
-                    {t("mobile.start.targetsOmitted", { count: catalog.omitted })}
-                  </option>
-                ) : null}
-              </>
-            ) : (
-              <option value="">{t("mobile.start.noProject")}</option>
-            )}
-          </select>
-        </Field>
-        <AgentChoice selection={selection} choice={sheet.choice} onChange={(choice) => editStartSheet({ choice })} name="start" />
+        <WhoWords selection={selection} choice={sheet.choice} disabled={pending} onChange={(choice) => editStartSheet({ choice })} />
         {shown ? (
           <p role="alert" className="text-body text-destructive" data-phone-start-error="true">
             {noticeText(t, shown)}

@@ -249,12 +249,13 @@ pub(crate) fn trust_worktree(
     path: &str,
     profile: Option<&hide_agent_adapter::ProfileId>,
 ) -> Result<(), TrustRefusal> {
-    let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
-        let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
-        Some((adapter, agent))
-    }) else {
+    let Some(agent) = hide_agent_hooks::folder_trust::Agent::of_kind(kind) else {
         return Ok(());
     };
+    // The node names the agent by its definition's id, as a profile does.
+    let definition =
+        hide_agent_adapter::definition::find(hide_agent_adapter::definition::builtins(), kind)
+            .expect("a kind whose definition declares a trust file has a definition");
     let node = node.ok_or_else(|| TrustRefusal {
         code: "agent_trust_unavailable",
         detail: "the machine that runs the worktree's pane cannot be reached.".to_owned(),
@@ -262,7 +263,7 @@ pub(crate) fn trust_worktree(
     crate::node_access::call_as::<()>(
         node,
         hide_node_link::protocol::Call::AgentTrust {
-            agent: adapter.id.to_owned(),
+            agent: definition.id.clone(),
             path: path.to_owned(),
             trusted: true,
             profile: profile.cloned(),
@@ -276,7 +277,7 @@ pub(crate) fn trust_worktree(
         code: "agent_trust_failed",
         detail: format!(
             "{}'s trust of {path} could not be recorded ({error})",
-            adapter.label
+            definition.name
         ),
     })
 }
@@ -293,10 +294,7 @@ pub(crate) fn linked_worktree(
     timeout: Duration,
 ) -> Result<bool, TrustRefusal> {
     use hide_node_link::cleanup::RepositoryDirs;
-    let asks = hide_agent_adapter::adapter(kind)
-        .and_then(|adapter| adapter.start)
-        .and_then(hide_agent_hooks::folder_trust::Agent::of)
-        .is_some();
+    let asks = hide_agent_hooks::folder_trust::Agent::of_kind(kind).is_some();
     if !asks {
         return Ok(false);
     }
@@ -1823,6 +1821,57 @@ mod tests {
                 .unwrap_err()
                 .code
                 == "agent_trust_unavailable"
+        );
+    }
+
+    /// Qwen Code is known only by its definition file, which declares its
+    /// trust file: a spawn into a linked worktree records its trust there as
+    /// it does an agent with Hide's own features (with-hide/hide#2917).
+    #[test]
+    fn qwen_code_has_a_worktree_trusted_from_its_definition_before_it_starts() {
+        struct Repository;
+        impl crate::node_access::NodeLink for Repository {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let hide_node_link::protocol::Call::Repository { path } = call else {
+                    panic!("unexpected call {call:?}");
+                };
+                Ok(crate::node_access::LinkAnswer::Parsed(serde_json::json!({
+                    "root": path,
+                    "git_dir": "/srv/repo/.git/worktrees/topic",
+                    "common_dir": "/srv/repo/.git",
+                })))
+            }
+        }
+        // The spawn asks whether the folder is a linked worktree only for
+        // an agent that asks whether to trust it.
+        assert!(
+            linked_worktree(
+                Some(&Repository),
+                "qwen",
+                "/srv/repo.worktrees/topic",
+                Duration::from_secs(1)
+            )
+            .unwrap()
+        );
+        let home = tempfile::tempdir().unwrap();
+        let node = hide_node::Local::new(Some(home.path().to_path_buf()));
+        let tree = home.path().join("tree");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        std::fs::write(tree.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let wire = hide_platform::path::to_wire(&tree).unwrap();
+        trust_worktree(Some(&node), "qwen", &wire, None).unwrap();
+        let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(home.path().join(".qwen/trustedFolders.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            written,
+            serde_json::json!({ resolved.to_str().unwrap(): "TRUST_FOLDER" })
         );
     }
 }

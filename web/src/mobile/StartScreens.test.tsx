@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { TFunction } from "i18next";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { AddScreen, FirstScreen, StartSettings } from "./StartScreens";
+import { AddChoice, AddScreen, FirstScreen, StartSettings } from "./StartScreens";
 
 let root: Root;
 let host: HTMLElement;
@@ -51,4 +51,20 @@ it("the add page folds the pasted link under the scan, says when the browser is 
   expect(back).toBe(1);
   await act(async () => root.render(<AddScreen t={t} full onBack={() => {}} onPair={() => {}} />));
   expect(host.querySelector("[data-phone-add-full]")?.textContent).toBe("mobile.relay.limit");
+});
+
+it("기기 추가 asks what is added: a computer goes on to its QR page, an SSH server only says where it is added", async () => {
+  const calls: string[] = [];
+  await act(async () => root.render(<AddChoice t={t} onBack={() => calls.push("back")} onComputer={() => calls.push("computer")} />));
+  const computer = host.querySelector<HTMLElement>('[data-phone-add-kind="computer"]')!;
+  const server = host.querySelector<HTMLElement>('[data-phone-add-kind="server"]')!;
+  expect(computer.tagName).toBe("BUTTON");
+  expect(computer.textContent).toContain("mobile.add.computerBody");
+  expect(server.textContent).toContain("mobile.add.serverBody");
+  // Nothing on the phone adds a server: its choice holds no press.
+  expect(server.querySelector("button")).toBeNull();
+  expect(server.tagName).not.toBe("BUTTON");
+  computer.click();
+  host.querySelector<HTMLElement>('[data-phone-back="add-choice"]')!.click();
+  expect(calls).toEqual(["computer", "back"]);
 });

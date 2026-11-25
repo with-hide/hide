@@ -33,6 +33,7 @@ hook_trust = false
 plugins = false
 skills = "shared"
 folder_trust = "{GROK_HOME}/trusted_folders.toml"
+folder_trust_format = "grok"
 sessions = "{GROK_HOME}/sessions"
 login = "{GROK_HOME}/auth.json"
 state = "{GROK_HOME}"

@@ -1021,8 +1021,8 @@ pub(crate) fn reports(
 }
 
 /// Takes every Hide piece off a machine: each guidance hook's marked
-/// entries, each unedited script file of Hide's and each skill stub that is
-/// Hide's.
+/// entries, each unedited script file of Hide's, each skill stub that is
+/// Hide's and the folder trust Hide recorded.
 pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
     let mut outcomes = Vec::new();
     for adapter in ADAPTERS {
@@ -1051,7 +1051,36 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
         outcomes.push((skill_code(dir), outcome));
     }
     outcomes.extend(retired_agents::remove(target));
+    outcomes.extend(remove_folder_trust(target));
     outcomes
+}
+
+/// Takes out the folder trust Hide recorded in the account's default
+/// account, for every writer (`folder_trust::Agent::ALL`): each agent whose
+/// definition declares a trust file, whether or not it has a hook or plugin
+/// of its own whose removal took its trust already (Qwen Code has neither).
+/// Codex's entries go through a Codex; with none, they stay, as with its
+/// hook (`hooks::remove`).
+fn remove_folder_trust(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    Agent::ALL
+        .into_iter()
+        .filter(|agent| *agent != Agent::Codex || target.codex.is_some())
+        .map(|agent| {
+            let tools = Tools {
+                codex: target.codex.as_ref(),
+                stop: &target.stop,
+            };
+            let outcome = match folder_trust::forget_all(agent, &target.home, tools) {
+                Ok(0) => RemoveOutcome::Absent,
+                Ok(_) => RemoveOutcome::Removed,
+                Err(failure) => RemoveOutcome::Failed {
+                    reason: failure.message(),
+                },
+            };
+            (format!("trust:{}", agent.code()), outcome)
+        })
+        .collect()
 }
 
 /// The kit parts' reports, in the shape [`apply`] and [`status`] take.

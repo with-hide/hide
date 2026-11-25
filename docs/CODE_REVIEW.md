@@ -25,8 +25,10 @@ So every review covers the perspectives below, and names the perspective of each
 - The same fact or decision computed in two or more places, or the same file read by two separate copies of its parser.
   One decision has one owner; every caller asks that owner.
 - A new function that is most of an existing one; extend the existing one for the callers that exist now instead.
+- A parallel copy of a component, helper, table or event the project already has: the reviewer searches for a sibling (`rg`) before approving new code that does the same job, and names the one to reuse.
 - Two implementations of one boundary (two engines, two hosts, two systems) that each carry their own copy of a shared rule instead of calling one place.
 - A fix that adds a special case for the instance in front of it (a second string match, threshold, delay or hardcoded value for a decision that already has one), above all when the same kind of bug has come back before: fix the common cause and model the state instead of adding a case.
+- A branch that sends a device or remote case down a weaker path than this machine's (an opt-out flag, a skipped check, a missing limit) is a finding unless `docs/INSTALL.md`, What each system supports, names the gap in its cell and a device-lane test holds it; a node link that could skip its silence limit kept a device's panes from coming back (with-hide/hide#2882).
 
 ### 3. Simplicity
 
@@ -45,6 +47,7 @@ So every review covers the perspectives below, and names the perspective of each
 ### 5. Ownership and limits
 
 - Whatever the change starts (a process, a thread, a timer, a watcher, a file, a connection) has an owner and ends on every exit path, and when that owner ends.
+- A state that waits on another's event (a lock, an answer, a peer's next byte) says what ends it and logs once when it passes its bound; a wait nothing ends is a finding.
 - Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and it never grows past that cap.
   At the cap, a record that keeps accumulating (agent registrations, the session archive, closed missions) makes room by dropping its oldest finished entries, with a diagnostic, rather than refusing the new one; new work is refused, as a reported failure, only when nothing finished can be dropped ([delivery.md](delivery.md), [ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 - A cap added or changed says in its doc comment or the pull request what it counts and what each path does when it is full ([Reviewing a cap](#reviewing-a-cap)).
@@ -54,12 +57,22 @@ So every review covers the perspectives below, and names the perspective of each
 
 - A test asserts what a caller observes, with the expected answer taken from outside the implementation.
 - A test that costs more to keep than it returns, or that would still pass with the fix reverted, is a finding.
+- A mission plan's verification row that rests on a weaker check than its claim needs (a unit test for a flow a user performs, an isolated-app row missing on a node that changes what a user runs) is an ordinary finding; `docs/VERIFICATION.md`, Pick the check by the claim, names the check each claim needs.
 - A bug fix comes with a test that fails without it and covers the kind of bug, not only the reported case, so the same bug cannot come back unseen; a fix without one is a finding.
 - A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
 - An end-to-end test names the user flow it protects and why a cheaper layer cannot observe it; a spec without both is an ordinary finding.
 - A new or changed test comes with its repeat result in the pull request's folded `Tests` block (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
 - A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
+
+### 7. Every agent, system and host
+
+`AGENTS.md`, Every Agent And Feature On Every System, owns the rule; a review checks the change against it.
+
+- Logic outside an agent's definition file (`hide-agent-adapter/agents/*.toml` and what reads it) that names one agent (`claude`, `codex`, `gemini`...): adding another agent must need a definition and no new branch.
+- A macOS, Windows or Linux difference written inline instead of once in its layer (`hide-platform`, `desktop/src/main/`), or a feature that works on this machine's pane and not on a pane of a connected device.
+- A gap on a system or a device that has no cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it.
+- `gh`, `glab`, GitHub or GitLab words in core logic outside the host interface: GitLab and a later Bitbucket should need an adapter and nothing else.
 
 ### Reviewing a cap
 

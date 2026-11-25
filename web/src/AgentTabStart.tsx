@@ -37,6 +37,9 @@ export function InlineStartHost() {
       for (const { device, path, receipt } of receipts) {
         if (useInlineStarts.getState().retired.has(receipt.request_id) || movedFailures.has(receipt.request_id)) continue;
         if (receipt.state === "ready" && (!receipt.agent_phase || receipt.agent_phase === "started")) continue;
+        // A start that made a live tab is answered by that tab's terminal, never
+        // a form over it (`AgentAreas`), so only a start with no pane gets its form back.
+        if (receipt.live_tab_id !== null) continue;
         const target = receiptTarget(receipt);
         const key = inlineStartKey(device, path, target);
         if (store.retarget(device, path, receipt.request_id, target) || useInlineStarts.getState().drafts[key]) continue;
@@ -115,7 +118,7 @@ export function AgentTabStart({ workspace, target, groupName, actions }: { works
   const failure = draft.failure ? "key" in draft.failure ? t(draft.failure.key) : draft.failure.message : null;
   return <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-lg" data-agent-tab-start={target.tab_id ?? "empty"}>
     <div className="flex w-full max-w-(--size-worktree-dialog) flex-col gap-md">
-      <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.add_pane ? "groups.addAgent" : target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2></div></div>
+      <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2></div></div>
       <div className="overflow-hidden rounded-lg border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
         <textarea rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? draft.phase : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composingKey(event)) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
         <div className="flex flex-wrap items-center justify-between gap-sm px-sm pb-sm"><AgentPicker actions={actions} value={draft.selection} onChange={(selection) => update({ ...draft, selection, phase: "editing", failure: null })} disabled={locked} /><Button disabled={!connected || busy || terminalIntent || draft.selection.kind === "terminal"} onClick={() => start(false)} data-group-start-agent="true">{t(busy ? "shell.starting" : "common.start")}</Button></div>

@@ -449,11 +449,17 @@ use crate::error::HostError;
 /// failed commands, so it is refused at Hello and upgraded with its core.
 /// The list read asks `mergeable` from 102 on, so a 101 node's allow-list
 /// would refuse that query too.
-/// 103: a start's first input reaches the agent through a private file of
+/// 103: both ends of every node link write `crate::liveness::PING_LINE` every
+/// `crate::liveness::HEARTBEAT` and end the link after
+/// `crate::liveness::HEARTBEAT_LIMIT` without a byte from the other. A node on
+/// 102 reads the core's ping as a request it cannot read and keeps a link
+/// whose core went silent, holding its pane ownership, so it is refused at
+/// Hello and upgraded with its core.
+/// 104: a start's first input reaches the agent through a private file of
 /// the pane's node (`PromptFile`, `PromptFileRemove`), which the start line
-/// reads, so the text never crosses the pane's shell; a node on 102 does not
+/// reads, so the text never crosses the pane's shell; a node on 103 does not
 /// know the calls, so it is refused at Hello and upgraded with its core.
-pub const PROTOCOL_VERSION: u32 = 103;
+pub const PROTOCOL_VERSION: u32 = 104;
 
 /// The longest text a prompt file holds ([`Call::PromptFile`]): a start's
 /// first input, `hide-core`'s 64 KiB with room to spare.

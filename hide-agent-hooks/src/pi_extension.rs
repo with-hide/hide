@@ -60,15 +60,9 @@ pub const OMP: PluginFile = PluginFile {
     ],
 };
 
-pub const PI_PLUGIN: Plugin = Plugin {
-    files: &[PI],
-    trust: Some(crate::folder_trust::Agent::Pi),
-};
+pub const PI_PLUGIN: Plugin = Plugin { files: &[PI] };
 
-pub const OMP_PLUGIN: Plugin = Plugin {
-    files: &[OMP],
-    trust: None,
-};
+pub const OMP_PLUGIN: Plugin = Plugin { files: &[OMP] };
 
 #[cfg(test)]
 mod tests {

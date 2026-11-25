@@ -6,7 +6,7 @@
 use crate::support::remote_delivery as fixture;
 
 use anyhow::{Context, Result, ensure};
-use fixture::{Fixture, hook_diagnostics, quote, wait_for};
+use fixture::{Fixture, hook_diagnostics, quote, wait_for, wait_within};
 use hide_core::delivery::ledger::State;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -551,6 +551,47 @@ fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
     }
 }
 
+/// Runs `spawn`, a `hide agent spawn --machine` of the device, in the local
+/// agent's pane, and reports `session` from the pane it starts on the device
+/// as a real provider's hook does as soon as it starts: the fixture provider
+/// reports no native session of its own, and the spawn finishes only once
+/// one is reported. Answers the command's output and the device pane, if
+/// one started.
+fn spawn_on_device(
+    fixture: &mut Fixture,
+    spawn: &str,
+    session: &str,
+) -> Result<(fixture::PaneOutput, Option<String>)> {
+    let before = fixture::ready_panes(&fixture.remote.environment.home)?;
+    let finished = AtomicBool::new(false);
+    let (local, remote) = (&mut fixture.local, &mut fixture.remote);
+    std::thread::scope(|scope| {
+        let reporter = scope.spawn(|| -> Result<Option<String>> {
+            let pane = wait_for("the spawned agent's pane on the device", || {
+                if finished.load(Ordering::Relaxed) {
+                    return Ok(Some(None));
+                }
+                let ready = fixture::ready_panes(&remote.environment.home)?;
+                Ok(ready
+                    .into_iter()
+                    .find(|pane| !before.contains(pane))
+                    .map(Some))
+            })?;
+            if let Some(pane) = &pane {
+                remote.report_session(&remote.core_pane(pane), session)?;
+            }
+            Ok(pane)
+        });
+        let output = local.run_in_pane(spawn);
+        finished.store(true, Ordering::Relaxed);
+        let reported = reporter
+            .join()
+            .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
+        let output = output?;
+        Ok::<_, anyhow::Error>((output, reported?))
+    })
+}
+
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Result<()> {
@@ -562,37 +603,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             quote(&fixture.hide),
             quote(&project)
         );
-        // The fixture provider reports no native session of its own, which a
-        // real provider's hook does as soon as it starts. Report it from the
-        // pane Hide starts on the device so the spawn can finish.
-        let before = fixture::ready_panes(&fixture.remote.environment.home)?;
-        let finished = AtomicBool::new(false);
-        let (local, remote) = (&mut fixture.local, &mut fixture.remote);
-        let (first, spawned) = std::thread::scope(|scope| {
-            let reporter = scope.spawn(|| -> Result<Option<String>> {
-                let pane = wait_for("the spawned agent's pane on the device", || {
-                    if finished.load(Ordering::Relaxed) {
-                        return Ok(Some(None));
-                    }
-                    let ready = fixture::ready_panes(&remote.environment.home)?;
-                    Ok(ready
-                        .into_iter()
-                        .find(|pane| !before.contains(pane))
-                        .map(Some))
-                })?;
-                if let Some(pane) = &pane {
-                    remote.report_session(&remote.core_pane(pane), "fixture-spawned-session")?;
-                }
-                Ok(pane)
-            });
-            let output = local.run_in_pane(&spawn);
-            finished.store(true, Ordering::Relaxed);
-            let reported = reporter
-                .join()
-                .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
-            let output = output?;
-            Ok::<_, anyhow::Error>((output, reported?))
-        })?;
+        let (first, spawned) = spawn_on_device(fixture, &spawn, "fixture-spawned-session")?;
         ensure!(
             first.status == 0,
             "remote spawn refused: {} {}",
@@ -890,6 +901,143 @@ fn briefed_start(fixture: &mut Fixture, brief: &str, on_device: bool) -> Result<
             .then_some(()))
     })?;
     Ok(())
+}
+
+/// How many lines of the daemon's diagnostic log at `state` are of `kind`.
+fn logged(state: &std::path::Path, kind: &str) -> Result<usize> {
+    let path = state.join("Logs/core.jsonl");
+    if !path.exists() {
+        return Ok(0);
+    }
+    Ok(String::from_utf8(fixture::read(&path)?)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["kind"] == kind)
+        .count())
+}
+
+/// The last line of the daemon's diagnostic log at `state` that is of
+/// `kind`, for a failure to name.
+fn last_logged(state: &std::path::Path, kind: &str) -> String {
+    let text = fixture::read(&state.join("Logs/core.jsonl")).unwrap_or_default();
+    String::from_utf8_lossy(&text)
+        .lines()
+        .rfind(|line| line.contains(&format!("\"kind\":\"{kind}\"")))
+        .unwrap_or("none")
+        .to_owned()
+}
+
+/// with-hide/hide#2882: a device link died without its close reaching the
+/// device (the Mac roamed off its Wi-Fi, and the server kept the connection
+/// for fifteen minutes), Hide connected again, and the new link's node
+/// waited out its two minutes for the pane ownership the old link's node
+/// still held: the device's panes never came back and every spawn there
+/// failed. Every node now ends a link whose core sent nothing for
+/// `HEARTBEAT_LIMIT`, so the old one lets go well inside that wait. The
+/// fixture's relay makes the connection half-open, as the network did: no
+/// byte crosses and no close reaches the server.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_device_link_cut_without_a_close_gives_its_panes_to_the_next_link() -> Result<()> {
+    use hide_node_link::liveness::HEARTBEAT_LIMIT;
+    /// How long the next link's node waits for the pane ownership before
+    /// its restore fails (`hide_core::engine::own::restore`, `RECOVERY_WAIT`).
+    const RECOVERY_WAIT: Duration = Duration::from_secs(120);
+    Fixture::journey(|fixture| {
+        // Sleep off: the stand-ins' conversations are dated long ago, so the
+        // idle rule ends the local caller while the cut link waits out its
+        // limit, and its next command never runs; the journey's subject is
+        // the link, not sleep.
+        fixture.event("agent_sleep_set", serde_json::json!({"after_hours": null}))?;
+        let project = fixture.commit_remote_project()?;
+        fixture.agent_ready_on_device("claude-code", ".claude")?;
+        let state = fixture.state.clone();
+        let closed = logged(&state, "host.closed")?;
+        let ready = logged(&state, "host.ready")?;
+        let restored = logged(&state, "engine.restored")?;
+        let unfinished = logged(&state, "engine.restore_unfinished")?;
+
+        fixture.network.cut();
+        // The core hears nothing from its node either, and ends its link.
+        wait_within(
+            "the core to end the cut link",
+            HEARTBEAT_LIMIT + Duration::from_secs(30),
+            || Ok((logged(&state, "host.closed")? > closed).then_some(())),
+        )?;
+        fixture.reconnect_device()?;
+        wait_within(
+            "the device's panes restored on the next link",
+            RECOVERY_WAIT + Duration::from_secs(60),
+            || {
+                ensure!(
+                    logged(&state, "engine.restore_unfinished")? == unfinished,
+                    "the next link's restore did not finish: {}",
+                    last_logged(&state, "engine.restore_unfinished")
+                );
+                Ok((logged(&state, "engine.restored")? > restored).then_some(()))
+            },
+        )?;
+        ensure!(
+            logged(&state, "host.ready")? > ready,
+            "the panes were restored with no new link"
+        );
+        let restore: Value = serde_json::from_str(&last_logged(&state, "engine.restored"))?;
+        ensure!(
+            restore["adopted"]
+                .as_u64()
+                .is_some_and(|adopted| adopted >= 1),
+            "the next link did not take the device's running pane back: {restore}"
+        );
+
+        // The device's pane answers through the core again.
+        let read = fixture.local.run_in_pane(&format!(
+            "{} pane read {}",
+            quote(&fixture.hide),
+            quote(&fixture.remote.pane)
+        ))?;
+        ensure!(
+            read.status == 0,
+            "the device's pane did not answer after the restore: {} {}",
+            read.stdout,
+            read.stderr
+        );
+
+        // A spawn on the device starts its agent, and the same command
+        // again returns that agent.
+        let spawn = format!(
+            "{} agent spawn --parent here --machine remote --name after-cut --intent spawn-after-cut --kind claude --repo {} --branch after-cut",
+            quote(&fixture.hide),
+            quote(&project)
+        );
+        let (first, spawned) = spawn_on_device(fixture, &spawn, "fixture-after-cut-session")?;
+        ensure!(
+            first.status == 0,
+            "the spawn after the cut was refused: {} {}",
+            first.stdout,
+            first.stderr
+        );
+        spawned.context("the spawned agent's pane on the device")?;
+        let child = |ledger: &hide_core::delivery::ledger::Ledger| {
+            let records: Vec<_> = ledger
+                .spawns
+                .iter()
+                .filter(|record| record.intent == "spawn-after-cut")
+                .collect();
+            match records.as_slice() {
+                [record] => record.child.clone(),
+                _ => None,
+            }
+        };
+        let started = child(&fixture.ledger()?).context("the spawn's one finished record")?;
+        let again = fixture.local.run_in_pane(&spawn)?;
+        ensure!(
+            again.status == 0 && child(&fixture.ledger()?) == Some(started),
+            "the same spawn again did not return the same agent: {} {}",
+            again.stdout,
+            again.stderr
+        );
+        Ok(())
+    })
 }
 
 /// `hide <path>` from a plain shell on the device, an ssh login with no

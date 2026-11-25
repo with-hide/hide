@@ -1,13 +1,14 @@
-//! The helper's request loop: JSON lines in, JSON lines out, until the input
-//! ends. The input is the SSH channel, so the helper lives exactly as long as
-//! the connection that started it (PRD S5.5 D-20).
+//! The helper's request loop: JSON lines in, JSON lines out, until the link
+//! ends: its input ends, its output fails, or the core falls silent. The
+//! input is the SSH channel, so the helper lives exactly as long as the
+//! connection that started it (PRD S5.5 D-20).
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use serde_json::Value;
 
@@ -18,6 +19,7 @@ use crate::protocol::{
 };
 use crate::root::{Root, relative_path};
 use crate::{bytes, document, git, index, list, mutate, save, worktrees};
+use hide_node_link::liveness::{Liveness, PING_LINE};
 use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 
 /// Requests the helper works on at once; the core also admits at most this
@@ -76,22 +78,27 @@ pub trait Terminals: Send + Sync {
     fn stop(&self);
 }
 
-pub fn serve(input: impl BufRead, output: impl Write + Send) -> io::Result<()> {
-    serve_in(input, output, Env::of_process(), Services::none())
+pub fn serve(
+    input: impl Read,
+    output: impl Write + Send + 'static,
+    end: LinkEnd,
+) -> io::Result<()> {
+    serve_in(input, output, Env::of_process(), Services::none(end))
 }
 
-/// [`serve`] with the node's terminal service.
+/// [`serve`] with the node's terminal service, for a node whose process is
+/// its link (`LinkEnd::Process`).
 pub fn serve_with_terminals(
-    input: impl BufRead,
-    output: impl Write + Send,
+    input: impl Read,
+    output: impl Write + Send + 'static,
     terminals: &dyn Terminals,
 ) -> io::Result<()> {
     serve_with(
         input,
         output,
         Services {
+            end: LinkEnd::Process,
             terminals: Some(terminals),
-            heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
             browser: None,
@@ -106,14 +113,29 @@ pub fn serve_with_terminals(
     )
 }
 
+/// How a node ends its link once the link is gone while a read or a write
+/// of it may still wait (the core fell silent, or a write failed): a dead
+/// connection returns neither, so the link ends by ending the connection
+/// under them.
+pub enum LinkEnd {
+    /// The process is the link (`hided node serve` on its standard input
+    /// and output, which no thread of it can end): the link's end steps
+    /// run, its pane ownership let go with them, and the process exits.
+    Process,
+    /// Shuts the link's connection, so its blocked read returns the end and
+    /// its blocked writes fail, as `hide_platform::ipc::ShutdownHandle`
+    /// does on every system; the node also shuts it once its link ended
+    /// any other way.
+    Shut(Box<dyn Fn() + Send + Sync>),
+}
+
 /// What a node serves on its link besides its files and machine work.
 pub struct Services<'a> {
+    /// How the node ends its link once the link is gone; every link has
+    /// one.
+    pub end: LinkEnd,
     /// The node's terminal service.
     pub terminals: Option<&'a dyn Terminals>,
-    /// Whether the node says it is alive every
-    /// [`hide_node_link::panes::HEARTBEAT`]: a node that dialed its core,
-    /// whose attach role ends a link that falls silent.
-    pub heartbeat: bool,
     /// Whether a caller in no pane is proved by its working directory
     /// instead, as the core's own machine proves one: the screen machine's
     /// node, whose agents' tools may run outside any pane. A device the
@@ -200,10 +222,10 @@ impl OpenedRoots {
 
 impl Services<'_> {
     /// Files and machine work only.
-    pub fn none() -> Self {
+    pub fn none(end: LinkEnd) -> Self {
         Self {
+            end,
             terminals: None,
-            heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
             browser: None,
@@ -216,16 +238,16 @@ impl Services<'_> {
 
 /// [`serve`] with what `services` names.
 pub fn serve_with(
-    input: impl BufRead,
-    output: impl Write + Send,
+    input: impl Read,
+    output: impl Write + Send + 'static,
     services: Services<'_>,
 ) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), services)
 }
 
 fn serve_in(
-    input: impl BufRead,
-    output: impl Write + Send,
+    input: impl Read,
+    output: impl Write + Send + 'static,
     env: Env,
     services: Services<'_>,
 ) -> io::Result<()> {
@@ -256,13 +278,23 @@ fn serve_in(
         None => env,
     };
     let terminals = services.terminals;
-    let heartbeat = services.heartbeat;
     let opened_roots = services.opened_roots;
-    // Ends the heartbeat when the input does.
-    let input_ended = (Mutex::new(false), std::sync::Condvar::new());
+    let end = services.end;
+    // When the core was last heard, and the link's watch and pinger
+    // (`hide_node_link::liveness`); a failed write tells the watch.
+    let liveness = Arc::new(Liveness::new());
+    let link_output = Arc::new(Mutex::new(LinkOutput {
+        output,
+        liveness: Arc::clone(&liveness),
+    }));
+    let mut input = io::BufReader::new(LinkInput {
+        input,
+        liveness: &liveness,
+    });
+    start_pinger(&link_output, &liveness)?;
+    let output = &*link_output;
     let link = crate::link_bridge::LinkBridge::new(services.browser);
     let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
-    let output = Mutex::new(output);
     // The calls handed to a worker and not yet answered, each with whether
     // it was asked to stop; the reader enters one before handing it over, so
     // a cancel that arrives first still reaches it.
@@ -287,37 +319,70 @@ fn serve_in(
     let control_receiver = Arc::new(Mutex::new(control_receiver));
     let background_receiver = Arc::new(Mutex::new(background_receiver));
     let pane_receiver = Arc::new(Mutex::new(pane_receiver));
-    let result = std::thread::scope(|scope| {
-        if let Some(terminals) = terminals {
-            let output = &output;
-            scope.spawn(move || {
-                // One line per turn of the output lock, so an answer waits
-                // behind at most one terminal line.
-                while let Some(line) = terminals.next_up() {
-                    if write_raw(output, &line).is_err() {
-                        terminals.stop();
-                        return;
-                    }
+    // The link's end steps, run once, by whichever finds the end first: the
+    // request loop once its input ended, or the watch of a node whose
+    // process is its link, which exits after them.
+    let stopped = std::sync::Once::new();
+    let stop_link = || {
+        stopped.call_once(|| {
+            // The connection is gone: the terminal sessions end with it, so
+            // no attach child outlives the link that asked for it (D-20,
+            // B20).
+            if let Some(terminals) = terminals {
+                terminals.stop();
+            }
+            // Each link stream's reader ends with its connection, and a
+            // request staged in part goes with it, a file being written once
+            // it is.
+            link.stop();
+            staging.end();
+            // A kit step still running ends its child rather than keep the
+            // helper alive after it, and the pane service ends its listener
+            // and streams so the scope can close.
+            env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            // A resident node's ownership of its panes is the node's, not
+            // this link's.
+            if !resident_panes {
+                env.panes.close();
+            }
+            panes.stop();
+        });
+    };
+    // The link's watch runs until every other thread of the link ended, so
+    // a write still stuck on a dead connection ends with the link.
+    let result =
+        std::thread::scope(|watching| {
+            watching.spawn(|| watch_link(&liveness, &end, &stop_link, &panes));
+            let _ending = Ending(&liveness);
+            std::thread::scope(|scope| {
+                if let Some(terminals) = terminals {
+                    scope.spawn(move || {
+                        // One line per turn of the output lock, so an answer waits
+                        // behind at most one terminal line.
+                        while let Some(line) = terminals.next_up() {
+                            if write_raw(output, &line).is_err() {
+                                terminals.stop();
+                                return;
+                            }
+                        }
+                    });
                 }
-            });
-        }
-        let lanes = std::iter::repeat_n(&receiver, CONCURRENCY)
-            .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY))
-            .chain(std::iter::repeat_n(
-                &background_receiver,
-                BACKGROUND_CONCURRENCY,
-            ))
-            .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
-        for receiver in lanes {
-            let receiver = Arc::clone(receiver);
-            let output = &output;
-            let panes = &panes;
-            let bridges = &bridges;
-            let env = &env;
-            let running = &running;
-            let link = &link;
-            let staging = &staging;
-            scope.spawn(move || {
+                let lanes = std::iter::repeat_n(&receiver, CONCURRENCY)
+                    .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY))
+                    .chain(std::iter::repeat_n(
+                        &background_receiver,
+                        BACKGROUND_CONCURRENCY,
+                    ))
+                    .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
+                for receiver in lanes {
+                    let receiver = Arc::clone(receiver);
+                    let panes = &panes;
+                    let bridges = &bridges;
+                    let env = &env;
+                    let running = &running;
+                    let link = &link;
+                    let staging = &staging;
+                    scope.spawn(move || {
                 loop {
                     let request = match receiver.lock().map(|receiver| receiver.recv()) {
                         Ok(Ok(request)) => request,
@@ -418,66 +483,81 @@ fn serve_in(
                     }
                 }
             });
-        }
-        drop(receiver);
-        drop(control_receiver);
-        drop(background_receiver);
-        drop(pane_receiver);
-        if heartbeat {
-            let output = &output;
-            let input_ended = &input_ended;
-            scope.spawn(move || {
-                let (ended, wake) = input_ended;
-                let mut ended = lock(ended);
-                loop {
-                    let (guard, _) = wake
-                        .wait_timeout(ended, hide_node_link::panes::HEARTBEAT)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    ended = guard;
-                    if *ended
-                        || write_line(output, &hide_node_link::panes::NodeEvent::Ping).is_err()
-                    {
-                        return;
-                    }
                 }
-            });
-        }
-        let result = read_requests(
-            input,
-            [&sender, &control_sender, &background_sender, &pane_sender],
-            &output,
-            &running,
-            terminals,
-        );
-        *lock(&input_ended.0) = true;
-        input_ended.1.notify_all();
-        drop(sender);
-        drop(control_sender);
-        drop(background_sender);
-        drop(pane_sender);
-        // The connection is gone: the terminal sessions end with it, so no
-        // attach child outlives the link that asked for it (D-20, B20).
-        if let Some(terminals) = terminals {
-            terminals.stop();
-        }
-        // Each link stream's reader ends with its connection, and a request
-        // staged in part goes with it, a file being written once it is.
-        link.stop();
-        staging.end();
-        // The connection is gone: a kit step still running ends its child
-        // rather than keep the helper alive after it, and the pane service
-        // ends its listener and streams so the scope can close.
-        env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // A resident node's ownership of its panes is the node's, not this
-        // link's.
-        if !resident_panes {
-            env.panes.close();
-        }
-        panes.stop();
-        result
-    });
+                drop(receiver);
+                drop(control_receiver);
+                drop(background_receiver);
+                drop(pane_receiver);
+                let result = read_requests(
+                    &mut input,
+                    [&sender, &control_sender, &background_sender, &pane_sender],
+                    output,
+                    &running,
+                    terminals,
+                );
+                // A link its watch ended says why.
+                let result = match liveness.gone() {
+                    Some(gone) => Err(gone.error("the core")),
+                    None => result,
+                };
+                drop(sender);
+                drop(control_sender);
+                drop(background_sender);
+                drop(pane_sender);
+                stop_link();
+                // What the core asked before its input ended is answered while the
+                // link carries it, and written before this returns, since a node
+                // whose process is its link exits then; on a link that carries
+                // nothing, the watch ends the writes still waiting.
+                result
+            })
+        });
+    // The link's connection ends with it, whichever end ended it.
+    if let LinkEnd::Shut(shut) = &end {
+        shut();
+    }
     panes.remove_folder();
     result
+}
+
+/// Watches the link until it ends (`Liveness::watch`), and ends a link
+/// found gone its owner's way (`LinkEnd`).
+fn watch_link(
+    liveness: &Liveness,
+    end: &LinkEnd,
+    stop_link: &(impl Fn() + Sync),
+    panes: &crate::panes::Panes,
+) {
+    liveness.watch(|gone| match end {
+        // Its standard error is the same dead connection, where a record
+        // could hold the exit; the core records the link's end.
+        LinkEnd::Process => {
+            stop_link();
+            panes.remove_folder();
+            std::process::exit(1);
+        }
+        LinkEnd::Shut(shut) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "node",
+                    "kind": "link.gone",
+                    "reason": gone.error("the core").to_string(),
+                })
+            );
+            shut();
+        }
+    });
+}
+
+/// Ends a link's liveness when dropped, on a panic's unwind too, so the
+/// link's watch and pinger never outlive it.
+struct Ending<'a>(&'a Liveness);
+
+impl Drop for Ending<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
 }
 
 /// Where this machine shows the Windows PC's drives, for `Hello` and for a
@@ -510,31 +590,140 @@ pub fn windows_drives() -> Option<String> {
     }
 }
 
-/// Reads requests and hands each to its lane: `[machine, control,
-/// background, pane]`.
-fn read_requests(
-    mut input: impl BufRead,
-    [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
-    output: &Mutex<impl Write>,
-    running: &Mutex<HashMap<u64, bool>>,
-    terminals: Option<&dyn Terminals>,
+/// The link's input as the node reads it: each read of the connection that
+/// brings bytes is heard (`Liveness::hear`), so a line still arriving keeps
+/// the link alive, once per read under the node's buffer rather than once
+/// per line.
+struct LinkInput<'a, R> {
+    input: R,
+    liveness: &'a Liveness,
+}
+
+impl<R: Read> Read for LinkInput<'_, R> {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        let read = self.input.read(into)?;
+        if read > 0 {
+            self.liveness.hear();
+        }
+        Ok(read)
+    }
+}
+
+/// The link's output as the node writes it: a write that fails tells the
+/// link's watch, which ends the link even while the core still writes.
+/// Every line is written with one `write_all` under the output's lock
+/// (`write_line`, `write_raw`, `crate::panes::write_event`), so a line is
+/// never cut by another.
+struct LinkOutput<W> {
+    output: W,
+    liveness: Arc<Liveness>,
+}
+
+impl<W> LinkOutput<W> {
+    fn failed<T>(&self, written: io::Result<T>) -> io::Result<T> {
+        if let Err(error) = &written
+            && error.kind() != io::ErrorKind::Interrupted
+        {
+            self.liveness.fail(error);
+        }
+        written
+    }
+}
+
+impl<W: Write> Write for LinkOutput<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.output.write(bytes);
+        self.failed(written)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let written = self.output.write_all(bytes);
+        self.failed(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let flushed = self.output.flush();
+        self.failed(flushed)
+    }
+}
+
+/// Starts the link's pinger (`Liveness::pinger`) on a thread of its own: it
+/// writes a ping only while no other line is being written, since a line
+/// being written says as much, and a write stuck on a dead connection holds
+/// the output, where the core's own silence limit ends the link. The thread
+/// is the link's: it returns once the link ends, and a ping stuck in its
+/// write ends with the connection (`LinkEnd`).
+fn start_pinger<W: Write + Send + 'static>(
+    output: &Arc<Mutex<LinkOutput<W>>>,
+    liveness: &Arc<Liveness>,
 ) -> io::Result<()> {
+    let output = Arc::clone(output);
+    let liveness = Arc::clone(liveness);
+    std::thread::Builder::new()
+        .name("node-link-ping".into())
+        .spawn(move || {
+            liveness.pinger(|| {
+                let mut output = match output.try_lock() {
+                    Ok(output) => output,
+                    Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                    Err(TryLockError::WouldBlock) => return true,
+                };
+                output
+                    .write_all(PING_LINE)
+                    .and_then(|()| output.flush())
+                    .is_ok()
+            });
+        })
+        .map(drop)
+}
+
+/// One whole line, newline included, or what is left of the input when it
+/// ends without one; `None` at its end.
+fn read_line(input: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
     loop {
-        line.clear();
-        let read = input
-            .by_ref()
-            .take(MAX_REQUEST_BYTES as u64 + 1)
-            .read_until(b'\n', &mut line)?;
-        if read == 0 {
-            return Ok(());
+        let available = match input.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then_some(line));
         }
+        let (taken, whole) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(end) => (end + 1, true),
+            None => (available.len(), false),
+        };
+        line.extend_from_slice(&available[..taken]);
+        input.consume(taken);
         if line.len() > MAX_REQUEST_BYTES {
             // The rest of the line cannot be framed; the channel is unusable.
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "request line too long",
             ));
+        }
+        if whole {
+            return Ok(Some(line));
+        }
+    }
+}
+
+/// Reads requests and hands each to its lane: `[machine, control,
+/// background, pane]`.
+fn read_requests(
+    input: &mut impl BufRead,
+    [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
+    output: &Mutex<impl Write>,
+    running: &Mutex<HashMap<u64, bool>>,
+    terminals: Option<&dyn Terminals>,
+) -> io::Result<()> {
+    loop {
+        let Some(line) = read_line(input)? else {
+            return Ok(());
+        };
+        if line == PING_LINE {
+            continue;
         }
         if line.starts_with(hide_node_link::terminal::TERMINAL_LINE_PREFIX) {
             // A node without the service never answered `terminals_start`,
@@ -1521,12 +1710,9 @@ pub fn handle_with_progress(
         } => {
             use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&kind)
-                .and_then(|adapter| adapter.start)
-                .and_then(Agent::of)
-                .ok_or_else(|| {
-                    HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
-                })?;
+            let agent = Agent::of_kind(&kind).ok_or_else(|| {
+                HostError::new(ErrorCode::InvalidPath, "agent_trust_agent_unknown")
+            })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
             let account = match &profile {
@@ -1553,7 +1739,23 @@ pub fn handle_with_progress(
             // trust for the folders Hide starts agents in).
             if trusted {
                 let automations = hide_kit::layout::automations_home(home);
-                folder_trust::trust_started_folder(agent, at, folder, &automations, tools)
+                folder_trust::trust_started_folder(agent, at, folder, &automations, tools).map(
+                    |added| {
+                        // The operator's own answer for the folder, "Do not
+                        // trust" included, stays as it is; the start goes on
+                        // as it would without Hide.
+                        if added == folder_trust::Added::Present {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "component": "node",
+                                    "kind": "agent_trust.operator_decides",
+                                    "agent": kind,
+                                })
+                            );
+                        }
+                    },
+                )
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
@@ -2078,6 +2280,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// The end of a link whose input ends by itself, as a test's bytes do.
+    fn ends_by_itself() -> LinkEnd {
+        LinkEnd::Shut(Box::new(|| {}))
+    }
+
+    /// The end of a link over `stream`, as a resident node's.
+    #[cfg(unix)]
+    fn shuts(stream: &std::os::unix::net::UnixStream) -> LinkEnd {
+        let stream = stream.try_clone().unwrap();
+        LinkEnd::Shut(Box::new(move || {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }))
+    }
+
     /// An OpenCode route proof that meets OpenCode writing its database
     /// answers busy, which the core reads again (Windows run 39104633599
     /// refused a wake on it), and answers the session once OpenCode is done.
@@ -2391,19 +2607,30 @@ mod tests {
 
     #[test]
     fn a_closed_channel_ends_the_helper_with_requests_still_arriving() {
-        // More requests than workers: each worker stops on its first failed
-        // answer, and the rest must not leave the reader waiting forever.
+        // More requests than workers: the first failed answer ends the link,
+        // and the requests still arriving must not keep the helper running.
         let requests: String = (1..=CONCURRENCY as u64 * 3)
             .map(|id| format!("{{\"id\":{id},\"op\":\"hello\"}}\n"))
             .collect();
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = done.send(serve(io::Cursor::new(requests.into_bytes()), Closed));
+            let _ = done.send(serve(
+                io::Cursor::new(requests.into_bytes()),
+                Closed,
+                ends_by_itself(),
+            ));
         });
         let result = finished
             .recv_timeout(Duration::from_secs(10))
             .expect("the helper kept running after its channel closed");
-        assert!(result.is_ok(), "{result:?}");
+        // Whichever ends the link first: the input's end, or the failed
+        // answer, which is the link's failure.
+        assert!(
+            result
+                .as_ref()
+                .map_or_else(|error| error.kind() == io::ErrorKind::BrokenPipe, |()| true),
+            "{result:?}"
+        );
     }
 
     /// What the helper writes, kept for the test to read.
@@ -2454,10 +2681,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         let mut text = String::new();
@@ -2557,10 +2784,10 @@ mod tests {
         let (written, lines) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             );
         });
         for id in 1..=BACKGROUND_CONCURRENCY as u64 {
@@ -2630,7 +2857,7 @@ mod tests {
             io::BufReader::new(&b""[..]),
             Vec::new(),
             Env::of_process(),
-            Services::none(),
+            Services::none(ends_by_itself()),
         )
         .unwrap();
 
@@ -2649,10 +2876,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 Lines(written),
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         input.write_all(&line).unwrap();
@@ -2686,6 +2913,290 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
+    use hide_node_link::holders::{
+        HolderError, HolderProcess, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
+        PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
+    };
+
+    /// Holders whose ownership is the state folder's real pane lock, taken
+    /// as a node's holders take it, and asked nothing else.
+    enum LockHolders {
+        Unowned(hide_kit::panes::Panes),
+        Owned(#[allow(dead_code)] hide_kit::panes::Owner),
+    }
+    impl PaneHolders for LockHolders {
+        fn own(self: Arc<Self>, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
+            let LockHolders::Unowned(panes) = &*self else {
+                unreachable!()
+            };
+            let owner = panes
+                .acquire(within)
+                .map_err(|message| HolderError::Unreachable { message })?;
+            Ok(Arc::new(LockHolders::Owned(owner)))
+        }
+        fn recovered(&self, _: Duration) -> Result<HolderRecovery, HolderError> {
+            Ok(HolderRecovery::default())
+        }
+        fn terminate(&self, _: &str) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
+            unreachable!()
+        }
+        fn read_styled(&self, _: &str, _: StyledRead) -> Result<(String, bool), HolderError> {
+            unreachable!()
+        }
+        fn read_visible(&self, _: &str) -> Result<String, HolderError> {
+            unreachable!()
+        }
+        fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
+            unreachable!()
+        }
+        fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
+            unreachable!()
+        }
+        fn process(
+            &self,
+            _: &str,
+            _: u32,
+            _: Duration,
+        ) -> Result<Option<HolderProcess>, HolderError> {
+            unreachable!()
+        }
+        fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {
+            unreachable!()
+        }
+        fn input(&self, _: &str, _: PaneInput) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn letter(
+            &self,
+            _: &str,
+            _: Vec<PaneInput>,
+            _: PaneInput,
+            _: Duration,
+        ) -> Result<(), HolderError> {
+            unreachable!()
+        }
+        fn watch_ends(&self, _: PaneEnded) {}
+        fn watch_facts(&self, _: PaneFactsSink) {}
+        fn set_rules(&self, _: &str, _: Option<ScreenRules>) -> Result<(), HolderError> {
+            unreachable!()
+        }
+    }
+
+    /// A node serving a link whose output is `output`, asked by its core for
+    /// its panes (`Recovered`, answered as id 1); the test's end of the
+    /// link, the node's result once its loop returns, and whether its state
+    /// folder's pane lock is free.
+    struct OwningNode {
+        core: hide_platform::ipc::LocalStream,
+        finished: mpsc::Receiver<io::Result<()>>,
+        home: tempfile::TempDir,
+    }
+
+    impl OwningNode {
+        fn start(output: impl Write + Send + 'static) -> Self {
+            use hide_node_link::holders::PaneCall;
+            let home = tempfile::tempdir().unwrap();
+            let env = Env {
+                panes: crate::pane_holders::PaneSlot::holding(Arc::new(LockHolders::Unowned(
+                    Self::panes(home.path()),
+                ))),
+                ..Env::of_process()
+            };
+            let (mut core, theirs) = hide_platform::ipc::LocalStream::pair().unwrap();
+            let (done, finished) = mpsc::channel();
+            let ending = theirs.shutdown_handle();
+            std::thread::spawn(move || {
+                let _ = done.send(serve_in(
+                    io::BufReader::new(theirs),
+                    output,
+                    env,
+                    Services::none(LinkEnd::Shut(Box::new(move || ending.shutdown()))),
+                ));
+            });
+            let mut recover = serde_json::to_vec(&Request {
+                id: 1,
+                call: Call::Pane {
+                    call: PaneCall::Recovered { timeout_ms: 5_000 },
+                },
+            })
+            .unwrap();
+            recover.push(b'\n');
+            core.write_all(&recover).unwrap();
+            Self {
+                core,
+                finished,
+                home,
+            }
+        }
+
+        fn panes(home: &Path) -> hide_kit::panes::Panes {
+            hide_kit::panes::Panes::open(home, &home.join("state"), |_| {}).unwrap()
+        }
+
+        fn lock_is_free(&self) -> bool {
+            Self::panes(self.home.path())
+                .acquire(Duration::ZERO)
+                .is_ok()
+        }
+    }
+
+    /// The lines a node wrote until it answered its core's id 1, refusing
+    /// nothing.
+    fn answered_for_its_panes(written: &mpsc::Receiver<Vec<u8>>) {
+        let mut said = Vec::new();
+        while !String::from_utf8_lossy(&said).contains("\"id\":1") {
+            said.extend(
+                written
+                    .recv_timeout(Duration::from_secs(20))
+                    .expect("the node never answered for its panes"),
+            );
+        }
+        assert!(
+            !String::from_utf8_lossy(&said).contains("\"error\""),
+            "the node refused the ownership: {}",
+            String::from_utf8_lossy(&said)
+        );
+    }
+
+    /// A node whose core went silent with its connection still open, as a
+    /// server's end stays after the other machine roamed off its network
+    /// (with-hide/hide#2882), ends its link within the silence limit and
+    /// lets go of its state folder's pane ownership, so the node of the
+    /// core's next link takes it; its output stuck in a write meanwhile, as
+    /// one is once the connection's buffers are full, holds none of it up.
+    #[test]
+    fn a_node_whose_core_falls_silent_ends_its_link_and_lets_its_panes_go() {
+        use hide_node_link::liveness::{HEARTBEAT, HEARTBEAT_LIMIT, PING_LINE};
+
+        /// The core's end of the output: it takes the node's lines until
+        /// the answer for its panes, then holds the next write, telling the
+        /// test what it holds, until the test lets it go.
+        struct Stalls {
+            written: mpsc::Sender<Vec<u8>>,
+            answered: bool,
+            held: mpsc::Sender<Vec<u8>>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Write for Stalls {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.answered {
+                    let _ = self.held.send(bytes.to_vec());
+                    let _ = self.release.recv();
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                self.answered = String::from_utf8_lossy(bytes).contains("\"id\":1");
+                let _ = self.written.send(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (written, lines) = mpsc::channel();
+        let (held, holding) = mpsc::channel();
+        let (let_go, release) = mpsc::channel();
+        let node = OwningNode::start(Stalls {
+            written,
+            answered: false,
+            held,
+            release,
+        });
+        answered_for_its_panes(&lines);
+        assert!(
+            !node.lock_is_free(),
+            "the node does not hold the ownership it answered for"
+        );
+        let stuck = holding
+            .recv_timeout(HEARTBEAT + Duration::from_secs(5))
+            .expect("the node never wrote again after its answer");
+        assert_eq!(stuck, PING_LINE, "the node's next line was not its ping");
+
+        // The core sends nothing more and never closes its end, and the
+        // node's write stays stuck.
+        let ended = node
+            .finished
+            .recv_timeout(HEARTBEAT_LIMIT + Duration::from_secs(15))
+            .expect("the node kept a link whose core sent nothing");
+        let error = ended.expect_err("a silent core is not an ended input");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+        assert!(
+            node.lock_is_free(),
+            "the node's pane ownership outlived its silent link"
+        );
+        drop(let_go);
+    }
+
+    /// A node whose output failed ends its link and lets go of its pane
+    /// ownership even while its core keeps writing: the core's pings keep
+    /// the input alive, and only the failed write says the link is gone.
+    #[test]
+    fn a_node_whose_output_fails_ends_its_link_while_its_core_still_pings() {
+        /// The core's end of the output: it takes the node's lines until the
+        /// answer for its panes and fails every write after it.
+        struct Fails {
+            written: mpsc::Sender<Vec<u8>>,
+            answered: bool,
+        }
+        impl Write for Fails {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.answered {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                self.answered = String::from_utf8_lossy(bytes).contains("\"id\":1");
+                let _ = self.written.send(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (written, lines) = mpsc::channel();
+        let mut node = OwningNode::start(Fails {
+            written,
+            answered: false,
+        });
+        answered_for_its_panes(&lines);
+        assert!(
+            !node.lock_is_free(),
+            "the node does not hold the ownership it answered for"
+        );
+        let mut pinging = node.core.duplicate();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let pinger = std::thread::spawn(move || {
+            while let Err(mpsc::RecvTimeoutError::Timeout) =
+                stopped.recv_timeout(Duration::from_millis(200))
+            {
+                if pinging.write_all(PING_LINE).is_err() {
+                    return;
+                }
+            }
+        });
+        // An answer the node cannot write.
+        let mut hello = serde_json::to_vec(&Request {
+            id: 2,
+            call: Call::Hello,
+        })
+        .unwrap();
+        hello.push(b'\n');
+        node.core.write_all(&hello).unwrap();
+
+        let ended = node
+            .finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the node kept a link whose output failed");
+        let error = ended.expect_err("a failed output is not an ended input");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe, "{error}");
+        assert!(
+            node.lock_is_free(),
+            "the node's pane ownership outlived its failed link"
+        );
+        drop(stop);
+        pinger.join().unwrap();
+    }
+
     /// A request whose id is still running is refused, and the running one
     /// keeps its own cancel.
     #[cfg(unix)]
@@ -2708,10 +3219,10 @@ mod tests {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = done.send(serve_in(
-                io::BufReader::new(theirs),
+                io::BufReader::new(theirs.try_clone().unwrap()),
                 output,
                 Env::of_process(),
-                Services::none(),
+                Services::none(shuts(&theirs)),
             ));
         });
         input.write_all(&line(7, watch())).unwrap();
@@ -2752,7 +3263,12 @@ mod tests {
         ];
         let input = requests.join("\n") + "\n";
         let kept = Kept::default();
-        serve(io::Cursor::new(input.into_bytes()), kept.clone()).unwrap();
+        serve(
+            io::Cursor::new(input.into_bytes()),
+            kept.clone(),
+            ends_by_itself(),
+        )
+        .unwrap();
         let written = String::from_utf8(kept.0.lock().unwrap().clone()).unwrap();
         let mut answers: Vec<Response> = written
             .lines()

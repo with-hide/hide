@@ -15,14 +15,14 @@ pub(crate) mod away;
 mod event_box;
 mod tap;
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_host::pane_holders::PaneSlot;
-use hide_host::serve::{KitPlace, Services, Terminals as _};
+use hide_host::serve::{KitPlace, LinkEnd, Services, Terminals as _};
 use hide_node::terminal::device::{NodeTerminals, ResidentFolders};
 use hide_node_link::holders::PaneHolders;
 use hide_peer::protocol::launch::{self, EndMode, FromNode, Ready, ToNode};
@@ -434,13 +434,16 @@ pub fn run(dir: &str) -> ! {
         let session = life.begin(stream.shutdown_handle());
         record("guest_node.link_started", json!({"session": session}));
         terminals.relink();
-        let reader = BufReader::new(stream.duplicate());
+        let reader = stream.duplicate();
+        // The link's end closes its stream (`LinkEnd::Shut`), whichever end
+        // ended the link.
+        let ending = stream.shutdown_handle();
         let served = hide_host::serve::serve_with(
             reader,
             stream,
             Services {
+                end: LinkEnd::Shut(Box::new(move || ending.shutdown())),
                 terminals: Some(&*terminals),
-                heartbeat: false,
                 // A call the host handed to this guest's `hide` is in no
                 // pane: the node proves it by its folder, and the guest's
                 // core binds it to its checkout or refuses, finally (D-55).

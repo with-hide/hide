@@ -50,7 +50,7 @@ import { bindUploads, dropFiles, filesSent, onAttachAck, replyFiles, reuploadFil
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { HOST_LIST_LINK, hostStore, validMachine, type PairedHost } from "./hosts";
+import { ADD_COMPUTER_LINK, HOST_LIST_LINK, hostStore, validMachine, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -1226,7 +1226,7 @@ function startDemo(): void {
 /** The sample host's way out: the first screen or the list of computers, never one of them, or its real QR scan and paste flow. */
 export function leaveDemo(connectReal = false): void {
   stop();
-  window.location.assign(connectReal ? "/?add=1" : HOST_LIST_LINK);
+  window.location.assign(connectReal ? ADD_COMPUTER_LINK : HOST_LIST_LINK);
 }
 
 async function startRelay(): Promise<void> {
