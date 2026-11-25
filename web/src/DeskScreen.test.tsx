@@ -5,8 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { configureAttachments } from "./attachments";
+import { configureFileBytes } from "./fileBytes";
 import { TooltipProvider } from "./components/ui/tooltip";
-import type { DeskAgent, DeskItem, DeskJob, DeskOption } from "./desk";
+import type { DeskAgent, DeskItem, DeskJob, DeskOption, DeskOutput } from "./desk";
 import { DeskScreen, DeskSettingsPage } from "./DeskScreen";
 import { clientI18n } from "./i18n/translator";
 import type { DeskMentions, DeskSection, SnapshotRest } from "./snapshot";
@@ -391,7 +392,10 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-mention-session='w1:other']")).not.toBeNull();
   });
 
-  it("opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
+  /** A connected device's session beside Desk whose conversation showed `shown` with `hide file open`, its card listing `outputs`; the file reads the panel asked for. */
+  async function remoteSessionShowed(shown: readonly string[], outputs: DeskOutput[]): Promise<Record<string, unknown>[]> {
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload as Record<string, unknown>); });
     const remoteRest = {
       navigator: {
         focused_device_id: "local", focused_checkout_id: null, focused_workspace_id: null,
@@ -404,11 +408,13 @@ describe("Desk's room", () => {
     const row = { pane_id: "d:p1", identity_label: "remote worker", agent_kind: "claude", mark: "going", device_id: "deepbox" } as never;
     await act(async () => useUiStore.getState().setScreen({ kind: "desk" }));
     await render(desk([]));
+    const calls = shown.map((path, index) => ({ sessionUpdate: "tool_call", toolCallId: `v${index}`, title: "Bash", kind: "execute", rawInput: { command: `hide file open ${path}` } }));
+    const parts = Object.fromEntries(shown.map((path, index) => [`v${index}`, { kind: "view", view: "file", target: path }]));
     const thread = { generation: 1, state: "ready", pane_id: "d:p1", machine: "deepbox", failure: null, pane: "same", connected: true, has_older: false, older: "idle", input: null,
-      tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "문서 보여줘" } }, { sessionUpdate: "tool_call", toolCallId: "v1", title: "Bash", kind: "execute", rawInput: { command: "hide file open /home/me/repo/new.md" } }], parts: { v1: { kind: "view", view: "file", target: "/home/me/repo/new.md" } }, sessions: {} } };
+      tail: { updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "보여줘" } }, ...calls], parts, sessions: {} } };
     await act(async () => {
       const card: DeskJob = { id: "pane:d:p1", pane_id: "d:p1", title: "remote worker", agent_kind: "claude", project: { workspace_id: "w-deep", label: "deep" }, location: { kind: "checkout", label: "main" },
-        state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs: [], joined: false, reason: null, failure: null, ask: null,
+        state: "working", queue_position: null, now: "쓰는 중", plan: null, question: null, summary: null, pull_requests: [], outputs, joined: false, reason: null, failure: null, ask: null,
         mark: "going", mark_read: false, machine: "deepbox", disconnected: false, changed_at_unix_ms: 0, read: false, mission: null, workers: [], agent_id: null };
       useShellStore.setState({ rest: remoteRest, agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } });
       useUiStore.getState().setDeskRoom((now) => ({ ...now, session: "d:p1" }));
@@ -417,9 +423,26 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ sessionThread: thread as never, sessionThreadHistory: { generation: 1, pages: [] } }));
     // The tab strip reads its sizes from the design tokens, which jsdom has no stylesheet for.
     for (const [name, value] of [["--size-tab-preferred", "160"], ["--size-tab-title-min", "48"], ["--size-tab-selected-max", "240"], ["--size-tab-icon-identity", "16"], ["--size-control-sm", "24"]] as const) document.documentElement.style.setProperty(name, value);
+    return reads;
+  }
+
+  const frontOutput = () => useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
+
+  it("draws and opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
+    const reads = await remoteSessionShowed(["/home/me/repo/new.md", "/home/me/repo/shot.png"], []);
+    // The image it showed is drawn from the file on that device, as the open below reads it.
+    expect(reads).toMatchObject([{ path: "/home/me/repo/shot.png", device_id: "deepbox", root: "/home/me/repo" }]);
     await press("[data-desk-output='/home/me/repo/new.md']");
-    const front = useUiStore.getState().deskRoom.panel?.tabs.find((tab) => tab.kind === "output");
-    expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
+    expect(frontOutput()).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
+  });
+
+  it("draws and opens an image the card lists from the card's own checkout, not the session's", async () => {
+    const listed: DeskOutput = { id: "view-9", kind: "image", label: "shot.png", thumb: null, seen: true, pr_state: null, device_id: "deepbox", checkout: "/home/me/wt", path: "/home/me/wt/shot.png", url: null };
+    const reads = await remoteSessionShowed(["/home/me/wt/shot.png"], [listed]);
+    // The shelf and the conversation draw the same file, read once.
+    expect(reads).toMatchObject([{ path: "/home/me/wt/shot.png", device_id: "deepbox", root: "/home/me/wt" }]);
+    await press("[data-desk-hide-part='view'] [data-desk-output='view-9']");
+    expect(frontOutput()).toMatchObject({ kind: "output", output: listed });
   });
 
   it("keeps one working line from the send to the turn's end, saying its step, and drops it while an approval waits (feedback 1 c3)", async () => {
@@ -699,8 +722,10 @@ describe("Desk's room", () => {
     await act(async () => useShellStore.setState({ agents: [row], deskJobs: { jobs: [], workers: [], named: [card] } }));
     await act(async () => useUiStore.getState().setDeskRoom(() => ({ session: "w1:p2", panel: null, closed: null, answer: 0 })));
     expect(sent("pane_ask")).toEqual([{ device_id: "local", pane_id: "w1:p2" }]);
-    // Until the screen is read, the card says what the card knows, with 직접 쓰기 only.
-    expect(document.body.querySelector("[data-desk-question]")?.textContent).toContain("Delete the old captures?");
+    // Until the screen is read, no card stands at the conversation's end: what the agent asked stays in its
+    // words, and the card's question is not said again in a card of its own.
+    expect(document.body.querySelector("[data-desk-ask], [data-desk-question]")).toBeNull();
+    expect(document.body.textContent).not.toContain("Delete the old captures?");
 
     const ask = { kind: "question" as const, turn: "7", since_ms: null, text: "Delete the old captures?", choices: [{ id: "1", label: "Keep" }, { id: "2", label: "Delete" }], answerable: true };
     await act(async () => useShellStore.setState({ paneAsk: { device_id: "local", pane_id: "w1:p2", ask, reason: null } }));

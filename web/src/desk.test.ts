@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, approvalButtons, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
+import { agentPickable, approvalButtons, askedIn, askingCount, deskAgentWord, failureReason, deskPhase, holdsFoot, markedMention, mentionParts, namedText, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob, type DeskOption } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -89,7 +89,7 @@ describe("what the working line says (feedback 1 c3)", () => {
     expect(threadPhase(turn([tool("edit")]))).toBe("editing");
     expect(threadPhase(turn([tool("execute")]))).toBe("other");
     expect(threadPhase(turn([tool("think")]))).toBe("thinking");
-    expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요" }]))).toBe("answering");
+    expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요", atMs: null }]))).toBe("answering");
   });
 });
 
@@ -145,14 +145,31 @@ describe("a letter's sender and a command's start (B25, D-75)", () => {
   });
 });
 
-describe("an asking thread's question (D-75)", () => {
-  const turns = (answer: string) => threadTurns(threadLines([text("user_message_chunk", "해줘"), text("agent_message_chunk", answer)]));
+describe("the answer a question Hide found was asked in (B4 question 나)", () => {
+  const answer = (words: string, at: number | null): AcpSessionUpdate => ({ sessionUpdate: "agent_message_chunk", messageId: words, content: { type: "text", text: words }, ...(at === null ? {} : { _meta: { hide: { at_ms: at } } }) });
+  const lines = threadLines([
+    text("user_message_chunk", "스크린샷 찍어 줘"),
+    answer("라이트를 찍었어요. 다크도 찍을까요?", 1_000),
+    text("user_message_chunk", "결제해놨어"),
+    answer("본인 확인은 직접 해 줄 수 있어?", 2_000),
+    text("user_message_chunk", "응"),
+    answer("끝났어요.", 3_000),
+  ]);
+  const turns = threadTurns(lines);
+  const said = (id: string | null) => {
+    const line = lines.find((one) => one.id === id);
+    return line?.kind === "agent" ? line.text : null;
+  };
 
-  it("is said once, at the foot: an answer that is the question goes, and one that ends with it keeps the rest", () => {
-    expect(askedOnce(turns("다크 모드도 찍을까요?"), "다크 모드도  찍을까요?")[0]!.answer).toEqual([]);
-    expect(askedOnce(turns("라이트는 끝났어요.\n다크 모드도 찍을까요?"), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
-    expect(askedOnce(turns("라이트는 끝났어요."), "다크 모드도 찍을까요?")[0]!.answer.map((line) => line.text)).toEqual(["라이트는 끝났어요."]);
-    expect(askedOnce(turns("다크 모드도 찍을까요?"), null)[0]!.answer).toHaveLength(1);
+  it("is the last answer written no later than the question was found", () => {
+    expect(said(askedIn(turns, 2_500))).toBe("본인 확인은 직접 해 줄 수 있어?");
+    expect(said(askedIn(turns, 2_000))).toBe("본인 확인은 직접 해 줄 수 있어?");
+    expect(said(askedIn(turns, 1_200))).toBe("라이트를 찍었어요. 다크도 찍을까요?");
+  });
+
+  it("is none when no answer read is that old or says when it was written", () => {
+    expect(askedIn(turns, 500)).toBeNull();
+    expect(askedIn(threadTurns(threadLines([text("user_message_chunk", "해줘"), answer("할까요?", null)])), 9_000)).toBeNull();
   });
 });
 
@@ -212,6 +229,15 @@ describe("a chip's session (D-86, B50)", () => {
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.card).toBeNull();
     expect(sessionFacts(rows, cards, { name: "agent-14586", mark: null, agent_kind: null })?.listed).toBe(true);
     expect(sessionFacts(rows, cards, { name: "nobody", mark: null, agent_kind: null })).toBeNull();
+  });
+});
+
+describe("namedText", () => {
+  it("says each held mention by its name, as the operator reads the message", () => {
+    const fixer = { kind: "session" as const, id: "w1:p3", name: "fixer" };
+    const repo = { kind: "project" as const, id: "/Users/me/repo", name: "repo name" };
+    const text = `${markedMention(fixer)} 결과를 ${markedMention(repo)}에 정리해 줘, ${markedMention(fixer)}`;
+    expect(namedText(text, [fixer, repo])).toBe("@fixer 결과를 @repo name에 정리해 줘, @fixer");
   });
 });
 

@@ -55,6 +55,24 @@ export function missionOfPane(rest: SnapshotRest | null | undefined, agents: Age
   return agent ? conductedBy(rest, agent) : null;
 }
 
+/**
+ * The open mission a pane's session works a node of, with that node: the
+ * node whose worker runs in this pane on this machine (`MissionNode.pane_id`,
+ * `machine`, read as the core reads it: no machine is the mission's own)
+ * and, when both name one, is this agent (`MissionNode.agent_id`, the card's
+ * `DeskJob.agent_id`), so a later session in the same pane is no worker of
+ * it; none while the record cannot be read.
+ */
+export function missionWorkedIn(rest: SnapshotRest | null | undefined, row: Pick<AgentRow, "pane_id" | "device_id">, agentId: string | null): { mission: Mission; node: MissionNode } | null {
+  if (rest?.missions?.failed) return null;
+  for (const mission of rest?.missions?.items ?? []) {
+    if (!missionOpen(mission)) continue;
+    const node = mission.nodes.find((one) => one.pane_id === row.pane_id && (one.machine ?? mission.device_id) === row.device_id && (one.agent_id === null || agentId === null || one.agent_id === agentId));
+    if (node) return { mission, node };
+  }
+  return null;
+}
+
 /** What the record counts (B21): done nodes of those still in the plan, and the ones dropped. */
 export function missionCounts(mission: { nodes: readonly Pick<MissionNode, "status">[] }): { done: number; total: number; dropped: number } {
   const dropped = mission.nodes.filter((node) => node.status === "dropped").length;

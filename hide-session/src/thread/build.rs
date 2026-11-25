@@ -464,10 +464,7 @@ impl Thread {
         };
         let chunk = ContentChunk::new(block)
             .message_id(message.map(str::to_owned).map(Into::into))
-            .meta(hide_meta([
-                ("origin", json!("letter")),
-                ("from", json!(from)),
-            ]));
+            .meta(self.message_meta(vec![("origin", json!("letter")), ("from", json!(from))]));
         self.updates.push(SessionUpdate::UserMessageChunk(chunk));
     }
 
@@ -478,12 +475,22 @@ impl Thread {
         origin: Origin,
         block: ContentBlock,
     ) {
-        let chunk = ContentChunk::new(block).message_id(message.map(str::to_owned).map(Into::into));
-        let chunk = match origin.as_str() {
-            Some(origin) => chunk.meta(hide_meta([("origin", json!(origin))])),
-            None => chunk,
-        };
+        let marks = origin
+            .as_str()
+            .map(|origin| ("origin", json!(origin)))
+            .into_iter()
+            .collect();
+        let chunk = ContentChunk::new(block)
+            .message_id(message.map(str::to_owned).map(Into::into))
+            .meta(self.message_meta(marks));
         self.updates.push(update(chunk));
+    }
+
+    /// A message's marks with when its record was written (`_meta.hide.at_ms`),
+    /// so a screen finds the answer a question Hide found later was asked in.
+    fn message_meta(&self, mut marks: Vec<(&'static str, Value)>) -> Option<Meta> {
+        marks.extend(self.at_ms.map(|at| ("at_ms", json!(at))));
+        (!marks.is_empty()).then(|| hide_meta(marks))
     }
 }
 

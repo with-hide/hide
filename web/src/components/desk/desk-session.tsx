@@ -1,106 +1,41 @@
-import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, XIcon } from "lucide-react";
-import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpRightIcon, CircleAlertIcon, EllipsisIcon, FolderIcon, MoonIcon, SquareTerminalIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { useMemo, useRef } from "react";
 import type { Actions } from "../../actions";
-import type { DeskJob, DeskOutput } from "../../desk";
+import type { DeskJob } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
-import { PaneHeadChildren, PanePrChip } from "../../PaneHeaderBand";
-import { PaneWorkChip } from "../../PaneMissionChip";
+import { missionNumber, missionWorkedIn } from "../../missions";
+import { PaneHeadChildren } from "../../PaneHeaderBand";
+import { PaneWorkChip, usePaneMission } from "../../PaneMissionChip";
+import { PanePlanChip } from "../../PanePlanChip";
+import { planOfPane } from "../../plans";
+import { useShellStore } from "../../store";
+import { DeviceChip } from "../device-chip";
 import { AncestorPath, usePaneMenu } from "../../PaneRelations";
 import { useNoticeFloor } from "../../noticeFloor";
 import { wakeFailureReason, wakingLine } from "../../sleep";
 import type { AgentRow, AgentSleep, PaneRow } from "../../snapshot";
 import { Button } from "../ui/button";
-import { Kbd } from "../ui/kbd";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Hint } from "../ui/tooltip";
 import { AskCardView } from "../../mobile/AskCard";
-import { JobLead, OutputsChip } from "./desk-job-card";
+import { JobLead } from "./desk-job-card";
 import { AgentMark } from "../../AgentMark";
 import { StatusMark } from "../status-mark";
 
 /**
- * The second line's chips in one line (PRD desk-2-ui B8): as many as fit,
- * in order, and the rest folded into `+n` at the end. Each chip is measured
- * as drawn, so a chip's own width (a long PR number, a mission title) is
- * what counts.
+ * The session panel's head (PRD desk-2-ui D-09, D-10, D-21, B6, B9, B43,
+ * B47; Doop H 다 and H2 1, operator decision 2026-11-25). One line is the
+ * session as the pane head draws it: its status, its agent, its ancestors
+ * (each opening that session beside Desk), its work name as the sidebar row
+ * names it, the children chip on a parent, then ↗ to its own tab, `파일` and `터미널` as icons
+ * (the terminal hidden while it sleeps), the pane's menu and `✕`. A quiet
+ * second line stands only when there is something to know: the machine when
+ * it is another device (this machine is never named), a device that is not
+ * connected, the mission it conducts as the app's mission chip and its name,
+ * or the one it works a node of by its number and name, and its plan as the
+ * pane's plan chip. What it made and its PRs are on the shelf below.
  */
-export function FoldingChips({ children }: { children: ReactNode }) {
-  const { t } = useInterfaceTranslation();
-  const items = Children.toArray(children).filter(Boolean);
-  const row = useRef<HTMLDivElement>(null);
-  // Where the row folds, as an index into `items`, and how many drawn chips fold there: a chip with nothing to say
-  // draws nothing and is neither measured nor counted.
-  const [fold, setFold] = useState({ cut: items.length, hidden: 0 });
-  useLayoutEffect(() => {
-    const node = row.current;
-    if (!node) return undefined;
-    const measure = () => {
-      const room = node.getBoundingClientRect().width;
-      const cells = Array.from(node.querySelectorAll<HTMLElement>(":scope > [data-desk-chip-cell]"));
-      const drawn = cells.filter((cell) => cell.childElementCount > 0);
-      // `+n` takes a chip's room of its own when anything folds.
-      const more = node.querySelector<HTMLElement>(":scope > [data-desk-chip-more]")?.getBoundingClientRect().width ?? 0;
-      let used = 0;
-      let cut = cells.length;
-      for (const [index, cell] of drawn.entries()) {
-        const width = cell.getBoundingClientRect().width + (index > 0 ? GAP : 0);
-        const reserve = index < drawn.length - 1 ? more + GAP : 0;
-        if (used + width + reserve > room) {
-          cut = cells.indexOf(cell);
-          break;
-        }
-        used += width;
-      }
-      const hidden = drawn.filter((cell) => cells.indexOf(cell) >= cut).length;
-      setFold((now) => (now.cut === cut && now.hidden === hidden ? now : { cut, hidden }));
-    };
-    measure();
-    // The row's width moves the fold, and so does a chip whose content arrives after the row was drawn.
-    const resized = new ResizeObserver(measure);
-    resized.observe(node);
-    for (const cell of node.querySelectorAll(":scope > [data-desk-chip-cell]")) resized.observe(cell);
-    const changed = new MutationObserver(measure);
-    changed.observe(node, { childList: true, subtree: true });
-    return () => {
-      resized.disconnect();
-      changed.disconnect();
-    };
-  }, [items.length]);
-  const hidden = fold.hidden;
-  return (
-    <div ref={row} className="flex min-w-0 flex-1 items-center gap-xs overflow-hidden" data-desk-session-chips="true">
-      {items.map((item, index) => {
-        const out = index >= fold.cut;
-        // A folded chip keeps its place to be measured, out of sight and out of reach; an empty one takes no room.
-        return <span key={index} className={cn("flex shrink-0 items-center empty:hidden", out && "invisible absolute")} aria-hidden={out || undefined} data-desk-chip-cell="true">{item}</span>;
-      })}
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button variant="ghost" size="sm" className={cn("h-(--size-control-compact) shrink-0 px-xxs text-micro font-normal text-muted-foreground", hidden > 0 ? "" : "invisible absolute")} aria-label={t("desk.room.moreChips", { count: hidden })} tabIndex={hidden > 0 ? undefined : -1} data-desk-chip-more={hidden}>+{hidden}</Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="flex w-auto flex-col items-start gap-xs p-xs" data-desk-chip-folded="true">
-          {items.slice(fold.cut).map((item, index) => <span key={index} className="flex items-center empty:hidden">{item}</span>)}
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-/** The gap between two chips, `gap-xs`. */
-const GAP = 4;
-
-/**
- * The session panel's head (PRD desk-2-ui D-09, D-10, D-21, B6, B8, B9,
- * B43, B47). The first line is the session as the pane head draws it: its
- * status, its agent, its ancestors (each opening that session beside Desk),
- * its work name as the sidebar row names it, the children chip on a parent;
- * then `파일 ⇧⌘E`, `터미널 ⌘J` (hidden while it sleeps) and `✕`. The second
- * line is its machine and the chips the pane head carries, in one line that
- * folds into `+n`: the work chip (the plan's, or the mission chip on a
- * Conductor), what it opened, and its PR; no model.
- */
-export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, selectedOutput, explorerOpen, filesChord, terminalChord, deskActions, onOutput, onFiles, onTerminal, onOwnTab, onClose }: {
+export function SessionHead({ paneId, title, job, row, pane, machine, disconnected, sleeping, explorerOpen, filesChord, terminalChord, deskActions, onFiles, onTerminal, onOwnTab, onClose }: {
   paneId: string;
   /** The session's work name, kept by the panel when its row and card are gone. */
   title: string;
@@ -108,16 +43,15 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   job: DeskJob | null;
   row: AgentRow | null;
   pane: PaneRow | null;
+  /** The machine's name when the session runs on another device; null on this machine. */
   machine: string | null;
   disconnected: boolean;
   sleeping: boolean;
-  selectedOutput: string | null;
   explorerOpen: boolean;
   filesChord: string | null;
   terminalChord: string | null;
   /** The app's actions with Desk's own opens: a mission, a PR or a session opens beside Desk. */
   deskActions: Actions;
-  onOutput: (output: DeskOutput) => void;
   onFiles: () => void;
   onTerminal: () => void;
   /** ↗, `원래 화면에서 보기` in its hint (feedback 1 D2): the session's own tab, its terminal with the sidebar and files, as a sidebar row's ⌘-click (Ctrl on Windows and Linux) opens it; Desk leaves the front. */
@@ -125,7 +59,16 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
   onClose: () => void;
 }) {
   const { t } = useInterfaceTranslation();
+  const conducts = usePaneMission(paneId);
+  // The record is picked from the store and the pair made from it here: a selector making a new pair on each read
+  // would never settle.
+  const rest = useShellStore((s) => s.rest);
+  const agentId = job?.agent_id ?? null;
+  const works = useMemo(() => (row && !conducts ? missionWorkedIn(rest, row, agentId) : null), [rest, row, conducts, agentId]);
+  const plan = useShellStore((s) => (sleeping ? null : planOfPane(s.rest, paneId)));
   const lead = job ? <JobLead job={job} /> : row ? <><StatusMark mark={row.mark} /><AgentMark kind={row.agent_kind} /></> : null;
+  const known = machine !== null || disconnected || conducts !== null || works !== null || plan !== null;
+  const tool = "text-muted-foreground";
   return (
     <header className="flex shrink-0 flex-col gap-xxs border-b border-border px-md py-xs text-caption" data-desk-session-head={sleeping ? "sleeping" : (job?.state ?? "pending")}>
       <div className="flex h-(--size-control-sm) min-w-0 items-center gap-xs">
@@ -144,77 +87,46 @@ export function SessionHead({ paneId, title, job, row, pane, machine, disconnect
           </Hint>
         )}
         <Hint label={t("desk.room.files")} shortcut={filesChord ?? undefined}>
-          <Button variant="ghost" size="sm" aria-pressed={explorerOpen} className={cn("h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground", explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}>
-            <FolderIcon />
-            {t("desk.room.files")}
-            {filesChord ? <Kbd aria-hidden="true">{filesChord}</Kbd> : null}
-          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.files")} aria-pressed={explorerOpen} className={cn(tool, explorerOpen && "bg-secondary text-foreground")} data-desk-session-files="true" onClick={onFiles}><FolderIcon /></Button>
         </Hint>
         {sleeping ? null : (
           <Hint label={t("desk.room.terminal")} shortcut={terminalChord ?? undefined}>
-            <Button variant="ghost" size="sm" className="h-(--size-control-compact) gap-xxs px-xs text-caption font-normal text-subtle-foreground" data-desk-session-terminal="true" onClick={onTerminal}>
-              <SquareTerminalIcon />
-              {t("desk.room.terminal")}
-              {terminalChord ? <Kbd aria-hidden="true">{terminalChord}</Kbd> : null}
-            </Button>
+            <Button variant="ghost" size="icon-sm" aria-label={t("desk.room.terminal")} className={tool} data-desk-session-terminal="true" onClick={onTerminal}><SquareTerminalIcon /></Button>
           </Hint>
         )}
         {pane && !sleeping ? <SessionPaneMenu pane={pane} title={title} actions={deskActions} /> : null}
         <Hint label={t("desk.room.closeSession")}>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
+          <Button variant="ghost" size="icon-sm" className={tool} aria-label={t("desk.room.closeSession")} data-desk-session-close="true" onClick={onClose}><XIcon /></Button>
         </Hint>
       </div>
-      <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm)">
-        {machine ? <span className="shrink-0 text-caption text-subtle-foreground" data-desk-session-machine="true">{machine}</span> : null}
-        {disconnected ? <span className="shrink-0 text-caption text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
-        <FoldingChips>
-          {sleeping ? null : <PaneWorkChip paneId={paneId} actions={deskActions} />}
-          {job?.outputs.length ? <OutputsChip outputs={job.outputs} selected={selectedOutput} onOpen={onOutput} /> : null}
-          {sleeping ? null : <PanePrChip paneId={paneId} actions={deskActions} />}
-        </FoldingChips>
-      </div>
+      {known ? (
+        <div className="flex min-w-0 items-center gap-xs pl-(--size-control-sm) text-caption text-muted-foreground" data-desk-session-meta="true">
+          {machine ? <DeviceChip label={machine} variant="inline" className="shrink-0" /> : null}
+          {disconnected ? <span className="shrink-0 text-warning" data-desk-session-disconnected="true">{t("desk.room.disconnected")}</span> : null}
+          {conducts ? (
+            <span className="flex min-w-0 items-center gap-xs" data-desk-session-mission={conducts.id}>
+              <PaneWorkChip paneId={paneId} actions={deskActions} />
+              <span className="min-w-0 truncate text-subtle-foreground">{conducts.title}</span>
+            </span>
+          ) : null}
+          {works ? (
+            <Button variant="text" size="inline" className="min-w-0 gap-xxs text-caption text-subtle-foreground" aria-label={t("desk.room.workedMission", { title: works.mission.title })} data-desk-session-mission={works.mission.id} onClick={() => deskActions.openMission(works.mission.id)}>
+              <WaypointsIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+              {missionNumber(works.mission.id) ? <span className="shrink-0 font-mono text-micro text-muted-foreground">{missionNumber(works.mission.id)}</span> : null}
+              <span className="min-w-0 truncate">{works.mission.title}</span>
+            </Button>
+          ) : null}
+          {plan && !conducts ? <PanePlanChip paneId={paneId} actions={deskActions} /> : null}
+        </div>
+      ) : null}
     </header>
   );
 }
 
-/** What a waiting session asks, as its sidebar row or its card names it (B14, B34). */
-export type SessionQuestion = { kind: "question" | "plan_approval" | "decision" | "approval"; text: string };
-
-/** The question a session waits on (B14): the agent's own ask from its sidebar row, else the card's line. */
-export function sessionQuestion(job: DeskJob, row: AgentRow | null): SessionQuestion | null {
-  if (job.state !== "asking") return null;
-  const turn = row?.user_turn;
-  if (turn?.content) return { kind: turn.kind, text: turn.content.text };
-  const kind = job.ask === "approval" ? "approval" : job.ask === "decision" ? "decision" : job.ask === "plan_review" ? "plan_approval" : "question";
-  return job.question ? { kind, text: job.question } : null;
-}
-
-const QUESTION_WORD = { question: "desk.ask.question", plan_approval: "desk.ask.plan_review", decision: "desk.ask.decision", approval: "desk.ask.approval" } as const;
-
 /**
- * The question card while what the agent asks on its screen has not been
- * read (PRD desk-2-ui B14): the kind of ask and what it asks, from its
- * sidebar row or its card, and `직접 쓰기`, which gives the keyboard to the
- * input box below.
- */
-export function SessionQuestionCard({ question, onWrite }: { question: SessionQuestion; onWrite: () => void }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <section className="flex min-w-0 flex-col gap-sm rounded-lg border border-warning bg-warning/10 p-md" aria-label={t(QUESTION_WORD[question.kind])} data-desk-question={question.kind}>
-      <p className="flex min-w-0 items-baseline gap-xs text-body text-foreground">
-        <span className="shrink-0 text-caption text-warning">{t(QUESTION_WORD[question.kind])}</span>
-        <span className="min-w-0 whitespace-pre-wrap break-keep font-semibold [overflow-wrap:anywhere]">{question.text}</span>
-      </p>
-      <div className="flex justify-end">
-        <Button variant="text" size="inline" className="text-caption text-subtle-foreground" data-desk-question-write="true" onClick={onWrite}>{t("desk.room.writeOwn")}</Button>
-      </div>
-    </section>
-  );
-}
-
-/**
- * The question card at the conversation's end (PRD desk-2-ui D-11, B14,
- * B34): the phone's own ask card (`AskCardView`), its choices answered
+ * What the agent's own screen asks, at the conversation's end, answered in
+ * place (PRD desk-2-ui D-11, B14, B34; Doop B4): the phone's own ask card
+ * (`AskCardView`), its choices answered
  * through the phone's path, which types the keys the agent's screen takes;
  * one the computer cannot answer goes to the terminal. `직접 쓰기` under it
  * gives the keyboard to the input box below, for an answer of the

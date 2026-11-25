@@ -20,7 +20,7 @@ import { planFixture } from "./PlanScene";
 
 export const DESK_THREAD_SCENES = [
   { state: "live", label: "Thread from the store: Hide's parts, a letter each way, a running command (B25, B26, D-75)" },
-  { state: "asking", label: "Thread from the store: its question said once, at the foot (D-75)" },
+  { state: "asking", label: "Thread from the store: the questions Hide found, in one line above the box (Doop B4)" },
   { state: "failed", label: "Thread from the store: a record it cannot read (B27)" },
   { state: "held", label: "Thread from the store: its pane runs another session (B29)" },
 ] as const;
@@ -28,6 +28,12 @@ export const DESK_THREAD_SCENES = [
 type SceneState = (typeof DESK_THREAD_SCENES)[number]["state"];
 
 const noop = () => undefined;
+
+/** The questions Hide found in the asking scene's conversation, oldest first, as `open_asks` lists them. */
+const ASKS = [
+  { id: "ask-1", text: "라이트 캡처 6장을 모두 비교할까요?", at_unix_ms: Date.now() - 9 * 60_000 },
+  { id: "ask-2", text: "다크 모드도 찍을까요?", at_unix_ms: Date.now() - 2 * 60_000 },
+];
 
 const row = (pane_id: string, identity_label: string, mark: AgentRow["mark"], agent_kind: string) => ({ pane_id, identity_label, mark, agent_kind }) as AgentRow;
 const said = (text: string) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
@@ -108,7 +114,7 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div className="flex h-screen min-w-0 justify-end bg-background text-foreground" data-desk-thread-scene={state}>
         <div className="flex min-h-0 w-full max-w-(--size-lane-ideal) min-w-0 flex-col border-l border-border">
-          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine="mac" disconnected={false} sleeping={false} selectedOutput={null} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onOutput={noop} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />} onTerminal={noop} onMission={noop} onOutput={noop} onSession={noop} />
+          <ThreadPanel job={job} paneId={job.pane_id} actions={actions} mentions={mentions} startedByDesk={state === "asking"} asks={state === "asking" ? ASKS : undefined} head={<SessionHead paneId={job.pane_id!} title={job.title} job={job} row={null} pane={null} machine={state === "live" ? "Mac mini" : null} disconnected={false} sleeping={false} explorerOpen={false} filesChord="⇧⌘E" terminalChord="⌘J" deskActions={actions} onFiles={noop} onTerminal={noop} onOwnTab={noop} onClose={noop} />} onTerminal={noop} onMission={noop} outputOf={(output) => output} onOutput={noop} onSession={noop} onCopy={() => Promise.resolve(true)} />
         </div>
       </div>
     </TooltipProvider>

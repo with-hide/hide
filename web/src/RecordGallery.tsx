@@ -1,16 +1,14 @@
 import { CircleDotIcon, GlobeIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Actions } from "./actions";
 import { browserStillOf, addressShown } from "./browserViews";
 import { FileMark } from "./components/file-mark";
-import { blobUrl, requestFileBytesWithTotal, type FileSource } from "./fileBytes";
+import { useFileSource, useImageFile } from "./imageFile";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { FIRST_PICTURES, FIRST_ROWS, pictureOf, rowDetail, type GalleryTile } from "./galleryTiles";
 import type { RecordView } from "./snapshot";
-import { localDeviceId } from "./snapshot";
-import { useShellStore } from "./store";
 
 const PICTURE = "relative flex aspect-[5/2] w-full min-w-0 overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 const ROW = "flex w-full min-w-0 items-center gap-xs rounded-xs px-xxs py-xxs text-left text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -74,37 +72,7 @@ function Mark({ view }: { view: RecordView }) {
 
 /** An image is its own picture: its bytes, read once and kept for the next draw. */
 function ImagePicture({ view }: { view: RecordView }) {
-  const node = useShellStore((state) => localDeviceId(state.rest));
-  const source: FileSource = view.device_id === node ? null : { device: view.device_id, root: view.checkout_path };
-  const url = useImage(view.path, source);
+  const url = useImageFile(view.path, useFileSource(view.device_id, view.checkout_path));
   if (url === "failed") return <span className="flex w-full items-center justify-center"><FileMark icon={fileIcon(view.label)} /></span>;
   return url ? <img src={url} alt="" aria-hidden="true" draggable={false} className="size-full object-cover" data-record-view-image="true" /> : null;
-}
-
-/** Bytes past this draw the file's mark instead: a tile is no place to read a large file. */
-const IMAGE_BYTES = 8 * 1024 * 1024;
-
-/** The image's picture while its tile is drawn: read once, let go when the tile goes. */
-function useImage(path: string, source: FileSource): string | "failed" | null {
-  const [url, setUrl] = useState<string | "failed" | null>(null);
-  const device = source?.device ?? null;
-  const root = source?.root ?? null;
-  useEffect(() => {
-    let live = true;
-    let made: string | null = null;
-    setUrl(null);
-    requestFileBytesWithTotal(path, { length: IMAGE_BYTES }, device && root ? { device, root } : null)
-      .then(({ bytes, total }) => {
-        if (!live) return;
-        if (total > IMAGE_BYTES) return setUrl("failed");
-        made = blobUrl(bytes, path.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/*");
-        setUrl(made);
-      })
-      .catch(() => { if (live) setUrl("failed"); });
-    return () => {
-      live = false;
-      if (made) URL.revokeObjectURL(made);
-    };
-  }, [path, device, root]);
-  return url;
 }
