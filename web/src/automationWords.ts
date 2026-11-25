@@ -55,17 +55,19 @@ export function onceText(schedule: Extract<AutomationSchedule, { kind: "once" }>
 }
 
 /**
- * `7일 뒤`: how long until a once schedule's time, in calendar days once it
- * is a day or more away (so 1주일 뒤 reads as 7일 뒤 at any hour), else by the
- * clock (`3시간 뒤`, the next morning's 00:30 an hour before it), or `곧` in its
- * last minute; `at` is the core's time for it.
+ * How long until `at`, the core's next time for `schedule`: `9시간 뒤`, or `곧` in its last minute, since the clock moves by the
+ * minute. A once time a day or more away counts calendar days (`7일 뒤` for 1주일 뒤 at any hour), the way its date reads; closer
+ * than that, and for a repeating schedule, the clock counts (the next morning's 00:30 is `1시간 뒤`).
  */
-export function onceUntilText(schedule: Extract<AutomationSchedule, { kind: "once" }>, at: number, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
-  const [year, month, day] = schedule.date.split("-").map(Number);
-  const [nowYear, nowMonth, nowDay] = wallDay(now, zone).split("-").map(Number);
-  const days = Math.round((Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1) - Date.UTC(nowYear ?? 0, (nowMonth ?? 1) - 1, nowDay ?? 1)) / 86_400_000);
-  if (at - now >= 86_400_000) return t("automationScreen.inTime", { time: formatElapsed(language, days * 86_400_000) });
-  return at - now < 60_000 ? t("automationScreen.soon") : t("automationScreen.inTime", { time: formatElapsed(language, at - now) });
+export function untilText(schedule: AutomationSchedule, at: number, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
+  if (at - now < 60_000) return t("automationScreen.soon");
+  if (schedule.kind === "once" && at - now >= 86_400_000) {
+    const [year, month, day] = schedule.date.split("-").map(Number);
+    const [nowYear, nowMonth, nowDay] = wallDay(now, zone).split("-").map(Number);
+    const days = Math.round((Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1) - Date.UTC(nowYear ?? 0, (nowMonth ?? 1) - 1, nowDay ?? 1)) / 86_400_000);
+    return t("automationScreen.inTime", { time: formatElapsed(language, days * 86_400_000) });
+  }
+  return t("automationScreen.inTime", { time: formatElapsed(language, at - now) });
 }
 
 /** `12-02(수) 09:00 · 한 번` for a once schedule, which says its date where a repeating one says how often; any other reads as `scheduleText`. */
@@ -77,6 +79,14 @@ export function scheduleWithDate(schedule: AutomationSchedule, language: Interfa
 /** Whether it runs one time, at a date, rather than again and again (mission-104). */
 export function isOnce(automation: { schedule: AutomationSchedule }): boolean {
   return automation.schedule.kind === "once";
+}
+
+/**
+ * Whether a once automation's one time was taken, done or with its run going: on, with no next time. It has no time left to
+ * pause, so no [멈춤] is drawn; the core refuses that press as `automation_done` on the same condition (mission-104 S-3).
+ */
+export function onceTaken(automation: { schedule: AutomationSchedule; paused?: unknown; next_run_at_unix_ms?: number | null }): boolean {
+  return isOnce(automation) && !automation.paused && automation.next_run_at_unix_ms == null;
 }
 
 /** `2026-11-25`: the day `unixMs` falls on in `zone`, the machine's own today when it is now. */

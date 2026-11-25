@@ -11,10 +11,9 @@ import { RunSummary } from "./AutomationRunSummary";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
 import { automationGroups } from "./automationGroups";
-import { isOnce, lastResult, onceText, onceUntilText, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
+import { isOnce, lastResult, onceTaken, onceText, untilText, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { LookChip } from "./components/linked-view";
-import { formatElapsed } from "./components/elapsed";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Badge } from "./components/ui/badge";
@@ -147,13 +146,17 @@ const EXAMPLE_ICONS = { report: ChartColumnIcon, briefing: SunriseIcon, ci: Circ
  * starting points. The arrows move between the cards and rows in the drawn
  * order, Enter opens one.
  */
+/** Where the arrows stop, in the drawn order: each card, the fold of the done ones, and each done row while it is open (B38, S-1). */
+const STOPS = "[data-automation-open], [data-automation-done-toggle]";
+
 function Table({ section, actions }: { section: AutomationsSection; actions: Actions }) {
   const box = useRef<HTMLDivElement>(null);
-  // Back from a detail or the form, whose button is gone, the keys land on the first row or [+ 새 자동화] (B38).
+  // Back from a detail or the form, whose button is gone, the keys land on the first card, the fold of the done ones when only
+  // those are left, or [+ 새 자동화] (B38).
   useEffect(() => {
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
-    box.current?.querySelector<HTMLElement>("[data-automation-open], [data-automation-new]")?.focus();
+    box.current?.querySelector<HTMLElement>(STOPS + ", [data-automation-new]")?.focus();
   }, []);
   if (section.items.length === 0) {
     return (
@@ -165,7 +168,7 @@ function Table({ section, actions }: { section: AutomationsSection; actions: Act
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
     const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
     if (!forward && event.key !== "ArrowUp" && event.key !== "ArrowLeft") return;
-    const cards = Array.from(box.current?.querySelectorAll<HTMLElement>("[data-automation-open]") ?? []);
+    const cards = Array.from(box.current?.querySelectorAll<HTMLElement>(STOPS) ?? []);
     const index = cards.findIndex((card) => card === document.activeElement);
     const next = cards[index < 0 ? 0 : index + (forward ? 1 : -1)];
     if (!next) return;
@@ -182,7 +185,7 @@ function Table({ section, actions }: { section: AutomationsSection; actions: Act
       ) : null}
       {groups.waiting.length > 0 ? (
         <Group kind="once" count={groups.waiting.length}>
-          {groups.waiting.map((automation) => <OnceCard key={automation.id} automation={automation} actions={actions} />)}
+          {groups.waiting.map((automation) => <AutomationCard key={automation.id} automation={automation} actions={actions} />)}
         </Group>
       ) : null}
       {groups.done.length > 0 ? <DoneOnce automations={groups.done} actions={actions} /> : null}
@@ -281,12 +284,18 @@ function Empty() {
   );
 }
 
+/**
+ * One automation's card (B3): the logo, the name with ▶, the next run as its largest line over the schedule, then the task; a
+ * repeating one ends with its newest results and its folder. A once one still waiting (S-1) reads its own date over `◷ 한 번` in
+ * the once colour, and has no results yet to show.
+ */
 function AutomationCard({ automation, actions }: { automation: Automation; actions: Actions }) {
   const words = useWords();
   const { t } = words;
   const agent = agentProductName(automation.agent.kind);
+  const once = isOnce(automation);
   return (
-    <div className={cn("relative flex min-w-0 flex-col gap-sm rounded-lg border border-border bg-card p-md", automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
+    <div className={cn("relative flex min-w-0 flex-col gap-sm rounded-lg border border-border bg-card p-md", automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-once={once ? "true" : undefined} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
       <RowOverlayButton className="rounded-lg" aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
       <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
         <AgentLogo agent={automation.agent.kind} label={agent} />
@@ -298,68 +307,19 @@ function AutomationCard({ automation, actions }: { automation: Automation; actio
       <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
         <span className="sr-only">{t("automationScreen.col.next")}</span>
         <NextTime automation={automation} words={words} large />
-        <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
-          <RepeatIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+        <span className={cn("flex min-w-0 items-center gap-xs text-caption", once ? "text-automation-once" : "text-subtle-foreground")}>
+          {once ? <ClockIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : <RepeatIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
           <span className="min-w-0 truncate">{scheduleText(automation.reads_as, words.language, t)}</span>
         </span>
       </span>
       <span className="pointer-events-none relative line-clamp-2 break-words text-caption text-muted-foreground" title={automation.task}>{automation.task}</span>
-      <span className="pointer-events-none relative mt-auto flex min-w-0 items-center gap-sm border-t border-border pt-sm text-caption text-subtle-foreground">
+      {once ? null : <span className="pointer-events-none relative mt-auto flex min-w-0 items-center gap-sm border-t border-border pt-sm text-caption text-subtle-foreground">
         <span className="sr-only">{t("automationScreen.recent")}</span>
         <span className="flex min-w-0 flex-1"><RecentRuns automation={automation} words={words} /></span>
         <span className="flex min-w-0 shrink items-center gap-xs text-muted-foreground"><Where automation={automation} /><span className="sr-only">, {agent}</span></span>
-      </span>
+      </span>}
     </div>
   );
-}
-
-/**
- * A once automation still waiting (S-1): the logo, the name with ▶, its date
- * and how long until it as the card's largest line (`12-02(수) 09:00 · 7일
- * 뒤`), `◷ 한 번` in the once colour, then its task; a paused one dimmed.
- */
-function OnceCard({ automation, actions }: { automation: Automation; actions: Actions }) {
-  const words = useWords();
-  const { t } = words;
-  const agent = agentProductName(automation.agent.kind);
-  return (
-    <div className={cn("relative flex min-w-0 flex-col gap-sm rounded-lg border border-border bg-card p-md", automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-once="true" data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
-      <RowOverlayButton className="rounded-lg" aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
-      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
-        <AgentLogo agent={automation.agent.kind} label={agent} />
-        <span className="min-w-0 truncate text-body font-semibold text-foreground" title={automation.name}>{automation.name}</span>
-        {automation.unseen > 0 ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-automation-unseen={automation.unseen} /> : null}
-        <StateBadge automation={automation} />
-        <span className="pointer-events-auto ml-auto flex shrink-0"><RunNowButton automation={automation} actions={actions} icon /></span>
-      </span>
-      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
-        <span className="sr-only">{t("automationScreen.col.next")}</span>
-        <OnceTime automation={automation} words={words} large />
-        <span className="flex min-w-0 items-center gap-xs text-caption text-automation-once">
-          <ClockIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-          <span className="min-w-0 truncate">{scheduleText(automation.reads_as, words.language, t)}</span>
-        </span>
-      </span>
-      <span className="pointer-events-none relative line-clamp-2 break-words text-caption text-muted-foreground" title={automation.task}>{automation.task}</span>
-    </div>
-  );
-}
-
-/** `12-02(수) 09:00 · 7일 뒤`: a once automation's own time, the time it was set for, with how long until it while it waits on it. */
-function OnceTime({ automation, words, large = false }: { automation: Automation; words: Words; large?: boolean }) {
-  if (automation.schedule.kind !== "once") return null;
-  const at = automation.paused || automation.done ? null : automation.next_run_at_unix_ms;
-  return (
-    <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next={at == null ? "none" : "at"} data-automation-once-at={`${automation.schedule.date} ${automation.schedule.time}`}>
-      <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{onceText(automation.schedule, words.language, words.t)}</span>
-      {at == null ? null : <span className="min-w-0 truncate text-muted-foreground">{onceUntilText(automation.schedule, at, words.now, words.zone, words.language, words.t)}</span>}
-    </span>
-  );
-}
-
-/** `· 9시간 뒤`, or `· 곧` in its last minute: the clock moves by the minute, so a time the core is about to take reads as soon rather than a count that stands still. */
-function untilText(at: number, words: Words): string {
-  return at - words.now < 60_000 ? words.t("automationScreen.soon") : words.t("automationScreen.inTime", { time: formatElapsed(words.language, at - words.now) });
 }
 
 /** What the automation is doing, by its name: a run going, paused by the operator, or stopped for a person with why (B3, B23, B25); one that waits for its time says nothing. */
@@ -378,17 +338,21 @@ function StateBadge({ automation }: { automation: Automation }) {
   return <Badge variant="outline" className="text-destructive" data-automation-state="stopped">{pauseReasonText(automation.paused.reason, t)}</Badge>;
 }
 
-/** `내일 09:00 · 15시간 뒤`, the time `large` on a card; a paused automation, a done once one (`끝남`) or a schedule that never runs again has no next time (B3, B25, S-3). */
+/**
+ * `내일 09:00 · 15시간 뒤`, the time `large` on a card; a once automation says its own date, `12-02(수) 09:00 · 7일 뒤` (S-1).
+ * A paused automation, a done once one (`끝남`) or a schedule that never runs again has no next time (B3, B25, S-3).
+ */
 function NextTime({ automation, words, large = false }: { automation: Automation; words: Words; large?: boolean }) {
   const at = automation.paused ? null : automation.next_run_at_unix_ms;
+  const once = automation.schedule.kind === "once" ? automation.schedule : null;
   if (at == null) {
     const none = automation.paused ? "—" : automation.done ? words.t("automation.next.done") : words.t("automation.next.none");
     return <span className={cn("text-muted-foreground", large ? "text-subhead" : "text-caption")} data-automation-next={automation.done && !automation.paused ? "done" : "none"}>{none}</span>;
   }
   return (
-    <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="at">
-      <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{whenText(at, words.now, words.zone, words.language, words.t)}</span>
-      <span className="min-w-0 truncate text-muted-foreground">{untilText(at, words)}</span>
+    <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="at" data-automation-once-at={once ? `${once.date} ${once.time}` : undefined}>
+      <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{once ? onceText(once, words.language, words.t) : whenText(at, words.now, words.zone, words.language, words.t)}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{untilText(automation.schedule, at, words.now, words.zone, words.language, words.t)}</span>
     </span>
   );
 }
@@ -501,8 +465,8 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
           <BackButton label={t("automationScreen.back")} onBack={() => useUiStore.getState().setAutomations({ selected: null, run: null })} />
           <span className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-xs">
             <RunNowButton automation={automation} actions={actions} />
-            {/* A done once automation has no time to pause for; [편집] with a new date turns it on again (S-3). */}
-            {automation.done && !automation.paused ? null : automation.paused ? (
+            {/* A once automation whose time was taken has none left to pause for; [편집] with a new date turns it on again (S-3). */}
+            {onceTaken(automation) ? null : automation.paused ? (
               <Button variant="secondary" size="sm" onClick={() => actions.automation("resume", automation.id)} data-automation-resume={automation.id}>
                 <PlayIcon aria-hidden="true" />
                 {t("automationScreen.resume")}

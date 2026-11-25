@@ -6,7 +6,7 @@
 // list that draws the number draws these rows with its agents.
 
 import type { MissionAsk } from "./missions";
-import type { Automation, AutomationPauseReason, AutomationRecord, AutomationsSection } from "./snapshot";
+import type { Automation, AutomationPauseReason, AutomationRecord, AutomationsSection, SnapshotRest } from "./snapshot";
 
 /** An automation stopped for a person to fix (B23): why, since when, and the machine that runs it. */
 export type AutomationAsk = { automation: Automation; reason: AutomationPauseReason; since_unix_ms: number; device_id: string };
@@ -74,4 +74,11 @@ export function automationLooks(section: AutomationsSection | null, ids: readonl
     const run = automation.records.find((record): record is Extract<AutomationRecord, { kind: "run" }> => record.kind === "run" && record.number === automation.look_run) ?? null;
     return [{ automation, run, since_unix_ms: run ? (run.ended_at_unix_ms ?? run.started_at_unix_ms) : 0, device_id: deviceId }];
   });
+}
+
+/** Every device's once lines from one snapshot, `frontId`'s first: the one loop the Overview and the window's notices read. */
+export function everyDeviceLooks(rest: SnapshotRest | null, section: AutomationsSection | null, frontId?: string): AutomationLook[] {
+  const devices = rest?.navigator?.devices ?? [];
+  const ordered = frontId === undefined ? devices : [...devices.filter((device) => device.id === frontId), ...devices.filter((device) => device.id !== frontId)];
+  return ordered.flatMap((device) => automationLooks(section, device.agent_scope.automation_looks ?? [], device.id));
 }

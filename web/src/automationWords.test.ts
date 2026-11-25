@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInterfaceI18n } from "./i18n/instance";
-import { lastResult, lineTime, lookText, nextRunText, onceText, onceUntilText, recentSpendText, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
+import { lastResult, lineTime, lookText, nextRunText, onceText, untilText, recentSpendText, recordText, scheduleText, scheduleWithDate, spendText, whenText } from "./automationWords";
 import type { Automation, AutomationRecord } from "./snapshot";
 
 // PRD automations B3, B6, B20, B22: what the table, the detail and the phone
@@ -113,11 +113,13 @@ describe("a once automation's words", () => {
 
   it("counts calendar days a day or more ahead, and the clock closer than that", () => {
     // Now is Thursday 23:30 in Seoul: a week ahead at 09:00 is 7 days off, though 6 days 9.5 hours by the clock.
-    expect(onceUntilText(once("2026-11-26", "09:00"), seoul("2026-11-26", "09:00"), NOW, SEOUL, "ko", ko)).toBe("7일 뒤");
+    expect(untilText(once("2026-11-26", "09:00"), seoul("2026-11-26", "09:00"), NOW, SEOUL, "ko", ko)).toBe("7일 뒤");
     // The next morning's 00:30 is tomorrow by the calendar and an hour by the clock.
-    expect(onceUntilText(once("2026-11-20", "00:30"), seoul("2026-11-20", "00:30"), NOW, SEOUL, "ko", ko)).toBe("1시간 뒤");
-    expect(onceUntilText(once("2026-11-20", "23:30"), seoul("2026-11-20", "23:30"), NOW, SEOUL, "ko", ko)).toBe("1일 뒤");
-    expect(onceUntilText(once("2026-11-19", "23:30"), NOW + 30_000, NOW, SEOUL, "ko", ko)).toBe("곧");
+    expect(untilText(once("2026-11-20", "00:30"), seoul("2026-11-20", "00:30"), NOW, SEOUL, "ko", ko)).toBe("1시간 뒤");
+    expect(untilText(once("2026-11-20", "23:30"), seoul("2026-11-20", "23:30"), NOW, SEOUL, "ko", ko)).toBe("1일 뒤");
+    expect(untilText(once("2026-11-19", "23:30"), NOW + 30_000, NOW, SEOUL, "ko", ko)).toBe("곧");
+    // A repeating schedule counts by the clock however far off: 1 day 18 hours floors to 1 day.
+    expect(untilText({ kind: "daily", time: "17:30" }, NOW + 42 * 3_600_000, NOW, SEOUL, "ko", ko)).toBe("1일 뒤");
   });
 
   it("reads a done once automation as done, and its run as it ended", () => {

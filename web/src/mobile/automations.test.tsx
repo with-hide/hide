@@ -324,7 +324,9 @@ it("lists a once automation by its date, a done one last, and the one whose run 
     await serve({ type: "automations", items: [ended, automation("daily"), waiting], zone: ZONE, looks: ["migration"] });
     const look = container.querySelector('[data-phone-group="needs_you"] [data-phone-automation-look="migration"]')!;
     expect(look.querySelector('[data-mark-automation="once"]')).not.toBeNull();
-    expect(look.querySelector('[data-phone-automation-look-line="ok"]')!.textContent).toBe("Automation · once · ✓ Done · 4m");
+    const line = look.querySelector('[data-automation-look-line="ok"]')!;
+    expect(line.textContent).toBe("Automation · once · Done · 4m");
+    expect(line.querySelector("svg.text-success")).not.toBeNull();
     expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
     // Opening the line looks at its run: the core is told once, with the run, and the automation's page opens.
     await click('[data-phone-automation-look="migration"] [data-slot="row-overlay-button"]');

@@ -14,12 +14,12 @@
 // is a Needs You line no agent row carries (mission-104 S-4), so this window
 // notifies it itself, once, when the line appears; a click opens that run.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { statusText } from "./agentStatus";
 import { lookText } from "./automationWords";
 import { requireInterfaceLanguage } from "./i18n/locale";
-import { automationLooks, type AutomationLook } from "./ownAsks";
+import { everyDeviceLooks, type AutomationLook } from "./ownAsks";
 import { askSubjectLead, askSubjectNotice } from "./askSubject";
 import { AGENT_NOTICE_PREFIX } from "./firstRun";
 import type { AgentNotice } from "./generated/hided-ws";
@@ -37,9 +37,6 @@ function lookTag(look: AutomationLook): string {
 }
 
 /** Every device's once automations whose run waits to be opened, which a notification announces and a click opens. */
-function everyLook(rest: SnapshotRest | null, section: Parameters<typeof automationLooks>[0]): AutomationLook[] {
-  return (rest?.navigator?.devices ?? []).flatMap((device) => automationLooks(section, device.agent_scope.automation_looks ?? [], device.id));
-}
 
 /** How hided tags a notice another machine handed over: `peer:<connection id>|<that machine's tag>`. */
 const PEER_TAG_PREFIX = "peer:";
@@ -141,32 +138,37 @@ export function useAgentNotifications(actions: Actions) {
     };
   }, [bridge, live, needsYouEnabled, doneEnabled, t]);
   // A once automation's line appearing is notified once, as the Needs You switch says; the lines there when the page went live are
-  // not, as hided seeds its own (B33); a line put away takes its notification back.
-  const rest = useShellStore((s) => s.rest);
-  const section = useShellStore((s) => s.automations);
-  const looks = useMemo(() => (live ? everyLook(rest, section) : null), [live, rest, section]);
+  // not, as hided seeds its own (B33); a line put away takes its notification back. The snapshot is read through a subscription,
+  // not a selector, so a snapshot that moves no line renders nothing here.
   const shownLooks = useRef<Set<string> | null>(null);
   useEffect(() => {
-    if (!bridge || looks === null) {
+    if (!bridge || !live) {
       shownLooks.current = null;
-      return;
+      return undefined;
     }
-    const now = new Set(looks.map(lookTag));
-    const before = shownLooks.current;
-    shownLooks.current = now;
-    if (before === null) return;
-    const gone = [...before].filter((tag) => !now.has(tag));
-    if (gone.length > 0) bridge.withdrawNotifications(gone);
-    if (!needsYouEnabled) return;
-    const language = requireInterfaceLanguage(i18n.language);
-    for (const look of looks) {
-      const tag = lookTag(look);
-      if (before.has(tag)) continue;
-      const result = look.run ? lookText(look.run, language, t).text : null;
-      const body = [t("automationScreen.look.kind"), result, look.run?.answer?.trim()].filter(Boolean).join(" · ");
-      bridge.notify(tag, cut(look.automation.name, TITLE_LIMIT), cut(body, BODY_LIMIT), { unlessFocused: true });
-    }
-  }, [bridge, looks, needsYouEnabled, t, i18n.language]);
+    const observe = (state: Pick<ReturnType<typeof useShellStore.getState>, "rest" | "automations">) => {
+      const looks = everyDeviceLooks(state.rest, state.automations);
+      const now = new Set(looks.map(lookTag));
+      const before = shownLooks.current;
+      shownLooks.current = now;
+      if (before === null) return;
+      const gone = [...before].filter((tag) => !now.has(tag));
+      if (gone.length > 0) bridge.withdrawNotifications(gone);
+      if (!needsYouEnabled) return;
+      const language = requireInterfaceLanguage(i18n.language);
+      for (const look of looks) {
+        const tag = lookTag(look);
+        if (before.has(tag)) continue;
+        const result = look.run ? lookText(look.run, language, t).text : null;
+        const body = [t("automationScreen.look.kind"), result, look.run?.answer?.trim()].filter(Boolean).join(" · ");
+        bridge.notify(tag, cut(look.automation.name, TITLE_LIMIT), cut(body, BODY_LIMIT), { unlessFocused: true });
+      }
+    };
+    observe(useShellStore.getState());
+    return useShellStore.subscribe((state, previous) => {
+      if (state.rest !== previous.rest || state.automations !== previous.automations) observe(state);
+    });
+  }, [bridge, live, needsYouEnabled, t, i18n.language]);
   useEffect(() => {
     if (!bridge) return undefined;
     return bridge.onNotificationOpen((id) => {

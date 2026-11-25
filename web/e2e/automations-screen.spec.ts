@@ -58,6 +58,19 @@ async function choose(page: Page, field: string, option: Locator): Promise<void>
 const screen = (page: Page) => page.locator("[data-automation-screen]");
 
 /** The wall date and minute `ahead` minutes from now on this machine, whose zone hided reads a once time in. */
+/** `date` moved by `days` whole days, read as a calendar date with no clock or zone. */
+function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
+}
+
+/** The number on the sidebar's Needs You entry, 0 while it draws none. */
+async function askingCount(page: Page): Promise<number> {
+  const count = page.locator("[data-overview-count]");
+  if ((await count.count()) === 0) return 0;
+  return Number((await count.textContent())?.match(/\d+/)?.[0] ?? 0);
+}
+
 function wallMinute(ahead: number): { date: string; time: string } {
   const at = new Date(Date.now() + ahead * 60_000);
   const two = (n: number) => String(n).padStart(2, "0");
@@ -322,14 +335,19 @@ test("a once automation waits in its group, runs once at its minute, stands in N
     // S-2: once comes first and opens on tomorrow; a past date is the core's refusal and nothing can be made.
     await expect(page.locator("[data-automation-schedule-kind]").first()).toHaveAttribute("data-automation-schedule-kind", "once");
     await page.locator('[data-automation-schedule-kind="once"]').click();
-    await expect(page.locator('[data-automation-field="date"]')).toHaveValue(wallMinute(24 * 60).date);
+    // Every date below is counted from the one the form opened on, never from this test's own clock, so a day turning
+    // between two reads moves both alike (docs/TESTING.md).
+    const dateField = page.locator('[data-automation-field="date"]');
+    await expect(dateField).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+    const opened = await dateField.inputValue();
     const create = page.locator("[data-automation-create]");
-    await page.locator('[data-automation-field="date"]').fill(wallMinute(-2 * 24 * 60).date);
+    await dateField.fill(shiftDate(opened, -3));
     await expect(page.locator('[data-automation-refusal="schedule_once_past"]')).toBeVisible();
     await expect(create).toBeDisabled();
-    // A week ahead reads back as its date, 7 days off, in this machine's zone.
+    // A week ahead is six days after tomorrow, and reads back as its date, 7 days off.
     await page.locator('[data-automation-once-quick="7"]').click();
-    const week = wallMinute(7 * 24 * 60).date;
+    const week = shiftDate(opened, 6);
+    await expect(dateField).toHaveValue(week);
     await expect(page.locator('[data-automation-preview="once"]')).toContainText(`${week.slice(5)} 09:00 once · in 7d`);
     await create.click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "detail");
@@ -352,11 +370,13 @@ test("a once automation waits in its group, runs once at its minute, stands in N
     await setAgentState(stack.daemon, pane, "working");
     await setAgentState(stack.daemon, pane, "idle");
 
-    // S-4: its line stands in Needs You with the clock, its run's result, and the app's count.
+    // S-4: its line stands in Needs You with the clock and its run's result, and the count of Needs You takes it in.
+    const askingBefore = await askingCount(page);
     const look = page.locator(`[data-project-list] [data-automation-look="${id}"]`);
     await expect(look).toHaveCount(1, { timeout: 60_000 }); // wait-ok: the core recorded the run as ended and put its line in Needs You
     await expect(look.locator('[data-mark-automation="once"]')).toHaveCount(1);
-    await expect(look.locator('[data-automation-look-line="ok"]')).toContainText("Automation · once · ✓ Done");
+    await expect(look.locator('[data-automation-look-line="ok"]')).toContainText("Automation · once · Done");
+    await expect.poll(() => askingCount(page)).toBe(askingBefore + 1);
 
     // S-1: done, it leaves the waiting group for the fold, closed until pressed.
     await expect(waiting.locator("[data-automation-open]")).toHaveCount(1);
@@ -365,6 +385,18 @@ test("a once automation waits in its group, runs once at its minute, stands in N
     await expect(page.locator(`[data-automation-done-row="${id}"]`)).toHaveCount(0);
     await toggle.click();
     await expect(page.locator(`[data-automation-done-row="${id}"]`)).toHaveAttribute("data-automation-done-tone", "ok");
+
+    // S-1, B38: the arrows walk the drawn order, 반복 then 한 번 then the fold and its open rows, and back.
+    const repeating = page.locator('[data-automation-group="repeating"] [data-automation-open]');
+    await repeating.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(waiting.locator("[data-automation-open]")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(`[data-automation-done-row="${id}"]`)).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(toggle).toBeFocused();
 
     // S-4: the line opens that run, and opened, the core takes the line away.
     await look.locator(`[data-automation-look-open="${id}"]`).click();

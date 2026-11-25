@@ -11,7 +11,7 @@ import { RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { StatusMark } from "../components/status-mark";
-import { AskLine, AutomationAskRows, LookLine } from "./AutomationsScreen";
+import { AskLine, AutomationAskRows, PhoneLookLine } from "./AutomationsScreen";
 import { MissionAskRows, OtherMissionAskRow } from "./MissionsScreen";
 import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type GatheredLook, type HostLine } from "./gather";
 import { automationLink, dropHostPush, hostLink, hostStore, missionLink, type PairedHost } from "./hosts";
@@ -240,7 +240,7 @@ function OtherLookRow({ host, look }: OtherLook) {
         <StatusMark mark="turn" automation="once" className="size-(--size-icon)" />
         <span className="flex min-w-0 flex-1 flex-col items-start gap-xs">
           <span className="break-keep text-body font-medium text-foreground wrap-anywhere">{look.name}</span>
-          <span className="break-keep text-body wrap-anywhere"><LookLine automation={look} /></span>
+          <span className="break-keep text-body wrap-anywhere"><PhoneLookLine automation={look} /></span>
           <DeviceTag label={host.name} computer />
         </span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />

@@ -3,13 +3,13 @@ import { useMemo } from "react";
 import type { Actions } from "../actions";
 import { useAgentLogosShown } from "../agentLogoMode";
 import { deviceScope } from "../agentScope";
-import { lookText, pauseReasonText } from "../automationWords";
+import { LookLine } from "../automationMarks";
+import { pauseReasonText } from "../automationWords";
 import { AgentRowMark } from "../AgentRowMark";
-import { requireInterfaceLanguage } from "../i18n/locale";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { automationAsks, automationLooks, type AutomationAsk, type AutomationLook } from "../ownAsks";
+import { automationAsks, automationLooks, everyDeviceLooks, type AutomationAsk, type AutomationLook } from "../ownAsks";
 import { machineName } from "../screenMachine";
 import type { SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
@@ -48,13 +48,9 @@ export function useAutomationLooks(deviceId: string | null | undefined): Automat
 
 /** Every device's, the front device's first, as `useEveryDeviceAutomationAsks` lists the asks. */
 export function useEveryDeviceAutomationLooks(frontId: string): AutomationLook[] {
-  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const rest = useShellStore((s) => s.rest);
   const section = useShellStore((s) => s.automations);
-  return useMemo(() => {
-    if (!devices) return [];
-    const ordered = [...devices.filter((device) => device.id === frontId), ...devices.filter((device) => device.id !== frontId)];
-    return ordered.flatMap((device) => automationLooks(section, device.agent_scope.automation_looks ?? [], device.id));
-  }, [devices, section, frontId]);
+  return useMemo(() => everyDeviceLooks(rest, section, frontId), [rest, section, frontId]);
 }
 
 /** `useAutomationAsks` read once from a snapshot, for a count drawn outside a render's subscription. */
@@ -81,20 +77,6 @@ export function AutomationAskChoices({ ask, actions, className }: { ask: Automat
   );
 }
 
-/** `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, the result in its tone (S-4). */
-export function AutomationLookLine({ look, className }: { look: AutomationLook; className?: string }) {
-  const { t, i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
-  const shown = look.run ? lookText(look.run, language, t) : null;
-  const mark = shown ? TONE_MARK[shown.tone] : null;
-  return (
-    <span className={cn("min-w-0 truncate text-caption text-muted-foreground", className)} data-automation-look-line={shown?.tone ?? "none"}>
-      {t("automationScreen.look.kind")}
-      {shown ? <>{" · "}<span className={TONE_CLASS[shown.tone]}>{mark ? `${mark} ` : ""}{shown.text}</span></> : null}
-    </span>
-  );
-}
-
 /** The run's answer, one quoted muted line under it (S-4); none while the core carries no answer. */
 export function AutomationLookAnswer({ look, className }: { look: AutomationLook; className?: string }) {
   const answer = look.run?.answer?.trim();
@@ -102,8 +84,6 @@ export function AutomationLookAnswer({ look, className }: { look: AutomationLook
   return <span className={cn("min-w-0 truncate text-caption text-muted-foreground", className)} title={answer} data-automation-look-answer="true">{`"${answer}"`}</span>;
 }
 
-const TONE_MARK = { ok: "✓", failed: "✗", skipped: "–", running: "●", stopped: "■" } as const;
-const TONE_CLASS = { ok: "text-success", failed: "text-destructive", skipped: "text-muted-foreground", running: "text-agent-working", stopped: "text-muted-foreground" } as const;
 
 /** The automation mark, where an agent's logo stands on the rows beside it. */
 export function AutomationMark({ className }: { className?: string }) {
@@ -200,7 +180,7 @@ export function SidebarAutomationLookRow({ look, inset, actions, ...data }: { lo
           <FoldLane />
         </>}
       >
-        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs leading-(--size-sidebar-line-detail)"><AutomationLookLine look={look} /></span>
+        <span aria-hidden="true" className="pointer-events-none flex min-w-0 items-baseline gap-xs leading-(--size-sidebar-line-detail)"><LookLine run={look.run} /></span>
         <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AutomationLookAnswer look={look} /></span>
       </SessionRowBody>
     </li>

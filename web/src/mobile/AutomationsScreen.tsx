@@ -12,7 +12,8 @@
 
 import { ClockIcon, Loader2Icon, RepeatIcon } from "lucide-react";
 import { doneLast } from "../automationGroups";
-import { lookText, nextRun, nextRunText, pauseReasonText, scheduleText, scheduleWithDate } from "../automationWords";
+import { LookLine } from "../automationMarks";
+import { nextRun, nextRunText, pauseReasonText, scheduleText, scheduleWithDate } from "../automationWords";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
 import { RowOverlayButton } from "../components/ui/row-button";
@@ -120,10 +121,12 @@ export function ScheduleLine({ automation, page = false, className }: { automati
         : page && next.kind === "at" ? t("mobile.automations.nextAt", { when }) : when;
   const tone = next.kind === "running" ? "working" : paused && paused.reason !== "operator" ? "warning" : "quiet";
   return (
-    <span className={cn("break-keep text-body wrap-anywhere", LINE_TONE[tone], className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason} data-phone-automation-tone={tone} data-phone-automation-once={once ? "true" : undefined}>
-      {once ? <ClockIcon aria-hidden="true" className="mr-xxs inline size-(--size-icon-sm) align-[-0.125em] text-automation-once" /> : null}
-      {once ? scheduleWithDate(automation.schedule, language, t) : scheduleText(automation.schedule, language, t)}
-      {after === null ? null : <>{" · "}{after}</>}
+    <span className={cn("break-keep text-body wrap-anywhere", once && "inline-flex items-center gap-xxs", LINE_TONE[tone], className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason} data-phone-automation-tone={tone} data-phone-automation-once={once ? "true" : undefined}>
+      {once ? <ClockIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-automation-once" /> : null}
+      <span>
+        {once ? scheduleWithDate(automation.schedule, language, t) : scheduleText(automation.schedule, language, t)}
+        {after === null ? null : <>{" · "}{after}</>}
+      </span>
     </span>
   );
 }
@@ -155,29 +158,6 @@ export function AutomationAskRows({ computer }: { computer?: string } = {}) {
   if (asking.length + looking.length === 0) return null;
   return (
     <>
-    {looking.length > 0 ? (
-      <ul data-phone-automation-looks={looking.length}>
-        {looking.map((automation) => (
-          <li key={automation.id} className="relative" data-phone-automation-look={automation.id}>
-            <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => { if (automation.look_run !== undefined) seeAutomationLook(automation.id, automation.look_run); openAutomation(automation.id); }} />
-            <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
-              <span className="flex min-w-0 flex-1">
-                <TwoLineRow
-                  lead={<StatusMark mark="turn" automation="once" className="size-(--size-icon)" />}
-                  head={<span className="min-w-0 break-keep text-title font-medium text-foreground wrap-anywhere">{automation.name}</span>}
-                  line={
-                    <span className="min-w-0 break-keep wrap-anywhere">
-                      {computer ? <DeviceTag label={computer} computer /> : null}
-                      <LookLine automation={automation} />
-                    </span>
-                  }
-                />
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-    ) : null}
     {asking.length === 0 ? null : (
     <ul data-phone-automation-asks={asking.length}>
       {asking.map(({ automation, paused }) => (
@@ -205,26 +185,38 @@ export function AutomationAskRows({ computer }: { computer?: string } = {}) {
       ))}
     </ul>
     )}
+    {looking.length > 0 ? (
+      <ul data-phone-automation-looks={looking.length}>
+        {looking.map((automation) => (
+          <li key={automation.id} className="relative" data-phone-automation-look={automation.id}>
+            <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => { if (automation.look_run !== undefined) seeAutomationLook(automation.id, automation.look_run); openAutomation(automation.id); }} />
+            <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
+              <span className="flex min-w-0 flex-1">
+                <TwoLineRow
+                  lead={<StatusMark mark="turn" automation="once" className="size-(--size-icon)" />}
+                  head={<span className="min-w-0 break-keep text-title font-medium text-foreground wrap-anywhere">{automation.name}</span>}
+                  line={
+                    <span className="min-w-0 break-keep wrap-anywhere">
+                      {computer ? <DeviceTag label={computer} computer /> : null}
+                      <PhoneLookLine automation={automation} />
+                    </span>
+                  }
+                />
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    ) : null}
     </>
   );
 }
 
-/** `자동화 · 한 번 · ✓ 끝남 · 4분`: what a once automation's run came to, as the desktop's line says it (S-4, S-5). */
-export function LookLine({ automation }: { automation: Pick<PhoneAutomation, "look_run" | "records"> }) {
-  const { t, i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
+/** A once automation's line as the phone draws it: the shared `LookLine` of the run that waits to be opened (S-5). */
+export function PhoneLookLine({ automation }: { automation: Pick<PhoneAutomation, "look_run" | "records"> }) {
   const run = automation.records.find((record) => record.kind === "run" && record.number === automation.look_run);
-  const shown = run?.kind === "run" ? lookText(run, language, t) : null;
-  return (
-    <span data-phone-automation-look-line={shown?.tone ?? "none"}>
-      <span className="text-muted-foreground">{t("automationScreen.look.kind")}</span>
-      {shown ? <><span className="text-muted-foreground">{" · "}</span><span className={LOOK_TONE[shown.tone]}>{`${LOOK_MARK[shown.tone]} ${shown.text}`}</span></> : null}
-    </span>
-  );
+  return <LookLine run={run?.kind === "run" ? run : null} size="body" className="inline-flex" />;
 }
-
-const LOOK_MARK = { ok: "✓", failed: "✗", skipped: "–", running: "●", stopped: "■" } as const;
-const LOOK_TONE = { ok: "text-success", failed: "text-destructive", skipped: "text-muted-foreground", running: "text-agent-working", stopped: "text-muted-foreground" } as const;
 
 /** An automation's name and why it stopped for a person, as one line of 내 차례; the gathered view draws other computers' with it. */
 export function AskLine({ name, reason, grow = false }: { name: string; reason: NonNullable<PhoneAutomation["paused"]>["reason"]; grow?: boolean }) {

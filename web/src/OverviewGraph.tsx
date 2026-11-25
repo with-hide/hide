@@ -11,7 +11,8 @@ import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { KindIcon } from "./components/kind-mark";
 import { MissionAskChoices, MissionAskLine, useMissionAsks, useMissionPlace } from "./components/sidebar-mission-row";
-import { AutomationAskChoices, AutomationAskLine, AutomationLookAnswer, AutomationLookLine, AutomationMark, useAutomationAsks, useAutomationLooks } from "./components/sidebar-automation-row";
+import { LookLine } from "./automationMarks";
+import { AutomationAskChoices, AutomationAskLine, AutomationLookAnswer, AutomationMark, useAutomationAsks, useAutomationLooks } from "./components/sidebar-automation-row";
 import type { AutomationAsk, AutomationLook } from "./ownAsks";
 import { missionAskWhat, type MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
@@ -575,7 +576,7 @@ function OverviewAutomationLook({ look, actions }: { look: AutomationLook; actio
   const { t } = useInterfaceTranslation();
   return <div className="og-ask" data-graph-automation-look={look.automation.id}>
     <Button variant="text" size="inline" className="og-ask-who flex justify-start font-normal" aria-label={t("automationScreen.open", { name: look.automation.name })} onClick={() => actions.openAutomation(look.automation.id, look.automation.look_run ?? null)}><StatusMark mark="turn" automation="once" /><span>{look.automation.name}</span></Button>
-    <p className="flex min-w-0 flex-col"><AutomationLookLine look={look} /><AutomationLookAnswer look={look} /></p>
+    <p className="flex min-w-0 flex-col"><LookLine run={look.run} /><AutomationLookAnswer look={look} /></p>
   </div>;
 }
 

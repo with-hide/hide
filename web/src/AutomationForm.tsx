@@ -4,7 +4,7 @@ import { Trans } from "react-i18next";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
 import { addCall, datePlus, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ONCE_QUICK_DAYS, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
-import { onceText, onceUntilText, scheduleText, wallDay, whenText, WEEKDAYS, weekdayText } from "./automationWords";
+import { onceText, scheduleText, untilText, wallDay, whenText, WEEKDAYS, weekdayText } from "./automationWords";
 import { AgentPicker } from "./components/agent-picker";
 import { useMinuteClock } from "./components/elapsed";
 import { Button } from "./components/ui/button";
@@ -91,7 +91,12 @@ export function AutomationForm({ section, automation, example = null, actions }:
   const chosen = draft.folder === null ? null : folders.find((workspace) => workspace.path === draft.folder) ?? null;
   const git = chosen?.is_git === true;
   const empty = emptyField(draft);
-  const blocked = empty !== null || preview.state === "refused" || sending;
+  // A done once automation's own date has passed: while an edit keeps that date the core takes the edit, which sends no schedule,
+  // so its passing is no refusal; a date the operator changed is read again (S-3).
+  const keptPast = automation !== null && automation.schedule.kind === "once" && preview.state === "refused" && preview.code === "schedule_once_past"
+    && JSON.stringify(draftSchedule(draft.schedule)) === JSON.stringify(automation.schedule);
+  const refused = preview.state === "refused" && !keptPast;
+  const blocked = empty !== null || refused || sending;
   const change = (patch: Partial<FormDraft>) => {
     setDraft((current) => ({ ...current, ...patch }));
     setRefusal(null);
@@ -126,7 +131,7 @@ export function AutomationForm({ section, automation, example = null, actions }:
     const empty = name === "name" || name === "task" ? missing(name) : null;
     return empty ? <RefusalLine code={empty} field={name} /> : null;
   };
-  const scheduleRefusal = refusal?.field === "schedule" ? refusal.code : preview.state === "refused" ? preview.code : null;
+  const scheduleRefusal = refusal?.field === "schedule" ? refusal.code : refused && preview.state === "refused" ? preview.code : null;
   return (
     <>
       <div className="flex shrink-0 items-center gap-sm border-b border-border px-lg py-sm" data-automation-form-head="true">
@@ -180,7 +185,7 @@ export function AutomationForm({ section, automation, example = null, actions }:
           </Field>
           <Field label={t("automationScreen.form.schedule")}>
             <ScheduleFields schedule={draft.schedule} change={changeSchedule} language={language} zone={section.zone} />
-            {scheduleRefusal ? <RefusalLine code={scheduleRefusal} field="schedule" /> : <PreviewLine preview={preview} />}
+            {scheduleRefusal ? <RefusalLine code={scheduleRefusal} field="schedule" /> : keptPast && automation?.schedule.kind === "once" ? <DoneLine schedule={automation.schedule} /> : <PreviewLine preview={preview} />}
           </Field>
         </div>
         {refusal?.field === "form" ? <div className="pt-md"><RefusalLine code={refusal.code} field="form" /></div> : null}
@@ -213,6 +218,12 @@ function RefusalLine({ code, field }: { code: string; field: string }) {
 }
 
 /** `평일 09:00 · 다음: 목 11-20 09:00 · 이 기계 시간대` (B6); a once schedule `12-02(수) 09:00 한 번 · 7일 뒤 · 이 기계 시간대` (S-2). */
+/** `11-25(수) 18:56 한 번 · 끝남`: the saved date of a done once automation, which an edit that keeps it sends unchanged (S-3). */
+function DoneLine({ schedule }: { schedule: Extract<AutomationSchedule, { kind: "once" }> }) {
+  const { t, i18n } = useInterfaceTranslation();
+  return <p className="text-caption text-subtle-foreground" data-automation-preview="done">{`${t("automation.schedule.onceAt", { when: onceText(schedule, requireInterfaceLanguage(i18n.language), t) })} · ${t("automation.next.done")}`}</p>;
+}
+
 function PreviewLine({ preview }: { preview: Preview }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
@@ -220,7 +231,7 @@ function PreviewLine({ preview }: { preview: Preview }) {
   if (preview.state !== "read") return <p className="text-caption text-muted-foreground" aria-hidden="true">&nbsp;</p>;
   const { value } = preview;
   if (value.reads_as.kind === "once" && value.next_run_at_unix_ms !== null) {
-    const until = onceUntilText(value.reads_as, value.next_run_at_unix_ms, now, value.zone ?? undefined, language, t);
+    const until = untilText(value.reads_as, value.next_run_at_unix_ms, now, value.zone ?? undefined, language, t);
     return <p className="text-caption text-subtle-foreground" data-automation-preview="once"><Trans i18n={i18n} t={t} i18nKey="automationScreen.form.previewOnce" values={{ when: onceText(value.reads_as, language, t), until }} components={{ when: <span className="font-semibold text-foreground" /> }} /></p>;
   }
   const reads = scheduleText(value.reads_as, language, t);
