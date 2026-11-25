@@ -10,7 +10,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Actions } from "./actions";
 import { escapeConsumed } from "./components/ui/tooltip";
 import { askingCount, deskOn, laneCards, sessionFacts, sessionThreadId, threadKeyPane, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
-import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
+import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, keepTab, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
 import { OutputMark } from "./components/desk/desk-job-card";
@@ -19,7 +19,6 @@ import { ThreadList } from "./components/desk/thread-list";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import { SessionChipProvider, type SessionChipSource } from "./components/desk/session-chip";
 import { allAgents } from "./paneAgents";
-import type { DeskKeptTab } from "./snapshot";
 import { commandLabel } from "./shortcutLabels";
 import { leaveDesk } from "./keyboard";
 import { mentionAt, mentionTree, outgoing, pickMention } from "./deskComposer";
@@ -37,7 +36,6 @@ import { useUiStore } from "./ui";
 import { windowIsActive } from "./viewFocus";
 
 const NO_JOBS: DeskJob[] = [];
-const NO_TABS: DeskKeptTab[] = [];
 
 /** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Labs › Desk switched it on (B41). */
 export function DeskSidebarEntry({ actions }: { actions: Actions }) {
@@ -294,7 +292,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
   if (!desk) return null;
   const working = jobs.filter((job) => job.state === "working").length;
   const shownThread = laneWindow.up && laneWindow.tool?.kind === "thread" ? laneWindow.tool.job : null;
-  const shownTab = laneWindow.up && laneWindow.view ? activeTab(desk.lane.kept, laneWindow) : null;
+  const shownTab = laneWindow.up && laneWindow.view ? activeTab(laneWindow.kept, laneWindow) : null;
   const shownOutput = shownTab?.kind === "output" ? shownTab.output.id : null;
   const composer = (
     <DeskComposer
@@ -405,7 +403,7 @@ type LaneActions = {
 function useLaneActions(actions: Actions): LaneActions {
   return useMemo(() => {
     const set = (change: Parameters<ReturnType<typeof useUiStore.getState>["setDeskLane"]>[0]) => useUiStore.getState().setDeskLane(change);
-    const kept = () => useShellStore.getState().desk?.lane.kept ?? NO_TABS;
+    const kept = () => useUiStore.getState().deskLane.kept;
     const thread = (job: DeskJob, answer = false) => set((lane) => openThread(lane, job.id, { answer }));
     const threadOutput = (job: DeskJob, output: DeskOutput) => set((lane) => showTab(lane, kept(), outputTab(job.id, outputOf(job, output))));
     return {
@@ -450,16 +448,15 @@ function useLaneActions(actions: Actions): LaneActions {
  */
 function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: LaneActions; chat: ReactNode }) {
   const { t } = useInterfaceTranslation();
-  const room = useShellStore((s) => s.desk?.lane);
   const own = useShellStore((s) => s.deskJobs?.jobs ?? NO_JOBS);
   const threads = useThreads();
   const place = useUiStore((s) => s.deskLane);
   const set = useUiStore((s) => s.setDeskLane);
   const chord = useShellStore((s) => commandLabel("desk_terminal", s.rest?.ui_state)) || null;
   const [conductors, setConductors] = useState<ReadonlySet<string>>(() => new Set());
-  const kept = room?.kept ?? NO_TABS;
-  const pinned = room?.pinned ?? false;
-  const pin = () => actions.deskLanePin(!pinned);
+  const kept = place.kept;
+  const pinned = place.pinned;
+  const pin = () => set((now) => ({ ...now, pinned: !now.pinned }));
   const expand = () => set((now) => ({ ...now, expanded: !now.expanded }));
   const tabs = viewTabs(kept, place);
   const active = activeTab(kept, place);
@@ -557,13 +554,12 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
         onTab={(key) => set((now) => ({ ...now, view: true, active: key }))}
         onKeep={(key) => {
           const found = tabOf(key);
-          if (found?.preview) actions.deskTabKeep(found.tab, true);
+          if (found?.preview) set((now) => keepTab(now, found.tab));
         }}
         onCloseTab={(key) => {
           const found = tabOf(key);
           if (!found) return;
-          set((now) => closeTab(now, kept, found.tab));
-          if (!found.preview) actions.deskTabKeep(found.tab, false);
+          set((now) => closeTab(now, now.kept, found.tab));
         }}
         controls={<LaneHeadControls edge={tool === null} expanded={place.expanded} pinned={pinned} onExpand={expand} onPin={pin} onClose={() => set(closeView)} />}
       >

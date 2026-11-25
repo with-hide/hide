@@ -194,9 +194,18 @@ pub(crate) struct Stored {
     /// What the core remembers of each job beyond the ledger, by intent.
     #[serde(default)]
     pub marks: Vec<JobMark>,
-    /// The lane's pin and kept tabs (B31, B32).
-    #[serde(default)]
+    /// The widths of Desk's two panels (PRD desk-2-ui B23), under a key of
+    /// their own: Desk 1차 kept a pin and kept tabs under `lane`, which this
+    /// build does not read and the next save leaves out, and Desk 1차 reads a
+    /// store with no `lane` as an empty one, so a downgrade keeps the
+    /// conversation and queue (B29).
+    #[serde(default, rename = "panel_widths")]
     pub lane: crate::model::DeskLane,
+    /// Messages the operator sent while a reply was being written, in order,
+    /// kept across a restart; each goes once the turn before it ended. An
+    /// older Hide reads past the key.
+    #[serde(default)]
+    pub queued: Vec<crate::model::DeskQueuedMessage>,
 }
 
 /// Spawns the queue holds; one past it is refused `desk_queue_full`.
@@ -334,14 +343,27 @@ fn decode(bytes: &[u8]) -> Result<Stored, String> {
     stored.settings.cap = stored.settings.cap.clamp(1, DESK_CAP_MAX);
     stored.sessions.truncate(AdapterId::all().count());
     stored.queue.truncate(MAX_QUEUE);
+    // A start is a fact of the thread running it, which no hided before
+    // this one left behind: read from the file, it waits again, and asking
+    // the same intent again converges on what the ledger already holds.
+    for job in &mut stored.queue {
+        if job.state == QueuedState::Starting {
+            job.state = QueuedState::Waiting;
+        }
+    }
+    stored
+        .queued
+        .retain(|message| !message.text.is_empty() && message.text.len() <= MAX_MESSAGE_BYTES);
+    // One past the cap: a message the agent did not take goes back ahead
+    // of a full line.
+    stored.queued.truncate(crate::model::DESK_QUEUED_MAX + 1);
     let excess = stored.marks.len().saturating_sub(MAX_MARKS);
     stored.marks.drain(..excess);
-    let excess = stored
-        .lane
-        .kept
-        .len()
-        .saturating_sub(crate::model::DESK_KEPT_TABS_MAX);
-    stored.lane.kept.drain(..excess);
+    let width = |width: Option<u32>| {
+        width.filter(|width| (1..=crate::model::DESK_LANE_WIDTH_MAX).contains(width))
+    };
+    stored.lane.view_width = width(stored.lane.view_width);
+    stored.lane.session_width = width(stored.lane.session_width);
     stored.choices.truncate(AdapterId::all().count());
     for (_, choices) in &mut stored.choices {
         choices.models.truncate(hide_desk::session::MAX_CHOICES);
@@ -549,21 +571,196 @@ mod tests {
     }
 
     #[test]
-    fn the_lane_comes_back_after_a_restart_within_its_cap() {
-        let tab = |index: usize| crate::model::DeskKeptTab::Mission {
-            mission: format!("mission-{index}"),
-            title: "Desk".into(),
+    fn the_lanes_widths_come_back_after_a_restart_and_desk_1_still_reads_the_store() {
+        /// The store as Desk 1차's reader takes it, kept as it shipped: a
+        /// `lane` it requires the fields of, defaulted when absent.
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        struct Released {
+            conversation: serde_json::Value,
+            #[serde(default)]
+            lane: Option<ReleasedLane>,
+        }
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        struct ReleasedLane {
+            pinned: bool,
+            kept: Vec<serde_json::Value>,
+        }
+        let stored = Stored {
+            lane: crate::model::DeskLane {
+                view_width: Some(720),
+                session_width: Some(480),
+            },
+            ..Stored::default()
+        };
+        let bytes = encode(&stored).unwrap();
+        assert_eq!(decode(&bytes).unwrap().lane, stored.lane);
+        assert!(
+            serde_json::from_slice::<Released>(&bytes).is_ok(),
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    #[test]
+    fn a_width_out_of_range_in_the_file_reads_as_unset() {
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&Stored::default()).unwrap()).unwrap();
+        file["panel_widths"] = serde_json::json!({"view_width": 0, "session_width": 99_999});
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(restored.lane, crate::model::DeskLane::default());
+    }
+
+    /// B29: a store Desk 1차 wrote, its lane pinned with sixteen kept tabs,
+    /// opens as it was but for two unset widths, its conversation, queue,
+    /// marks and settings kept, and the next save writes no tab.
+    #[test]
+    fn an_old_lane_with_a_pin_and_sixteen_kept_tabs_loads_as_two_unset_widths() {
+        let output = |index: usize| {
+            serde_json::json!({"kind": "output", "job": format!("desk:{index}"), "output": {
+                "id": format!("view-{index}"), "kind": "image", "label": "shot.png",
+                "thumb": null, "seen": true, "pr_state": null, "device_id": "node",
+                "checkout": "/repo", "path": "/repo/shot.png", "url": null,
+            }})
+        };
+        let mission = |index: usize| serde_json::json!({"kind": "mission", "mission": format!("mission-{index}"), "title": "Desk"});
+        let kept: Vec<_> = (0..16)
+            .map(|index| {
+                if index % 2 == 0 {
+                    output(index)
+                } else {
+                    mission(index)
+                }
+            })
+            .collect();
+        let mut stored = Stored::default();
+        stored.conversation.push(user(1, "what runs now?"));
+        stored.settings.cap = 3;
+        stored.queue.push(QueuedJob {
+            intent: "desk:1".into(),
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                parent: None,
+                machine: None,
+                name: "worker".into(),
+                intent: "desk:1".into(),
+                kind: "codex".into(),
+                repo: Some("/r".into()),
+                branch: Some("main".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: Some("go".into()),
+                beside: false,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                profile: None,
+            },
+            queued_at_ms: 1,
+            state: QueuedState::Waiting,
+            code: None,
+        });
+        stored.marks.push(JobMark {
+            intent: "desk:0".into(),
+            grouped: true,
+            watched: true,
+            changed_at_ms: 2,
+            ..JobMark::default()
+        });
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("panel_widths");
+        file["lane"] = serde_json::json!({"pinned": true, "kept": kept});
+
+        let restored = decode(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(restored, stored);
+        let written: serde_json::Value =
+            serde_json::from_slice(&encode(&restored).unwrap()).unwrap();
+        assert_eq!(written.get("lane"), None);
+        assert_eq!(
+            written["panel_widths"],
+            serde_json::json!({"view_width": null, "session_width": null})
+        );
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    /// A spawn a hided ended while it started, read again: no thread will
+    /// answer it, so it waits again and the queue goes on, rather than
+    /// stand starting for ever and hold the whole queue.
+    #[test]
+    fn a_start_hided_ended_under_reads_as_waiting_again() {
+        let job = |intent: &str, state: QueuedState| QueuedJob {
+            intent: intent.into(),
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                parent: None,
+                machine: None,
+                name: "worker".into(),
+                intent: intent.into(),
+                kind: "codex".into(),
+                repo: Some("/r".into()),
+                branch: Some("main".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: None,
+                beside: false,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                profile: None,
+            },
+            queued_at_ms: 1,
+            state,
+            code: None,
         };
         let mut stored = Stored::default();
-        stored.lane.pinned = true;
-        stored.lane.kept = (0..crate::model::DESK_KEPT_TABS_MAX + 2).map(tab).collect();
-        let restored = decode(&encode(&stored).unwrap()).unwrap();
-        assert!(restored.lane.pinned);
-        assert_eq!(restored.lane.kept.len(), crate::model::DESK_KEPT_TABS_MAX);
+        stored.queue.push(job("starting", QueuedState::Starting));
+        stored.queue.push(job("waiting", QueuedState::Waiting));
+        stored.queue.push(job("failed", QueuedState::Failed));
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        let states: Vec<_> = read
+            .queue
+            .iter()
+            .map(|job| (job.intent.as_str(), job.state))
+            .collect();
         assert_eq!(
-            restored.lane.kept[0],
-            tab(2),
-            "the oldest kept tabs go first"
+            states,
+            [
+                ("starting", QueuedState::Waiting),
+                ("waiting", QueuedState::Waiting),
+                ("failed", QueuedState::Failed)
+            ]
         );
+    }
+
+    /// The waiting messages read back as they were kept, within the line's
+    /// cap and the message cap.
+    #[test]
+    fn queued_messages_are_kept_and_held_to_their_caps_when_read() {
+        let message = |id: u64, text: String| crate::model::DeskQueuedMessage {
+            id,
+            text,
+            at_ms: 0,
+            mentions: Vec::new(),
+        };
+        let mut stored = Stored::default();
+        stored
+            .queued
+            .push(message(1, "x".repeat(MAX_MESSAGE_BYTES + 1)));
+        for id in 2..20 {
+            stored.queued.push(message(id, format!("m{id}")));
+        }
+        let read = decode(&encode(&stored).unwrap()).unwrap();
+        assert_eq!(read.queued.len(), crate::model::DESK_QUEUED_MAX + 1);
+        assert_eq!(read.queued[0].text, "m2");
     }
 }

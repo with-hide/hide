@@ -105,7 +105,7 @@ export function SettingsScreen({ openSheet = null }: { /** The gallery's: the sh
         <h1 className="pt-lg text-headline font-semibold text-foreground">{t("mobile.settings.title")}</h1>
       </header>
       <Section title={t("mobile.settings.computers")} data-phone-settings-section="computers" note={demo ? t("mobile.demo.panelNote") : undefined}>
-        {demo ? <DemoHostRows /> : <HostList t={t} machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
+        {demo ? <DemoHostRows /> : <HostList t={t} card machines={devices} active={{ online: connected, lastSeen: null, needs: local?.needs_you, working: local?.working }} />}
       </Section>
       <Section title={t("mobile.settings.notifications")} data-phone-settings-section="notifications">
         {inApp ? appPushAvailable() ? <AppNotifications />

@@ -84,8 +84,9 @@ describe("the sample host's screens", () => {
     await act(async () => openDetail({ device_id: "local", pane_id: "a3" }));
     await settle(50);
     const mission = document.querySelector<HTMLElement>('[data-phone-detail-mission="mission-release"]')!;
-    // The chip draws the flag and the mission's progress (Doop 02); its name says the mission and the step.
-    expect(mission.textContent).toBe("2/6");
+    // The chip draws the desktop's mission face: `!` for the operator's turn, the mission mark and its steps; its name says the mission and the step.
+    expect(mission.textContent).toBe("!2/6");
+    expect(mission.querySelector("svg.lucide-waypoints")).not.toBeNull();
     expect(mission.getAttribute("aria-label")).toContain("Prepare release 1.2.0");
     expect(mission.getAttribute("aria-label")).toContain("Rehearse the migration");
     expect(document.querySelector("[data-phone-detail-pr]")?.textContent).toContain("2091");

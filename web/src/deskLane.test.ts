@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { activeTab, afterKeep, backFromThread, closeLane, namesView, closeTab, DESK_LANE_CLOSED, openMission, openThread, outputTab, showTab, toggleLane, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
-import type { DeskKeptTab, DeskOutput } from "./snapshot";
+import { activeTab, backFromThread, closeLane, namesView, closeTab, DESK_KEPT_TABS_MAX, DESK_LANE_CLOSED, keepTab, openMission, openThread, outputTab, showTab, toggleLane, toggleOutputs, toggleThreads, viewTabs, type DeskKeptTab } from "./deskLane";
+import type { DeskOutput } from "./snapshot";
 
 // Expected answers are PRD session-docs-and-assistant B28-B35 and the
 // project lane's rules UI_BEHAVIOR.md (The right lane) and with-hide/hide-private
@@ -39,12 +39,16 @@ describe("Desk's lane", () => {
     expect(back.preview).toBe(second.preview);
   });
 
-  it("stops calling a tab the preview once the core keeps it", () => {
+  it("stops calling a tab the preview once it is kept, and lets the oldest kept tab go past the cap", () => {
     const tab = outputTab("job-a", output("one"));
     const shown = showTab(DESK_LANE_CLOSED, NONE, tab);
-    const kept = afterKeep(shown, tab);
+    const kept = keepTab(shown, tab);
     expect(kept.preview).toBeNull();
-    expect(viewTabs([tab], kept)).toEqual([{ tab, preview: false }]);
+    expect(viewTabs(kept.kept, kept)).toEqual([{ tab, preview: false }]);
+    let full = kept;
+    for (let index = 0; index < DESK_KEPT_TABS_MAX; index += 1) full = keepTab(full, outputTab("job-b", output(`more-${index}`)));
+    expect(full.kept).toHaveLength(DESK_KEPT_TABS_MAX);
+    expect(full.kept[0]).toEqual(outputTab("job-b", output("more-0")));
   });
 
   it("closes the 보기 column with its last tab and the lane with its last column", () => {

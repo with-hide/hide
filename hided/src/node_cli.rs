@@ -6,7 +6,7 @@
 //! terminals included.
 
 use std::ffi::OsString;
-use std::io::{self, BufReader};
+use std::io;
 
 /// What a device answers to `hided node --version`: the role, the build and
 /// the node protocol it speaks.
@@ -32,7 +32,7 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
             // a device's own stderr reaches no log.
             hide_node::diagnostics::install(hide_node::terminal::device::forward_diagnostic);
             ask_for_the_helpers_folder();
-            let input = BufReader::new(io::stdin().lock());
+            let input = io::stdin().lock();
             // The node's terminals ride the same link (PRD
             // core-host-node-terminal D-18).
             let terminals = hide_node::terminal::device::NodeTerminals::new();

@@ -203,6 +203,8 @@ export type Notice = {
   text: string;
   refreshable: boolean;
   dontSave?: { workspace: ViewWorkspace; displayId: string };
+  /** The id of a skill or MCP ask this notice stands for; its press opens that ask's confirm (`openStoreAsk`). */
+  storeAsk?: string;
   key?: string;
 };
 

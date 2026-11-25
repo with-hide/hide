@@ -93,7 +93,7 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
-import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
+import { openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -2784,15 +2784,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_output_seen", payload: { device_id: output.device_id, checkout: output.checkout, id: output.id } });
     },
 
-    /** The lane's pin (B32): the core keeps it, across a restart. */
-    deskLanePin(pinned: boolean) {
-      dispatch({ schema_version: 2, kind: "desk_lane", payload: { action: "pin", pinned } });
-    },
-
-    /** A tab kept in the 보기 column, or let go (B31); the core keeps them, at most 16. */
-    deskTabKeep(tab: import("./snapshot").DeskKeptTab, keep: boolean) {
-      if (keep) ui().setDeskLane((lane) => afterKeep(lane, tab));
-      dispatch({ schema_version: 2, kind: "desk_lane", payload: { action: keep ? "keep" : "close", tab } });
+    /**
+     * A Desk panel's width let go after a drag (PRD desk-2-ui B22, B23), in whole CSS pixels from 1 to
+     * 8192, which this rounds and clamps to: the core refuses any other. One event per drag, and a
+     * keyboard handle's ←→ commits once, on key up, never per key repeat: each event resends the `desk`
+     * section, conversation included. The core keeps it across a restart.
+     */
+    deskLaneWidth(panel: "view_width" | "session_width", width: number) {
+      const whole = Math.min(8192, Math.max(1, Math.round(width)));
+      dispatch({ schema_version: 2, kind: "desk_lane", payload: { [panel]: whole } });
     },
 
     /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */
@@ -3929,6 +3929,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Asks for the index of `root` on `device`; a device's is walked by its helper. */
     requestFileIndex(root: string, query: string, device: string) {
       dispatch({ schema_version: 2, kind: "file_index", payload: { root, query, ...deviceField(device, localDeviceId(rest())) } });
+    },
+
+    /**
+     * Asks every project's index at once (Desk's ⌘P with no session open, PRD desk-2-ui B38); `prefer`, the
+     * project Desk named last, comes first in the answer.
+     */
+    requestFileIndexAll(query: string, prefer?: { device_id: string; root_path: string }) {
+      dispatch({ schema_version: 2, kind: "file_index_all", payload: prefer ? { query, prefer } : { query } });
     },
 
     /** A palette pick opens in the checkout's preview tab (B12) and closes the palette. */

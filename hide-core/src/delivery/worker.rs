@@ -74,8 +74,9 @@ pub(crate) struct Start {
     pub(crate) registers: Option<Box<crate::coordination::AgentRecord>>,
 }
 
-/// A step that follows a command's answer, given that answer.
-pub(crate) type After = Box<dyn FnOnce(&Result<Value, String>) + Send>;
+/// A step that follows a command's answer, given that answer, which it may
+/// replace with what the step made of it before the caller reads it.
+pub(crate) type After = Box<dyn FnOnce(&mut Result<Value, String>) + Send>;
 
 /// Immutable notification receipt. Reserving it consumes the attempt before
 /// either external channel runs, so a crash or failed channels cannot resend.
@@ -374,7 +375,7 @@ impl Prepared {
             items.retain(|item| item["id"].as_str().is_some_and(|id| listed.contains(id)));
         }
         if let Some(after) = self.then {
-            after(&result);
+            after(&mut result);
         }
         result
     }

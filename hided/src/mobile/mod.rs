@@ -9,6 +9,10 @@
 //! receives Web Push (`push.rs`). The core knows nothing of
 //! phones; this module reads its snapshot like any other client.
 //!
+//! A desktop window answers an agent's ask through here too
+//! (`screen_ask.rs`, PRD desk-2-ui B14), on the phone's own ask rules
+//! (`ask.rs`) and write, so the two never judge a choice apart.
+//!
 //! What the renderer sees is one `mobile` frame, republished on every
 //! change; what it asks is one of the `mobile_*` events.
 
@@ -26,6 +30,7 @@ pub mod projection;
 pub mod prs;
 pub mod push;
 pub mod relay;
+pub mod screen_ask;
 pub mod start;
 pub mod store;
 pub mod tailscale;

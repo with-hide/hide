@@ -36,7 +36,7 @@ export function ScreenHead({ title, line, action, ...data }: { title: ReactNode;
  * action at the right; what the page keeps under its head (tabs, cells, buttons) comes as `children`. `back.tag` marks the back
  * press for tests and names the list it returns to.
  */
-export function PageHead({ back, lead, title, line, action, children, ...data }: { back: { label: string; onClick: () => void; tag: string }; lead?: ReactNode; title: ReactNode; line?: ReactNode; action?: ReactNode; children?: ReactNode } & DataProps) {
+export function PageHead({ back, lead, title, titleEnd, line, lineEnd, action, children, ...data }: { back: { label: string; onClick: () => void; tag: string }; lead?: ReactNode; title: ReactNode; titleEnd?: ReactNode; line?: ReactNode; lineEnd?: ReactNode; action?: ReactNode; children?: ReactNode } & DataProps) {
   return (
     <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-sm" {...data}>
       <div className="flex min-w-0 items-center gap-sm pt-sm">
@@ -46,8 +46,18 @@ export function PageHead({ back, lead, title, line, action, children, ...data }:
         {/* One title line tall, so the marks sit on the title's first line however the title wraps. */}
         {lead ? <span className="flex h-lh shrink-0 items-center gap-xs self-start text-title">{lead}</span> : null}
         <div className="flex min-w-0 flex-1 flex-col">
-          <h1 className="min-w-0 break-keep text-title font-semibold text-foreground wrap-anywhere">{title}</h1>
-          {line ? <div className="flex min-w-0 flex-wrap items-center gap-x-xs text-body text-muted-foreground">{line}</div> : null}
+          {/* What never shrinks after the title (an agent's chips) shares its line only, so the line under it keeps the full width. */}
+          <div className="flex min-w-0 items-start gap-sm">
+            <h1 className="min-w-0 flex-1 break-keep text-title font-semibold text-foreground wrap-anywhere">{title}</h1>
+            {titleEnd ? <div className="flex min-h-lh shrink-0 items-center text-title">{titleEnd}</div> : null}
+          </div>
+          {line || lineEnd ? (
+            // What sits at the right of the line under the title (an agent's tabs) never shrinks; the line gives up its width first.
+            <div className={cn("flex min-w-0 items-center gap-sm", lineEnd && "mt-xs")}>
+              <div className={cn("flex min-w-0 flex-1 items-center gap-x-xs text-body text-muted-foreground", !lineEnd && "flex-wrap")}>{line}</div>
+              {lineEnd ? <div className="shrink-0">{lineEnd}</div> : null}
+            </div>
+          ) : null}
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -76,12 +86,13 @@ export function TwoLineRow({ lead, head, end, line }: { lead?: ReactNode; head: 
 }
 
 /**
- * The state of what a page is about, under its head (Doop 02, 09, 10): the state's word in its colour (`tone`), one line of what
- * it does now, and how long ago it changed at the right.
+ * The state of what a page is about, under its head (Doop 02, 09, 10): what leads it (`lead`, an agent's children chip), the
+ * state's word in its colour (`tone`), one line of what it does now, and how long ago it changed at the right.
  */
-export function StatusStrip({ word, tone, line, since }: { word: string; tone: string; line: string | null; since: number | null | undefined }) {
+export function StatusStrip({ lead, word, tone, line, since }: { lead?: ReactNode; word: string; tone: string; line: string | null; since: number | null | undefined }) {
   return (
     <div className="flex min-h-(--size-touch-target) shrink-0 items-center gap-sm border-b border-border bg-background px-lg text-body" data-phone-status-strip={word}>
+      {lead}
       <span className={cn("shrink-0 font-medium", tone)}>{word}</span>
       <span className="min-w-0 flex-1 truncate text-foreground" data-phone-status-line="true">{line}</span>
       <Elapsed since={since} className="shrink-0 font-mono text-muted-foreground" />

@@ -1039,3 +1039,79 @@ describe("a page's navigation and the keyboard", () => {
     expect(pageFocusReports(forwarded)).toEqual(["dashboard"]);
   });
 });
+
+describe("a file page's links (issue 2894)", () => {
+  type OpenHandler = (details: { url: string; disposition: string; features: string; referrer: { url: string } }) => { action: string };
+
+  /** A host with one file page loaded off screen, its route answered as hided answers it. */
+  async function filePage(workspace: string, source: string, route: string) {
+    let nextId = 0;
+    const made: (EventEmitter & { setWindowOpenHandler: ReturnType<typeof vi.fn>; loadURL: ReturnType<typeof vi.fn> })[] = [];
+    nativeView.make = () => {
+      const contents = Object.assign(new EventEmitter(), {
+        id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "", close: vi.fn(),
+        enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn(),
+        loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined),
+        navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      });
+      made.push(contents);
+      return { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() };
+    };
+    Object.assign(session, { fromPartition: vi.fn(() => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), on: vi.fn(), webRequest: { onBeforeRequest: vi.fn() } })) });
+    const resolve = vi.fn((_workspace: string, _id: string, load: number) => Promise.resolve<ResolvedPage>({ url: route, source_url: source, load }));
+    const log = { event: vi.fn() };
+    const subject = new BrowserViews(log as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
+    const send = vi.fn();
+    const window = Object.assign(new EventEmitter(), {
+      isFocused: () => true, isDestroyed: () => false, getContentBounds: () => ({ x: 0, y: 0, width: 1400, height: 820 }),
+      webContents: Object.assign(new EventEmitter(), { isDestroyed: () => false, send, focus: vi.fn(), getZoomFactor: () => 1 }),
+      contentView: { removeChildView: vi.fn(), addChildView: vi.fn() },
+    });
+    subject.attach(window as never);
+    const sync = (retained: { workspace: string; id: string; area_id: string; url: string; load: number }[]) =>
+      ipc.get(BROWSER_SYNC_CHANNEL)!({}, { workspace: null, displays: [], retained, inventoried: true });
+    sync([]);
+    sync([{ workspace, id: "preview", area_id: "shelf", url: source, load: 2 }]);
+    // Ready once the host applied the route: it loads the route's address.
+    await vi.waitFor(() => expect(made[0]?.loadURL).toHaveBeenCalledWith(route));
+    const contents = made[0]!;
+    const opened = () => send.mock.calls.filter(([channel, event]) => channel === BROWSER_EVENT_CHANNEL && (event as { kind: string }).kind === "open").map(([, event]) => event);
+    const navigate = (url: string) => {
+      const event = { preventDefault: vi.fn() };
+      contents.emit("will-navigate", event, url);
+      return event.preventDefault.mock.calls.length > 0;
+    };
+    const openWindow = (url: string, features = "") => (contents.setWindowOpenHandler.mock.calls[0]![0] as OpenHandler)({ url, disposition: features ? "new-window" : "foreground-tab", features, referrer: { url: "" } });
+    return { opened, navigate, openWindow, log };
+  }
+
+  it("opens a local file page's web link, a click or a window.open, as a display beside it", async () => {
+    const workspace = "local\u0000/checkout";
+    const source = "file:///checkout/report.html";
+    const { opened, navigate, openWindow, log } = await filePage(workspace, source, source);
+    // A link to the operator's dev server, a loopback address, and a public one.
+    expect(navigate("http://127.0.0.1:8765/")).toBe(true);
+    expect(openWindow("https://example.com/").action).toBe("deny");
+    expect(openWindow("https://example.com/sign-in", "width=400,height=500").action).toBe("deny");
+    expect(opened()).toEqual([
+      { kind: "open", workspace, id: "preview", url: "http://127.0.0.1:8765/" },
+      { kind: "open", workspace, id: "preview", url: "https://example.com/" },
+      { kind: "open", workspace, id: "preview", url: "https://example.com/sign-in" },
+    ]);
+    // Its own file links still move it in place.
+    expect(navigate("file:///checkout/other.html")).toBe(false);
+    expect(log.event).not.toHaveBeenCalledWith(expect.stringMatching(/refused$/), expect.objectContaining({ reason: "remote_file_boundary" }));
+  });
+
+  it("refuses a device file page's loopback link, a click or a window.open, and opens nothing", async () => {
+    const workspace = "device-b\u0000/remote";
+    const { opened, navigate, openWindow, log } = await filePage(workspace, "file:///remote/report.html", "http://127.0.0.1:53000/route-1/report.html");
+    expect(navigate("http://localhost:3000/")).toBe(true);
+    expect(openWindow("http://localhost:3000/").action).toBe("deny");
+    expect(opened()).toEqual([]);
+    expect(log.event).toHaveBeenCalledWith("browser.navigation_refused", { reason: "remote_file_boundary" });
+    expect(log.event).toHaveBeenCalledWith("browser.window_open_refused", { reason: "remote_file_boundary" });
+    // Its own route is its own page.
+    expect(navigate("http://127.0.0.1:53000/route-1/other.html")).toBe(false);
+  });
+});

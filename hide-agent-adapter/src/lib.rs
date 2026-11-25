@@ -16,7 +16,7 @@ pub use account::{
 pub mod composer;
 mod declarations;
 pub mod definition;
-pub use definition::{AccountPath, McpFormat};
+pub use definition::{AccountPath, McpFormat, TrustFormat};
 mod journey;
 pub mod scene;
 mod scene_declarations;
@@ -575,21 +575,6 @@ impl LaunchDialect {
         }
     }
 
-    /// Whether the agent asks before it works in a folder it has not been
-    /// told to trust, so Hide records that trust for a worktree it made
-    /// before it starts the agent there: the question would otherwise hold a
-    /// delegated child that nobody is watching (PRD antigravity-first-class
-    /// D-08; Claude Code 2.1.302 and Codex 0.163.0 ask the same, measured
-    /// 2026-10-17, Grok 1.0.67, measured 2026-10-23, and Pi 1.0.4 in a folder
-    /// with project files it loads, measured 2026-11-02; docs/agent-hooks.md,
-    /// Folder trust for the folders Hide starts agents in).
-    pub const fn trusts_worktrees(self) -> bool {
-        matches!(
-            self,
-            Self::Claude | Self::Codex | Self::Antigravity | Self::Grok | Self::Pi
-        )
-    }
-
     /// Whether an agent that has reported no conversation yet can still
     /// sleep, waking as a new one in the same pane: agy reports its
     /// conversation only once its first prompt is sent (PRD
@@ -1077,6 +1062,19 @@ pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
                 .iter()
                 .any(|alias| alias.eq_ignore_ascii_case(value))
     })
+}
+
+/// The format of the folder trust file `kind`'s built-in definition
+/// declares (`[account.paths] folder_trust_format`), the one place that says
+/// whether the agent asks before it works in a folder it has not been told to
+/// trust and where it keeps that trust; `None` for a kind whose definition
+/// declares no such file (docs/agent-hooks.md, Folder trust for the folders
+/// Hide starts agents in).
+pub fn folder_trust_format(kind: &str) -> Option<TrustFormat> {
+    definition::find(definition::builtins(), kind)?
+        .account
+        .as_ref()?
+        .folder_trust_format
 }
 
 /// Known identities use the kind's spelling; an unknown captured kind stays

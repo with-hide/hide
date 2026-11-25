@@ -327,6 +327,36 @@ pub enum McpFormat {
     Agy,
 }
 
+/// The format of an agent's folder trust file (`[account.paths]
+/// folder_trust_format`): which of Hide's trust writers
+/// (`hide_agent_hooks::folder_trust`) records a folder in it. Like
+/// [`McpFormat`], a dialect, never data: a new value comes only with the
+/// writer for it, and an agent whose file has another agent's format names
+/// that agent's. A definition that names one is an agent Hide records the
+/// trust of before it starts it in a folder Hide keeps; one whose
+/// `folder_trust` is `false` never asks.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustFormat {
+    /// `projects["<folder>"].hasTrustDialogAccepted` in JSON, under Claude
+    /// Code's own lock on the file.
+    Claude,
+    /// `[projects."<folder>"] trust_level`, written by Codex's own
+    /// app-server.
+    Codex,
+    /// One entry of `trustedWorkspaces` in JSON.
+    Agy,
+    /// `[folders."<folder>"] trusted` in TOML, naming the repository's main
+    /// checkout, under Grok's own lock.
+    Grok,
+    /// `"<folder>": true` in JSON, under Pi's own lock.
+    Pi,
+    /// `"<folder>": "TRUST_FOLDER"` in JSON, under Qwen Code's own lock.
+    Qwen,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Start {
@@ -792,6 +822,9 @@ pub struct AccountRule {
     /// The shape of the file at [`AccountPath::Mcp`]; `Some` exactly when
     /// the agent has that file.
     pub mcp_format: Option<McpFormat>,
+    /// The format of the file at [`AccountPath::FolderTrust`]; `Some`
+    /// exactly when the agent has that file.
+    pub folder_trust_format: Option<TrustFormat>,
     /// Variables a profile's own environment may not set.
     pub forbid: Vec<String>,
     pub login: Option<LoginRule>,
@@ -873,6 +906,8 @@ struct PathsFile {
     mcp: PathFile,
     #[serde(default)]
     mcp_format: Option<McpFormat>,
+    #[serde(default)]
+    folder_trust_format: Option<TrustFormat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -990,6 +1025,7 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         usage,
         mcp,
         mcp_format,
+        folder_trust_format,
     } = file.paths;
     let written = [
         hooks,
@@ -1045,6 +1081,27 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
             .find(|(feature, _)| *feature == AccountPath::Mcp),
         Some((_, PathRule::Absent))
     );
+    // Likewise the trust file's format says which writer records a folder.
+    let has_folder_trust = !matches!(
+        paths
+            .iter()
+            .find(|(feature, _)| *feature == AccountPath::FolderTrust),
+        Some((_, PathRule::Absent))
+    );
+    match (has_folder_trust, folder_trust_format) {
+        (true, None) => {
+            return Err(fail(
+                ".paths.folder_trust_format names the format of .paths.folder_trust".into(),
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(fail(
+                ".paths.folder_trust_format is for an agent whose .paths.folder_trust is a file"
+                    .into(),
+            ));
+        }
+        _ => {}
+    }
     match (has_mcp, mcp_format) {
         (true, None) => {
             return Err(fail(
@@ -1084,6 +1141,7 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         vars,
         paths,
         mcp_format,
+        folder_trust_format,
         forbid,
         login,
     })

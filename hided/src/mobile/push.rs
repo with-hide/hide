@@ -1284,6 +1284,170 @@ mod tests {
         );
     }
 
+    /// One root standing for the ask `key` (`RowState::ask_keys`): asking in
+    /// Needs You, or, read, at rest in Seen, where a row names no ask.
+    fn standing(group: &str, key: &str) -> Projection {
+        let mut agent = row("w1:p1", group, "question", None);
+        agent["status_code"] = json!("question");
+        agent["detail"] = json!("Ship it?");
+        if group == "needs_you" {
+            agent["state"] = json!({"ask_keys": [key]});
+        }
+        project(&rest(json!([agent])), "local")
+    }
+
+    /// The phone sent the root's ask `key` once, at `t0`.
+    fn sent_once(key: &str, t0: Instant) -> PhoneNotices {
+        let mut phone = PhoneNotices::default();
+        phone.seed(&rested("working", "none", "working", ""), t0);
+        let asking = standing("needs_you", key);
+        phone.observe(&asking, t0);
+        assert_eq!(said(&phone.due(&asking, t0 + SETTLE)), [question()]);
+        phone
+    }
+
+    /// The operator's report (2026-11-25): one question, sent once, rang
+    /// again each time its row was read and turned unread again on the same
+    /// ask. An ask is sent once, however often its row leaves Needs You and
+    /// comes back with it.
+    #[test]
+    fn an_ask_read_and_unread_again_is_not_sent_again() {
+        let t0 = Instant::now();
+        let mut phone = sent_once("laid:decision:mission-1#1", t0);
+        let asking = standing("needs_you", "laid:decision:mission-1#1");
+        let mut at = t0 + SETTLE;
+        for _ in 0..3 {
+            at += Duration::from_secs(5);
+            let (_, closed) = phone.observe(&standing("seen", "laid:decision:mission-1#1"), at);
+            assert_eq!(closed.len(), 1, "reading it closes its notice");
+            at += Duration::from_secs(1);
+            phone.observe(&asking, at);
+            assert_eq!(phone.next_due(), None, "nothing waits to be sent");
+            assert!(phone.due(&asking, at + SETTLE * 2).is_empty());
+        }
+        // A finished turn between the two is no new ask either.
+        phone.observe(&rested("done", "none", "done", ""), at + SETTLE * 3);
+        phone.observe(&asking, at + SETTLE * 4);
+        assert!(phone.due(&asking, at + SETTLE * 6).is_empty());
+    }
+
+    #[test]
+    fn a_new_ask_is_sent_once() {
+        let t0 = Instant::now();
+        let mut phone = sent_once("laid:decision:mission-1#1", t0);
+        let at = t0 + SETTLE + Duration::from_secs(5);
+        phone.observe(&standing("seen", "laid:decision:mission-1#1"), at);
+        let next = standing("needs_you", "laid:decision:mission-1#2");
+        phone.observe(&next, at + Duration::from_secs(1));
+        assert_eq!(
+            said(&phone.due(&next, at + Duration::from_secs(1) + SETTLE)),
+            [question()]
+        );
+        assert!(phone.due(&next, at + SETTLE * 10).is_empty(), "sent once");
+        phone.observe(
+            &standing("seen", "laid:decision:mission-1#2"),
+            at + SETTLE * 11,
+        );
+        phone.observe(&next, at + SETTLE * 12);
+        assert!(
+            phone.due(&next, at + SETTLE * 14).is_empty(),
+            "and only once"
+        );
+    }
+
+    /// A root gone past `VANISHED_TTL`, a device that stayed away that long,
+    /// has its notice closed; back with the same ask it sends nothing, and
+    /// neither does the ledger seeded again after a reset.
+    #[test]
+    fn an_ask_back_after_its_root_was_gone_is_not_sent_again() {
+        let t0 = Instant::now();
+        let mut phone = sent_once("laid:decision:mission-1#1", t0);
+        let asking = standing("needs_you", "laid:decision:mission-1#1");
+        let empty = project(&rest(json!([])), "local");
+        let gone = t0 + SETTLE + Duration::from_secs(1);
+        phone.observe(&empty, gone);
+        let (_, closed) = phone.observe(&empty, gone + VANISHED_TTL);
+        assert_eq!(closed.len(), 1, "gone for good, its notice closes");
+        let back = gone + VANISHED_TTL + Duration::from_secs(1);
+        phone.observe(&asking, back);
+        assert_eq!(phone.next_due(), None);
+        assert!(phone.due(&asking, back + SETTLE * 2).is_empty());
+
+        phone.reset();
+        phone.seed(&empty, back + SETTLE * 3);
+        phone.observe(&asking, back + SETTLE * 4);
+        assert!(phone.due(&asking, back + SETTLE * 6).is_empty());
+    }
+
+    /// The asks the ledger keeps are capped twice: `KNOWN_ASKS` per root,
+    /// its oldest forgotten first, and `KNOWN_ROOTS` roots, the one that
+    /// stood longest ago forgotten first. A forgotten ask is said again if
+    /// it ever comes back; one still kept is not.
+    #[test]
+    fn the_asks_kept_are_capped_per_root_and_in_roots_oldest_forgotten_first() {
+        use hide_core::agent_state::push::{KNOWN_ASKS, KNOWN_ROOTS};
+        let pane = |n: usize| format!("w1:p{n}");
+        let asking = |panes: &[(String, String)]| {
+            let rows = panes
+                .iter()
+                .map(|(pane, key)| {
+                    let mut agent = row(pane, "needs_you", "question", None);
+                    agent["state"] = json!({"ask_keys": [key]});
+                    agent
+                })
+                .collect::<Vec<_>>();
+            project(&rest(json!(rows)), "local")
+        };
+        let read =
+            |pane: &str| project(&rest(json!([row(pane, "seen", "question", None)])), "local");
+        let says = |transitions: &mut Transitions, pane: &str, key: &str| {
+            transitions.observe(&read(pane));
+            transitions
+                .observe(&asking(&[(pane.to_owned(), key.to_owned())]))
+                .0
+                .len()
+        };
+
+        let mut transitions = Transitions::default();
+        transitions.observe(&project(&rest(json!([])), "local"));
+        for n in 0..=KNOWN_ASKS {
+            assert_eq!(says(&mut transitions, &pane(0), &format!("laid:q{n}")), 1);
+        }
+        assert_eq!(
+            says(&mut transitions, &pane(0), &format!("laid:q{KNOWN_ASKS}")),
+            0,
+            "kept"
+        );
+        assert_eq!(says(&mut transitions, &pane(0), "laid:q1"), 0, "kept");
+        assert_eq!(
+            says(&mut transitions, &pane(0), "laid:q0"),
+            1,
+            "the first, forgotten"
+        );
+
+        let mut transitions = Transitions::default();
+        transitions.observe(&project(&rest(json!([])), "local"));
+        assert_eq!(says(&mut transitions, &pane(0), "laid:first"), 1);
+        let others = (1..=KNOWN_ROOTS)
+            .map(|n| (pane(n), format!("laid:q{n}")))
+            .collect::<Vec<_>>();
+        assert_eq!(transitions.observe(&asking(&others)).0.len(), KNOWN_ROOTS);
+        assert_eq!(
+            says(
+                &mut transitions,
+                &pane(KNOWN_ROOTS),
+                &format!("laid:q{KNOWN_ROOTS}")
+            ),
+            0,
+            "kept"
+        );
+        assert_eq!(
+            says(&mut transitions, &pane(0), "laid:first"),
+            1,
+            "stood longest ago, forgotten"
+        );
+    }
+
     /// B5: a block enters Needs You like a question, notifies once, and its
     /// notification closes once the operator has read it.
     #[test]
