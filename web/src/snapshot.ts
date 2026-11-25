@@ -3658,7 +3658,10 @@ export type DeskJobsSection = {
 };
 
 /** The `desk_live` section: the reply being written, `null` between turns. */
-export type DeskLive = { text: string | null; started_at_ms: number | null };
+/** One of `DeskSteps`' kinds, by its count's name there. */
+export type DeskStepKind = keyof DeskSteps;
+/** The turn under way: its reply so far, when it started, and what its newest tool call does while the agent has written nothing since. */
+export type DeskLive = { text: string | null; started_at_ms: number | null; step?: DeskStepKind | null };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };

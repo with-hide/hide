@@ -25,7 +25,7 @@ import { ThreadView } from "../components/desk/thread-view";
 import { SessionRow } from "../components/session-row";
 import { StatusMark } from "../components/status-mark";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure } from "../desk";
+import { askingCount, outputKindOf, threadLines, type DeskAgent, type DeskItem, type DeskJob, type DeskMention, type DeskQueuedMessage, type DeskOutput, type DeskSelection, type DeskSessionRef, type ThreadReadFailure, type WorkingPhase } from "../desk";
 import { mentionTree } from "../deskComposer";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -186,9 +186,9 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
   }, [mission, theme, params]);
 
   const pick = (...ids: string[]) => ids.map((id) => jobs[id]!);
-  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; thinking?: boolean; queued?: DeskQueuedMessage[] } = {}) => (
+  const chat = (items: DeskItem[], composer: ReactNode, options: { jobs?: Record<string, DeskJob>; selectedJob?: string | null; selectedOutput?: string | null; live?: string | null; working?: WorkingPhase; queued?: DeskQueuedMessage[] } = {}) => (
     <DeskChatColumn head={<ChatHead />} composer={composer}>
-      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} startedAt={now - 3_000} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} thinking={options.thinking ?? false} queued={options.queued ?? []} {...CHAT_ACTIONS} />
+      <DeskChat items={items} jobs={options.jobs ?? jobs} agents={AGENTS} selectedJob={options.selectedJob ?? null} selectedOutput={options.selectedOutput ?? null} live={options.live ?? null} working={options.working ? { phase: options.working, since: now - 3_000 } : null} queued={options.queued ?? []} {...CHAT_ACTIONS} />
     </DeskChatColumn>
   );
   let sidebar: ReactNode = <SceneSidebar jobs={pick("mention", "gallery", "release")} selected={null} />;
@@ -202,7 +202,7 @@ export function DeskScene({ params }: { params: URLSearchParams }) {
       break;
     }
     case "s2":
-      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { thinking: true, selectedJob: "gallery" })} />;
+      body = <Room chat={chat(handoffItems(now), <ChatComposer selection={CLAUDE} />, { working: "sessions", selectedJob: "gallery" })} />;
       break;
     case "s2b":
       body = <Room chat={chat(statusItems(now), <ChatComposer selection={CLAUDE} />)} />;

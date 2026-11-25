@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, markedMention, mentionParts, missionMentions, outputKindOf, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
+import { agentPickable, agentsRunningUnasked, askedOnce, askingCount, deskAgentWord, failureReason, deskPhase, markedMention, mentionParts, missionMentions, outputKindOf, threadPhase, type ThreadTurn, sessionFacts, threadLines, threadTurns, type AcpSessionUpdate, type DeskAgent, type DeskJob } from "./desk";
 import type { AgentRow } from "./snapshot";
 
 const job = (id: string, state: DeskJob["state"], extra: Partial<DeskJob> = {}): DeskJob => ({
@@ -71,6 +71,25 @@ describe("a thread's lines (B25, B26)", () => {
   it("keeps a letter apart from the operator's own words by its origin", () => {
     const lines = threadLines([text("user_message_chunk", "내 말"), { sessionUpdate: "user_message_chunk", content: { type: "text", text: "편지" }, _meta: { hide: { origin: "letter" } } }]);
     expect(lines.map((line) => line.kind === "user" && line.origin)).toEqual(["operator", "letter"]);
+  });
+});
+
+describe("what the working line says (feedback 1 c3)", () => {
+  it("says Desk's running step, else answering once it wrote, else thinking", () => {
+    expect(deskPhase("files", "찾아보겠습니다.")).toBe("files");
+    expect(deskPhase(null, "찾아보겠습니다.")).toBe("answering");
+    expect(deskPhase(undefined, null)).toBe("thinking");
+  });
+
+  it("says a session's newest line: its words, its call's kind, a Hide part, or thinking", () => {
+    const turn = (work: ThreadTurn["work"], answer: ThreadTurn["answer"] = []): ThreadTurn => ({ key: "t", user: null, work, answer, parts: [], files: 0, commands: 0 });
+    const tool = (toolKind: "read" | "edit" | "execute" | "think") => ({ kind: "tool" as const, id: toolKind, title: toolKind, toolKind, status: "in_progress" as const, input: null, output: null, diffs: [], images: [], startedAtMs: null });
+    expect(threadPhase(undefined)).toBe("thinking");
+    expect(threadPhase(turn([tool("read")]))).toBe("files");
+    expect(threadPhase(turn([tool("edit")]))).toBe("editing");
+    expect(threadPhase(turn([tool("execute")]))).toBe("other");
+    expect(threadPhase(turn([tool("think")]))).toBe("thinking");
+    expect(threadPhase(turn([tool("read")], [{ kind: "agent", id: "a", message: null, text: "다 읽었어요" }]))).toBe("answering");
   });
 });
 

@@ -1,7 +1,7 @@
 import { ArrowLeftRightIcon, CopyIcon, CornerDownLeftIcon, FilePenIcon, FileSearchIcon, HouseIcon, MailIcon, ShieldIcon, SlidersHorizontalIcon, SquareTerminalIcon, TerminalIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Trans } from "react-i18next";
-import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
+import type { DeskAgent, DeskApproval, DeskApprovalAnswer, DeskIrreversible, DeskItem, DeskJob, DeskMention, DeskMissionMention, DeskNoticeKind, WorkingPhase, DeskQueuedMessage, DeskSessionRef, DeskSteps } from "../../desk";
 import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, handedSession, markedMention, mentionParts, missionMentions, namedMention } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
@@ -9,7 +9,7 @@ import type { MessageKey } from "../../i18n/catalogs";
 import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
-import { Elapsed, formatElapsed } from "../elapsed";
+import { formatElapsed } from "../elapsed";
 import { MentionChip } from "../mention-chip";
 import { MissionChipOf } from "../mission-chip";
 import { useShellStore } from "../../store";
@@ -21,6 +21,7 @@ import { Hint } from "../ui/tooltip";
 import { agentProductName } from "../../agentAdapters";
 import { DeskJobCard, type DeskJobCardActions } from "./desk-job-card";
 import { SessionChip, useSessionChipBridge } from "./session-chip";
+import { WorkingLine } from "./working-line";
 
 /**
  * Words with their mentions drawn as chips (B18, B26): a session and a
@@ -116,17 +117,6 @@ export function DeskReply({ text, stopped = false, live = false, mentions = [], 
       <MarkdownText text={text} size="chat" chips={chips} />
       {stopped ? <span className="text-micro text-muted-foreground">{t("desk.reply.stopped")}</span> : null}
     </div>
-  );
-}
-
-/** `생각 중 · 3초` from the moment a message is sent until the answer starts (B7): words alone, since a ring is always a session's state (D-75). */
-export function DeskThinking({ startedAt = null }: { startedAt?: number | null }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <p role="status" className="text-caption text-muted-foreground" data-desk-item="thinking">
-      <span className="animate-pulse">{t("desk.thinking")}</span>
-      {startedAt !== null ? <> · <Elapsed since={startedAt} /></> : null}
-    </p>
   );
 }
 
@@ -422,10 +412,10 @@ function jobOf(jobs: Readonly<Record<string, DeskJob>>, id: string): DeskJob {
  * Desk's conversation (D-17, D-39, D-75, B7-B16): the operator's words as
  * bubbles, Desk's answers as plain Markdown at the conversation's size, the
  * lines that change nothing, the approval card, the notices, and a card for
- * each job Desk started. `live` is the answer still arriving; `thinking`
- * shows until it starts.
+ * each job Desk started. `live` is the answer still arriving; `working`,
+ * when given, is the working line at the foot until the turn ends.
  */
-export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, thinking = false, startedAt = null, selectedJob = null, selectedOutput = null, ...actions }: {
+export function DeskChat({ items, jobs, agents, queued = [], held = false, live = null, working = null, selectedJob = null, selectedOutput = null, ...actions }: {
   items: readonly DeskItem[];
   jobs: Readonly<Record<string, DeskJob>>;
   /** The agents, whose choices name a model line's model and effort. */
@@ -436,9 +426,8 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
   held?: boolean;
   /** The answer streaming now, after the last item. */
   live?: string | null;
-  thinking?: boolean;
-  /** When the turn started (`desk_live.started_at_ms`), for `생각 중 · 3초`. */
-  startedAt?: number | null;
+  /** The turn under way, which the working line says (feedback 1 c3): what it does now and when it started; none once it ends or while it waits on the operator. */
+  working?: { phase: WorkingPhase; since: number | null } | null;
   selectedJob?: string | null;
   selectedOutput?: string | null;
 } & DeskChatActions) {
@@ -459,7 +448,8 @@ export function DeskChat({ items, jobs, agents, queued = [], held = false, live 
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>
       ))}
-      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live onMission={actions.onMission} /></li> : thinking ? <li><DeskThinking startedAt={startedAt} /></li> : null}
+      {live !== null ? <li className="flex min-w-0 flex-col"><DeskReply text={live} live onMission={actions.onMission} /></li> : null}
+      {working ? <li data-desk-item="working"><WorkingLine phase={working.phase} since={working.since} /></li> : null}
       {queued.map((message) => <li key={`queued-${message.id}`} className="flex min-w-0 flex-col"><DeskQueuedBubble message={message} held={held} onRemove={() => actions.onQueuedRemove(message.id)} onMention={actions.onMention} /></li>)}
     </ol>
   );

@@ -332,6 +332,24 @@ describe("Desk's room", () => {
     expect(front).toMatchObject({ kind: "output", output: { device_id: "deepbox", checkout: "/home/me/repo", path: "/home/me/repo/new.md" } });
   });
 
+  it("keeps one working line from the send to the turn's end, saying its step, and drops it while an approval waits (feedback 1 c3)", async () => {
+    await render(desk([]));
+    const line = () => document.body.querySelector("[data-working-line]")?.getAttribute("data-working-line") ?? null;
+    expect(line()).toBeNull();
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: 1 } }));
+    expect(line()).toBe("thinking");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: null } }));
+    expect(line()).toBe("answering");
+    await act(async () => useShellStore.setState({ deskLive: { text: "찾아보겠습니다.", started_at_ms: 1, step: "files" } }));
+    expect(line()).toBe("files");
+    expect(document.body.querySelector("[data-working-line]")?.textContent).toContain("Reading files");
+    await show({ ...desk([]), approvals_waiting: 1 });
+    expect(line()).toBeNull();
+    await show(desk([]));
+    await act(async () => useShellStore.setState({ deskLive: { text: null, started_at_ms: null } }));
+    expect(line()).toBeNull();
+  });
+
   it("opens the checkout a project chip names", async () => {
     await render(desk([{ kind: "user", id: 1, text: "@project(/work/repo-home repo) fix the build", at_ms: 0, mentions: [repo] }]));
     await press("[data-mention-chip='project']");

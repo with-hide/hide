@@ -8,7 +8,7 @@
 // The fields no section carries (marked `wire gap` below) are a thread's
 // own, which the threads node reads from the session record.
 
-import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, PlanView, PrState, RowMark } from "./snapshot";
+import type { AgentRow, DeskAgent, DeskAgentState, DeskAskKind, DeskIrreversible, DeskItem, DeskJob, DeskJobsSection, DeskMention as WireMention, DeskMission, DeskNotice, DeskOutput, DeskOutputKind, DeskPermissionRow, DeskSection, DeskSessionChip, DeskStepKind, PlanView, PrState, RowMark } from "./snapshot";
 
 export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskApprovalState, DeskChoice, DeskIrreversible, DeskItem, DeskJob, DeskJobFailure, DeskJobState, DeskLive, DeskLocation, DeskMission, DeskOutput, DeskOutputKind, DeskPermissionAnswer, DeskQueuedMessage, DeskPermissionRow, DeskPermissions, DeskSteps } from "./snapshot";
 
@@ -376,6 +376,43 @@ export function mentionParts(text: string, mentions: readonly DeskMention[], tok
   }
   if (plain) parts.push(plain);
   return parts;
+}
+
+/**
+ * What the working line says an agent does now (feedback 1 c3): a short word
+ * from a closed set, Desk's steps by the names `DeskSteps` counts them, and a
+ * session's by its newest line.
+ */
+export type WorkingPhase = "thinking" | "answering" | "editing" | DeskStepKind;
+
+/** Desk's turn as the working line says it: the step its newest call does, else answering once it has written, else thinking. */
+export function deskPhase(step: DeskStepKind | null | undefined, text: string | null): WorkingPhase {
+  return step ?? (text ? "answering" : "thinking");
+}
+
+/** A session's running turn as the working line says it, from its newest line: its words, else its newest call or Hide part. */
+export function threadPhase(turn: ThreadTurn | undefined): WorkingPhase {
+  if (!turn) return "thinking";
+  if (turn.answer.length > 0) return "answering";
+  const last = turn.work.at(-1);
+  if (last?.kind === "tool") {
+    switch (last.toolKind) {
+      case "read":
+      case "search":
+      case "fetch":
+        return "files";
+      case "edit":
+      case "delete":
+      case "move":
+        return "editing";
+      case "execute":
+        return "other";
+      default:
+        return "thinking";
+    }
+  }
+  if (last?.kind === "hide") return last.part.kind === "letter" ? "letters" : last.part.kind === "spawn" ? "starts" : "sessions";
+  return "thinking";
 }
 
 /** A mission a Desk answer names as `@mission(<id> <title>)`: its token in the text, its id and the title the answer wrote. */
