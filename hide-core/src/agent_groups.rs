@@ -294,7 +294,10 @@ impl WorkspaceView {
 
     /// The reserved group of `role`, by its role whatever it is named now.
     pub fn reserved_agent_group(&self, role: GroupRole) -> Option<&Group> {
-        self.agent_groups.items.iter().find(|g| g.role == Some(role))
+        self.agent_groups
+            .items
+            .iter()
+            .find(|g| g.role == Some(role))
     }
 
     /// The reserved group of `role`, made under its role's name when
@@ -306,7 +309,11 @@ impl WorkspaceView {
         self.push_agent_group(role.name().to_owned(), Some(role))
     }
 
-    fn push_agent_group(&mut self, name: String, role: Option<GroupRole>) -> Result<String, GroupError> {
+    fn push_agent_group(
+        &mut self,
+        name: String,
+        role: Option<GroupRole>,
+    ) -> Result<String, GroupError> {
         if self.agent_groups.items.len() >= GROUP_LIMIT {
             return Err(GroupError::GroupLimit);
         }
@@ -602,18 +609,35 @@ mod tests {
         let desk = view.ensure_reserved_agent_group(GroupRole::Desk).unwrap();
         assert_ne!(own, desk);
         let names = |view: &WorkspaceView| -> Vec<(Option<GroupRole>, String)> {
-            view.agent_groups.items.iter().map(|g| (g.role, g.name.clone())).collect()
+            view.agent_groups
+                .items
+                .iter()
+                .map(|g| (g.role, g.name.clone()))
+                .collect()
         };
-        assert_eq!(names(&view), [(None, "Desk".into()), (Some(GroupRole::Desk), "Desk".into())]);
+        assert_eq!(
+            names(&view),
+            [
+                (None, "Desk".into()),
+                (Some(GroupRole::Desk), "Desk".into())
+            ]
+        );
         // A rename keeps it Desk's, and a second ask makes no other group.
         view.rename_agent_group(&desk, "내 Desk").unwrap();
-        assert_eq!(view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(), desk);
+        assert_eq!(
+            view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(),
+            desk
+        );
         assert_eq!(view.agent_groups.items.len(), 2);
         // Saved and read back, it is still the reserved group.
         view.agent_groups =
             serde_json::from_value(serde_json::to_value(&view.agent_groups).unwrap()).unwrap();
         assert!(view.repair_agent_groups().is_empty());
-        assert_eq!(view.reserved_agent_group(GroupRole::Desk).map(|g| g.id.clone()), Some(desk));
+        assert_eq!(
+            view.reserved_agent_group(GroupRole::Desk)
+                .map(|g| g.id.clone()),
+            Some(desk)
+        );
     }
 
     #[test]
@@ -621,14 +645,23 @@ mod tests {
         let mut view = WorkspaceView::new("local", "/desk-checkout");
         let old = view.create_agent_group(DESK_GROUP_BEFORE_ROLES).unwrap();
         let mut saved = serde_json::to_value(&view.agent_groups).unwrap();
-        assert!(saved["items"][0].get("role").is_none(), "an ordinary group saves no role");
+        assert!(
+            saved["items"][0].get("role").is_none(),
+            "an ordinary group saves no role"
+        );
         saved["items"][0].as_object_mut().unwrap().remove("role");
         view.agent_groups = serde_json::from_value(saved).unwrap();
         let notes = view.repair_agent_groups();
         assert_eq!(notes, ["Desk's group became its reserved group"]);
         let desk = view.reserved_agent_group(GroupRole::Desk).unwrap();
-        assert_eq!((desk.id.as_str(), desk.name.as_str()), (old.as_str(), "Desk"));
-        assert_eq!(view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(), old);
+        assert_eq!(
+            (desk.id.as_str(), desk.name.as_str()),
+            (old.as_str(), "Desk")
+        );
+        assert_eq!(
+            view.ensure_reserved_agent_group(GroupRole::Desk).unwrap(),
+            old
+        );
         assert_eq!(view.agent_groups.items.len(), 1);
     }
 

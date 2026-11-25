@@ -1,9 +1,9 @@
 use super::workspace_view::with_new_views;
 use super::*;
+use crate::agent_groups::GroupRole;
 use crate::coordination::started::tests::{Child, register, spawn};
 use crate::delivery::ledger::Ledger;
 use crate::delivery::{Actor, HIDE_DESK_ROLE};
-use crate::agent_groups::GroupRole;
 use crate::model::{AgentGroupSnapshot, DeskJobState};
 use serde_json::{Value, json};
 
