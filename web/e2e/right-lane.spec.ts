@@ -347,10 +347,9 @@ test("the rail shows icons alone and names each tool in its hint in four languag
     await openOnDesk(lane, "a.md");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
     const rail = page.locator("[data-tool-rail]");
-    // The rail draws no text of its own but the documents count: a tool's name
-    // is its accessible name and the hint that opens on hover, with the tool's
-    // scope and chord.
-    await expect(rail).toHaveText("1");
+    // The rail draws no text of its own: a tool's name is its accessible name
+    // and the hint that opens on hover, with the tool's scope and chord.
+    await expect(rail).toHaveText("");
     for (const [language, theme] of [
       ["en", "light"],
       ["ko", "dark"],
