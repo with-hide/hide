@@ -9,6 +9,7 @@ import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hi
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
+import { FoldRow } from "./components/fold-row";
 import { EntryContextMenu, EntryDropdown } from "./components/entry-menu";
 import { SidebarHeader, type DeviceMenu } from "./components/sidebar-header";
 import { Hint } from "./components/ui/tooltip";
@@ -579,7 +580,7 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
         <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
-        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} inset={PROJECT_COLUMN} /> : null}
+        {!remote && !tool ? <GuestMachineGroups actions={actions} projects={guestProjects} columns={GUESTS_OUTSIDE} /> : null}
         {/* A tool's cell with no work says so in the same place, in the tool's words (B42). */}
         {!remote && workspaces.length === 0 ? (
           <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
@@ -777,6 +778,18 @@ const PROJECT_COLUMN = "var(--spacing-sm)";
 const PROJECT_NAME_COLUMN = "calc(var(--spacing-sm) + var(--size-checkout-icon) + var(--spacing-sm))";
 /** Where a checkout's name, its line two and its agents' marks start. */
 const CHECKOUT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
+/**
+ * Where another machine's work stands (B10, operator review 2026-11-25):
+ * after a checkout's rows, or at a project's end, on the column of the
+ * checkout's own rows; after a folder's rows on the folder's; and outside
+ * every project with its head where the list's folds start and its rows on
+ * a folder's column. Its rail runs down the glyph column a tab's guide hangs
+ * from.
+ */
+const GUEST_RAIL = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) / 2)`;
+const GUESTS_IN_CHECKOUT = { head: CHECKOUT_NAME_COLUMN, rows: CHECKOUT_NAME_COLUMN, rail: GUEST_RAIL };
+const GUESTS_IN_FOLDER = { head: PROJECT_NAME_COLUMN, rows: PROJECT_NAME_COLUMN, rail: GUEST_RAIL };
+const GUESTS_OUTSIDE = { head: PROJECT_COLUMN, rows: PROJECT_NAME_COLUMN, rail: GUEST_RAIL };
 /** Where a group header's briefcase stands, one step past the chevron it shares with the checkout's glyph column; its rows' guide hangs under it. */
 const GROUP_GLYPH_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-icon-sm) + var(--spacing-xs))`;
 
@@ -793,51 +806,6 @@ const ROW_REVEALED =
 /** A row's time and fold slot, a step apart as on an agent row, so every row's time ends on one column. */
 function RowEnd({ children }: { children: ReactNode }) {
   return <span className="relative flex shrink-0 items-center gap-xs self-stretch">{children}</span>;
-}
-
-/**
- * One disclosure for both inactive folds, the project level's and the checkout level's; its chevron stands in the fold slot.
- * It is `current` while it hides the focused checkout, and carries the selection for it.
- */
-function FoldRow({
-  label,
-  count,
-  expanded,
-  current = false,
-  badge,
-  onToggle,
-  ...data
-}: {
-  label: string;
-  count: number;
-  expanded: boolean;
-  current?: boolean;
-  /** The marks of what the fold holds (a `StatusBadge`), so a demand inside a fold is seen without opening it. */
-  badge?: ReactNode;
-  onToggle: () => void;
-} & Record<`data-${string}`, string>) {
-  const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
-  return (
-    <RowButton
-      aria-expanded={expanded}
-      aria-current={current ? "true" : undefined}
-      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-muted-foreground")}
-      style={{ paddingLeft: PROJECT_COLUMN }}
-      onClick={onToggle}
-      {...data}
-    >
-      <span className="min-w-0 flex-1 truncate">
-        {label} {count}
-      </span>
-      {/* The badge keeps a project row's gap to the fold slot, so its right edge lines up with the project badges around it. */}
-      <span className="flex shrink-0 items-center gap-xs">
-        {badge}
-        <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
-          <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
-        </span>
-      </span>
-    </RowButton>
-  );
 }
 
 /** The fold on a project or checkout row: a folded one is always shown, an open one waits for the pointer (D-3). */
@@ -1011,7 +979,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
     );
   }
   // Every checkout waits under 정리할 것: the project draws no row, and its machines' heads stand in its place.
-  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} inset={PROJECT_COLUMN} actions={actions} /> : null;
+  if (workspace.checkouts.length > 0 && workspace.checkouts.every((checkout) => workspace.session_folds?.cleanup.includes(checkout.id))) return guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} columns={GUESTS_OUTSIDE} actions={actions} /> : null;
   const target = projectCheckout(workspace, useShellStore.getState().rest?.ui_state?.recent_checkouts);
   const hiding = focusFold(workspace, context.workspaceScreen ? context.focusedCheckoutId : null, expanded);
   // A checkout Hide AI made is drawn only while it is in front or an operator's agent works in it (PRD hide-ai-work-home D-17, B3).
@@ -1113,7 +1081,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
               {othersOpen ? <ul>{others.map(checkoutRow)}</ul> : null}
             </li>
           ) : null}
-          {guestRows ? <GuestProjectRows projectId={workspace.id} rows={rowCheckouts} folded={foldedCheckouts} inset={PROJECT_COLUMN} actions={actions} /> : null}
+          {guestRows ? <GuestProjectRows projectId={workspace.id} folder={workspace.path} rows={rowCheckouts} folded={foldedCheckouts} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
         </ul>
       ) : null}
     </li>
@@ -1289,7 +1257,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={CHECKOUT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
-      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} inset={CHECKOUT_NAME_COLUMN} actions={actions} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} folder={checkout.path} columns={GUESTS_IN_CHECKOUT} actions={actions} /> : null}
     </li>
   );
 });
@@ -1390,7 +1358,7 @@ const FolderRowView = memo(function FolderRowView({
         </div>
       </EntryContextMenu>
       {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} inset={PROJECT_NAME_COLUMN} glyphColumn={PROJECT_COLUMN} context={context} /> : null}
-      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} inset={PROJECT_NAME_COLUMN} actions={actions} /> : null}
+      {guests ? <GuestCheckoutRows projectId={workspace.id} checkoutId={checkout.id} folder={checkout.path} columns={GUESTS_IN_FOLDER} actions={actions} /> : null}
     </li>
   );
 });

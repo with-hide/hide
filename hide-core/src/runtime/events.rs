@@ -270,6 +270,14 @@ pub(super) struct SessionFoldPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct GuestWorkFoldTogglePayload {
+    pub(super) device_id: String,
+    /// The folder of the checkout or project whose rows the head stands
+    /// after, or `""` for the machine's work outside every project.
+    pub(super) folder: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct InactiveCheckoutsTogglePayload {
     pub(super) project_path: String,
 }
@@ -1751,6 +1759,7 @@ pub(super) enum Event {
     FocusDevice(FocusDevicePayload),
     InactiveCheckoutsToggle(InactiveCheckoutsTogglePayload),
     SessionFoldToggle(SessionFoldPayload),
+    GuestWorkFoldToggle(GuestWorkFoldTogglePayload),
     InactiveProjectsToggle(InactiveProjectsTogglePayload),
     ProjectCheckoutsFold(ProjectCheckoutsFoldPayload),
     CheckoutAgentsToggle(CheckoutAgentsTogglePayload),
@@ -2056,6 +2065,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "reorder_tab" => decode!(ReorderTabPayload, ReorderTab),
         "focus_device" => decode!(FocusDevicePayload, FocusDevice),
         "session_fold_toggle" => decode!(SessionFoldPayload, SessionFoldToggle),
+        "guest_work_fold_toggle" => decode!(GuestWorkFoldTogglePayload, GuestWorkFoldToggle),
         "inactive_checkouts_toggle" => {
             decode!(InactiveCheckoutsTogglePayload, InactiveCheckoutsToggle)
         }
@@ -3258,6 +3268,48 @@ impl Runtime {
                     keys.sort();
                 }
                 self.refresh_inactive_groups();
+                self.persist_ui_state();
+                true
+            }
+            Event::GuestWorkFoldToggle(payload) => {
+                // A head stands only for a machine whose work is listed here,
+                // after one of this machine's projects or checkouts, or at
+                // the list's end.
+                let listed = self
+                    .snapshot
+                    .navigator
+                    .guest_panes
+                    .iter()
+                    .any(|guest| guest.device_id == payload.device_id);
+                let placed = payload.folder.is_empty()
+                    || self.snapshot.navigator.workspaces.iter().any(|workspace| {
+                        workspace.path == payload.folder
+                            || workspace
+                                .checkouts
+                                .iter()
+                                .any(|checkout| checkout.path == payload.folder)
+                    });
+                if !listed || !placed {
+                    self.set_error(
+                        "guest_work_fold.unavailable",
+                        "This machine's work is no longer listed here".to_owned(),
+                        false,
+                    );
+                    return true;
+                }
+                let fold = crate::guest_panes::GuestWorkFold {
+                    device_id: payload.device_id,
+                    folder: payload.folder,
+                };
+                let folds = &mut self.snapshot.ui_state.folded_guest_work;
+                if folds.contains(&fold) {
+                    folds.retain(|kept| kept != &fold);
+                } else {
+                    if folds.len() >= crate::guest_panes::MAX_FOLDS {
+                        folds.remove(0);
+                    }
+                    folds.push(fold);
+                }
                 self.persist_ui_state();
                 true
             }
@@ -4686,6 +4738,8 @@ impl Runtime {
                         .expanded_inactive_checkout_project_paths,
                     expanded_inactive_project_device_ids: current
                         .expanded_inactive_project_device_ids,
+                    // Its own event (`guest_work_fold_toggle`).
+                    folded_guest_work: current.folded_guest_work,
                     project_base_branches: current.project_base_branches,
                     project_settings: current.project_settings,
                     project_settings_writes: current.project_settings_writes,

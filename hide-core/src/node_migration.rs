@@ -696,6 +696,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // A folded head of another machine's work: that machine's own device id
+    // and a folder, as the 다른 체크아웃 fold keys by folder.
+    (
+        CORE_STATE,
+        "/folded_guest_work/*",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         WORKSPACE_VIEWS,
         "/workspaces/*/device_id",
@@ -2064,6 +2072,7 @@ mod tests {
                     }
                 },
                 "expanded_inactive_checkout_project_paths": [root],
+                "folded_guest_work": [{"device_id": "macbook", "folder": root}],
                 "selected_path": root,
                 "focused_checkout_id": "workspace:a",
                 "collapsed_workspace_ids": ["workspace:a"],

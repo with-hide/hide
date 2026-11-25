@@ -3767,6 +3767,7 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 | Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 4 | the next guest's node is not started, by a first ask or by a retry of one left stopped, and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::within_the_cap` |
 | Guests a host keeps a place for | 32 | those with no node and no pane are dropped, and past that a guest is refused | `hide_peer::limits::MAX_GRANTS`, `Guests::node_for` |
 | Panes of one guest, each in one holder | 128 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, which `hide_core::guest_panes::MAX_PANES` is |
+| Folded heads of guests' work in this machine's 프로젝트 list | 256 | folding one more lets the oldest fold open again | `hide_core::guest_panes::MAX_FOLDS` |
 | Streams on one connection | 72, with a cap for each kind | a stream past it is refused | `hide_peer::limits::MAX_STREAMS` |
 | Output a node keeps waiting for a slow host, on the tap | 4 MiB | what waits is dropped and each pane is drawn whole again | `tap::CAP_BYTES` |
 | Letters a node keeps while its core is away | 4,096 events and 8 MiB | the sender is refused `outbox_full`; nothing is dropped | `event::BOX_MAX_EVENTS`, `event::BOX_MAX_BYTES` |

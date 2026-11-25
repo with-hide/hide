@@ -125,6 +125,21 @@ pub fn agent_is_carried(agent: &str) -> bool {
         })
 }
 
+/// A folded head of another machine's work in the 프로젝트 list (B10,
+/// operator review 2026-11-25): that machine's work in one place, the
+/// folder of the checkout or project whose rows it stands after, or `""`
+/// for its work outside every project. Keyed by folder, as the 다른 체크아웃
+/// fold is, so it holds across navigator rebuilds.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GuestWorkFold {
+    pub device_id: String,
+    pub folder: String,
+}
+
+/// The most folded heads the core keeps; folding one past it lets the
+/// oldest fold open again.
+pub const MAX_FOLDS: usize = 256;
+
 /// Whether `pane` is a pane id a list carries.
 pub fn pane_is_listed(pane: &str) -> bool {
     !pane.is_empty() && pane.len() <= MAX_PANE_BYTES

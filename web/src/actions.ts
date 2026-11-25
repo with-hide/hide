@@ -237,9 +237,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * moving one slider right after the other would send the first one's older
    * value back. The folds (`collapsed_workspace_ids`,
    * `expanded_checkout_ids`, `expanded_agent_pane_ids`,
-   * `sessions_expanded_agent_pane_ids`) are left out for the same reason: the
-   * core owns them through `project_checkouts_fold`, `checkout_agents_toggle`,
-   * `agent_tree_toggle` and `session_tree_toggle`. The recent lists
+   * `sessions_expanded_agent_pane_ids`, `folded_guest_work`) are left out for
+   * the same reason: the core owns them through `project_checkouts_fold`,
+   * `checkout_agents_toggle`, `agent_tree_toggle`, `session_tree_toggle` and
+   * `guest_work_fold_toggle`. The recent lists
    * (`recent_checkouts`, `recent_pane_ids`) ride along and the core ignores
    * them, keeping its own. The keyboard's pane, checkout and device are left
    * out too: the core moves them on their own events, and this copy can be
@@ -260,6 +261,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       expanded_checkout_ids: _checkoutFolds,
       expanded_agent_pane_ids: _lineageFolds,
       sessions_expanded_agent_pane_ids: _sessionFolds,
+      folded_guest_work: _guestFolds,
       selected_pane_id: _pane,
       focused_checkout_id: _checkout,
       focused_device_id: _device,
@@ -273,6 +275,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     void _terminalFontFamily;
     void _language;
     void _projectFolds;
+    void _guestFolds;
     void _checkoutFolds;
     void _lineageFolds;
     void _sessionFolds;
@@ -3550,6 +3553,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     toggleSessionFold(key: string) {
       dispatch({ schema_version: 2, kind: "session_fold_toggle", payload: { key } });
+    },
+
+    /** Folds or opens the head of `deviceId`'s work in the place whose folder is `folder` (`""` outside every project); the core keeps it. */
+    toggleGuestWorkFold(deviceId: string, folder: string) {
+      dispatch({ schema_version: 2, kind: "guest_work_fold_toggle", payload: { device_id: deviceId, folder } });
     },
 
     toggleInactiveCheckouts(projectPath: string) {

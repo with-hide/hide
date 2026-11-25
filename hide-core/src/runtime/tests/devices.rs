@@ -2731,3 +2731,71 @@ fn work_on_a_paired_machine_is_told_by_its_agents_label_else_its_tabs_name() {
         ]
     );
 }
+
+/// B10, operator review 2026-11-25: a head of another machine's work folds
+/// and opens again by its machine and the folder of the place it stands in
+/// (a project or checkout of this machine, or `""` outside every project),
+/// survives a restart, and is refused for a machine or a folder the list
+/// does not hold; past the cap the oldest fold opens again.
+#[test]
+fn a_head_of_another_machines_work_folds_by_machine_and_folder_and_is_kept() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "shop",
+        "shop",
+        "/work/shop",
+        vec![checkout("shop", "shop:main", "/work/shop", None)],
+    )];
+    runtime.snapshot.navigator.guest_panes = vec![crate::guest_panes::GuestPanes {
+        device_id: "macbook".into(),
+        key: "cd".repeat(32),
+        panes: Vec::new(),
+    }];
+    let toggle = |device: &str, folder: &str| {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "guest_work_fold_toggle",
+            "payload": { "device_id": device, "folder": folder },
+        }))
+        .expect("event")
+    };
+    let fold = |folder: &str| crate::guest_panes::GuestWorkFold {
+        device_id: "macbook".into(),
+        folder: folder.into(),
+    };
+
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    assert!(runtime.dispatch_json(&toggle("macbook", "")));
+    assert_eq!(
+        runtime.snapshot.ui_state.folded_guest_work,
+        [fold("/work/shop"), fold("")]
+    );
+    let (restored, _, _) = persistence::load(&runtime.state_path);
+    assert_eq!(restored.folded_guest_work, [fold("/work/shop"), fold("")]);
+
+    // Toggled again, the head opens; the other stays folded.
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    assert_eq!(runtime.snapshot.ui_state.folded_guest_work, [fold("")]);
+
+    // A machine with no work here, or a folder no project holds, folds nothing.
+    for (device, folder) in [("windows-pc", "/work/shop"), ("macbook", "/elsewhere")] {
+        assert!(runtime.dispatch_json(&toggle(device, folder)));
+        assert_eq!(
+            runtime.snapshot.ui_state.folded_guest_work,
+            [fold("")],
+            "{device} {folder}"
+        );
+    }
+
+    // Full, the next fold lets the oldest open again.
+    runtime.snapshot.ui_state.folded_guest_work = (0..crate::guest_panes::MAX_FOLDS)
+        .map(|n| crate::guest_panes::GuestWorkFold {
+            device_id: format!("old-{n}"),
+            folder: String::new(),
+        })
+        .collect();
+    assert!(runtime.dispatch_json(&toggle("macbook", "/work/shop")));
+    let folds = &runtime.snapshot.ui_state.folded_guest_work;
+    assert_eq!(folds.len(), crate::guest_panes::MAX_FOLDS);
+    assert_eq!(folds[0].device_id, "old-1");
+    assert_eq!(folds.last(), Some(&fold("/work/shop")));
+}

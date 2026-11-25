@@ -4050,6 +4050,8 @@ export type SnapshotRest = {
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
     expanded_checkout_ids?: string[];
+    /** Heads of another machine's work the operator folded, by its device id and the folder of the place it stands in (`""` outside every project); absence is open. */
+    folded_guest_work?: { device_id: string; folder: string }[];
     session_collapsed_checkout_ids?: string[];
     /** Agents whose children the sidebar tree opened; absence is folded. */
     expanded_agent_pane_ids?: string[];

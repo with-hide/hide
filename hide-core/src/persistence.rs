@@ -64,6 +64,9 @@ struct StoredUiState {
     /// Device ids whose Inactive projects row is open.
     #[serde(default)]
     expanded_inactive_project_device_ids: Vec<String>,
+    /// Folded heads of another machine's work, by machine and folder.
+    #[serde(default)]
+    folded_guest_work: Vec<crate::guest_panes::GuestWorkFold>,
     #[serde(default)]
     project_base_branches: BTreeMap<String, String>,
     #[serde(default)]
@@ -800,6 +803,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             expanded_inactive_checkout_project_paths: stored
                 .expanded_inactive_checkout_project_paths,
             expanded_inactive_project_device_ids: stored.expanded_inactive_project_device_ids,
+            folded_guest_work: stored.folded_guest_work,
             project_base_branches: stored.project_base_branches,
             project_settings: stored.project_settings,
             project_settings_writes: BTreeMap::new(),
@@ -987,6 +991,7 @@ pub fn save(
             .expanded_inactive_checkout_project_paths
             .clone(),
         expanded_inactive_project_device_ids: state.expanded_inactive_project_device_ids.clone(),
+        folded_guest_work: state.folded_guest_work.clone(),
         project_base_branches: state.project_base_branches.clone(),
         project_settings: state.project_settings.clone(),
         expanded_agent_pane_ids: state.expanded_agent_pane_ids.clone(),
@@ -1725,9 +1730,14 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().to_path_buf();
         let path = root.join("state.json");
+        let fold = crate::guest_panes::GuestWorkFold {
+            device_id: "macbook".to_owned(),
+            folder: "/repo/alpha".to_owned(),
+        };
         let state = UiStateSnapshot {
             expanded_inactive_checkout_project_paths: vec!["/repo/alpha".to_owned()],
             expanded_inactive_project_device_ids: vec!["local".to_owned()],
+            folded_guest_work: vec![fold.clone()],
             ..UiStateSnapshot::default()
         };
 
@@ -1740,6 +1750,7 @@ mod tests {
             ["/repo/alpha"]
         );
         assert_eq!(restored.expanded_inactive_project_device_ids, ["local"]);
+        assert_eq!(restored.folded_guest_work, [fold]);
 
         let legacy = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null}"#;
         let (legacy_state, _sizes, legacy_disposition) = decode(legacy);
@@ -1750,6 +1761,7 @@ mod tests {
                 .is_empty()
         );
         assert!(legacy_state.expanded_inactive_project_device_ids.is_empty());
+        assert!(legacy_state.folded_guest_work.is_empty());
 
         let _ = fs::remove_file(path);
         let _ = fs::remove_dir(root);

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Actions } from "./actions";
 import { DeviceChip } from "./components/device-chip";
+import { FoldRow } from "./components/fold-row";
 import { StatusMark } from "./components/status-mark";
 import { RowButton } from "./components/ui/row-button";
 import { AgentRowMark } from "./AgentRowMark";
@@ -19,7 +20,8 @@ import { useUiStore } from "./ui";
  * device-connect-iroh B10), drawn as this computer's own rows are: the mark
  * its machine draws it with, its agent's logo while rows draw logos, and the
  * name its machine calls it by. Its machine is named once by the head it
- * stands under (`GuestMachineRows`). It opens the pane in the center. A
+ * stands under (`GuestMachineRows`); `inset` is where its mark starts. It
+ * opens the pane in the center. A
  * machine that told no mark leaves the mark's slot empty, so names line up.
  */
 function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Actions; inset: string }) {
@@ -44,32 +46,53 @@ function GuestPaneRow({ pane, actions, inset }: { pane: GuestPane; actions: Acti
   );
 }
 
+const NO_FOLDS: { device_id: string; folder: string }[] = [];
+
+/**
+ * Where a place's heads and rows stand: where the head starts, where the
+ * rows' marks start (the column of the place's own rows), and the column
+ * whose center the rail left of the rows runs down (the glyph column a
+ * tab's guide hangs from).
+ */
+export type GuestColumns = { head: string; rows: string; rail: string };
+
 /**
  * Other machines' work in one place, one head per machine (operator review
- * 2026-11-25): the machine's letters once, `<machine>에서 시킨 일` (or its
- * words for work outside every project) and how many, then its rows one
- * tree step in. `inset` is where the head starts.
+ * 2026-11-25): a fold row with the machine's letters once,
+ * `<machine>에서 시킨 일` and how many, then its rows, whose marks stand on
+ * the column of the place's own rows, with a tree rail down their left that
+ * ties them to the head.
+ * A head folds as the list's other folds do, and the core keeps it by the
+ * machine and `folder`, the place's folder (`""` outside every project);
+ * folded, it shows its count and nothing more.
  */
-function GuestMachineRows({ panes, inset, outside = false, actions }: { panes: readonly GuestPane[]; inset: string; /** The work stands in no project of this computer. */ outside?: boolean; actions: Actions }) {
+function GuestMachineRows({ panes, folder, columns, actions }: { panes: readonly GuestPane[]; folder: string; columns: GuestColumns; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const machines = useMemo(() => byMachine(panes), [panes]);
-  const rowInset = `calc(${inset} + var(--size-lineage-indent))`;
+  const folds = useShellStore((s) => s.rest?.ui_state?.folded_guest_work ?? NO_FOLDS);
   return (
-    <ul data-guest-machines={outside ? "outside" : "project"}>
+    <ul data-guest-machines={folder === "" ? "outside" : "project"}>
       {machines.map((group) => {
-        const label = t(outside ? "pairing.work.outside" : "pairing.work.group", { name: group.machine });
+        const open = !folds.some((fold) => fold.device_id === group.deviceId && fold.folder === folder);
         return (
           <li key={group.deviceId} data-guest-group={group.deviceId}>
-            <div className="flex h-(--size-control-compact) min-w-0 items-center gap-xs pr-sm text-caption text-muted-foreground" style={{ paddingLeft: inset }} data-guest-head={group.deviceId}>
-              <GuestMark pane={group} />
-              <span className="min-w-0 truncate">{label}</span>
-              <span className="shrink-0" data-guest-count={group.panes.length}>{group.panes.length}</span>
-            </div>
-            <ul aria-label={t("pairing.work.groupAria", { name: group.machine })}>
-              {group.panes.map((pane) => (
-                <GuestPaneRow key={pane.id} pane={pane} actions={actions} inset={rowInset} />
-              ))}
-            </ul>
+            <FoldRow
+              label={t("pairing.work.group", { name: group.machine })}
+              count={group.panes.length}
+              expanded={open}
+              lead={<GuestMark pane={group} />}
+              inset={columns.head}
+              onToggle={() => actions.toggleGuestWorkFold(group.deviceId, folder)}
+              data-guest-head={group.deviceId}
+            />
+            {open ? (
+              <ul className="relative" aria-label={t("pairing.work.groupAria", { name: group.machine })}>
+                <span aria-hidden="true" className="pointer-events-none absolute inset-y-xxs w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${columns.rail} - var(--size-hairline) / 2)` }} data-guest-rail={group.deviceId} />
+                {group.panes.map((pane) => (
+                  <GuestPaneRow key={pane.id} pane={pane} actions={actions} inset={columns.rows} />
+                ))}
+              </ul>
+            ) : null}
           </li>
         );
       })}
@@ -83,25 +106,25 @@ const NO_CHECKOUTS: ReadonlySet<string> = new Set();
  * The panes of other machines' work started in one of `projectId`'s folders
  * that stand at the project's end, inside it (B10): those whose checkout the
  * tree draws no row for and no fold keeps (`guestPlaces`). The caller draws
- * it only while the project is open.
+ * it only while the project is open; `folder` is the project's.
  */
-export function GuestProjectRows({ projectId, rows = NO_CHECKOUTS, folded = NO_CHECKOUTS, inset, actions }: { projectId: string; rows?: ReadonlySet<string>; folded?: ReadonlySet<string>; inset: string; actions: Actions }) {
+export function GuestProjectRows({ projectId, folder, rows = NO_CHECKOUTS, folded = NO_CHECKOUTS, columns, actions }: { projectId: string; folder: string; rows?: ReadonlySet<string>; folded?: ReadonlySet<string>; columns: GuestColumns; actions: Actions }) {
   const panes = useGuestPanes();
   const atEnd = useMemo(() => guestPlaces(panes, projectId, { open: true, rows, folded }).atEnd, [panes, projectId, rows, folded]);
   if (atEnd.length === 0) return null;
   return (
     <li data-project-guests={projectId}>
-      <GuestMachineRows panes={atEnd} inset={inset} actions={actions} />
+      <GuestMachineRows panes={atEnd} folder={folder} columns={columns} actions={actions} />
     </li>
   );
 }
 
-/** The panes of other machines' work started in `checkoutId`'s folder, after that checkout's own rows (B10). */
-export function GuestCheckoutRows({ projectId, checkoutId, inset, actions }: { projectId: string; checkoutId: string; inset: string; actions: Actions }) {
+/** The panes of other machines' work started in `checkoutId`'s folder, after that checkout's own rows (B10); `folder` is the checkout's. */
+export function GuestCheckoutRows({ projectId, checkoutId, folder, columns, actions }: { projectId: string; checkoutId: string; folder: string; columns: GuestColumns; actions: Actions }) {
   const panes = useGuestPanes();
   const mine = useMemo(() => guestPlaces(panes, projectId, { open: true, rows: new Set([checkoutId]), folded: NO_CHECKOUTS }).byCheckout.get(checkoutId) ?? NO_PANES, [panes, projectId, checkoutId]);
   if (mine.length === 0) return null;
-  return <GuestMachineRows panes={mine} inset={inset} actions={actions} />;
+  return <GuestMachineRows panes={mine} folder={folder} columns={columns} actions={actions} />;
 }
 
 const NO_PANES: GuestPane[] = [];
@@ -119,17 +142,17 @@ export function useGuestInFront(projectId: string): GuestPane | null {
 
 /**
  * The panes of other machines' work that stand under no project of this
- * computer, one head per machine that asked for them, named so the
- * difference reads in words (B10). `projects` are the projects whose rows
- * draw their own.
+ * computer, one head per machine that asked for them, worded as every
+ * other head is (B10). `projects` are the projects whose rows draw their
+ * own.
  */
-export function GuestMachineGroups({ actions, projects, inset }: { actions: Actions; projects: ReadonlySet<string>; inset: string }) {
+export function GuestMachineGroups({ actions, projects, columns }: { actions: Actions; projects: ReadonlySet<string>; columns: GuestColumns }) {
   const panes = useGuestPanes();
   const outside = useMemo(() => panes.filter((pane) => pane.projectId === null || !projects.has(pane.projectId)), [panes, projects]);
   if (outside.length === 0) return null;
   return (
     <li className="mt-xs" data-guest-outside="true">
-      <GuestMachineRows panes={outside} inset={inset} outside actions={actions} />
+      <GuestMachineRows panes={outside} folder="" columns={columns} actions={actions} />
     </li>
   );
 }
