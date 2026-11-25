@@ -38,6 +38,7 @@ import { FileMark } from "./components/file-mark";
 import { fileIcon } from "./fileIcons";
 import { useEscapeLayer } from "./components/ui/layer";
 import { useInterfaceTranslation } from "./i18n/client";
+import { composingKey } from "./keys";
 import { machineName } from "./screenMachine";
 import { catalogWorkspaces, checkoutAtRoot, checkoutOfPane, localDeviceId, paneRowOf, type AgentRow, type SleepingSession, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
@@ -211,7 +212,7 @@ export function DeskScreen({ actions }: { actions: Actions }) {
 
   // The `@` menu's keys; the composer sends on ↵ when the menu is closed.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.nativeEvent.isComposing || !menuOpen) return;
+    if (composingKey(event) || !menuOpen) return;
     const key = event.key;
     // With nothing to choose the menu has no keys of its own but Esc, which closes it; ↵ sends the words.
     if (menuEmpty) {

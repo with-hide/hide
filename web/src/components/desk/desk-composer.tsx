@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { Hint } from "../ui/tooltip";
+import { composingKey } from "../../keys";
 import { useNoticeFloor } from "../../noticeFloor";
 import type { DeskDraft } from "../../ui";
 import { MentionInput, type MentionInputHandle } from "./mention-input";
@@ -66,7 +67,7 @@ export function DeskComposer({ value, draft, inputRef, label, placeholder, attac
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     onKeyDown?.(event);
     // Enter sends and Shift+Enter starts a line, while Desk answers too (the message waits for its turn); a key that ends an IME composition only commits it, and the `@` menu takes its own Enter.
-    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || (menuOpen && !menuEmpty)) return;
+    if (event.defaultPrevented || event.key !== "Enter" || event.shiftKey || composingKey(event) || (menuOpen && !menuEmpty)) return;
     event.preventDefault();
     if (!blocked) onSend();
   };

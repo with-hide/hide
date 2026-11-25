@@ -6,6 +6,7 @@ import { approvalIrreversible, chipMention, DESK_REFUSAL_MAX, failureReason, han
 import { useInterfaceTranslation } from "../../i18n/client";
 import { requireInterfaceLanguage } from "../../i18n/locale";
 import type { MessageKey } from "../../i18n/catalogs";
+import { composingKey } from "../../keys";
 import { cn } from "../../lib/utils";
 import { MarkdownText, type MarkdownChip } from "../../MarkdownText";
 import { Elapsed, formatElapsed } from "../elapsed";
@@ -307,7 +308,7 @@ export function DeskApprovalCard({ item, onAnswer, defaultRefusal }: { item: Des
             data-desk-approval-refusal="true"
             onChange={(event) => setLine(event.target.value)}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
+              if (composingKey(event)) return;
               if (event.key === "Enter") { event.preventDefault(); refuse(); }
               else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setRefusing(false); setLine(""); }
             }}
@@ -425,7 +426,7 @@ export function DeskChat({ items, jobs, agents, queued = [], live = null, thinki
             : item.kind === "switch" ? <MarkerLine icon={<ArrowLeftRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="switch">{item.from === null ? t("desk.switch.start", { to: agentProductName(item.to) }) : t(SWITCH_WORDS[item.carried], { from: agentProductName(item.from), to: agentProductName(item.to) })}</MarkerLine>
             : item.kind === "model" ? <MarkerLine icon={<SlidersHorizontalIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />} data-desk-item="model">{t("desk.model", { model: choice(item.model, "models"), effort: choice(item.effort, "efforts") })}</MarkerLine>
             : item.kind === "approval" ? <DeskApprovalCard item={item} onAnswer={(answer, text) => actions.onApproval(item.id, answer, text)} />
-            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && item.notice === "turn_failed") || items.slice(index + 1).some((later) => later.kind === "user")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
+            : item.kind === "notice" ? <DeskNotice item={item} reason={failureReason(item.detail, replyBefore(items, index))} settled={(queued.length > 0 && (item.notice === "turn_failed" || item.notice === "blocked")) || items.slice(index + 1).some((later) => later.kind === "user")} onAction={(action) => actions.onNoticeAction(action, item)} onCopy={actions.onCopy} />
             : item.kind === "handed" ? <DeskHandedLine session={handedSession(item)} handed={item.letter_kind === "request"} line={item.line} read={item.read} onOpen={() => actions.onHanded(item.pane_id)} />
             : <DeskJobCard job={jobOf(jobs, item.job_id)} selected={selectedJob === item.job_id} selectedOutput={selectedOutput} {...actions} />}
         </li>

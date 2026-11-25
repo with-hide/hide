@@ -151,6 +151,9 @@ describe("Desk's room", () => {
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
     await show(desk(failed));
     expect(document.body.querySelector("[data-desk-notice-action='retry']")).not.toBeNull();
+    // A blocked open puts its message back first in the waiting line: its retry waits too.
+    await show(desk([{ kind: "notice", id: 2, notice: "blocked", agent: "claude", detail: null }], "ready", true, [{ id: 3, text: "실패해 보세요", at_ms: 0, mentions: [] }]));
+    expect(document.body.querySelector("[data-desk-notice-action='retry']")).toBeNull();
   });
 
   it("names the agent's own reason on a failed turn when it gave one", async () => {
@@ -283,6 +286,21 @@ describe("Desk's room", () => {
     expect(box().querySelectorAll("[data-desk-token]")).toHaveLength(1);
   });
 
+  it("leaves the box, the `@` menu and a refusal's line alone on the Enter that ends a Korean syllable, which Safari reports as keyCode 229", async () => {
+    const enter = (target: HTMLElement) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true })); });
+    useUiStore.setState({ deskDraft: { text: "안녕", mentions: [] } });
+    await render(desk([]), tree);
+    await enter(box());
+    expect(sent("desk_send")).toEqual([]);
+    expect(useUiStore.getState().deskDraft.text).toBe("안녕");
+    // The `@` menu does not take it as a choice.
+    useUiStore.setState({ deskDraft: { text: "@", mentions: [] } });
+    await show(desk([]));
+    await enter(box());
+    expect(useUiStore.getState().deskDraft.mentions).toEqual([]);
+    expect(document.body.querySelector("[data-desk-mention-session='w1:other']")).not.toBeNull();
+  });
+
   it("opens a file a connected device's session showed from that device, which no card lists (PRD desk-2-ui B27)", async () => {
     const remoteRest = {
       navigator: {
@@ -399,6 +417,8 @@ describe("Desk's room", () => {
       expect(answers()).toEqual(["Reject without a reason", "Reject and send"]);
       await type("wait until it ends, then archive it");
       await key("Enter", true);
+      expect(sent("desk_approval")).toEqual([]);
+      await act(async () => { refusal()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })); });
       expect(sent("desk_approval")).toEqual([]);
       await key("Enter");
       expect(sent("desk_approval")).toEqual([{ id: 7, answer: "reject", text: "wait until it ends, then archive it" }]);
