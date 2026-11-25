@@ -32,7 +32,7 @@ export function DeskOutputs({ outputs, selected = null, onOpen }: {
           {pictures.map((output) => (
             <li key={output.id}>
               <RowButton className={cn(PICTURE, "p-0", selected === output.id && "border-ring ring-1 ring-ring")} aria-label={output.seen ? output.label : `${output.label} · ${t("desk.outputs.unseen")}`} aria-pressed={selected === output.id} title={output.label} onClick={() => onOpen(output)} data-desk-output={output.id} data-desk-output-thumb={output.kind}>
-                <OutputPicture output={output} className="size-full object-cover object-top" fallback={<ImageIcon aria-hidden="true" className="m-auto size-(--size-icon-sm) text-muted-foreground" />} />
+                <OutputPicture output={output} className="size-full object-cover object-top" fallback={<UnreadPicture label={output.label} />} />
                 {!output.seen ? <UnseenMark className="absolute right-xxs top-xxs" /> : null}
               </RowButton>
             </li>
@@ -53,5 +53,15 @@ export function DeskOutputs({ outputs, selected = null, onOpen }: {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** An image tile while its picture is not drawn (being read, or unreadable): its mark and its name. */
+function UnreadPicture({ label }: { label: string }) {
+  return (
+    <span className="m-auto flex min-w-0 max-w-full flex-col items-center gap-xxs px-xs" data-desk-output-unread="true">
+      <ImageIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      <span className="max-w-full truncate text-micro text-muted-foreground">{label}</span>
+    </span>
   );
 }
